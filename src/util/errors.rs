@@ -207,7 +207,10 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
     #[cfg(any(target_arch = "wasm32", feature = "embed"))]
     report
         .write(
-            (src.0.as_str(), ariadne::Source::from(src.1.as_str())),
+            (
+                src.filename.as_str(),
+                ariadne::Source::from(src.contents.as_str()),
+            ),
             crate::captured_output::CapturedOutputWriter,
         )
         .unwrap();
@@ -253,8 +256,8 @@ pub fn throw_compiler_error<'a>(
                 .with_sources(
                     sources
                         .iter()
-                        .map(|(name, contents)| {
-                            (name.as_str(), ariadne::Source::from(contents.as_str()))
+                        .map(|Source { filename, contents }| {
+                            (filename.as_str(), ariadne::Source::from(contents.as_str()))
                         })
                         .collect(),
                 ),
