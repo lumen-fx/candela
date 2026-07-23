@@ -1,8 +1,11 @@
 use crate::array_gc::alloc_array;
 use crate::compiler::compiler_data::DynamicLibFn;
 use crate::compiler::compiler_data::ErrorCatch;
+use crate::compiler::compiler_data::HostFnSig;
 use crate::compiler::compiler_data::Pools;
 use crate::compiler::compiler_data::Struct;
+use crate::embed::HostDispatch;
+use crate::embed::Value;
 use crate::compiler::type_system::DataType;
 use crate::data::Data;
 use crate::data::DataHash;
@@ -280,8 +283,15 @@ pub fn execute(
     structs: &[Struct],
     allocated_arg_count: usize,
     allocated_call_depth: usize,
+    // Embedding: `host` function signatures and the Rust closures they dispatch
+    // to, both indexed by host-function id. Empty for the CLI/REPL/WASM paths.
+    host_sigs: &[HostFnSig],
+    host_dispatch: &[HostDispatch],
+    // Instruction index to begin execution at. `0` runs `main`; the embedding
+    // `Program::call` passes the entry index of an appended call trampoline.
+    start: usize,
 ) {
-    let mut i: usize = 0;
+    let mut i: usize = start;
 
     let mut args: Vec<u16> = Vec::with_capacity(allocated_arg_count);
     let mut call_frames: Vec<CallFrame> = Vec::with_capacity(allocated_call_depth);
@@ -300,6 +310,7 @@ pub fn execute(
     let mut string_live: Vec<bool> = Vec::new();
 
     let mut dyn_lib_args: Vec<u64> = Vec::new();
+    let mut host_call_args: Vec<Value> = Vec::new();
     let mut keep_alive: Vec<Box<[u8]>> = Vec::new();
     let mut obj_gc_stack: Vec<Data> = Vec::with_capacity(obj_pool.len());
 
@@ -513,6 +524,36 @@ pub fn execute(
                             error_with_catch!(ErrType::InvalidReturnType(t));
                         }
                     }
+                };
+            }
+            Instr::CallHostFunc(fn_id, dest) => {
+                let sig = unsafe { host_sigs.get_unchecked(fn_id as usize) };
+                let dispatch = unsafe { host_dispatch.get_unchecked(fn_id as usize) };
+
+                host_call_args.clear();
+                for idx in 0..args.len() {
+                    let data = r[unsafe { *args.get_unchecked(idx) }];
+                    host_call_args.push(match sig.get_arg(idx) {
+                        DataType::Int => Value::Int(i64::from(data.as_int())),
+                        DataType::Float => Value::Float(data.as_float()),
+                        DataType::Bool => Value::Bool(data.as_bool()),
+                        DataType::String => Value::String(data.as_str(string_pool).to_owned()),
+                        _ => Value::Null,
+                    });
+                }
+                args.clear();
+
+                let result = (**dispatch)(&host_call_args);
+
+                r[dest] = match sig.get_return_type() {
+                    DataType::Int => Data::int(result.as_i64().unwrap_or(0) as i32),
+                    DataType::Float => Data::float(result.as_f64().unwrap_or(0.0)),
+                    DataType::Bool => Data::bool(result.as_bool().unwrap_or(false)),
+                    DataType::String => {
+                        let s = result.into_string().unwrap_or_default();
+                        string!(s)
+                    }
+                    _ => NULL,
                 };
             }
             Instr::AddFloat(o1, o2, dest) => {

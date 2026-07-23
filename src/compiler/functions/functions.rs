@@ -97,12 +97,20 @@ pub fn handle_functions(
             span,
             args_indexes,
         )
-    } else if let Some((fn_args, returns_null, dyn_id)) = state
+    } else if let Some((fn_args, returns_null, dyn_id, is_host)) = state
         .dyn_libs
         .iter()
         .find(|l| l.name == namespace[0])
-        .and_then(|lib| lib.fns.iter().find(|x| x.name == fn_name))
-        .map(|sig| (sig.args.clone(), sig.return_type == DataType::Null, sig.id))
+        .and_then(|lib| {
+            lib.fns.iter().find(|x| x.name == fn_name).map(|sig| {
+                (
+                    sig.args.clone(),
+                    sig.return_type == DataType::Null,
+                    sig.id,
+                    lib.is_host,
+                )
+            })
+        })
     {
         check_args(
             args,
@@ -140,7 +148,11 @@ pub fn handle_functions(
         } else {
             state.alloc_reg_tgt(tgt_id)
         };
-        output.push(Instr::CallDynamicLibFunc(dyn_id, register_id));
+        if is_host {
+            output.push(Instr::CallHostFunc(dyn_id, register_id));
+        } else {
+            output.push(Instr::CallDynamicLibFunc(dyn_id, register_id));
+        }
         state.add_to_src(ctx, output, span);
         if returns_null {
             None

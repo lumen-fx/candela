@@ -7,35 +7,29 @@ use crate::instr::Instr;
 macro_rules! run_and_check_registers {
     ($contents:expr, $expected:expr) => {
         let filename = "test.kl";
-        let (
-            instructions,
-            registers,
-            mut arrays,
-            instr_src,
-            fn_registers,
-            _,
-            allocated_arg_count,
-            allocated_call_depth,
-            _,
-            _,
-        ) = compile(String::from($contents), filename, true);
-        let mut reg = RegisterFile(registers);
+        let out = compile(String::from($contents), filename, true);
+        let instructions = out.instructions;
+        let mut arrays = out.pools;
+        let mut reg = RegisterFile(out.registers);
         crate::vm::execute(
             &instructions,
             &mut reg,
             &mut arrays,
             &crate::errors::ErrorCtx {
-                instr_src,
+                instr_src: out.instr_src,
                 sources: vec![Source {
                     filename: filename.into(),
                     contents: String::from($contents),
                 }],
             },
-            &fn_registers,
+            &out.fn_registers,
             &[],
             &[],
-            allocated_arg_count,
-            allocated_call_depth,
+            out.allocated_arg_count,
+            out.allocated_call_depth,
+            &[],
+            &[],
+            0,
         );
         assert!(instructions.iter().any(|x| {
             if let Instr::Print(tgt) = x {
@@ -50,34 +44,27 @@ macro_rules! run_and_check_registers {
 macro_rules! run {
     ($contents:expr) => {
         let filename = "test.kl";
-        let (
-            instructions,
-            registers,
-            mut arrays,
-            instr_src,
-            fn_registers,
-            _,
-            allocated_arg_count,
-            allocated_call_depth,
-            _,
-            _,
-        ) = compile(String::from($contents), filename, true);
+        let out = compile(String::from($contents), filename, true);
+        let mut arrays = out.pools;
         crate::vm::execute(
-            &instructions,
-            &mut RegisterFile(registers),
+            &out.instructions,
+            &mut RegisterFile(out.registers),
             &mut arrays,
             &crate::errors::ErrorCtx {
-                instr_src,
+                instr_src: out.instr_src,
                 sources: vec![Source {
                     filename: filename.into(),
                     contents: String::from($contents),
                 }],
             },
-            &fn_registers,
+            &out.fn_registers,
             &[],
             &[],
-            allocated_arg_count,
-            allocated_call_depth,
+            out.allocated_arg_count,
+            out.allocated_call_depth,
+            &[],
+            &[],
+            0,
         );
     };
 }
@@ -3595,34 +3582,27 @@ fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
 /// compiler and runtime errors as structured `Diagnostic`s.
 fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
-        let (
-            instructions,
-            registers,
-            mut arrays,
-            instr_src,
-            fn_registers,
-            _,
-            allocated_arg_count,
-            allocated_call_depth,
-            _,
-            structs,
-        ) = compile(String::from(src), filename, false);
+        let out = compile(String::from(src), filename, false);
+        let mut arrays = out.pools;
         crate::vm::execute(
-            &instructions,
-            &mut RegisterFile(registers),
+            &out.instructions,
+            &mut RegisterFile(out.registers),
             &mut arrays,
             &crate::errors::ErrorCtx {
-                instr_src,
+                instr_src: out.instr_src,
                 sources: vec![Source {
                     filename: filename.into(),
                     contents: String::from(src),
                 }],
             },
-            &fn_registers,
+            &out.fn_registers,
             &[],
-            &structs,
-            allocated_arg_count,
-            allocated_call_depth,
+            &out.structs,
+            out.allocated_arg_count,
+            out.allocated_call_depth,
+            &[],
+            &[],
+            0,
         );
     })
 }

@@ -64,6 +64,7 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
         | Instr::GetSliceString(_, _, y)
         | Instr::SaveFrame(_, y, _)
         | Instr::CallDynamicLibFunc(_, y)
+        | Instr::CallHostFunc(_, y)
         | Instr::MapGet(_, _, y)
         | Instr::IncIntTo(_, y)
         | Instr::DecIntTo(_, y) => *y = tgt_id,
@@ -174,6 +175,7 @@ impl Instr {
             | Self::GetSliceString(_, _, y)
             | Self::SetElementString(y, _, _)
             | Self::CallDynamicLibFunc(_, y)
+            | Self::CallHostFunc(_, y)
             | Self::IncInt(y)
             | Self::DecInt(y)
             | Self::IncIntTo(_, y)
@@ -292,6 +294,7 @@ impl Instr {
             | Self::CallFuncRecursive(_, _)
             | Self::SaveFrame(_, _, _)
             | Self::CallDynamicLibFunc(_, _)
+            | Self::CallHostFunc(_, _)
             | Self::EmptyArray(_)
             | Self::SetInt(_, _)
             | Self::StartErrorCatch(_, _)

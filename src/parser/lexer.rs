@@ -83,6 +83,8 @@ pub enum Token<'a> {
     True,
     #[token("dylib")]
     Dylib,
+    #[token("host")]
+    Host,
     #[token("import")]
     Import,
     #[token("as")]

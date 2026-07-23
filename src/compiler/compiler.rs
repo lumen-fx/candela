@@ -28,6 +28,7 @@ use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
 use compiler_data::FnSignature;
 use compiler_data::Function;
+use compiler_data::HostFnSig;
 use compiler_data::Pools;
 use compiler_data::State;
 use compiler_data::Struct;
@@ -2902,6 +2903,13 @@ fn parse_toplevel(
         Rc<Library>,
         Span,
     )>,
+    pending_host: &mut Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        SmolStr,
+        Span,
+    )>,
 ) {
     let mut imports = Vec::new();
     for expr in code {
@@ -2956,7 +2964,9 @@ fn parse_toplevel(
             Expr::ImportDylib(..) => wasm_error("WASM does not support loading dynamic libraries"),
             #[cfg(target_arch = "wasm32")]
             Expr::ImportFile(..) => wasm_error("WASM does not support importing files"),
-            import @ (Expr::ImportFile(..) | Expr::ImportDylib(..)) => imports.push(import),
+            import @ (Expr::ImportFile(..) | Expr::ImportDylib(..) | Expr::HostBlock(..)) => {
+                imports.push(import);
+            }
             _ => {}
         }
     }
@@ -3009,6 +3019,21 @@ fn parse_toplevel(
                 dynamic_libs.push(Dynamiclib {
                     name: dylib_name,
                     fns: Box::new([]),
+                    is_host: false,
+                });
+            }
+            Expr::HostBlock(host_namespace, fn_signatures, span) => {
+                pending_host.push((
+                    src_file_idx,
+                    dynamic_libs.len() as u16,
+                    fn_signatures,
+                    host_namespace.clone(),
+                    span,
+                ));
+                dynamic_libs.push(Dynamiclib {
+                    name: host_namespace,
+                    fns: Box::new([]),
+                    is_host: true,
                 });
             }
             Expr::ImportFile(path, alias, span) => {
@@ -3083,6 +3108,7 @@ fn parse_toplevel(
                     pending_fns,
                     #[cfg(not(target_arch = "wasm32"))]
                     pending_dylibs,
+                    pending_host,
                 );
                 files.insert(file_path, child_namespace.clone());
                 namespace.children.push((child_name, child_namespace));
@@ -3105,8 +3131,16 @@ fn resolve_types(
         Rc<Library>,
         Span,
     )>,
+    pending_host: Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        SmolStr,
+        Span,
+    )>,
     file_namespaces: &FxHashMap<u16, Namespace>,
     dynamic_libs_fns: &mut Vec<DynamicLibFn>,
+    host_fns: &mut Vec<HostFnSig>,
     dynamic_libs: &mut [Dynamiclib],
     sources: &[Source],
 ) {
@@ -3189,24 +3223,70 @@ fn resolve_types(
             .collect();
         dynamic_libs[dynlib_id as usize].fns = fns;
     }
+
+    // Resolve `host "..." { ... }` blocks. Unlike dylibs there is no shared
+    // object to load or FFI CIF to build: each signature is type-checked and
+    // recorded as a `HostFnSig` whose `id` the VM later uses to dispatch to the
+    // Rust closure the embedding `Engine` bound to `(namespace, name)`.
+    for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
+        let namespace = &file_namespaces[&src_file_idx];
+        let fns = fn_signatures
+            .iter()
+            .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
+                let fn_args = fn_args
+                    .iter()
+                    .map(|t| t.to_datatype(src_file_idx, namespace, sources))
+                    .collect::<Vec<DataType>>()
+                    .into_boxed_slice();
+                let fn_return_type = fn_return_type.to_datatype(src_file_idx, namespace, sources);
+                let return_val = FnSignature {
+                    name: fn_name.clone(),
+                    args: fn_args.clone(),
+                    return_type: fn_return_type.clone(),
+                    id: host_fns.len() as u16,
+                };
+
+                let mut types = vec![fn_return_type];
+                types.extend(fn_args);
+                host_fns.push(HostFnSig {
+                    types: types.into_boxed_slice(),
+                    namespace: host_namespace.clone(),
+                    name: fn_name.clone(),
+                });
+                return_val
+            })
+            .collect();
+        dynamic_libs[dynlib_id as usize].fns = fns;
+    }
 }
 
-pub fn compile(
-    contents: String,
-    filename: &str,
-    debug: bool,
-) -> (
-    Vec<Instr>,
-    Vec<Data>,
-    Pools,
-    Vec<InstrSrc>,
-    Vec<Vec<u16>>,
-    Vec<DynamicLibFn>,
-    usize,
-    usize,
-    Vec<Source>,
-    Vec<Struct>,
-) {
+/// The complete result of compiling a keel program.
+///
+/// In addition to the fields the CLI/VM needs to run `main`, this carries the
+/// compiler-side tables (`functions`, `dyn_libs`, `namespace`, register
+/// bookkeeping) that the embedding `Program` keeps alive so it can compile
+/// additional function specializations on demand for `Program::call`, plus the
+/// resolved `host_fns` signature table used to dispatch `host` calls.
+pub struct CompileOutput {
+    pub instructions: Vec<Instr>,
+    pub registers: Vec<Data>,
+    pub pools: Pools,
+    pub instr_src: Vec<InstrSrc>,
+    pub fn_registers: Vec<Vec<u16>>,
+    pub dyn_lib_fns: Vec<DynamicLibFn>,
+    pub host_fns: Vec<HostFnSig>,
+    pub allocated_arg_count: usize,
+    pub allocated_call_depth: usize,
+    pub sources: Vec<Source>,
+    pub structs: Vec<Struct>,
+    pub functions: Vec<Function>,
+    pub dyn_libs: Vec<Dynamiclib>,
+    pub namespace: Namespace,
+    pub const_registers: FxHashMap<Data, u16>,
+    pub free_registers: Vec<u16>,
+}
+
+pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     #[cfg(not(target_arch = "wasm32"))]
     let now = std::time::Instant::now();
 
@@ -3239,6 +3319,7 @@ pub fn compile(
     let mut structs: Vec<Struct> = Vec::new();
     let mut dyn_libs: Vec<Dynamiclib> = Vec::new();
     let mut dyn_lib_fns: Vec<DynamicLibFn> = Vec::new();
+    let mut host_fns: Vec<HostFnSig> = Vec::new();
     let mut allocated_arg_count = 0;
     let mut allocated_call_depth = 0;
     let mut const_registers: FxHashMap<Data, u16> = FxHashMap::default();
@@ -3263,6 +3344,13 @@ pub fn compile(
         Rc<Library>,
         Span,
     )> = Vec::new();
+    let mut pending_host: Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        SmolStr,
+        Span,
+    )> = Vec::new();
 
     parse_toplevel(
         code,
@@ -3280,6 +3368,7 @@ pub fn compile(
         &mut pending_fns,
         #[cfg(not(target_arch = "wasm32"))]
         &mut pending_dylibs,
+        &mut pending_host,
     );
     resolve_types(
         &mut structs,
@@ -3288,8 +3377,10 @@ pub fn compile(
         pending_fns,
         #[cfg(not(target_arch = "wasm32"))]
         pending_dylibs,
+        pending_host,
         &file_namespaces,
         &mut dyn_lib_fns,
+        &mut host_fns,
         &mut dyn_libs,
         &sources,
     );
@@ -3371,16 +3462,22 @@ pub fn compile(
         println!("------------------");
     }
 
-    (
+    CompileOutput {
         instructions,
         registers,
         pools,
         instr_src,
         fn_registers,
         dyn_lib_fns,
+        host_fns,
         allocated_arg_count,
         allocated_call_depth,
         sources,
         structs,
-    )
+        functions,
+        dyn_libs,
+        namespace,
+        const_registers,
+        free_registers,
+    }
 }

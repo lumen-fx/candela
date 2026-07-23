@@ -707,6 +707,17 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
+    let (fn_signatures, end) = parse_fn_signature_block(parser);
+    Expr::ImportDylib(path, fn_signatures, (start, end).into())
+}
+
+/// Parses a brace-delimited block of typed function signatures shared by
+/// `dylib "..." { ... }` and `host "..." { ... }`. The opening `{` must already
+/// have been consumed; this consumes through the closing `}` and returns the
+/// parsed signatures together with the end offset of the `}`.
+fn parse_fn_signature_block(
+    parser: &mut Parser<'_>,
+) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
     let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
     let end: u32;
     loop {
@@ -716,6 +727,7 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         }
 
         let type_start = parser.peek_token();
+        let span = parser.peek_token_span();
         let first = parse_type(parser);
         let fn_name_span: Span;
         let (return_type, fn_name) = if parser.peek_token() == Token::LParen {
@@ -778,7 +790,32 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
         fn_signatures.push((fn_name, Box::from(args), return_type, fn_name_span));
     }
-    Expr::ImportDylib(path, Box::from(fn_signatures), (start, end).into())
+    (fn_signatures.into_boxed_slice(), end)
+}
+
+/// Parses a `host "namespace" { signatures... }` block. The namespace names a
+/// table of Rust closures registered on the embedding [`crate::Engine`]; the
+/// signatures are type-checked at compile time exactly like `dylib` signatures.
+fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
+    let (t, Span { start, end: _ }) = parser.next_token();
+    debug_assert_eq!(t, Token::Host);
+    let (next_token, span) = parser.next_token();
+    let namespace = if let Token::String(s) = next_token {
+        SmolStr::new(parse_string(s))
+    } else {
+        cold_path();
+        parser.error(
+            span,
+            ParserErr::UnexpectedToken(
+                Token::String(""),
+                next_token,
+                "Host namespaces must be strings.",
+            ),
+        );
+    };
+    parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
+    let (fn_signatures, end) = parse_fn_signature_block(parser);
+    Expr::HostBlock(namespace, fn_signatures, (start, end).into())
 }
 
 #[inline(always)]
@@ -791,10 +828,11 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
             Token::Import => parse_file_import(parser),
             Token::Struct => parse_struct_declare(parser),
             Token::Dylib => parse_dylib_import(parser),
+            Token::Host => parse_host_block(parser),
             unexpected => {
                 cold_path();
                 let span = parser.peek_token_span();
-                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), or 'dylib' (dynamic library import)", unexpected, "Invalid file statement."));
+                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
             }
         });
     }

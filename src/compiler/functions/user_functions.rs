@@ -73,7 +73,7 @@ pub fn handle_user_function(
         && let Some(fn_sig) = state
             .dyn_libs
             .iter()
-            .find(|lib| lib.name == namespace[namespace.len() - 2])
+            .find(|lib| !lib.is_host && lib.name == namespace[namespace.len() - 2])
             .and_then(|lib| {
                 lib.fns
                     .iter()

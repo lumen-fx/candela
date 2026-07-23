@@ -100,6 +100,12 @@ pub enum Instr {
     /// CallDynamicLibFunc(fn_id, dest_register_id)
     CallDynamicLibFunc(u16, u16),
 
+    /// CallHostFunc(host_fn_id, dest_register_id)
+    /// Dispatches to a Rust closure registered on the embedding `Engine`,
+    /// marshalling `StoreFuncArg` operands into the closure and its result back
+    /// into `dest_register_id`.
+    CallHostFunc(u16, u16),
+
     StoreFuncArg(u16),
     /// CallLibFunc(function, src_register_id, dest_register_id)
     CallLibFunc(LibFunc, u16, u16),
