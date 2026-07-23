@@ -7,8 +7,19 @@
 
 use keel::{Engine, Value};
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+/// Convenience for building a string-keyed record `Value::Map`.
+fn record(pairs: &[(&str, Value)]) -> Value {
+    Value::Map(
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect(),
+    )
+}
 
 /// Mirrors the author's snippet: `register_host_fn("app", "rows", |id: &str| ...)`
 /// returning an `i64`, a `host "app" { int rows(string); }` block, and a script
@@ -202,4 +213,158 @@ fn main() {}
 
     // The program remains usable for a subsequent good call.
     assert_eq!(program.call("ok", &[2i64.into(), 3i64.into()]).unwrap(), Value::Int(5));
+}
+
+// ---------------------------------------------------------------------------
+// ARRAY + MAP MARSHALLING
+// ---------------------------------------------------------------------------
+
+/// An array round-trips both as a host-fn argument and as a `Program::call`
+/// return value.
+#[test]
+fn array_arg_and_return_roundtrip() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("agg", "sum", |rows: Vec<i64>| rows.iter().sum::<i64>());
+
+    let src = r#"
+host "agg" {
+    int sum(int[]);
+}
+fn total(xs) { return agg::sum(xs); }
+fn make() { return [1, 2, 3, 4]; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "arr.kl").unwrap();
+
+    // Array passed from the host through a script fn into the host closure.
+    let sum = program
+        .call("total", &[Value::Array(vec![10.into(), 20.into(), 5.into()])])
+        .unwrap();
+    assert_eq!(sum, Value::Int(35));
+
+    // Array returned by a script fn, read back out of the pools.
+    let arr = program.call("make", &[]).unwrap();
+    assert_eq!(
+        arr,
+        Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+    );
+}
+
+/// An array built by a host closure marshals into keel and back out.
+#[test]
+fn array_returned_by_host_fn() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("nums", "seq", || vec![7i64, 8, 9]);
+
+    let src = r#"
+host "nums" {
+    int[] seq();
+}
+fn get() { return nums::seq(); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "seq.kl").unwrap();
+    let got = program.call("get", &[]).unwrap();
+    assert_eq!(got, Value::Array(vec![Value::Int(7), Value::Int(8), Value::Int(9)]));
+}
+
+/// A string-keyed map round-trips both directions.
+#[test]
+fn map_roundtrip_both_directions() {
+    let mut engine = Engine::new();
+    // Map argument: sum the values.
+    engine.register_host_fn("cfg", "size", |m: BTreeMap<String, i64>| {
+        m.values().sum::<i64>()
+    });
+
+    let src = r#"
+host "cfg" {
+    int size({string: int});
+}
+fn sz(m) { return cfg::size(m); }
+fn conf() { return {"title": "Song", "artist": "Band"}; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "map.kl").unwrap();
+
+    // Map passed from the host into a host closure via a script fn.
+    let mut m = BTreeMap::new();
+    m.insert("a".to_owned(), Value::Int(1));
+    m.insert("b".to_owned(), Value::Int(2));
+    m.insert("c".to_owned(), Value::Int(4));
+    let total = program.call("sz", &[Value::Map(m)]).unwrap();
+    assert_eq!(total, Value::Int(7));
+
+    // Map built by a script fn, read back as a Value::Map.
+    let conf = program.call("conf", &[]).unwrap();
+    assert_eq!(
+        conf,
+        record(&[
+            ("artist", Value::String("Band".to_owned())),
+            ("title", Value::String("Song".to_owned())),
+        ])
+    );
+}
+
+/// The shape Lumen's track list needs: an array of string-keyed records built
+/// entirely on the host side, marshalled into keel and read back nested.
+#[test]
+fn nested_array_of_maps_track_list() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("lib", "tracks", || -> Vec<BTreeMap<String, String>> {
+        let mk = |title: &str, artist: &str, dur: &str, file: &str| {
+            let mut r = BTreeMap::new();
+            r.insert("title".to_owned(), title.to_owned());
+            r.insert("artist".to_owned(), artist.to_owned());
+            r.insert("dur".to_owned(), dur.to_owned());
+            r.insert("file".to_owned(), file.to_owned());
+            r
+        };
+        vec![
+            mk("Intro", "Aphex", "83", "a.flac"),
+            mk("Xtal", "Aphex", "294", "b.flac"),
+        ]
+    });
+
+    let src = r#"
+host "lib" {
+    {string: string}[] tracks();
+}
+fn all() { return lib::tracks(); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "tracks.kl").unwrap();
+    let got = program.call("all", &[]).unwrap();
+
+    let expected = Value::Array(vec![
+        record(&[
+            ("artist", Value::String("Aphex".to_owned())),
+            ("dur", Value::String("83".to_owned())),
+            ("file", Value::String("a.flac".to_owned())),
+            ("title", Value::String("Intro".to_owned())),
+        ]),
+        record(&[
+            ("artist", Value::String("Aphex".to_owned())),
+            ("dur", Value::String("294".to_owned())),
+            ("file", Value::String("b.flac".to_owned())),
+            ("title", Value::String("Xtal".to_owned())),
+        ]),
+    ]);
+    assert_eq!(got, expected);
+}
+
+/// A collection-typed signature mismatch (closure takes `string[]`, block
+/// declares `int[]`) is a clean `Diagnostic`, not a panic.
+#[test]
+fn collection_signature_mismatch_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("agg", "sum", |_rows: Vec<String>| 0i64);
+    let src = r#"
+host "agg" {
+    int sum(int[]);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "mismatch.kl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
 }

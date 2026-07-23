@@ -285,7 +285,10 @@ pub fn execute(
     allocated_call_depth: usize,
     // Embedding: `host` function signatures and the Rust closures they dispatch
     // to, both indexed by host-function id. Empty for the CLI/REPL/WASM paths.
-    host_sigs: &[HostFnSig],
+    // Marshalling is driven by the runtime `Data` tag, so the signatures are
+    // currently only consumed at compile/bind time (kept here for future
+    // per-argument coercion).
+    _host_sigs: &[HostFnSig],
     host_dispatch: &[HostDispatch],
     // Instruction index to begin execution at. `0` runs `main`; the embedding
     // `Program::call` passes the entry index of an appended call trampoline.
@@ -527,34 +530,26 @@ pub fn execute(
                 };
             }
             Instr::CallHostFunc(fn_id, dest) => {
-                let sig = unsafe { host_sigs.get_unchecked(fn_id as usize) };
                 let dispatch = unsafe { host_dispatch.get_unchecked(fn_id as usize) };
 
+                // Marshal each argument register (scalar or heap handle) into a
+                // host `Value`, recursively for arrays/maps/structs.
                 host_call_args.clear();
                 for idx in 0..args.len() {
                     let data = r[unsafe { *args.get_unchecked(idx) }];
-                    host_call_args.push(match sig.get_arg(idx) {
-                        DataType::Int => Value::Int(i64::from(data.as_int())),
-                        DataType::Float => Value::Float(data.as_float()),
-                        DataType::Bool => Value::Bool(data.as_bool()),
-                        DataType::String => Value::String(data.as_str(string_pool).to_owned()),
-                        _ => Value::Null,
-                    });
+                    host_call_args.push(crate::embed::unmarshal_value(
+                        data, obj_pool, map_pool, string_pool, structs,
+                    ));
                 }
                 args.clear();
 
                 let result = (**dispatch)(&host_call_args);
 
-                r[dest] = match sig.get_return_type() {
-                    DataType::Int => Data::int(result.as_i64().unwrap_or(0) as i32),
-                    DataType::Float => Data::float(result.as_f64().unwrap_or(0.0)),
-                    DataType::Bool => Data::bool(result.as_bool().unwrap_or(false)),
-                    DataType::String => {
-                        let s = result.into_string().unwrap_or_default();
-                        string!(s)
-                    }
-                    _ => NULL,
-                };
+                // Marshal the result back, allocating arrays/maps into the pools.
+                // `Value::Null` (including a void closure's `()`) becomes NULL,
+                // which is what register 0 expects for a discarded result.
+                r[dest] =
+                    crate::embed::marshal_value(&result, obj_pool, map_pool, string_pool);
             }
             Instr::AddFloat(o1, o2, dest) => {
                 r[dest] = (r[o1].as_float() + r[o2].as_float()).into();

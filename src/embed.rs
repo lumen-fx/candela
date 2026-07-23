@@ -35,22 +35,31 @@ use crate::compiler::compiler_data::Pools;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Struct;
+use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
 use crate::compiler::type_system::DataType;
 use crate::data::Data;
+use crate::data::DataHash;
 use crate::data::NULL;
 use crate::errors::Diagnostic;
 use crate::errors::ErrorCtx;
 use crate::errors::collect_diagnostic;
 use crate::instr::Instr;
 use crate::vm;
+use crate::vm::MapPool;
+use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
 use crate::vm::StringPool;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::rc::Rc;
+
+/// A keel runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
+type KeelMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// A dynamically-typed value passed across the host/script boundary.
 ///
@@ -63,6 +72,12 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(String),
+    /// A keel array `T[]`. Elements are expected to be homogeneous, matching
+    /// keel's static array typing.
+    Array(Vec<Self>),
+    /// A keel string-keyed map `{string: V}` (or a struct read back as a record).
+    /// Ordered so equality and iteration are deterministic on the host side.
+    Map(BTreeMap<String, Self>),
 }
 
 impl Value {
@@ -83,8 +98,24 @@ impl Value {
         if let Self::String(s) = self { Some(s.as_str()) } else { None }
     }
     #[must_use]
+    pub const fn as_array(&self) -> Option<&Vec<Self>> {
+        if let Self::Array(a) = self { Some(a) } else { None }
+    }
+    #[must_use]
+    pub const fn as_map(&self) -> Option<&BTreeMap<String, Self>> {
+        if let Self::Map(m) = self { Some(m) } else { None }
+    }
+    #[must_use]
     pub fn into_string(self) -> Option<String> {
         if let Self::String(s) = self { Some(s) } else { None }
+    }
+    #[must_use]
+    pub fn into_array(self) -> Option<Vec<Self>> {
+        if let Self::Array(a) = self { Some(a) } else { None }
+    }
+    #[must_use]
+    pub fn into_map(self) -> Option<BTreeMap<String, Self>> {
+        if let Self::Map(m) = self { Some(m) } else { None }
     }
     #[must_use]
     pub const fn is_null(&self) -> bool {
@@ -127,36 +158,74 @@ impl From<()> for Value {
         Self::Null
     }
 }
+impl<T: Into<Self>> From<Vec<T>> for Value {
+    fn from(v: Vec<T>) -> Self {
+        Self::Array(v.into_iter().map(Into::into).collect())
+    }
+}
+impl<T: Into<Self>> From<BTreeMap<String, T>> for Value {
+    fn from(m: BTreeMap<String, T>) -> Self {
+        Self::Map(m.into_iter().map(|(k, v)| (k, v.into())).collect())
+    }
+}
+impl<T: Into<Self>> From<HashMap<String, T>> for Value {
+    fn from(m: HashMap<String, T>) -> Self {
+        Self::Map(m.into_iter().map(|(k, v)| (k, v.into())).collect())
+    }
+}
 
-/// The primitive type kinds that can cross the host boundary. Used to
-/// type-check a registered closure against its `host` block declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The type kinds that can cross the host boundary.
+///
+/// Used to type-check a registered closure against its `host` block declaration.
+/// `Array`/`Map` are recursive so nested shapes (e.g. `{string: string}[]`)
+/// validate structurally; `Map` is always string-keyed, so only the value type
+/// is carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostType {
     Int,
     Float,
     Bool,
     String,
     Unit,
+    Array(Box<Self>),
+    Map(Box<Self>),
 }
 
 impl HostType {
-    const fn from_datatype(dt: &DataType) -> Option<Self> {
+    /// Maps a keel [`DataType`] onto the host type kind it marshals as, or
+    /// `None` for a type that cannot cross the boundary.
+    fn from_datatype(dt: &DataType) -> Option<Self> {
         match dt {
             DataType::Int => Some(Self::Int),
             DataType::Float => Some(Self::Float),
             DataType::Bool => Some(Self::Bool),
             DataType::String => Some(Self::String),
             DataType::Null => Some(Self::Unit),
+            DataType::Array(Some(inner)) => {
+                Some(Self::Array(Box::new(Self::from_datatype(inner)?)))
+            }
+            DataType::Map(kv) => {
+                // Only string-keyed maps cross the boundary.
+                match &kv.0 {
+                    Some(DataType::String) | None => {}
+                    Some(_) => return None,
+                }
+                let value = kv.1.as_ref().map_or(Some(Self::Unit), Self::from_datatype)?;
+                Some(Self::Map(Box::new(value)))
+            }
             _ => None,
         }
     }
-    const fn as_str(self) -> &'static str {
+
+    fn describe(&self) -> String {
         match self {
-            Self::Int => "int",
-            Self::Float => "float",
-            Self::Bool => "bool",
-            Self::String => "string",
-            Self::Unit => "null",
+            Self::Int => "int".to_owned(),
+            Self::Float => "float".to_owned(),
+            Self::Bool => "bool".to_owned(),
+            Self::String => "string".to_owned(),
+            Self::Unit => "null".to_owned(),
+            Self::Array(inner) => format!("{}[]", inner.describe()),
+            Self::Map(value) => format!("{{string: {}}}", value.describe()),
         }
     }
 }
@@ -217,6 +286,36 @@ impl FromHostValue for String {
     }
     fn host_type() -> HostType {
         HostType::String
+    }
+}
+impl<T: FromHostValue> FromHostValue for Vec<T> {
+    fn from_host_value(v: &Value) -> Self {
+        v.as_array()
+            .map(|items| items.iter().map(T::from_host_value).collect())
+            .unwrap_or_default()
+    }
+    fn host_type() -> HostType {
+        HostType::Array(Box::new(T::host_type()))
+    }
+}
+impl<T: FromHostValue> FromHostValue for BTreeMap<String, T> {
+    fn from_host_value(v: &Value) -> Self {
+        v.as_map()
+            .map(|m| m.iter().map(|(k, val)| (k.clone(), T::from_host_value(val))).collect())
+            .unwrap_or_default()
+    }
+    fn host_type() -> HostType {
+        HostType::Map(Box::new(T::host_type()))
+    }
+}
+impl<T: FromHostValue, S: std::hash::BuildHasher + Default> FromHostValue for HashMap<String, T, S> {
+    fn from_host_value(v: &Value) -> Self {
+        v.as_map()
+            .map(|m| m.iter().map(|(k, val)| (k.clone(), T::from_host_value(val))).collect())
+            .unwrap_or_default()
+    }
+    fn host_type() -> HostType {
+        HostType::Map(Box::new(T::host_type()))
     }
 }
 
@@ -280,6 +379,30 @@ impl IntoHostValue for () {
     }
     fn host_type() -> HostType {
         HostType::Unit
+    }
+}
+impl<T: IntoHostValue> IntoHostValue for Vec<T> {
+    fn into_host_value(self) -> Value {
+        Value::Array(self.into_iter().map(IntoHostValue::into_host_value).collect())
+    }
+    fn host_type() -> HostType {
+        HostType::Array(Box::new(T::host_type()))
+    }
+}
+impl<T: IntoHostValue> IntoHostValue for BTreeMap<String, T> {
+    fn into_host_value(self) -> Value {
+        Value::Map(self.into_iter().map(|(k, v)| (k, v.into_host_value())).collect())
+    }
+    fn host_type() -> HostType {
+        HostType::Map(Box::new(T::host_type()))
+    }
+}
+impl<T: IntoHostValue, S: std::hash::BuildHasher> IntoHostValue for HashMap<String, T, S> {
+    fn into_host_value(self) -> Value {
+        Value::Map(self.into_iter().map(|(k, v)| (k, v.into_host_value())).collect())
+    }
+    fn host_type() -> HostType {
+        HostType::Map(Box::new(T::host_type()))
     }
 }
 
@@ -510,8 +633,8 @@ fn validate_host_fn(
                 sig.namespace,
                 sig.name,
                 idx + 1,
-                declared.as_str(),
-                want.as_str(),
+                declared.describe(),
+                want.describe(),
             )));
         }
     }
@@ -527,8 +650,8 @@ fn validate_host_fn(
             "host function `{}.{}` is declared to return `{}` but the registered closure returns `{}`",
             sig.namespace,
             sig.name,
-            declared_ret.as_str(),
-            registered.ret_type.as_str(),
+            declared_ret.describe(),
+            registered.ret_type.describe(),
         )));
     }
 
@@ -579,17 +702,45 @@ impl Program {
     /// Returns a [`Diagnostic`] if `fn_name` is unknown, if the arguments don't
     /// type-check against its signature, or if the call raises a runtime error.
     pub fn call(&mut self, fn_name: &str, args: &[Value]) -> Result<Value, Diagnostic> {
-        let arg_exprs: Box<[Expr]> = args.iter().map(value_to_expr).collect();
-        let arg_spans: Box<[Span]> = args.iter().map(|_| Span { start: 0, end: 0 }).collect();
+        // Scalars compile as literal exprs; arrays/maps can't, so they are
+        // allocated into the heap pools now and passed as a pre-seeded variable
+        // that holds the handle in a register the trampoline moves into place.
+        let dummy = Span { start: 0, end: 0 };
+        let mut arg_exprs: Vec<Expr> = Vec::with_capacity(args.len());
+        let mut seed_vars: Vec<Variable> = Vec::new();
+        for (i, v) in args.iter().enumerate() {
+            if let Some(expr) = value_to_expr(v) {
+                arg_exprs.push(expr);
+            } else {
+                let handle = marshal_value(
+                    v,
+                    &mut self.pools.objs,
+                    &mut self.pools.maps,
+                    &mut self.pools.strings,
+                );
+                let register_id = self.registers.len() as u16;
+                self.registers.push(handle);
+                let name = SmolStr::from(format!("__host_arg{i}"));
+                seed_vars.push(Variable {
+                    name: name.clone(),
+                    register_id,
+                    var_type: value_datatype(v),
+                });
+                arg_exprs.push(Expr::Var(name, dummy));
+            }
+        }
+
+        let arg_spans: Box<[Span]> = args.iter().map(|_| dummy).collect();
         let call_expr = Expr::FunctionCall(
-            arg_exprs,
+            arg_exprs.into_boxed_slice(),
             Box::from([SmolStr::from(fn_name)]),
-            Span { start: 0, end: 0 },
+            dummy,
             arg_spans,
         );
 
         // Compile the trampoline (type-checks the call) under a diagnostic sink.
-        let (mut output, ret_id) = collect_diagnostic(|| self.build_trampoline(&call_expr))?;
+        let (mut output, ret_id) =
+            collect_diagnostic(|| self.build_trampoline(&call_expr, seed_vars))?;
 
         let ret_id = ret_id.unwrap_or(0);
         output.push(Instr::Halt(0));
@@ -598,9 +749,12 @@ impl Program {
 
         self.execute_from(start)?;
 
-        Ok(data_to_value(
+        Ok(unmarshal_value(
             self.registers[ret_id as usize],
+            &self.pools.objs,
+            &self.pools.maps,
             &self.pools.strings,
+            &self.structs,
         ))
     }
 
@@ -608,7 +762,11 @@ impl Program {
     /// specialized function bodies to a local buffer whose instructions are
     /// absolute (offset by the current instruction count). Returns the buffer
     /// and the register holding the call's result.
-    fn build_trampoline(&mut self, call_expr: &Expr) -> (Vec<Instr>, Option<u16>) {
+    fn build_trampoline(
+        &mut self,
+        call_expr: &Expr,
+        seed_vars: Vec<Variable>,
+    ) -> (Vec<Instr>, Option<u16>) {
         // A prior call whose trampoline aborted mid-inference (error unwind) may
         // have left stale entries in the return-type inference thread-local;
         // clear it so this compile starts clean, exactly as `compile()` does.
@@ -622,7 +780,8 @@ impl Program {
             file_idx: 0,
             offset,
         };
-        let mut variables = Vec::new();
+        // Pre-seeded variables hold heap handles for non-scalar arguments.
+        let mut variables = seed_vars;
         let mut output = Vec::new();
         let mut state = State {
             registers: &mut self.registers,
@@ -695,30 +854,135 @@ impl Program {
     }
 }
 
-/// Synthesizes a literal [`Expr`] carrying a [`Value`] so a host argument can be
-/// compiled through the ordinary call path. keel integers are 32-bit, so
-/// [`Value::Int`] is narrowed here.
-fn value_to_expr(v: &Value) -> Expr {
-    match v {
+/// Synthesizes a literal [`Expr`] carrying a scalar [`Value`] so a host argument
+/// can be compiled through the ordinary call path. keel integers are 32-bit, so
+/// [`Value::Int`] is narrowed here. Returns `None` for non-scalars (arrays/maps),
+/// which cannot be expressed as literal exprs and are instead allocated into the
+/// heap pools and passed as a register handle (see [`Program::call`]).
+fn value_to_expr(v: &Value) -> Option<Expr> {
+    Some(match v {
         Value::Null => Expr::Null,
         Value::Int(i) => Expr::Int(*i as i32),
         Value::Float(f) => Expr::Float(*f),
         Value::Bool(b) => Expr::Bool(*b),
         Value::String(s) => Expr::String(SmolStr::from(s.as_str())),
+        Value::Array(_) | Value::Map(_) => return None,
+    })
+}
+
+/// Infers the keel [`DataType`] of a [`Value`] so a host-provided array/map
+/// argument can be given a type the call site type-checks against. Homogeneous
+/// element/value types are assumed (matching keel's static collection typing);
+/// the first element is sampled, empty collections yield an unknown element type.
+fn value_datatype(v: &Value) -> DataType {
+    match v {
+        Value::Null => DataType::Null,
+        Value::Int(_) => DataType::Int,
+        Value::Float(_) => DataType::Float,
+        Value::Bool(_) => DataType::Bool,
+        Value::String(_) => DataType::String,
+        Value::Array(items) => DataType::Array(
+            items.first().map(|e| Box::new(value_datatype(e))),
+        ),
+        Value::Map(entries) => {
+            let value = entries.values().next().map(value_datatype);
+            DataType::Map(Box::new((Some(DataType::String), value)))
+        }
     }
 }
 
-/// Marshals a runtime [`Data`] register back into a host [`Value`]. Non-scalar
-/// results (arrays, structs, maps) currently surface as [`Value::Null`].
-fn data_to_value(d: Data, strings: &StringPool) -> Value {
+/// Allocates a [`Value`] into keel's heap pools and returns the handle [`Data`].
+///
+/// Scalars become NaN-boxed values directly; arrays/maps are pushed into the
+/// object/map pools (nested structures allocated depth-first) and referenced by
+/// handle. Strings go through [`Data::p_str`], which interns without triggering
+/// the GC — safe because these direct pushes never invoke the collector, so
+/// intermediate handles cannot be reclaimed mid-construction.
+pub fn marshal_value(
+    v: &Value,
+    objs: &mut ObjectPool,
+    maps: &mut MapPool,
+    strings: &mut StringPool,
+) -> Data {
+    match v {
+        Value::Null => NULL,
+        Value::Int(i) => Data::int(*i as i32),
+        Value::Float(f) => Data::float(*f),
+        Value::Bool(b) => Data::bool(*b),
+        Value::String(s) => Data::p_str(s, strings),
+        Value::Array(items) => {
+            let elems: Vec<Data> = items
+                .iter()
+                .map(|e| marshal_value(e, objs, maps, strings))
+                .collect();
+            let id = objs.len() as u32;
+            objs.push(elems);
+            Data::array(id)
+        }
+        Value::Map(entries) => {
+            let mut map: KeelMap = HashMap::default();
+            for (k, val) in entries {
+                let key = Data::p_str(k, strings);
+                let value = marshal_value(val, objs, maps, strings);
+                map.insert(key, value);
+            }
+            let id = maps.len() as u32;
+            maps.push(map);
+            Data::map(id)
+        }
+    }
+}
+
+/// Reads a runtime [`Data`] back into a host [`Value`], recursively for arrays,
+/// maps and structs. Arrays and structs live in the shared object pool; structs
+/// are surfaced as string-keyed [`Value::Map`]s using their declared field
+/// names. Map keys that are not strings are skipped.
+pub fn unmarshal_value(
+    d: Data,
+    objs: &ObjectPool,
+    maps: &MapPool,
+    strings: &StringPool,
+    structs: &[Struct],
+) -> Value {
     if d.is_int() {
         Value::Int(i64::from(d.as_int()))
-    } else if d.is_float() {
-        Value::Float(d.as_float())
     } else if d.is_bool() {
         Value::Bool(d.as_bool())
     } else if d.is_str() {
         Value::String(d.as_str(strings).to_owned())
+    } else if d.is_null() {
+        Value::Null
+    } else if d.is_array() {
+        let items = objs[d.as_array()]
+            .iter()
+            .map(|e| unmarshal_value(*e, objs, maps, strings, structs))
+            .collect();
+        Value::Array(items)
+    } else if d.is_struct() {
+        let fields = &structs[d.struct_type_id() as usize].fields;
+        let values = &objs[d.as_struct()];
+        let record = fields
+            .iter()
+            .zip(values.iter())
+            .map(|((name, _, _), val)| {
+                (name.to_string(), unmarshal_value(*val, objs, maps, strings, structs))
+            })
+            .collect();
+        Value::Map(record)
+    } else if d.is_map() {
+        let record = maps[d.as_map()]
+            .iter()
+            .filter(|(k, _)| k.is_str())
+            .map(|(k, val)| {
+                (
+                    k.as_str(strings).to_owned(),
+                    unmarshal_value(*val, objs, maps, strings, structs),
+                )
+            })
+            .collect();
+        Value::Map(record)
+    } else if d.is_float() {
+        Value::Float(d.as_float())
     } else {
         Value::Null
     }
