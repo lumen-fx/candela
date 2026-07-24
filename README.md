@@ -1,25 +1,33 @@
-![Keel logo](assets/keel_banner.png#gh-light-mode-only)
-![Keel logo](assets/keel_banner_dark.png#gh-dark-mode-only)
+# Candela
 
 > [!WARNING]
-> Keel is under active development
+> Candela is under active development and the API is unstable.
 
-**Keel** is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.
+**Candela** is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.
 
 Its goal is to provide a faster alternative to Python that sits closer to low-level languages while remaining accessible to a wide audience.
 
-**Contributions and issues are welcome!**
+Candela is the embedded scripting language for the Lumen UI framework and is driven through a host-embeddable `Engine`/`Program` API (see `src/embed.rs`).
 
-[Website](https://keel-lang.com)
-[Documentation](https://docs.keel-lang.com)
-[Try Keel in your browser](https://keel-lang.com/playground)
+## Origin and attribution
 
-## Why Keel?
+Candela is a fork of [keel](https://github.com/horacehoff/keel) by Horace Hoff.
+The original work is licensed under the Apache License, Version 2.0; that license
+and Horace Hoff's authorship are retained in full (see `LICENSE` and `NOTICE`).
+Candela renames the language and crate and extends it with a host embedding API
+(variadic host functions, array/map marshalling, structured diagnostics) for use
+inside Lumen. All credit for the original language design and implementation goes
+to Horace Hoff.
 
-- **Fast**: ~2-15x faster than Python ([benchmarks](BENCHMARKS.md)), with aggressive compile-time optimizations
+Upstream project: https://github.com/horacehoff/keel
+
+## Why Candela?
+
+- **Fast**: aggressive compile-time optimizations ([benchmarks](BENCHMARKS.md))
 - **Familiar syntax**: Rust-like, with Python's ease-of-use
 - **Statically typed, zero annotations**: full type inference, static type checking, polymorphism
-- **FFI support**: call C/dynamic libraries directly from Keel
+- **FFI support**: call C/dynamic libraries directly from Candela
+- **Embeddable**: register typed host functions and drive scripts from a Rust host
 - **Built-in REPL**
 
 [Browse examples](examples/)
@@ -48,42 +56,22 @@ fn main() {
 }
 ```
 
-## Benchmarks
-![Keel benchmarks](docs/docs/images/keel-benchmarks.png)
-
-## Installation
-
-### macOS / Linux
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/horacehoff/keel/main/install.sh | sh
-```
-
-### Windows
-
-Download the latest `.zip` from the [releases page](https://github.com/horacehoff/keel/releases/latest) and add the binary to your PATH.
-
-### Build from source (without PGO)
+## Build from source
 
 Make sure [Rust](https://rustup.rs/) is installed.
 
 ```sh
-git clone https://github.com/horacehoff/keel && cd keel && cargo build --release
-./target/release/keel myfile.kl
+cargo build --release
+./target/release/candela myfile.cdl
 ```
 
 ## Usage
 
 ```sh
-keel program.kl    # Run a file
-keel               # Start the REPL
-keel -v/--version  # Print version
-keel -h/--help     # Print help
+candela program.cdl   # Run a file
+candela               # Start the REPL
+candela -v/--version  # Print version
+candela -h/--help     # Print help
 ```
 
-## Near-future roadmap
-- Better, more helpful errors
-- Better module system
-- Struct methods
-- Proper higher-order functions implementation
-- Better embedding API with limits
+Candela source files use the `.cdl` extension.

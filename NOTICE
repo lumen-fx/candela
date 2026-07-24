@@ -1,0 +1,11 @@
+candela is a fork of keel (https://github.com/horacehoff/keel) by Horace Hoff.
+
+Original work licensed under the Apache License, Version 2.0.
+Renamed and extended for the Lumen UI framework.
+
+The original keel copyright and Apache-2.0 license terms are retained in
+full in the LICENSE file. All original authorship by Horace Hoff is
+preserved. Modifications include a host-embeddable Engine/Program API,
+variadic host functions, array/map marshalling across the host boundary,
+structured diagnostics, and the rename of the language and crate to
+candela (source file extension: .cdl).
