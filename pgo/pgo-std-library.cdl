@@ -50,8 +50,8 @@ fn main() {
         print(arr.contains(1));
         print(arr.repeat(2));
         print(arr.partition(4));
-        fs::read("pgo/pgo-std-library.kl");
-        print(fs::exists("pgo/pgo-std-library.kl"));
+        fs::read("pgo/pgo-std-library.cdl");
+        print(fs::exists("pgo/pgo-std-library.cdl"));
         print(argv());
         let map = {"test": 32, "othertest": 42};
         print(map.get("test"));

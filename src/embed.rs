@@ -1,21 +1,21 @@
-//! Embedding / library API for keel.
+//! Embedding / library API for candela.
 //!
 //! This is the persistent, in-process entry point a Rust host (such as Lumen)
-//! uses to embed keel the way it embeds `rhai`/`mlua`: register typed host
+//! uses to embed candela the way it embeds `rhai`/`mlua`: register typed host
 //! functions, compile a script to a reusable [`Program`], and invoke
 //! script-defined functions by name with marshalled arguments — all while
 //! keeping interpreter state (registers + heap pools) alive between calls.
 //!
 //! ```no_run
-//! let mut engine = keel::Engine::new();
+//! let mut engine = candela::Engine::new();
 //! engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
-//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id) { return app.rows(id); }\nfn main() {}", "main.kl")?;
+//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id) { return app.rows(id); }\nfn main() {}", "main.cdl")?;
 //! let rows = program.call("count", &["board".into()])?;
-//! assert_eq!(rows, keel::Value::Int(5));
-//! # Ok::<(), keel::Diagnostic>(())
+//! assert_eq!(rows, candela::Value::Int(5));
+//! # Ok::<(), candela::Diagnostic>(())
 //! ```
 //!
-//! Unlike the one-shot [`crate::keel_run`] C-ABI entry point (which compiles a
+//! Unlike the one-shot [`crate::candela_run`] C-ABI entry point (which compiles a
 //! script, runs `main`, and returns captured stdout), the [`Engine`]/[`Program`]
 //! pair keeps the compiler and VM state resident so the host can drive the
 //! script incrementally. Errors are returned as structured [`Diagnostic`]
@@ -58,12 +58,12 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-/// A keel runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
-type KeelMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
+/// A candela runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
+type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// A dynamically-typed value passed across the host/script boundary.
 ///
-/// keel integers are 32-bit internally (NaN-boxed); [`Value::Int`] widens them
+/// candela integers are 32-bit internally (NaN-boxed); [`Value::Int`] widens them
 /// to `i64` for host ergonomics and narrows on the way back in.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -72,10 +72,10 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(String),
-    /// A keel array `T[]`. Elements are expected to be homogeneous, matching
-    /// keel's static array typing.
+    /// A candela array `T[]`. Elements are expected to be homogeneous, matching
+    /// candela's static array typing.
     Array(Vec<Self>),
-    /// A keel string-keyed map `{string: V}` (or a struct read back as a record).
+    /// A candela string-keyed map `{string: V}` (or a struct read back as a record).
     /// Ordered so equality and iteration are deterministic on the host side.
     Map(BTreeMap<String, Self>),
 }
@@ -192,7 +192,7 @@ pub enum HostType {
 }
 
 impl HostType {
-    /// Maps a keel [`DataType`] onto the host type kind it marshals as, or
+    /// Maps a candela [`DataType`] onto the host type kind it marshals as, or
     /// `None` for a type that cannot cross the boundary.
     fn from_datatype(dt: &DataType) -> Option<Self> {
         match dt {
@@ -493,7 +493,7 @@ impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 /// The persistent embedding entry point. Holds the table of registered host
 /// functions and compiles scripts into reusable [`Program`]s.
 ///
-/// This is the library analogue of the one-shot [`crate::keel_run`]: it does
+/// This is the library analogue of the one-shot [`crate::candela_run`]: it does
 /// not run a script and hand back stdout, it keeps compiler + VM state resident
 /// so the host can call into the script repeatedly.
 #[derive(Default)]
@@ -533,7 +533,7 @@ impl Engine {
     /// without a fixed Rust signature. The `host` block must declare the
     /// function with a `...` argument list:
     ///
-    /// ```keel
+    /// ```candela
     /// host "app" {
     ///     log(...);
     /// }
@@ -593,7 +593,7 @@ impl Engine {
             host_dispatch.push(Rc::clone(&registered.func));
         }
 
-        // Register 0 is keel's void-return / null sink: a call whose result is
+        // Register 0 is candela's void-return / null sink: a call whose result is
         // discarded writes `null` there. A normal program always has register 0
         // occupied by a constant, but an empty `main` can leave it free, which
         // would let a `Program::call` trampoline allocate a function parameter to
@@ -714,14 +714,14 @@ fn validate_host_fn(
     Ok(())
 }
 
-/// A compiled keel program with resident interpreter state.
+/// A compiled candela program with resident interpreter state.
 ///
 /// Registers and heap pools persist between [`Program::call`] invocations, so
 /// state established by one call (including anything a host function mutates on
 /// the Rust side) is visible to the next.
 ///
 /// `Program` is single-threaded (`!Send`/`!Sync`): it holds `Rc` dispatchers
-/// and reflects keel's single-threaded VM.
+/// and reflects candela's single-threaded VM.
 pub struct Program {
     // ---- VM state (persists across calls) ----
     instructions: Vec<Instr>,
@@ -911,7 +911,7 @@ impl Program {
 }
 
 /// Synthesizes a literal [`Expr`] carrying a scalar [`Value`] so a host argument
-/// can be compiled through the ordinary call path. keel integers are 32-bit, so
+/// can be compiled through the ordinary call path. candela integers are 32-bit, so
 /// [`Value::Int`] is narrowed here. Returns `None` for non-scalars (arrays/maps),
 /// which cannot be expressed as literal exprs and are instead allocated into the
 /// heap pools and passed as a register handle (see [`Program::call`]).
@@ -926,9 +926,9 @@ fn value_to_expr(v: &Value) -> Option<Expr> {
     })
 }
 
-/// Infers the keel [`DataType`] of a [`Value`] so a host-provided array/map
+/// Infers the candela [`DataType`] of a [`Value`] so a host-provided array/map
 /// argument can be given a type the call site type-checks against. Homogeneous
-/// element/value types are assumed (matching keel's static collection typing);
+/// element/value types are assumed (matching candela's static collection typing);
 /// the first element is sampled, empty collections yield an unknown element type.
 fn value_datatype(v: &Value) -> DataType {
     match v {
@@ -947,7 +947,7 @@ fn value_datatype(v: &Value) -> DataType {
     }
 }
 
-/// Allocates a [`Value`] into keel's heap pools and returns the handle [`Data`].
+/// Allocates a [`Value`] into candela's heap pools and returns the handle [`Data`].
 ///
 /// Scalars become NaN-boxed values directly; arrays/maps are pushed into the
 /// object/map pools (nested structures allocated depth-first) and referenced by
@@ -976,7 +976,7 @@ pub fn marshal_value(
             Data::array(id)
         }
         Value::Map(entries) => {
-            let mut map: KeelMap = HashMap::default();
+            let mut map: CandelaMap = HashMap::default();
             for (k, val) in entries {
                 let key = Data::p_str(k, strings);
                 let value = marshal_value(val, objs, maps, strings);

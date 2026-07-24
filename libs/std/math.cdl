@@ -1,0 +1,57 @@
+dylib "../std_src/math/math" {
+    float candela_acos(float);
+    float candela_asin(float);
+    float candela_atan(float);
+    float candela_atan2(float, float);
+    float candela_cos(float);
+    float candela_sin(float);
+    float candela_tan(float);
+    float candela_acosh(float);
+    float candela_asinh(float);
+    float candela_atanh(float);
+    float candela_cosh(float);
+    float candela_sinh(float);
+    float candela_tanh(float);
+    float candela_exp(float);
+    float candela_expm1(float);
+    float candela_log(float);
+    float candela_log10(float);
+    float candela_log2(float);
+    float candela_log1p(float);
+    float candela_logb(float);
+    float candela_ldexp(float, int);
+    int candela_ilogb(float);
+    float candela_scalbn(float, int);
+    float candela_cbrt(float);
+    float candela_hypot(float, float);
+    float candela_erf(float);
+    float candela_erfc(float);
+}
+
+fn acos(x) { return math::candela_acos(x); }
+fn asin(x) { return math::candela_asin(x); }
+fn atan(x) { return math::candela_atan(x); }
+fn atan2(x, y) { return math::candela_atan2(x, y); }
+fn cos(x) { return math::candela_cos(x); }
+fn sin(x) { return math::candela_sin(x); }
+fn tan(x) { return math::candela_tan(x); }
+fn acosh(x) { return math::candela_acosh(x); }
+fn asinh(x) { return math::candela_asinh(x); }
+fn atanh(x) { return math::candela_atanh(x); }
+fn cosh(x) { return math::candela_cosh(x); }
+fn sinh(x) { return math::candela_sinh(x); }
+fn tanh(x) { return math::candela_tanh(x); }
+fn exp(x) { return math::candela_exp(x); }
+fn expm1(x) { return math::candela_expm1(x); }
+fn log(x) { return math::candela_log(x); }
+fn log10(x) { return math::candela_log10(x); }
+fn log2(x) { return math::candela_log2(x); }
+fn log1p(x) { return math::candela_log1p(x); }
+fn logb(x) { return math::candela_logb(x); }
+fn ldexp(x, y) { return math::candela_ldexp(x, y); }
+fn ilogb(x) { return math::candela_ilogb(x); }
+fn scalbn(x, y) { return math::candela_scalbn(x, y); }
+fn cbrt(x) { return math::candela_cbrt(x); }
+fn hypot(x, y) { return math::candela_hypot(x, y); }
+fn erf(x) { return math::candela_erf(x); }
+fn erfc(x) { return math::candela_erfc(x); }

@@ -7,5 +7,5 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 /// Live long and prosper
 fn main() {
-    keel::main();
+    candela::main();
 }

@@ -96,20 +96,20 @@ pub fn get_output() -> String {
 #[wasm_bindgen]
 pub fn run(code: String) {
     captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
-    execute_compiled(compile(code, "playground.kl", false));
+    execute_compiled(compile(code, "playground.cdl", false));
 }
 
 #[cfg(feature = "embed")]
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)] // WIP
-pub unsafe extern "C" fn keel_run(code: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
     std::panic::set_hook(Box::new(|_| {}));
     let code = unsafe { CStr::from_ptr(code) }
         .to_string_lossy()
         .to_string();
     captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let _ = catch_unwind(|| {
-        execute_compiled(compile(code, "embedded.kl", false));
+        execute_compiled(compile(code, "embedded.cdl", false));
     });
     let output = captured_output::CAPTURED_OUTPUT.with(|o| o.take());
     CString::new(output).unwrap_or_default().into_raw()
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn keel_run(code: *const c_char) -> *mut c_char {
 #[cfg(feature = "embed")]
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)] // WIP
-pub unsafe extern "C" fn keel_free_output(output: *mut c_char) {
+pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
     if !output.is_null() {
         #[allow(unused_must_use)]
         unsafe {
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn keel_free_output(output: *mut c_char) {
 pub fn main() {
     #[cfg(not(debug_assertions))]
     std::panic::set_hook(Box::new(|info| {
-        eprintln!("{RED}KEEL ERROR{RESET}\n{info}");
+        eprintln!("{RED}CANDELA ERROR{RESET}\n{info}");
     }));
 
     let mut args = std::env::args().skip(1);
@@ -146,8 +146,8 @@ pub fn main() {
     if next_arg == "--help" || next_arg == "-h" {
         cold_path();
         println!(
-            "{}\nKeel is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  keel myfile.kl\n  keel [-v | --version]",
-            util::KEEL_LOGO
+            "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela [-v | --version]",
+            util::CANDELA_LOGO
         );
         return;
     }
@@ -156,11 +156,11 @@ pub fn main() {
         cold_path();
         if args.len() > 1 {
             eprintln!(
-                "{RED}KEEL ERROR{RESET}\nInvalid arguments\nUsage:\n  keel myfile.kl\n  keel [-v | --version]"
+                "{RED}CANDELA ERROR{RESET}\nInvalid arguments\nUsage:\n  candela myfile.cdl\n  candela [-v | --version]"
             );
             return;
         }
-        println!("Keel {}", env!("CARGO_PKG_VERSION"));
+        println!("Candela {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
@@ -169,7 +169,7 @@ pub fn main() {
     let contents = fs::read_to_string(filename).unwrap_or_else(|_| {
         cold_path();
         eprintln!(
-            "--------------\n{RED}KEEL RUNTIME ERROR:{RESET}\nCannot read {RED}{BOLD}{filename}{RESET}\n--------------",
+            "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot read {RED}{BOLD}{filename}{RESET}\n--------------",
         );
         std::process::exit(1);
     });

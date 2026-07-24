@@ -3274,7 +3274,7 @@ fn resolve_types(
     }
 }
 
-/// The complete result of compiling a keel program.
+/// The complete result of compiling a candela program.
 ///
 /// In addition to the fields the CLI/VM needs to run `main`, this carries the
 /// compiler-side tables (`functions`, `dyn_libs`, `namespace`, register
@@ -3439,7 +3439,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
                     );
                 }
                 eprintln!(
-                    "--------------\n{RED}KEEL RUNTIME ERROR:{RESET}\nCannot find {BLUE}{BOLD}main{RESET} function\n--------------",
+                    "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot find {BLUE}{BOLD}main{RESET} function\n--------------",
                 );
                 std::process::exit(1);
             })

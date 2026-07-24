@@ -1,0 +1,17 @@
+dylib "../std_src/random/random" {
+    candela_seed(int);
+    int candela_random_int();
+    int candela_random_int_range(int, int);
+    float candela_random();
+    float candela_random_float_range(float,float);
+}
+
+fn seed(s) { random::candela_seed(s); }
+fn random_int() { return random::candela_random_int(); }
+fn random_int_range(min, max) {
+    return random::candela_random_int_range(min, max);
+}
+fn random() { return random::candela_random(); }
+fn random_range(min, max) {
+    return random::candela_random_float_range(min, max);
+}

@@ -17,35 +17,35 @@ inline void seed(void) {
   seeded = 1;
 }
 
-EXPORT void keel_seed(int32_t seed) {
+EXPORT void candela_seed(int32_t seed) {
   pcg32_srandom_r(&rng, (uint64_t)(uint32_t)seed, 54u);
   seeded = 1;
 }
 
-EXPORT int32_t keel_random_int(void) {
+EXPORT int32_t candela_random_int(void) {
   if (seeded == 0) {
     seed();
   }
   return (int32_t)pcg32_random_r(&rng);
 }
 
-EXPORT int32_t keel_random_int_range(int32_t min, int32_t max) {
+EXPORT int32_t candela_random_int_range(int32_t min, int32_t max) {
   if (seeded == 0) {
     seed();
   }
   return min + (int32_t)pcg32_boundedrand_r(&rng, max - min + 1);
 }
 
-EXPORT double keel_random(void) {
+EXPORT double candela_random(void) {
   if (seeded == 0) {
     seed();
   }
   return ldexp(pcg32_random_r(&rng), -32);
 }
 
-EXPORT double keel_random_float_range(double min, double max) {
+EXPORT double candela_random_float_range(double min, double max) {
   if (seeded == 0) {
     seed();
   }
-  return min + (keel_random() * (max - min));
+  return min + (candela_random() * (max - min));
 }

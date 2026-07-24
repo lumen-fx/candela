@@ -127,11 +127,11 @@ pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code
 ///
 /// **An unwinding panic strategy (`panic = "unwind"`).** This function catches
 /// the internal unwind used to carry a diagnostic out of the error funnels via
-/// [`std::panic::catch_unwind`]. Under `panic = "abort"` — which is keel's own
+/// [`std::panic::catch_unwind`]. Under `panic = "abort"` — which is candela's own
 /// `[profile.release]` default — that unwind cannot be caught: the process
 /// aborts on the first error instead of this returning `Err`. Embedders that
 /// rely on `collect_diagnostic` therefore **must** build with `panic = "unwind"`
-/// (see the `embed` profile in keel's `Cargo.toml`). The CLI never calls this,
+/// (see the `embed` profile in candela's `Cargo.toml`). The CLI never calls this,
 /// so its behavior is unaffected either way.
 ///
 /// While a collection is active this installs a process-global panic hook that
@@ -381,7 +381,7 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
         );
     }
     let err_message: SmolStr = t.into();
-    eprintln!("{RED}KEEL ERROR{RESET}");
+    eprintln!("{RED}CANDELA ERROR{RESET}");
     let report = Report::build(
         ReportKind::Error,
         (src.filename.as_str(), (*start as usize)..(*end as usize)),
@@ -419,8 +419,8 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
 #[inline(never)]
 #[cfg(target_arch = "wasm32")]
 pub fn wasm_error(msg: &str) -> ! {
-    crate::captured_output::print(&format!("KEEL ERROR\n{msg}\n"));
-    wasm_bindgen::throw_str("keel error");
+    crate::captured_output::print(&format!("CANDELA ERROR\n{msg}\n"));
+    wasm_bindgen::throw_str("candela error");
 }
 
 #[cold]
@@ -490,7 +490,7 @@ pub fn crash() -> ! {
     std::process::exit(1);
 
     #[cfg(target_arch = "wasm32")]
-    wasm_bindgen::throw_str("keel_error");
+    wasm_bindgen::throw_str("candela_error");
 
     #[cfg(all(feature = "embed", not(debug_assertions)))]
     panic!();

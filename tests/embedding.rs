@@ -1,11 +1,11 @@
-//! Integration tests for the keel embedding / library API (`Engine`/`Program`).
+//! Integration tests for the candela embedding / library API (`Engine`/`Program`).
 //!
 //! These exercise the exact shape the author asked for: register typed host
 //! functions, declare them in a `host "..."` block, compile a script that calls
 //! them, and invoke script functions by name with marshalled arguments — with
 //! state persisting between calls and errors surfaced as `Diagnostic` values.
 
-use keel::{Engine, Value};
+use candela::{Engine, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ fn count(id) {
 fn main() {}
 "#;
 
-    let mut program = engine.compile(src, "main.kl").expect("compiles");
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
     let result = program.call("count", &["board".into()]).expect("call ok");
     assert_eq!(result, Value::Int(5));
 
@@ -90,7 +90,7 @@ fn get(id) {
 fn main() {}
 "#;
 
-    let mut program = engine.compile(src, "main.kl").expect("compiles");
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
 
     // First call sets state and reads it back.
     assert_eq!(
@@ -137,7 +137,7 @@ fn sh(s) { return m::shout(s); }
 fn main() {}
 "#;
 
-    let mut program = engine.compile(src, "m.kl").unwrap();
+    let mut program = engine.compile(src, "m.cdl").unwrap();
     assert_eq!(program.call("ai", &[41i64.into()]).unwrap(), Value::Int(42));
     assert_eq!(program.call("hf", &[9.0f64.into()]).unwrap(), Value::Float(4.5));
     assert_eq!(program.call("ng", &[true.into()]).unwrap(), Value::Bool(false));
@@ -157,7 +157,7 @@ host "app" {
 }
 fn main() {}
 "#;
-    let err = engine.compile(src, "main.kl").err().unwrap();
+    let err = engine.compile(src, "main.cdl").err().unwrap();
     assert_eq!(err.code, "unregistered_host_fn");
     assert!(err.message.contains("app") && err.message.contains("rows"));
 }
@@ -175,7 +175,7 @@ host "app" {
 }
 fn main() {}
 "#;
-    let err = engine.compile(src, "main.kl").err().unwrap();
+    let err = engine.compile(src, "main.cdl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
 }
 
@@ -184,7 +184,7 @@ fn main() {}
 #[test]
 fn unknown_script_fn_is_a_diagnostic() {
     let engine = Engine::new();
-    let mut program = engine.compile("fn main() {}", "main.kl").unwrap();
+    let mut program = engine.compile("fn main() {}", "main.cdl").unwrap();
     let err = program.call("nope", &[]).unwrap_err();
     assert!(!err.code.is_empty());
     assert!(!err.message.is_empty());
@@ -204,7 +204,7 @@ fn ok(a, b) {
 }
 fn main() {}
 ";
-    let mut program = engine.compile(src, "main.kl").unwrap();
+    let mut program = engine.compile(src, "main.cdl").unwrap();
 
     // Indexing the one-character string "x" at position 5 is an out-of-bounds
     // runtime error, which must come back as a diagnostic rather than abort.
@@ -234,7 +234,7 @@ fn total(xs) { return agg::sum(xs); }
 fn make() { return [1, 2, 3, 4]; }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "arr.kl").unwrap();
+    let mut program = engine.compile(src, "arr.cdl").unwrap();
 
     // Array passed from the host through a script fn into the host closure.
     let sum = program
@@ -250,7 +250,7 @@ fn main() {}
     );
 }
 
-/// An array built by a host closure marshals into keel and back out.
+/// An array built by a host closure marshals into candela and back out.
 #[test]
 fn array_returned_by_host_fn() {
     let mut engine = Engine::new();
@@ -263,7 +263,7 @@ host "nums" {
 fn get() { return nums::seq(); }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "seq.kl").unwrap();
+    let mut program = engine.compile(src, "seq.cdl").unwrap();
     let got = program.call("get", &[]).unwrap();
     assert_eq!(got, Value::Array(vec![Value::Int(7), Value::Int(8), Value::Int(9)]));
 }
@@ -285,7 +285,7 @@ fn sz(m) { return cfg::size(m); }
 fn conf() { return {"title": "Song", "artist": "Band"}; }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "map.kl").unwrap();
+    let mut program = engine.compile(src, "map.cdl").unwrap();
 
     // Map passed from the host into a host closure via a script fn.
     let mut m = BTreeMap::new();
@@ -307,7 +307,7 @@ fn main() {}
 }
 
 /// The shape Lumen's track list needs: an array of string-keyed records built
-/// entirely on the host side, marshalled into keel and read back nested.
+/// entirely on the host side, marshalled into candela and read back nested.
 #[test]
 fn nested_array_of_maps_track_list() {
     let mut engine = Engine::new();
@@ -333,7 +333,7 @@ host "lib" {
 fn all() { return lib::tracks(); }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "tracks.kl").unwrap();
+    let mut program = engine.compile(src, "tracks.cdl").unwrap();
     let got = program.call("all", &[]).unwrap();
 
     let expected = Value::Array(vec![
@@ -365,7 +365,7 @@ host "agg" {
 }
 fn main() {}
 "#;
-    let err = engine.compile(src, "mismatch.kl").err().unwrap();
+    let err = engine.compile(src, "mismatch.cdl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
 }
 
@@ -396,7 +396,7 @@ fn one() { app::log("hi"); }
 fn mixed() { app::log("tag", 42, true); }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "log.kl").expect("compiles");
+    let mut program = engine.compile(src, "log.cdl").expect("compiles");
 
     program.call("none", &[]).unwrap();
     program.call("one", &[]).unwrap();
@@ -428,7 +428,7 @@ host "app" {
 }
 fn main() {}
 "#;
-    let err = engine.compile(src, "log.kl").err().unwrap();
+    let err = engine.compile(src, "log.cdl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
 }
 
@@ -444,11 +444,11 @@ host "app" {
 }
 fn main() {}
 "#;
-    let err = engine.compile(src, "log.kl").err().unwrap();
+    let err = engine.compile(src, "log.cdl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
 }
 
-/// The Lumen `derive` shape compiles today with no new keel feature: a fixed
+/// The Lumen `derive` shape compiles today with no new candela feature: a fixed
 /// `(string, string[], string)` signature, an array literal argument, and a
 /// function referenced by name. Registered state persists so the host can
 /// invoke the named function later.
@@ -478,7 +478,7 @@ fn on_start() {
 fn compute_total(price, qty) { return price * qty; }
 fn main() {}
 "#;
-    let mut program = engine.compile(src, "derive.kl").expect("compiles");
+    let mut program = engine.compile(src, "derive.cdl").expect("compiles");
     program.call("on_start", &[]).unwrap();
 
     let recorded = recorded.borrow();

@@ -1,0 +1,3 @@
+fn main() {
+    print("fib.cdl:\n\n"+fs::read("examples/fib.cdl"));
+}

@@ -126,7 +126,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             t.kind(),
         );
     }
-    eprintln!("{RED}KEEL ERROR{RESET}");
+    eprintln!("{RED}CANDELA ERROR{RESET}");
     let report = Report::build(
         ReportKind::Error,
         (src.filename.as_str(), (start as usize)..(end as usize)),
@@ -164,7 +164,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     std::process::exit(1);
 
     #[cfg(target_arch = "wasm32")]
-    wasm_bindgen::throw_str("keel_error");
+    wasm_bindgen::throw_str("candela_error");
 
     #[cfg(all(feature = "embed", not(debug_assertions)))]
     panic!();

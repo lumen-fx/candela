@@ -6,12 +6,12 @@ use std::io::{Write, stdin, stdout};
 #[inline(never)]
 pub fn repl() {
     println!(
-        "{BLUE}KEEL {} -- REPL (read-eval-print-loop){RESET}",
+        "{BLUE}CANDELA {} -- REPL (read-eval-print-loop){RESET}",
         env!("CARGO_PKG_VERSION")
     );
 
-    let exe = std::env::current_exe().expect("{RED}[ERROR]{RESET} Cannot find keel binary path");
-    let tmp = std::env::temp_dir().join("keel_repl_tmp.kl");
+    let exe = std::env::current_exe().expect("{RED}[ERROR]{RESET} Cannot find candela binary path");
+    let tmp = std::env::temp_dir().join("candela_repl_tmp.cdl");
 
     let mut all_lines: Vec<String> = Vec::with_capacity(1);
     let mut prev_stdout = String::with_capacity(1);
@@ -37,7 +37,7 @@ pub fn repl() {
             s.push(';');
         }
         if s.contains("exit()") && !s.contains('"') {
-            println!("{BLUE}[KEEL TIP]{RESET} To exit, press Ctrl+C");
+            println!("{BLUE}[CANDELA TIP]{RESET} To exit, press Ctrl+C");
         }
 
         all_lines.push(s);
@@ -61,7 +61,7 @@ pub fn repl() {
         let output = std::process::Command::new(&exe)
             .arg(tmp.to_str().unwrap())
             .output()
-            .expect("{RED}[ERROR]{RESET} Failed to execute Keel");
+            .expect("{RED}[ERROR]{RESET} Failed to execute Candela");
 
         std::fs::remove_file(&tmp).unwrap();
 

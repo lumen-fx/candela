@@ -34,7 +34,7 @@ pub fn keep_buffer_alive(
     ptr
 }
 
-/// Converts a Keel array to a C pointer for libffi
+/// Converts a Candela array to a C pointer for libffi
 #[cfg(not(target_arch = "wasm32"))]
 pub fn array_to_c_ptr(
     data: Data,
@@ -94,7 +94,7 @@ pub fn array_to_c_ptr(
     }
 }
 
-/// Computes a Keel struct's size, alignment, and per-field offsets
+/// Computes a Candela struct's size, alignment, and per-field offsets
 /// Returns (size, alignment, field_offsets)
 #[cfg(not(target_arch = "wasm32"))]
 fn get_struct_size(struct_fields: &[Data], obj_pool: &ObjectPool) -> (usize, usize, Vec<usize>) {
@@ -130,7 +130,7 @@ fn get_struct_size(struct_fields: &[Data], obj_pool: &ObjectPool) -> (usize, usi
 }
 
 /// (Uses DataType)
-/// Computes a Keel struct's size, alignment, and per-field offsets
+/// Computes a Candela struct's size, alignment, and per-field offsets
 /// Returns (size, alignment, field_offsets)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn get_struct_size_datatype(
@@ -173,7 +173,7 @@ pub fn get_struct_size_datatype(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn keel_struct_to_c_struct(
+pub fn candela_struct_to_c_struct(
     struct_index: usize,
     obj_pool: &ObjectPool,
     string_pool: &StringPool,
@@ -208,7 +208,7 @@ pub fn keel_struct_to_c_struct(
                     .copy_from_slice_unchecked(&ptr);
             } else if field.is_struct() {
                 let b =
-                    keel_struct_to_c_struct(field.as_struct(), obj_pool, string_pool, keep_alive);
+                    candela_struct_to_c_struct(field.as_struct(), obj_pool, string_pool, keep_alive);
                 buf.get_unchecked_mut(offset..offset + b.len())
                     .copy_from_slice_unchecked(&b);
             } else {
@@ -220,7 +220,7 @@ pub fn keel_struct_to_c_struct(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn c_struct_to_keel_struct(
+pub fn c_struct_to_candela_struct(
     c_struct: &[u8],
     field_offsets: &[usize],
     obj_pool: &mut ObjectPool,
@@ -278,7 +278,7 @@ pub fn c_struct_to_keel_struct(
             DataType::Struct(nested_struct_id) => {
                 let s = unsafe { structs.get_unchecked(*nested_struct_id as usize) };
                 let (_, _, inner_offsets) = get_struct_size_datatype(&s.fields, structs);
-                let nested_data_fields = c_struct_to_keel_struct(
+                let nested_data_fields = c_struct_to_candela_struct(
                     &c_struct[field_offset..],
                     &inner_offsets,
                     obj_pool,

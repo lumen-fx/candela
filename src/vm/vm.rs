@@ -442,7 +442,7 @@ pub fn execute(
                             ffi_args.push(libffi::middle::Arg::new(&*args_ptr.add(idx)));
                         }
                     } else if data.is_struct() {
-                        let b = ffi::keel_struct_to_c_struct(
+                        let b = ffi::candela_struct_to_c_struct(
                             data.as_struct(),
                             obj_pool,
                             str_pool,
@@ -489,7 +489,7 @@ pub fn execute(
                                 libffi::middle::ret(&mut return_buf[..]),
                             );
 
-                            let data_fields = ffi::c_struct_to_keel_struct(
+                            let data_fields = ffi::c_struct_to_candela_struct(
                                 &return_buf,
                                 &field_offsets,
                                 obj_pool,
@@ -985,7 +985,7 @@ pub fn execute(
                 }
                 r[dest_reg_id] = Data::array(new_array_id);
             }
-            // Keel currently indexes strings by byte, meaning multi-byte characters won't get properly indexed
+            // Candela currently indexes strings by byte, meaning multi-byte characters won't get properly indexed
             Instr::GetIndexString(tgt, index, dest) => {
                 let idx = r[index].as_int();
                 let tgt_data = r[tgt];

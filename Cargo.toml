@@ -1,5 +1,5 @@
 [package]
-name = "keel"
+name = "candela"
 version = "0.3.0"
 edition = "2024"
 authors = ["Horace Hoff <horace.hoff@gmail.com>"]
@@ -65,7 +65,7 @@ getrandom = { version = "0.3.4", features = ["wasm_js"] }
 wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 
 [lib]
-name = "keel"
+name = "candela"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
