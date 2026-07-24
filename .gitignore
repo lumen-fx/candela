@@ -1,7 +1,7 @@
 /target
 /.zed
 /.idea
-test.kl
+test.cdl
 docs/benchmarks.py
 /lib_testing
 /testing

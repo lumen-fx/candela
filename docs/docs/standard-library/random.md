@@ -7,7 +7,7 @@ icon: lucide/dice-5
 
     This is highly subject to change.
 
-Import this library with `import "std/random.kl";` at the top-level.
+Import this library with `import "std/random.cdl";` at the top-level.
 
 *[at the top-level]: Outside of any function.
 

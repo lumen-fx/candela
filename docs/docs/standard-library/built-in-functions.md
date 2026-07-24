@@ -391,7 +391,7 @@ print(arr); // Prints "[1,2,3]"
 Returns the arguments passed to the script, excluding the interpreter path and script name.
 
 ```
-// ./keel script.kl foo bar
+// ./candela script.cdl foo bar
 argv() // Returns ["foo", "bar"]
 ```
 ## Exit

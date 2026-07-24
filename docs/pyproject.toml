@@ -1,7 +1,7 @@
 [project]
-name = "keel-docs"
+name = "candela-docs"
 version = "0.1.0"
-description = "The documentation for the Keel programming language."
+description = "The documentation for the Candela programming language."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []

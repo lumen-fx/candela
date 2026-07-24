@@ -13,7 +13,7 @@ fn main() { // This is another comment!
 ```
 
 ## Breakdown
-The heart of every Keel file is the main function, it's the entry point of your program. Any Keel file used as the program's entry point must define a `main` function.<br/>
+The heart of every Candela file is the main function, it's the entry point of your program. Any Candela file used as the program's entry point must define a `main` function.<br/>
 
 
 `fn` is the keyword used to declare the function. `main` is the name of the function. `()` indicates that our function doesn't take any arguments as input (more on functions and function arguments in [Functions](functions.md).).<br/>We then use curly braces to enclose the function's code. You'll encounter curly braces pretty much everywhere, as they're used to enclose 'blocks'.<br/>

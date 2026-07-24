@@ -11,33 +11,33 @@
 # The site_name is shown in the page header and the browser window title
 #
 # Read more: https://zensical.org/docs/setup/basics/#site_name
-site_name = "Keel Docs"
+site_name = "Candela Docs"
 
 # The site_description is included in the HTML head and should contain a
 # meaningful description of the site content for use by search engines.
 #
 # Read more: https://zensical.org/docs/setup/basics/#site_description
-site_description = "Documentation for Keel, a fast, statically-typed interpreted programming language."
+site_description = "Documentation for Candela, a fast, statically-typed interpreted programming language."
 
 # The site_author attribute. This is used in the HTML head element.
 #
 # Read more: https://zensical.org/docs/setup/basics/#site_author
-site_author = "Horace Hoff"
+site_author = "Lumen FX"
 
-repo_url = "https://github.com/horacehoff/keel"
-repo_name = "horacehoff/keel"
+repo_url = "https://github.com/lumen-fx/candela"
+repo_name = "lumen-fx/candela"
 
 # The site_url is the canonical URL for your site. When building online
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
-site_url = "https://docs.keel-lang.com"
+site_url = "https://github.com/lumen-fx/candela"
 
 # The copyright notice appears in the page footer and can contain an HTML
 # fragment.
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2026 Horace Hoff
+Copyright &copy; 2026 Lumen FX &middot; Candela is a fork of keel by Horace Hoff
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
@@ -341,7 +341,7 @@ toggle.name = "Switch to light mode"
 # ----------------------------------------------------------------------------
 [[project.extra.social]]
 icon = "fontawesome/brands/github"
-link = "https://github.com/horacehoff/keel"
+link = "https://github.com/lumen-fx/candela"
 
 # ----------------------------------------------------------------------------
 # In this section you can configure the Markdown extensions that are used when

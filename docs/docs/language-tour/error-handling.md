@@ -3,7 +3,7 @@ icon: lucide/triangle-alert
 ---
 # Error handling
 
-Keel does error handling through Try/Catch blocks. These allow you to run code potentially expecting one or more errors, and to run code in case an error arises, and are not entirely dissimilar to the if blocks.
+Candela does error handling through Try/Catch blocks. These allow you to run code potentially expecting one or more errors, and to run code in case an error arises, and are not entirely dissimilar to the if blocks.
 
 You can view the list of errors that can be caught in [Errors](../reference/errors.md#list-of-catchable-errors).
 

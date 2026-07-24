@@ -1,25 +1,25 @@
-# Keel benchmarks
-> Keel is still experimental, and more optimizations are still to come.
+# Candela benchmarks
+> Candela is still experimental, and more optimizations are still to come.
 
 All times are measured with [hyperfine](https://github.com/sharkdp/hyperfine) (`--runs 150 --warmup 10`). All benchmarks are run on a 2021 M1 Pro Macbook Pro with 16GBs of ram.
 
-Keel release binaries are built with PGO, and the instrumented binary is trained on representative Keel programs, including smaller-input versions of some benchmarks shown here.
+Candela release binaries are built with PGO, and the instrumented binary is trained on representative Candela programs, including smaller-input versions of some benchmarks shown here.
 The PGO workflow is visible [here](.github/workflows/release.yml).
 
 
 ## Iterative fib(46) x 200000
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [iter_fib.kl](/examples/iter_fib/iter_fib.kl) | [iter_fib.py](/examples/iter_fib/iter_fib.py) | [iter_fib.lua](/examples/iter_fib/iter_fib.lua) |
+| [iter_fib.cdl](/examples/iter_fib/iter_fib.cdl) | [iter_fib.py](/examples/iter_fib/iter_fib.py) | [iter_fib.lua](/examples/iter_fib/iter_fib.lua) |
 | 73.4ms | 740ms | 72.5ms |
 
 
 ## Recursive fib(10,15,20,25,30,33)
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [fib.kl](/examples/fib/fib.kl) | [fib.py](/examples/fib/fib.py) | [fib.lua](/examples/fib/fib.lua) |
+| [fib.cdl](/examples/fib/fib.cdl) | [fib.py](/examples/fib/fib.py) | [fib.lua](/examples/fib/fib.lua) |
 | 189.1ms | 507.4ms | 183.4ms |
 
 
@@ -28,38 +28,38 @@ Based on [this benchmark from The Computer Language Benchmarks Game](https://ben
 `nbody_lua` is based on [the fastest Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-lua-2.html).\
 `nbody_py` is based on [the fastest Python implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-python3-1.html).
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [nbody_lua.kl](/examples/nbody/nbody_lua.kl) | [nbody_lua.py](/examples/nbody/nbody_lua.py) | [nbody_lua.lua](/examples/nbody/nbody_lua.lua) |
+| [nbody_lua.cdl](/examples/nbody/nbody_lua.cdl) | [nbody_lua.py](/examples/nbody/nbody_lua.py) | [nbody_lua.lua](/examples/nbody/nbody_lua.lua) |
 | 451.5ms | 2649ms | 458.5ms |
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [nbody_py.kl](/examples/nbody/nbody_py.kl) | [nbody_py.py](/examples/nbody/nbody_py.py) | [nbody_py.lua](/examples/nbody/nbody_py.lua) |
+| [nbody_py.cdl](/examples/nbody/nbody_py.cdl) | [nbody_py.py](/examples/nbody/nbody_py.py) | [nbody_py.lua](/examples/nbody/nbody_py.lua) |
 | 565.4ms | 2726ms | 581.2ms |
 
 ## Binary trees (N=16)
 Based on [this benchmark from The Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html#binarytrees).\
 Based on [this Python implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-python3-2.html) and [this Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-lua-2.html).
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [binary-trees.kl](/examples/binary-trees/binary-trees.kl) | [binary-trees.py](/examples/binary-trees/binary-trees.py) | [binary-trees.lua](/examples/binary-trees/binary-trees.lua) |
+| [binary-trees.cdl](/examples/binary-trees/binary-trees.cdl) | [binary-trees.py](/examples/binary-trees/binary-trees.py) | [binary-trees.lua](/examples/binary-trees/binary-trees.lua) |
 | 540.7ms | 1264ms | 541.8ms |
 
 
 ## Quicksort (N=10000)
 
-| Keel | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3.14.5 | LuaJIT (-joff) |
 | --- | --- | --- |
-| [quicksort.kl](/examples/quicksort/quicksort.kl) | [quicksort.py](/examples/quicksort/quicksort.py) | [quicksort.lua](/examples/quicksort/quicksort.lua) |
+| [quicksort.cdl](/examples/quicksort/quicksort.cdl) | [quicksort.py](/examples/quicksort/quicksort.py) | [quicksort.lua](/examples/quicksort/quicksort.lua) |
 | 348.4ms | 730.9ms | 1755ms |
 
 ## Sqrt (N=0 to 9999999)
 
 <table>
 <tr>
-  <th>Keel</th>
+  <th>Candela</th>
   <th>Python 3</th>
   <th>LuaJIT (-joff)</th>
 </tr>
@@ -95,7 +95,7 @@ print(x)</code></pre></td>
 
 <table>
 <tr>
-  <th>Keel</th>
+  <th>Candela</th>
   <th>Python 3</th>
   <th>LuaJIT (-joff)</th>
 </tr>
@@ -139,7 +139,7 @@ print(count)</code></pre></td>
 
 <table>
 <tr>
-  <th>Keel</th>
+  <th>Candela</th>
   <th>Python 3</th>
   <th>LuaJIT (-joff)</th>
 </tr>
@@ -198,7 +198,7 @@ Almost all the functions from the standard library are tested, except file syste
 
 <table>
 <tr>
-  <th>Keel</th>
+  <th>Candela</th>
   <th>Python 3</th>
   <th>LuaJIT (-joff)</th>
 </tr>
@@ -357,7 +357,7 @@ int increment(int x) {
 
 <table>
 <tr>
-  <th>Keel</th>
+  <th>Candela</th>
   <th>Python 3</th>
   <th>LuaJIT (-joff)</th>
 </tr>

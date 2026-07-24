@@ -34,7 +34,7 @@ fn main() {
 }
 ```
 
-If the extension is omitted, Keel will choose the correct extension based on your OS, and it will also try to load an architecture-specific version if one exists. This makes cross-platform & cross-architecture dynamic library loading possible from a single Keel file. For example:
+If the extension is omitted, Candela will choose the correct extension based on your OS, and it will also try to load an architecture-specific version if one exists. This makes cross-platform & cross-architecture dynamic library loading possible from a single Candela file. For example:
 
 ```rust
 // On macOS, it will try to load "my_test-aarch64.dylib"

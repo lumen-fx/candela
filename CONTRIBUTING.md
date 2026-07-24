@@ -1,4 +1,4 @@
-# Contributing to Keel
+# Contributing to Candela
 
 Welcome! Contributions and issues are really appreciated.
 

@@ -3,16 +3,16 @@ icon: lucide/circle-alert
 ---
 # Errors
 
-Keel aims to have pretty & helpful error messages. Right now, they're not very helpful...
+Candela aims to have pretty & helpful error messages. Right now, they're not very helpful...
 ```rust
 fn main() {
     print(x)
 }
 
 -- OUTPUT -- 
-KEEL ERROR
+CANDELA ERROR
 Error:
-   ╭─[ test.kl:3:1 ]
+   ╭─[ test.cdl:3:1 ]
    │
  3 │ }
    │ ┬

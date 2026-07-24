@@ -22,44 +22,44 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: keel-aarch64-apple-darwin
-            embed_artifact: libkeel-aarch64-apple-darwin
+            artifact: candela-aarch64-apple-darwin
+            embed_artifact: libcandela-aarch64-apple-darwin
             rustflags: ""
-            bin: keel
-            lib: libkeel.dylib
+            bin: candela
+            lib: libcandela.dylib
 
           - os: macos-26-intel
             target: x86_64-apple-darwin
-            artifact: keel-x86_64-apple-darwin
-            embed_artifact: libkeel-x86_64-apple-darwin
+            artifact: candela-x86_64-apple-darwin
+            embed_artifact: libcandela-x86_64-apple-darwin
             rustflags: "-C target-cpu=x86-64-v3"
-            bin: keel
-            lib: libkeel.dylib
+            bin: candela
+            lib: libcandela.dylib
 
           # Two tiers: v3 and baseline v1
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: keel-x86_64-linux-v3
-            embed_artifact: libkeel-x86_64-linux-v3
+            artifact: candela-x86_64-linux-v3
+            embed_artifact: libcandela-x86_64-linux-v3
             rustflags: "-C target-cpu=x86-64-v3"
-            bin: keel
-            lib: libkeel.so
+            bin: candela
+            lib: libcandela.so
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: keel-x86_64-linux-v1
-            embed_artifact: libkeel-x86_64-linux-v1
+            artifact: candela-x86_64-linux-v1
+            embed_artifact: libcandela-x86_64-linux-v1
             rustflags: "-C target-cpu=x86-64"
-            bin: keel
-            lib: libkeel.so
+            bin: candela
+            lib: libcandela.so
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: keel-x86_64-windows
-            embed_artifact: libkeel-x86_64-windows
+            artifact: candela-x86_64-windows
+            embed_artifact: libcandela-x86_64-windows
             rustflags: "-C target-cpu=x86-64-v3"
-            bin: keel.exe
-            lib: keel.dll
+            bin: candela.exe
+            lib: candela.dll
 
     steps:
       - uses: actions/checkout@v6
@@ -91,15 +91,15 @@ jobs:
 
       - name: Gather PGO profiles
         run: |
-          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-std-library.kl
-          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_lua.kl 10000
-          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_py.kl 10000
-          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/binary-trees/binary-trees.kl 10
-          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/fib/fib.kl
-          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/iter_fib/iter_fib.kl
-          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-fizzbuzz.kl
-          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-dynlib.kl
-          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-import.kl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-std-library.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_lua.cdl 10000
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_py.cdl 10000
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/binary-trees/binary-trees.cdl 10
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/fib/fib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/iter_fib/iter_fib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-fizzbuzz.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-dynlib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-import.cdl
 
       - name: Build stdlib dylibs (macOS)
         if: runner.os == 'macOS'
@@ -131,7 +131,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/keel dist/
+          cp target/${{ matrix.target }}/release/candela dist/
           cp -R libs dist/
           cp LICENSE THIRD-PARTY-LICENSE dist/
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
@@ -140,7 +140,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType "Directory" -Force -Path "dist"
-          Copy-Item "target/${{ matrix.target }}/release/keel.exe" "dist/"
+          Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"

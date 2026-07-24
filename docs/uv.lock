@@ -45,7 +45,7 @@ wheels = [
 ]
 
 [[package]]
-name = "keel-docs"
+name = "candela-docs"
 version = "0.1.0"
 source = { virtual = "." }
 

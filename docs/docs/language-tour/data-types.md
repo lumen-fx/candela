@@ -3,18 +3,18 @@ icon: lucide/binary
 ---
 
 # Data types
-Every data has a given type. Keel does full type inference, requiring zero annotations, meaning Keel will automatically infer the type of everything in your program (which allows the compiler to perform multiple optimizations).
+Every data has a given type. Candela does full type inference, requiring zero annotations, meaning Candela will automatically infer the type of everything in your program (which allows the compiler to perform multiple optimizations).
 
-Keel has 6 built-in types, plus user-defined structs.
+Candela has 6 built-in types, plus user-defined structs.
 
 You can view all the built-in functions in [Built-in functions](../standard-library/built-in-functions.md).
 
 ## Integer (`int`)
 
-An [integer](https://wikipedia.org/wiki/Integer) is a whole number that can be written without a fractional component. Behind the scenes, Keel integers are `i32`, meaning they're signed (they can be negative or positive), and are 32 bits long.
+An [integer](https://wikipedia.org/wiki/Integer) is a whole number that can be written without a fractional component. Behind the scenes, Candela integers are `i32`, meaning they're signed (they can be negative or positive), and are 32 bits long.
 They can store values from `-2147483648` to `2147483647`.
 
-In the case of integer overflow, Keel will **not** warn you and will wrap, meaning the value `-2147483649` will become `2147483647`, and the value `2147483648` will become `-2147483648`.
+In the case of integer overflow, Candela will **not** warn you and will wrap, meaning the value `-2147483649` will become `2147483647`, and the value `2147483648` will become `-2147483648`.
 
 [Integer operators](../reference/operators.md#integerfloat-operators)
 
@@ -30,7 +30,7 @@ fn main() {
     While integers are stored as `i32`, it would technically be possible to stretch them to `i48`. While this isn't planned for now, there's room to grow in the future if it becomes desirable.
 
 ## Float (`float`)
-A [float](https://wikipedia.org/wiki/Floating-point_arithmetic) is a number with a decimal point. Keel floats are `f64`, meaning they're 64 bits big and can store values from `-1.7976931348623157 * 10^308` to `1.7976931348623157 * 10^308`. If a value become too big, floats saturate to positive or negative infinity.
+A [float](https://wikipedia.org/wiki/Floating-point_arithmetic) is a number with a decimal point. Candela floats are `f64`, meaning they're 64 bits big and can store values from `-1.7976931348623157 * 10^308` to `1.7976931348623157 * 10^308`. If a value become too big, floats saturate to positive or negative infinity.
 Floats must always be written with the decimal point included.
 
 [Float operators](../reference/operators.md#integerfloat-operators)
@@ -83,7 +83,7 @@ fn main() {
 ```
 
 ## Array (`T[]`)
-An [array](https://en.wikipedia.org/wiki/Array_(data_structure)) is simply a mutable collection of elements. Keel arrays are homogeneous, meaning they can only hold elements of a single type. An array's type is written `T[]`, with `T` representing the type the array holds, which can be any type (even another array!).
+An [array](https://en.wikipedia.org/wiki/Array_(data_structure)) is simply a mutable collection of elements. Candela arrays are homogeneous, meaning they can only hold elements of a single type. An array's type is written `T[]`, with `T` representing the type the array holds, which can be any type (even another array!).
 
 Since arrays are collections, they can be indexed, sliced, and concatenated.
 
@@ -147,7 +147,7 @@ fn main() {
 ```
 
 ## Map (`{K: V}`)
-A [map](https://wikipedia.org/wiki/Associative_array) is a collection of key-value pairs in which keys are unique. They allow for O(1) retrieval and insertion. Keel maps can only store one key-value type, and their type is written `{K: V}`, `K` representing the type of the keys, which can be any type, and `V` representing the type of the values, which can also be any type. Map keys must be literals.
+A [map](https://wikipedia.org/wiki/Associative_array) is a collection of key-value pairs in which keys are unique. They allow for O(1) retrieval and insertion. Candela maps can only store one key-value type, and their type is written `{K: V}`, `K` representing the type of the keys, which can be any type, and `V` representing the type of the values, which can also be any type. Map keys must be literals.
 
 ``` rust
 fn main() {

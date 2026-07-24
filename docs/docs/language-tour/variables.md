@@ -4,7 +4,7 @@ icon: lucide/variable
 
 # Variables
 
-Variables are containers that allow you to store data. In Keel, all variables are mutable.<br/>
+Variables are containers that allow you to store data. In Candela, all variables are mutable.<br/>
 Variables are declared with `let name = value`. To mutate a variable, simply write `name = value`.
 
 ``` rust
