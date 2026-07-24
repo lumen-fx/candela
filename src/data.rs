@@ -6,9 +6,6 @@ use smol_strc::ToSmolStr;
 use std::hash::Hasher;
 use std::hint::unreachable_unchecked;
 
-// 51 bits of total payload => 3 bits for data type & 48 bits of actual payload
-// 1111_1111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// |    NAN TAG   |                    TYPE TAG + PAYLOAD                        |
 const NAN_BASE: u64 =
     0b1111_1111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
 const PAYLOAD_MASK: u64 = 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111;
@@ -24,6 +21,24 @@ pub const NULL: Data = Data(NAN_NULL);
 pub const FALSE: Data = Data(NAN_BOOL);
 pub const TRUE: Data = Data(NAN_BOOL | 1);
 
+/// NaN-boxed u64.
+/// ### Layout:
+/// - first 13 bits are NaN
+/// - remaining 51 bits: 3 bits for type (4 for the MAP type) & 48 bits of actual payload (47 for the MAP type)
+///
+/// ### Data type:
+/// - BOOL = 001
+/// - STRING_SMALL = 010
+/// - STRING_LARGE = 011
+/// - ARRAY = 100
+/// - NULL = 101
+/// - INT = 110
+/// - STRUCT = 111
+/// - MAP = 1111
+///
+/// ### Strings
+/// Strings are inlined if they're 6 bytes long or less.
+/// If they're longer, they're stored in `string_pool`.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Data(pub u64);
 
@@ -39,6 +54,50 @@ impl Hasher for DataHash {
     }
     fn write_u64(&mut self, i: u64) {
         self.0 = i;
+    }
+}
+
+pub trait PoolString {
+    fn pool_as_str(&self) -> &str;
+    fn move_to_slot(self, slot: &mut String);
+    fn push_to_pool(self, str_pool: &mut StringPool);
+    fn str_len(&self) -> usize;
+}
+
+impl PoolString for String {
+    #[inline(always)]
+    fn pool_as_str(&self) -> &str {
+        self.as_str()
+    }
+    #[inline(always)]
+    fn move_to_slot(self, slot: &mut String) {
+        *slot = self;
+    }
+    #[inline(always)]
+    fn push_to_pool(self, pool: &mut StringPool) {
+        pool.push(self);
+    }
+    #[inline(always)]
+    fn str_len(&self) -> usize {
+        self.len()
+    }
+}
+impl PoolString for &str {
+    #[inline(always)]
+    fn pool_as_str(&self) -> &str {
+        self
+    }
+    #[inline(always)]
+    fn move_to_slot(self, slot: &mut String) {
+        self.clone_into(slot);
+    }
+    #[inline(always)]
+    fn push_to_pool(self, string_pool: &mut StringPool) {
+        string_pool.push(self.to_owned());
+    }
+    #[inline(always)]
+    fn str_len(&self) -> usize {
+        self.len()
     }
 }
 
@@ -105,13 +164,15 @@ impl Data {
     pub const fn is_array(self) -> bool {
         (self.0 & !PAYLOAD_MASK) == NAN_ARRAY
     }
+    /// This will create a new inlined string.
+    /// In debug it'll panic (just in case).
+    /// The caller guarantees that `s` is never longer than 6 bytes.
     #[inline(always)]
     pub fn small_str(s: &str) -> Self {
         debug_assert!(s.len() <= 6);
-        let bytes = s.as_bytes();
         let mut payload: u64 = 0;
         // Packs 6 bytes into the payload, filling up the 48 payload bits
-        for (i, byte) in bytes.iter().enumerate() {
+        for (i, byte) in s.as_bytes().iter().enumerate() {
             payload |= (*byte as u64) << (i * 8);
         }
         Self(NAN_STRING_SMALL | (payload & PAYLOAD_MASK))
@@ -120,8 +181,8 @@ impl Data {
     pub const fn large_str_id(id: u64) -> Self {
         Self(NAN_STRING_LARGE | id)
     }
+    /// Same as str(), except this never runs the GC because this function is called by the compiler
     #[inline(always)]
-    /// Same as str(), except this never runs the GC because this function is called by the parser
     pub fn p_str(s: &str, string_pool: &mut StringPool) -> Self {
         if s.len() <= 6 {
             Self::small_str(s)
@@ -133,10 +194,9 @@ impl Data {
             Self(NAN_STRING_LARGE | string_pool_id)
         }
     }
-    #[inline(always)]
     /// Allocates a string, storing it directly inside the u64 if it's <= 6 characters or inside string_pool if it's bigger
-    pub fn str(
-        s: &str,
+    pub fn string<S: PoolString>(
+        s: S,
         array_pool: &ObjectPool,
         string_pool: &mut StringPool,
         registers: &RegisterFile,
@@ -145,8 +205,8 @@ impl Data {
         gc_string_threshold: &mut u32,
         string_live: &mut Vec<bool>,
     ) -> Self {
-        if s.len() <= 6 {
-            Self::small_str(s)
+        if s.str_len() <= 6 {
+            Self::small_str(s.pool_as_str())
         } else {
             if string_pool.len() >= (*gc_string_threshold as usize) && free_strings.is_empty() {
                 raise_string_gc_threshold(gc_string_threshold, string_pool.len());
@@ -160,53 +220,18 @@ impl Data {
                 );
             }
             if let Some(id) = free_strings.pop() {
-                s.clone_into(&mut string_pool[id as usize]);
+                s.move_to_slot(string_pool.get_mut(id as usize));
                 Self(NAN_STRING_LARGE | (id as u64))
             } else {
                 let string_pool_id = string_pool.len() as u64;
-                string_pool.push(s.to_owned());
-                Self(NAN_STRING_LARGE | string_pool_id)
-            }
-        }
-    }
-    #[inline(always)]
-    pub fn string(
-        s: String,
-        array_pool: &ObjectPool,
-        string_pool: &mut StringPool,
-        registers: &RegisterFile,
-        recursion_stack: &RegisterFile,
-        free_strings: &mut Vec<u16>,
-        gc_string_threshold: &mut u32,
-        string_live: &mut Vec<bool>,
-    ) -> Self {
-        if s.len() <= 6 {
-            Self::small_str(&s)
-        } else {
-            if string_pool.len() >= (*gc_string_threshold as usize) && free_strings.is_empty() {
-                raise_string_gc_threshold(gc_string_threshold, string_pool.len());
-                string_gc(
-                    array_pool,
-                    string_pool,
-                    free_strings,
-                    registers,
-                    recursion_stack,
-                    string_live,
-                );
-            }
-            if let Some(id) = free_strings.pop() {
-                string_pool[id as usize] = s;
-                Self(NAN_STRING_LARGE | (id as u64))
-            } else {
-                let string_pool_id = string_pool.len() as u64;
-                string_pool.push(s);
+                s.push_to_pool(string_pool);
                 Self(NAN_STRING_LARGE | string_pool_id)
             }
         }
     }
     #[inline(always)]
     pub fn as_str(&self, string_pool: &StringPool) -> &str {
-        debug_assert!(self.is_str());
+        debug_assert!(self.is_string());
         if (self.0 & !PAYLOAD_MASK) == NAN_STRING_SMALL {
             let payload = self.0 & PAYLOAD_MASK;
             let len = ((64 - payload.leading_zeros()) as usize + 7) >> 3;
@@ -221,7 +246,7 @@ impl Data {
         }
     }
     #[inline(always)]
-    pub const fn is_str(self) -> bool {
+    pub const fn is_string(self) -> bool {
         // this works because NAN_TAG_STRING_LARGE == NAN_TAG_STRING_SMALL + (1 << 48)
         (self.0 & !PAYLOAD_MASK).wrapping_sub(NAN_STRING_SMALL) <= const { 1u64 << 48 }
     }
@@ -302,7 +327,7 @@ impl Data {
             self.as_int().to_smolstr()
         } else if self.is_bool() {
             self.as_bool().to_smolstr()
-        } else if self.is_str() {
+        } else if self.is_string() {
             if show_str {
                 self.as_str(string_pool).to_smolstr()
             } else {

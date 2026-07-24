@@ -1004,7 +1004,7 @@ pub fn unmarshal_value(
         Value::Int(i64::from(d.as_int()))
     } else if d.is_bool() {
         Value::Bool(d.as_bool())
-    } else if d.is_str() {
+    } else if d.is_string() {
         Value::String(d.as_str(strings).to_owned())
     } else if d.is_null() {
         Value::Null
@@ -1028,7 +1028,7 @@ pub fn unmarshal_value(
     } else if d.is_map() {
         let record = maps[d.as_map()]
             .iter()
-            .filter(|(k, _)| k.is_str())
+            .filter(|(k, _)| k.is_string())
             .map(|(k, val)| {
                 (
                     k.as_str(strings).to_owned(),
