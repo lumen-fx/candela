@@ -22,6 +22,7 @@ mod captured_output;
 mod compiler;
 #[path = "./data.rs"]
 mod data;
+mod embed;
 #[path = "./util/errors.rs"]
 mod errors;
 #[path = "./instr.rs"]
@@ -41,6 +42,50 @@ mod util;
 #[path = "./vm/vm.rs"]
 mod vm;
 
+pub use errors::Diagnostic;
+pub use errors::collect_diagnostic;
+
+pub use embed::Engine;
+pub use embed::FromHostValue;
+pub use embed::HostType;
+pub use embed::IntoHostFn;
+pub use embed::IntoHostValue;
+pub use embed::Program;
+pub use embed::Value;
+
+/// Runs a freshly compiled program's `main` to completion on the CLI/REPL path.
+/// The embedding API (`Engine`/`Program`) drives the VM directly instead, with
+/// the host-function tables the CLI never has.
+fn execute_compiled(out: compiler::CompileOutput) {
+    let compiler::CompileOutput {
+        instructions,
+        registers,
+        mut pools,
+        instr_src,
+        fn_registers,
+        dyn_lib_fns,
+        structs,
+        allocated_arg_count,
+        allocated_call_depth,
+        sources,
+        ..
+    } = out;
+    vm::execute(
+        &instructions,
+        &mut RegisterFile(registers),
+        &mut pools,
+        &ErrorCtx { instr_src, sources },
+        &fn_registers,
+        &dyn_lib_fns,
+        &structs,
+        allocated_arg_count,
+        allocated_call_depth,
+        &[],
+        &[],
+        0,
+    );
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn get_output() -> String {
@@ -51,63 +96,20 @@ pub fn get_output() -> String {
 #[wasm_bindgen]
 pub fn run(code: String) {
     captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
-    let (
-        instructions,
-        registers,
-        mut arrays,
-        instr_src,
-        fn_registers,
-        fn_dyn_libs,
-        allocated_arg_count,
-        allocated_call_depth,
-        sources,
-        struct_fields,
-    ) = compile(code, "playground.kl", false);
-    vm::execute(
-        &instructions,
-        &mut RegisterFile(registers),
-        &mut arrays,
-        &ErrorCtx { instr_src, sources },
-        &fn_registers,
-        &fn_dyn_libs,
-        &struct_fields,
-        allocated_arg_count,
-        allocated_call_depth,
-    );
+    execute_compiled(compile(code, "playground.kl", false));
 }
 
 #[cfg(feature = "embed")]
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)] // WIP
 pub unsafe extern "C" fn keel_run(code: *const c_char) -> *mut c_char {
+    std::panic::set_hook(Box::new(|_| {}));
     let code = unsafe { CStr::from_ptr(code) }
         .to_string_lossy()
         .to_string();
     captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let _ = catch_unwind(|| {
-        let (
-            instructions,
-            registers,
-            mut arrays,
-            instr_src,
-            fn_registers,
-            fn_dyn_libs,
-            allocated_arg_count,
-            allocated_call_depth,
-            sources,
-            struct_fields,
-        ) = compile(code, "embedded.kl", false);
-        vm::execute(
-            &instructions,
-            &mut RegisterFile(registers),
-            &mut arrays,
-            &ErrorCtx { instr_src, sources },
-            &fn_registers,
-            &fn_dyn_libs,
-            &struct_fields,
-            allocated_arg_count,
-            allocated_call_depth,
-        );
+        execute_compiled(compile(code, "embedded.kl", false));
     });
     let output = captured_output::CAPTURED_OUTPUT.with(|o| o.take());
     CString::new(output).unwrap_or_default().into_raw()
@@ -177,31 +179,10 @@ pub fn main() {
         let next = args.next();
         if next == Some(String::from("--debug")) {
             let now = std::time::Instant::now();
-            let (
-                instructions,
-                registers,
-                mut arrays,
-                instr_src,
-                fn_registers,
-                fn_dyn_libs,
-                allocated_arg_count,
-                allocated_call_depth,
-                sources,
-                struct_fields,
-            ) = compile(contents, filename, true);
+            let out = compile(contents, filename, true);
             println!("COMPILATION TIME: {:.2?}", now.elapsed());
             let now = std::time::Instant::now();
-            vm::execute(
-                &instructions,
-                &mut RegisterFile(registers),
-                &mut arrays,
-                &ErrorCtx { instr_src, sources },
-                &fn_registers,
-                &fn_dyn_libs,
-                &struct_fields,
-                allocated_arg_count,
-                allocated_call_depth,
-            );
+            execute_compiled(out);
             println!(
                 "EXECUTION TIME: {:.3}ms",
                 now.elapsed().as_nanos() / 1_000_000
@@ -213,27 +194,5 @@ pub fn main() {
         }
     }
 
-    let (
-        instructions,
-        registers,
-        mut arrays,
-        instr_src,
-        fn_registers,
-        fn_dyn_libs,
-        allocated_arg_count,
-        allocated_call_depth,
-        sources,
-        struct_fields,
-    ) = compile(contents, filename, false);
-    vm::execute(
-        &instructions,
-        &mut RegisterFile(registers),
-        &mut arrays,
-        &ErrorCtx { instr_src, sources },
-        &fn_registers,
-        &fn_dyn_libs,
-        &struct_fields,
-        allocated_arg_count,
-        allocated_call_depth,
-    );
+    execute_compiled(compile(contents, filename, false));
 }

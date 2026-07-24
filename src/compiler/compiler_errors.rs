@@ -57,6 +57,10 @@ pub fn error_array_diff_types(
             .finish()
         },
         sources,
+        file_idx,
+        array_span,
+        &format!("Invalid array types: this array holds elements of type {array_elem_type} but an element of type {failing_elem_type} was found"),
+        "array_element_type_mismatch",
     );
 }
 
@@ -99,6 +103,10 @@ pub fn error_invalid_type(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Invalid type: expected {expected_type}, but this expression's type is {perceived_type}"),
+        "invalid_type",
     );
 }
 
@@ -144,6 +152,10 @@ pub fn error_division_by_zero(modulo: bool, span: Span, file_idx: u16, sources: 
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("{} by zero", if modulo { "Modulo" } else { "Division" }),
+        if modulo { "modulo_by_zero" } else { "division_by_zero" },
     );
 }
 
@@ -185,6 +197,10 @@ pub fn error_cannot_push_type_to_array(
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Cannot insert {elem_type} in {array_type}"),
+        "cannot_push_type_to_array",
     );
 }
 
@@ -226,6 +242,10 @@ pub fn error_type_not_indexable(
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("This expression's type is {t}, which cannot be {}", if iterator_error { "iterated on" } else { "indexed" }),
+        if iterator_error { "type_not_iterable" } else { "type_not_indexable" },
     );
 }
 
@@ -252,6 +272,10 @@ pub fn error_conditional_expression_without_else(
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        "Inline if blocks must have an else branch",
+        "conditional_without_else",
     );
 }
 
@@ -274,6 +298,10 @@ pub fn error_cannot_read_file(span: Span, file_idx: u16, sources: &[Source]) -> 
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        "Cannot read file: this file cannot be found",
+        "cannot_read_file",
     );
 }
 
@@ -296,6 +324,10 @@ pub fn error_cannot_load_dynlib(span: Span, file_idx: u16, sources: &[Source]) -
             .finish()
         },
         sources,
+        file_idx,
+        span,
+        "Cannot load dynamic library: this dynamic library cannot be found/loaded",
+        "cannot_load_dynlib",
     );
 }
 
@@ -332,6 +364,10 @@ pub fn error_cannot_find_dynlib_symbol(
             .finish()
         },
         sources,
+        file_idx,
+        symbol_span,
+        &format!("Cannot find symbol {symbol} in this dynamic library"),
+        "dynlib_symbol_not_found",
     );
 }
 
@@ -373,6 +409,10 @@ pub fn error_map_diff_types(
             .finish()
         },
         sources,
+        file_idx,
+        map_span,
+        &format!("Invalid map types: this map holds entries of type {map_elem_type} but an expression of type {failing_elem_type} was found"),
+        "map_entry_type_mismatch",
     );
 }
 
@@ -400,6 +440,10 @@ pub fn error_unknown_struct(
             .finish()
         },
         sources,
+        file_idx,
+        struct_span,
+        &format!("Unknown struct {struct_name}"),
+        "unknown_struct",
     );
 }
 
@@ -437,6 +481,10 @@ pub fn error_struct_no_such_field(
             report.finish()
         },
         sources,
+        file_idx,
+        struct_field_span,
+        &format!("There is no field {struct_field_name} in {struct_name}"),
+        "struct_no_such_field",
     );
 }
 
@@ -477,6 +525,10 @@ pub fn error_struct_missing_fields(
             report.finish()
         },
         sources,
+        file_idx,
+        struct_literal_span,
+        &format!("Missing struct field{}: {}", if missing_fields.len() > 1 { "s" } else { "" }, missing_fields.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")),
+        "struct_missing_fields",
     );
 }
 
@@ -511,6 +563,10 @@ pub fn check_args(
                 report.finish()
             },
             sources,
+            file_idx,
+            span,
+            &format!("Function {fn_name} expects {expected_args_len} arguments but {} arguments were supplied", args.len()),
+            "arity_mismatch",
         );
     }
 }
@@ -547,6 +603,10 @@ pub fn error_invalid_obj_type(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Function {fn_name} expects this expression's type to be {} but here its type is {perceived_type}", expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join(" or ")),
+        "invalid_object_type",
     );
 }
 
@@ -615,6 +675,10 @@ pub fn check_args_user_fn(
                 report.finish()
             },
             state.sources,
+            file_idx,
+            span,
+            &format!("Function {fn_name} expects {expected_args_len} arguments but {args_len} arguments were supplied"),
+            "arity_mismatch",
         );
     }
 }
@@ -674,6 +738,10 @@ pub fn check_args_range(
                 report.finish()
             },
             sources,
+            file_idx,
+            span,
+            &format!("Function {fn_name} expects at least {min_args_len} and at most {max_args_len} arguments but {} were supplied", args.len()),
+            "arity_mismatch_range",
         );
     }
 }
@@ -725,6 +793,10 @@ pub fn error_struct_unknown_field(
             report.finish()
         },
         sources,
+        file_idx,
+        field_span,
+        &format!("The field {field} isn't defined in struct {struct_name}"),
+        "struct_field_not_defined",
     );
 }
 
@@ -786,6 +858,10 @@ pub fn error_struct_field_invalid_type(
             report.finish()
         },
         sources,
+        file_idx,
+        value_span,
+        &format!("Field {struct_field_name} in struct {struct_name} expects type {struct_field_type}, but this expression is of type {value_type}"),
+        "struct_field_type_mismatch",
     );
 }
 
@@ -869,6 +945,10 @@ pub fn error_unknown_variable(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Cannot find variable {var_name} in this scope"),
+        "unknown_variable",
     )
 }
 
@@ -909,6 +989,10 @@ pub fn error_unknown_function(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Cannot find function {fn_name} in this scope"),
+        "unknown_function",
     )
 }
 
@@ -940,6 +1024,10 @@ pub fn error_unknown_namespace(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("{} is not a valid namespace", namespace.join("::")),
+        "unknown_namespace",
     )
 }
 
@@ -984,6 +1072,10 @@ pub fn error_unknown_function_in_namespace(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Cannot find function {fn_name} in namespace {namespace_str}"),
+        "unknown_function_in_namespace",
     )
 }
 
@@ -1021,6 +1113,10 @@ pub fn error_function_already_defined(
             report.finish()
         },
         sources,
+        file_idx,
+        redeclaration_span,
+        &format!("Function {} is already defined", func.name),
+        "function_already_defined",
     )
 }
 
@@ -1136,6 +1232,14 @@ pub fn error_op(
             report.finish()
         },
         sources,
+        file_idx,
+        span_l.extend(span_r),
+        &if (op == "-" && l == &DataType::Null) || op == "!" {
+            format!("Cannot perform operation {op} {r}")
+        } else {
+            format!("Cannot perform operation {l} {op} {r}")
+        },
+        "invalid_operation",
     );
 }
 
@@ -1173,6 +1277,10 @@ pub fn error_unknown_type(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Unknown type {t}"),
+        "unknown_type",
     )
 }
 
@@ -1214,6 +1322,10 @@ pub fn error_unknown_type_with_namespace(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Unknown type {t}"),
+        "unknown_type_in_namespace",
     )
 }
 
@@ -1247,6 +1359,10 @@ pub fn error_duplicate_map_key(
             .finish()
         },
         sources,
+        file_idx,
+        key_repeat_span,
+        "Key is defined more than once in map",
+        "duplicate_map_key",
     );
 }
 
@@ -1275,6 +1391,10 @@ pub fn error_not_literal_map_key(
             .finish()
         },
         sources,
+        file_idx,
+        key_span,
+        "Map keys must be literals",
+        "map_key_not_literal",
     );
 }
 
@@ -1316,6 +1436,10 @@ pub fn error_function_arg_invalid_type(
             report.finish()
         },
         sources,
+        file_idx,
+        arg_span,
+        &format!("Function {fn_name} expects this argument's type to be {expected_type}, but this expression's type is {perceived_type}"),
+        "argument_type_mismatch",
     );
 }
 
@@ -1357,6 +1481,10 @@ pub fn error_function_arg_invalid_type_multiple(
             report.finish()
         },
         sources,
+        file_idx,
+        arg_span,
+        &format!("Function {fn_name} expects this argument to be of type {}, but this expression's type is {perceived_type}", expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join(" or ")),
+        "argument_type_mismatch",
     );
 }
 
@@ -1396,5 +1524,9 @@ pub fn error_range_invalid_type(
             report.finish()
         },
         sources,
+        file_idx,
+        span,
+        &format!("Invalid type in range: expected int, but this expression's type is {perceived_type}"),
+        "range_element_type_mismatch",
     );
 }

@@ -52,12 +52,58 @@ pub struct FnSignature {
     pub args: Box<[DataType]>,
     pub return_type: DataType,
     pub id: u16,
+    /// When true (host functions only) the call site accepts any number of
+    /// arguments of any type and forwards them to the registered closure as a
+    /// slice; `args` is empty and no arity/type checking is performed.
+    pub variadic: bool,
 }
 
 #[derive(Debug)]
 pub struct Dynamiclib {
     pub name: SmolStr,
     pub fns: Box<[FnSignature]>,
+    /// When true, this namespace's functions are backed by Rust closures
+    /// registered on the embedding `Engine` (a `host "..."` block) rather than
+    /// by C symbols loaded from a shared object. Host calls compile to
+    /// [`crate::instr::Instr::CallHostFunc`] instead of `CallDynamicLibFunc`, and
+    /// their `FnSignature::id` indexes the program's host-function table.
+    pub is_host: bool,
+}
+
+/// Marshalling signature for a `host` function, indexed by
+/// [`FnSignature::id`]. `types[0]` is the return type; `types[1..]` are the
+/// argument types. Mirrors [`DynamicLibFn::types`] but carries no FFI state,
+/// since dispatch goes through a registered Rust closure.
+#[derive(Debug, Clone)]
+pub struct HostFnSig {
+    /// [ return_type, arg_types... ]
+    pub types: Box<[DataType]>,
+    /// The `(namespace, name)` this signature was declared under, used by the
+    /// `Engine` to bind the matching registered closure.
+    pub namespace: SmolStr,
+    pub name: SmolStr,
+    /// Declared with `...` in the `host` block: the call site forwards any
+    /// number of arguments of any type to the registered closure and the
+    /// `Engine` skips signature validation. `types` holds only the return type.
+    pub variadic: bool,
+}
+
+impl HostFnSig {
+    #[inline(always)]
+    #[must_use]
+    pub fn get_return_type(&self) -> &DataType {
+        unsafe { self.types.get_unchecked(0) }
+    }
+    #[inline(always)]
+    #[must_use]
+    pub fn get_arg(&self, idx: usize) -> &DataType {
+        unsafe { self.types.get_unchecked(1 + idx) }
+    }
+    #[inline(always)]
+    #[must_use]
+    pub fn arg_count(&self) -> usize {
+        self.types.len() - 1
+    }
 }
 
 #[derive(Debug)]
@@ -76,10 +122,6 @@ impl DynamicLibFn {
     #[inline(always)]
     pub fn get_return_type(&self) -> &DataType {
         unsafe { self.types.get_unchecked(0) }
-    }
-    #[inline(always)]
-    pub fn get_arg(&self, idx: usize) -> &DataType {
-        unsafe { self.types.get_unchecked(1 + idx) }
     }
 }
 

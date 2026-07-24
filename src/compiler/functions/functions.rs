@@ -37,7 +37,7 @@ pub fn check_arg_type(
     expected: &[DataType],
 ) {
     let inferred = args[arg_idx].infer_type(v, ctx, state);
-    let matches = if let DataType::Poly(polytype) = &inferred {
+    let matches = if let DataType::Union(polytype) = &inferred {
         polytype.iter().all(|x| expected.contains(x))
     } else {
         expected.contains(&inferred)
@@ -97,32 +97,46 @@ pub fn handle_functions(
             span,
             args_indexes,
         )
-    } else if let Some((fn_args, returns_null, dyn_id)) = state
+    } else if let Some((fn_args, returns_null, dyn_id, is_host, is_variadic)) = state
         .dyn_libs
         .iter()
         .find(|l| l.name == namespace[0])
-        .and_then(|lib| lib.fns.iter().find(|x| x.name == fn_name))
-        .map(|sig| (sig.args.clone(), sig.return_type == DataType::Null, sig.id))
+        .and_then(|lib| {
+            lib.fns.iter().find(|x| x.name == fn_name).map(|sig| {
+                (
+                    sig.args.clone(),
+                    sig.return_type == DataType::Null,
+                    sig.id,
+                    lib.is_host,
+                    sig.variadic,
+                )
+            })
+        })
     {
-        check_args(
-            args,
-            fn_args.len(),
-            fn_name,
-            span,
-            state.sources,
-            ctx.file_idx,
-        );
-        for (i, a) in fn_args.iter().enumerate() {
-            check_arg_type(
-                fn_name,
-                v,
-                ctx,
-                state,
+        // A variadic host fn accepts any argument count and any types, so its
+        // arity/type checks are skipped; every supplied argument is still
+        // compiled and stored, and the registered closure receives them all.
+        if !is_variadic {
+            check_args(
                 args,
-                args_indexes,
-                i,
-                slice::from_ref(a),
+                fn_args.len(),
+                fn_name,
+                span,
+                state.sources,
+                ctx.file_idx,
             );
+            for (i, a) in fn_args.iter().enumerate() {
+                check_arg_type(
+                    fn_name,
+                    v,
+                    ctx,
+                    state,
+                    args,
+                    args_indexes,
+                    i,
+                    slice::from_ref(a),
+                );
+            }
         }
 
         for arg in args {
@@ -140,7 +154,11 @@ pub fn handle_functions(
         } else {
             state.alloc_reg_tgt(tgt_id)
         };
-        output.push(Instr::CallDynamicLibFunc(dyn_id, register_id));
+        if is_host {
+            output.push(Instr::CallHostFunc(dyn_id, register_id));
+        } else {
+            output.push(Instr::CallDynamicLibFunc(dyn_id, register_id));
+        }
         state.add_to_src(ctx, output, span);
         if returns_null {
             None

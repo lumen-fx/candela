@@ -4,7 +4,194 @@ use crate::{compiler::type_system::DataType, instr::Instr};
 use ariadne::FnCache;
 use ariadne::{Color, Label, Report, ReportKind};
 use smol_strc::{SmolStr, ToSmolStr};
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
+use std::ops::Range;
+
+/// A structured compile/runtime error, produced instead of printing + exiting
+/// whenever a diagnostic sink is installed (see `collect_diagnostic`).
+///
+/// `span` is a byte range into the source named by `filename`.
+/// `code` is a stable, machine-readable error identifier, e.g.
+/// `index_out_of_bounds`, `unexpected_eof`, or `compile_error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub filename: String,
+    pub span: Range<usize>,
+    pub message: String,
+    pub code: String,
+}
+
+/// Panic payload used to unwind out of compilation/execution once a
+/// diagnostic has been recorded in the active sink.
+struct FatalError;
+
+thread_local! {
+    static DIAGNOSTIC_SINK: RefCell<Option<Diagnostic>> = const { RefCell::new(None) };
+    static SINK_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static SUPPRESS_PANIC_HOOK: Cell<bool> = const { Cell::new(false) };
+}
+
+type BoxedHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+/// Process-global bookkeeping for the scoped, silencing panic hook installed by
+/// [`collect_diagnostic`]. `depth` counts how many `collect_diagnostic` calls
+/// are currently active across all threads; `previous` holds the host's own
+/// panic hook, captured when the first collection begins and restored when the
+/// last one ends — so the host's hook is never *permanently* clobbered.
+struct HookState {
+    depth: usize,
+    previous: Option<BoxedHook>,
+}
+
+static HOOK_STATE: std::sync::Mutex<HookState> =
+    std::sync::Mutex::new(HookState { depth: 0, previous: None });
+
+/// Recover the guarded state even if a previous panic-hook invocation poisoned
+/// the mutex (a chained host hook is allowed to panic without wedging us).
+fn lock_hook_state() -> std::sync::MutexGuard<'static, HookState> {
+    HOOK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Installs the silencing hook for the duration of a `collect_diagnostic` scope,
+/// capturing the host's current hook the first time collection becomes active.
+///
+/// The hook is shared by nested/concurrent collections via `depth`; it forwards
+/// every panic to the host's saved hook *except* the internal `FatalError`
+/// unwind on a thread that is actively collecting (which it silences).
+fn enter_silencing_hook() {
+    let mut state = lock_hook_state();
+    if state.depth == 0 {
+        state.previous = Some(std::panic::take_hook());
+        std::panic::set_hook(Box::new(|info| {
+            if SUPPRESS_PANIC_HOOK.with(Cell::get) && info.payload().is::<FatalError>() {
+                return;
+            }
+            let state = lock_hook_state();
+            if let Some(previous) = state.previous.as_ref() {
+                previous(info);
+            }
+        }));
+    }
+    state.depth += 1;
+}
+
+/// Undoes one `enter_silencing_hook`; when the last active collection ends, the
+/// host's original hook is put back so the process is left exactly as we found
+/// it.
+fn leave_silencing_hook() {
+    let mut state = lock_hook_state();
+    state.depth -= 1;
+    if state.depth == 0 && let Some(previous) = state.previous.take() {
+        std::panic::set_hook(previous);
+    }
+}
+
+/// Whether errors should be recorded as a `Diagnostic` instead of being
+/// printed and aborting the process. This is what keeps the CLI behavior
+/// byte-for-byte identical: without an active sink, every error path behaves
+/// exactly as before.
+#[inline]
+pub fn diagnostics_enabled() -> bool {
+    SINK_ACTIVE.with(Cell::get)
+}
+
+/// Records `Diagnostic` data in the active sink and unwinds to the enclosing
+/// `collect_diagnostic` call. Must only be called when `diagnostics_enabled()`.
+///
+/// The three error funnels are fatal-on-first-error (they return `!`), so a
+/// single slot is enough: the first error to fire is the one reported.
+#[cold]
+#[inline(never)]
+pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code: &str) -> ! {
+    DIAGNOSTIC_SINK.with(|sink| {
+        *sink.borrow_mut() = Some(Diagnostic {
+            filename: filename.to_owned(),
+            span,
+            message,
+            code: code.to_owned(),
+        });
+    });
+    std::panic::panic_any(FatalError);
+}
+
+/// Runs `f` with a diagnostic sink installed.
+///
+/// An error that would normally print a report and exit/panic instead records a
+/// [`Diagnostic`] and unwinds back here. Nested calls are supported (the
+/// previous state is restored), and genuine panics (real bugs) are *not*
+/// swallowed — they propagate through unchanged.
+///
+/// # Requires
+///
+/// **An unwinding panic strategy (`panic = "unwind"`).** This function catches
+/// the internal unwind used to carry a diagnostic out of the error funnels via
+/// [`std::panic::catch_unwind`]. Under `panic = "abort"` — which is keel's own
+/// `[profile.release]` default — that unwind cannot be caught: the process
+/// aborts on the first error instead of this returning `Err`. Embedders that
+/// rely on `collect_diagnostic` therefore **must** build with `panic = "unwind"`
+/// (see the `embed` profile in keel's `Cargo.toml`). The CLI never calls this,
+/// so its behavior is unaffected either way.
+///
+/// While a collection is active this installs a process-global panic hook that
+/// silences only the internal diagnostic unwind and forwards every other panic
+/// to the host's own hook. The host's hook is captured on entry and restored
+/// once the outermost collection finishes, so it is never permanently replaced.
+///
+/// # Errors
+///
+/// Returns the [`Diagnostic`] recorded by the first error funnel that fired
+/// while `f` was running (parser, compiler or runtime).
+pub fn collect_diagnostic<R>(f: impl FnOnce() -> R) -> Result<R, Diagnostic> {
+    enter_silencing_hook();
+    let previous_active = SINK_ACTIVE.replace(true);
+    let previous_sink = DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take());
+    let previous_suppress = SUPPRESS_PANIC_HOOK.replace(true);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    let recorded = DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take());
+    DIAGNOSTIC_SINK.with(|sink| *sink.borrow_mut() = previous_sink);
+    SINK_ACTIVE.set(previous_active);
+    SUPPRESS_PANIC_HOOK.set(previous_suppress);
+    leave_silencing_hook();
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            if payload.is::<FatalError>() {
+                Err(recorded.unwrap_or_else(|| Diagnostic {
+                    filename: String::new(),
+                    span: 0..0,
+                    message: String::from("unknown error"),
+                    code: String::from("unknown"),
+                }))
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// Removes ANSI escape sequences (colors/bold) from an error message so that
+/// structured diagnostics carry plain text.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1B' {
+            // Skip a CSI sequence: ESC '[' ... final byte in '@'..='~'
+            if chars.next() == Some('[') {
+                for f in chars.by_ref() {
+                    if ('@'..='~').contains(&f) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 pub const BLUE: &str = "\x1B[94m";
 pub fn blue<F: std::fmt::Display>(t: F) -> String {
@@ -183,6 +370,16 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
             file_id: 0,
         });
     let src = &ctx.sources[*file_id as usize];
+    if diagnostics_enabled() {
+        let code = t.kind().to_owned();
+        let err_message: SmolStr = t.into();
+        emit_diagnostic(
+            src.filename.as_str(),
+            (*start as usize)..(*end as usize),
+            strip_ansi(err_message.as_str()),
+            &code,
+        );
+    }
     let err_message: SmolStr = t.into();
     eprintln!("{RED}KEEL ERROR{RESET}");
     let report = Report::build(
@@ -231,7 +428,19 @@ pub fn wasm_error(msg: &str) -> ! {
 pub fn throw_compiler_error<'a>(
     report: &dyn Fn() -> Report<'a, (&'a str, core::ops::Range<usize>)>,
     sources: &'a [Source],
+    file_idx: u16,
+    span: Span,
+    message: &str,
+    code: &'static str,
 ) -> ! {
+    if diagnostics_enabled() {
+        emit_diagnostic(
+            sources[file_idx as usize].filename.as_str(),
+            (span.start as usize)..(span.end as usize),
+            strip_ansi(message),
+            code,
+        );
+    }
     let report = report();
 
     #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
@@ -256,8 +465,11 @@ pub fn throw_compiler_error<'a>(
                 .with_sources(
                     sources
                         .iter()
-                        .map(|Source { filename, contents }| {
-                            (filename.as_str(), ariadne::Source::from(contents.as_str()))
+                        .map(|src| {
+                            (
+                                src.filename.as_str(),
+                                ariadne::Source::from(src.contents.as_str()),
+                            )
                         })
                         .collect(),
                 ),

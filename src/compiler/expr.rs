@@ -77,6 +77,17 @@ pub enum Expr {
         Span,
     ),
 
+    /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end))
+    ///
+    /// Declares a host namespace whose functions are backed by Rust closures
+    /// registered on the embedding [`crate::Engine`]. Mirrors [`Self::ImportDylib`]
+    /// but dispatches to a registered closure instead of a C symbol.
+    HostBlock(
+        SmolStr,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        Span,
+    ),
+
     /// ImportFile(path,alias ,(start, end))
     ImportFile(SmolStr, Option<SmolStr>, Span),
 
@@ -164,6 +175,7 @@ pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) 
     }
 }
 
+/// A span of code in a `Source`'s `contents`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: u32,

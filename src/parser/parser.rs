@@ -67,6 +67,27 @@ enum ParserErr<'a> {
     MatchBlockZeroArms,
 }
 
+impl ParserErr<'_> {
+    /// Stable, machine-readable identifier for this parser error, mirroring
+    /// `ErrType::kind` on the runtime side.
+    const fn kind(&self) -> &'static str {
+        match self {
+            ParserErr::UnexpectedEOF => "unexpected_eof",
+            ParserErr::UnknownToken => "unknown_token",
+            ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => "unexpected_token",
+            ParserErr::ArrayElementsMissingComma => "array_elements_missing_comma",
+            ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
+            ParserErr::DivisionByZero => "division_by_zero",
+            ParserErr::ModuloByZero => "modulo_by_zero",
+            ParserErr::IntegerNegativeExponent => "integer_negative_exponent",
+            ParserErr::ArgumentsMissingCommaSeparator => "arguments_missing_comma_separator",
+            ParserErr::TryBlockNoCatch => "try_block_no_catch",
+            ParserErr::MatchBlockNoNonWildcardArm => "match_block_no_non_wildcard_arm",
+            ParserErr::MatchBlockZeroArms => "match_block_zero_arms",
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> ! {
@@ -97,6 +118,14 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one arm{RESET}"
         }
     };
+    if crate::errors::diagnostics_enabled() {
+        crate::errors::emit_diagnostic(
+            src.filename.as_str(),
+            (start as usize)..(end as usize),
+            crate::errors::strip_ansi(err_message),
+            t.kind(),
+        );
+    }
     eprintln!("{RED}KEEL ERROR{RESET}");
     let report = Report::build(
         ReportKind::Error,
@@ -251,7 +280,18 @@ impl<'a> Parser<'a> {
     pub fn throw_parser_err<'b, F: Fn() -> Report<'b, (&'b str, core::ops::Range<usize>)>>(
         &self,
         report: F,
+        span: Span,
+        message: &str,
+        code: &str,
     ) -> ! {
+        if crate::errors::diagnostics_enabled() {
+            crate::errors::emit_diagnostic(
+                self.ctx.src.filename.as_str(),
+                (span.start as usize)..(span.end as usize),
+                crate::errors::strip_ansi(message),
+                code,
+            );
+        }
         let report = report();
 
         #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
@@ -472,6 +512,13 @@ fn error_unclosed_delimiter(
     expected_closer_token: Token,
     end: Option<(Token, Span)>,
 ) -> ! {
+    let message = if let Some((actual_closer_token, _)) = end {
+        format!(
+            "This {opener_token} is never closed: expected {expected_closer_token} but found {actual_closer_token}"
+        )
+    } else {
+        format!("This {opener_token} is never closed: expected {expected_closer_token} but the file ends here")
+    };
     parser.throw_parser_err(|| {
         let mut report = Report::build(
             ariadne::ReportKind::Error,
@@ -511,12 +558,13 @@ fn error_unclosed_delimiter(
         }
 
         report.finish()
-    })
+    }, opener_span, &message, "unclosed_delimiter")
 }
 
 #[cold]
 #[inline(never)]
 fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
+    let span: Span = (parser.last_token_end as u32, parser.last_token_end as u32).into();
     parser.throw_parser_err(|| {
         Report::build(
             ariadne::ReportKind::Error,
@@ -536,7 +584,7 @@ fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
         )
         .with_help("All statements end with a ';'")
         .finish()
-    })
+    }, span, "Missing semicolon", "missing_semicolon")
 }
 
 fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {
@@ -659,6 +707,17 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
+    let (fn_signatures, end) = parse_fn_signature_block(parser);
+    Expr::ImportDylib(path, fn_signatures, (start, end).into())
+}
+
+/// Parses a brace-delimited block of typed function signatures shared by
+/// `dylib "..." { ... }` and `host "..." { ... }`. The opening `{` must already
+/// have been consumed; this consumes through the closing `}` and returns the
+/// parsed signatures together with the end offset of the `}`.
+fn parse_fn_signature_block(
+    parser: &mut Parser<'_>,
+) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
     let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
     let end: u32;
     loop {
@@ -668,6 +727,7 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         }
 
         let type_start = parser.peek_token();
+        let span = parser.peek_token_span();
         let first = parse_type(parser);
         let fn_name_span: Span;
         let (return_type, fn_name) = if parser.peek_token() == Token::LParen {
@@ -714,6 +774,16 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
             if parser.peek_token() == Token::RParen {
                 break;
             }
+            // `...` marks a variadic host function: it accepts any number of
+            // arguments of any type, delivered to the registered closure as a
+            // slice. Carried through as a reserved sentinel type the host
+            // resolver recognises (meaningless in a `dylib` block).
+            if parser.peek_token() == Token::Ellipsis {
+                let span = parser.peek_token_span();
+                parser.next_token();
+                args.push(TypeExpr::Identifier(SmolStr::new_static("..."), span));
+                break;
+            }
             args.push(parse_type(parser));
             if parser.peek_token() == Token::Comma {
                 parser.next_token();
@@ -730,7 +800,32 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
         fn_signatures.push((fn_name, Box::from(args), return_type, fn_name_span));
     }
-    Expr::ImportDylib(path, Box::from(fn_signatures), (start, end).into())
+    (fn_signatures.into_boxed_slice(), end)
+}
+
+/// Parses a `host "namespace" { signatures... }` block. The namespace names a
+/// table of Rust closures registered on the embedding [`crate::Engine`]; the
+/// signatures are type-checked at compile time exactly like `dylib` signatures.
+fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
+    let (t, Span { start, end: _ }) = parser.next_token();
+    debug_assert_eq!(t, Token::Host);
+    let (next_token, span) = parser.next_token();
+    let namespace = if let Token::String(s) = next_token {
+        SmolStr::new(parse_string(s))
+    } else {
+        cold_path();
+        parser.error(
+            span,
+            ParserErr::UnexpectedToken(
+                Token::String(""),
+                next_token,
+                "Host namespaces must be strings.",
+            ),
+        );
+    };
+    parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
+    let (fn_signatures, end) = parse_fn_signature_block(parser);
+    Expr::HostBlock(namespace, fn_signatures, (start, end).into())
 }
 
 #[inline(always)]
@@ -743,10 +838,11 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
             Token::Import => parse_file_import(parser),
             Token::Struct => parse_struct_declare(parser),
             Token::Dylib => parse_dylib_import(parser),
+            Token::Host => parse_host_block(parser),
             unexpected => {
                 cold_path();
                 let span = parser.peek_token_span();
-                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), or 'dylib' (dynamic library import)", unexpected, "Invalid file statement."));
+                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
             }
         });
     }

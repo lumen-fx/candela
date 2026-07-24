@@ -73,7 +73,7 @@ pub fn handle_user_function(
         && let Some(fn_sig) = state
             .dyn_libs
             .iter()
-            .find(|lib| lib.name == namespace[namespace.len() - 2])
+            .find(|lib| !lib.is_host && lib.name == namespace[namespace.len() - 2])
             .and_then(|lib| {
                 lib.fns
                     .iter()
@@ -312,7 +312,7 @@ fn compile_function(
         DataType::Null
     } else {
         // If function returns anything, check if it returns the same thing each time
-        DataType::Poly(Box::from(fn_type)).check_poly()
+        DataType::Union(Box::from(fn_type)).check_poly()
     };
 
     v.truncate(v_len_before_args);

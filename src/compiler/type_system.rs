@@ -7,7 +7,6 @@ use crate::compiler::compiler_data::FnSignature;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_data::State;
-
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_op;
@@ -37,6 +36,12 @@ use libffi::middle::Type;
 thread_local! {
     static RETURN_TYPE_INFERRING: RefCell<FxHashSet<usize>> =
         RefCell::new(FxHashSet::default());
+}
+
+/// Clears inference bookkeeping left behind when a previous compilation on
+/// this thread was aborted by an error unwind (see `errors::collect_diagnostic`).
+pub fn reset_inference_state() {
+    RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().clear());
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -100,7 +105,7 @@ impl TypeExpr {
                 Some(k_t.to_datatype(file_idx, namespace, sources)),
                 Some(v_t.to_datatype(file_idx, namespace, sources)),
             ))),
-            Self::Union(poly) => DataType::Poly(
+            Self::Union(poly) => DataType::Union(
                 poly.iter()
                     .map(|t| t.to_datatype(file_idx, namespace, sources))
                     .collect(),
@@ -112,17 +117,15 @@ impl TypeExpr {
 
 #[derive(Debug, Clone)]
 pub enum DataType {
-    /// Array(None) = unknown element type (e.g. empty array literal [])
+    /// Array(None) = Unknown[]
     Array(Option<Box<Self>>),
     Float,
     Int,
     Bool,
     String,
     Null,
-    /// Internal inference placeholder used while breaking recursive return-type cycles
     Unknown,
-    Poly(Box<[Self]>),
-    /// Fn (\[arg_types ... return_type\]) => return_type is always specified
+    Union(Box<[Self]>),
     Fn(u16),
     Struct(u16),
     Map(Box<(Option<Self>, Option<Self>)>),
@@ -141,7 +144,7 @@ impl std::fmt::Display for DataType {
             },
             Self::Null => write!(f, "null"),
             Self::Unknown => write!(f, "Unknown"),
-            Self::Poly(types) => write!(
+            Self::Union(types) => write!(
                 f,
                 "{}",
                 types
@@ -177,7 +180,7 @@ impl DataType {
             },
             Self::Null => SmolStr::new_static("null"),
             Self::Unknown => SmolStr::new_static("Unknown"),
-            Self::Poly(types) => format_args!(
+            Self::Union(types) => format_args!(
                 "{}",
                 types
                     .into_iter()
@@ -258,14 +261,14 @@ impl PartialEq for DataType {
             | (Self::Array(_), Self::Array(None))
             | (Self::Array(None), Self::Array(_)) => true,
             (Self::Array(Some(a)), Self::Array(Some(b))) => a == b,
-            (Self::Poly(a), Self::Poly(b)) => a == b,
+            (Self::Union(a), Self::Union(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
             (Self::Fn(_), Self::Fn(_)) => true,
             (Self::Map(a), Self::Map(b)) => {
                 (a.0.is_none() || b.0.is_none() || a.0 == b.0)
                     && (a.1.is_none() || b.1.is_none() || a.1 == b.1)
             }
-            (t, Self::Poly(p)) | (Self::Poly(p), t) => p.contains(t),
+            (t, Self::Union(p)) | (Self::Union(p), t) => p.contains(t),
             _ => false,
         }
     }
@@ -282,7 +285,7 @@ impl std::hash::Hash for DataType {
             Self::String => 4u8.hash(state),
             Self::Null => 6u8.hash(state),
             Self::Unknown => 7u8.hash(state),
-            Self::Poly(p) => {
+            Self::Union(p) => {
                 8u8.hash(state);
                 p.hash(state);
             }
@@ -840,10 +843,8 @@ impl Expr {
                     function_name => {
                         if let Some(lib) = state.dyn_libs.iter().find(|l| l.name == namespace[0])
                             && let Some(FnSignature {
-                                name: _,
-                                args: _,
                                 return_type: fn_return_type,
-                                id: _,
+                                ..
                             }) = lib.fns.iter().find(|x| x.name == function_name)
                         {
                             return fn_return_type.clone();
@@ -924,7 +925,7 @@ impl Expr {
                             DataType::Null
                         } else {
                             // If function returns anything, check if it returns the same thing each time
-                            DataType::Poly(Box::from(fn_type)).check_poly()
+                            DataType::Union(Box::from(fn_type)).check_poly()
                         };
 
                         v.truncate(v_len_before_args);
@@ -1016,7 +1017,7 @@ impl Expr {
                         }
                     }
                 }
-                DataType::Poly(Box::from(types)).check_poly()
+                DataType::Union(Box::from(types)).check_poly()
             }
             Self::Struct(namespace, _, span) => {
                 let struct_name = &namespace[namespace.len() - 1];
@@ -1068,7 +1069,7 @@ impl Expr {
 
 impl DataType {
     pub fn check_poly(self) -> Self {
-        if let Self::Poly(ref elems) = self {
+        if let Self::Union(ref elems) = self {
             if let Some(new) = reduce_null_struct(elems) {
                 return new;
             }
