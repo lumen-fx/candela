@@ -774,6 +774,16 @@ fn parse_fn_signature_block(
             if parser.peek_token() == Token::RParen {
                 break;
             }
+            // `...` marks a variadic host function: it accepts any number of
+            // arguments of any type, delivered to the registered closure as a
+            // slice. Carried through as a reserved sentinel type the host
+            // resolver recognises (meaningless in a `dylib` block).
+            if parser.peek_token() == Token::Ellipsis {
+                let span = parser.peek_token_span();
+                parser.next_token();
+                args.push(TypeExpr::Identifier(SmolStr::new_static("..."), span));
+                break;
+            }
             args.push(parse_type(parser));
             if parser.peek_token() == Token::Comma {
                 parser.next_token();

@@ -52,6 +52,10 @@ pub struct FnSignature {
     pub args: Box<[DataType]>,
     pub return_type: DataType,
     pub id: u16,
+    /// When true (host functions only) the call site accepts any number of
+    /// arguments of any type and forwards them to the registered closure as a
+    /// slice; `args` is empty and no arity/type checking is performed.
+    pub variadic: bool,
 }
 
 #[derive(Debug)]
@@ -78,6 +82,10 @@ pub struct HostFnSig {
     /// `Engine` to bind the matching registered closure.
     pub namespace: SmolStr,
     pub name: SmolStr,
+    /// Declared with `...` in the `host` block: the call site forwards any
+    /// number of arguments of any type to the registered closure and the
+    /// `Engine` skips signature validation. `types` holds only the return type.
+    pub variadic: bool,
 }
 
 impl HostFnSig {

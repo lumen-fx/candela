@@ -368,3 +368,128 @@ fn main() {}
     let err = engine.compile(src, "mismatch.kl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
 }
+
+// ---------------------------------------------------------------------------
+// VARIADIC HOST FUNCTIONS
+// ---------------------------------------------------------------------------
+
+/// A `...` host fn is callable with any argument count and any mix of types;
+/// the closure receives them all as a `&[Value]` slice.
+#[test]
+fn variadic_host_fn_receives_all_args() {
+    let calls: Rc<RefCell<Vec<Vec<Value>>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut engine = Engine::new();
+    {
+        let calls = Rc::clone(&calls);
+        engine.register_host_fn_variadic("app", "log", move |args: &[Value]| {
+            calls.borrow_mut().push(args.to_vec());
+            Value::Null
+        });
+    }
+
+    let src = r#"
+host "app" {
+    log(...);
+}
+fn none() { app::log(); }
+fn one() { app::log("hi"); }
+fn mixed() { app::log("tag", 42, true); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "log.kl").expect("compiles");
+
+    program.call("none", &[]).unwrap();
+    program.call("one", &[]).unwrap();
+    program.call("mixed", &[]).unwrap();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].is_empty());
+    assert_eq!(calls[1], vec![Value::String("hi".to_owned())]);
+    assert_eq!(
+        calls[2],
+        vec![
+            Value::String("tag".to_owned()),
+            Value::Int(42),
+            Value::Bool(true),
+        ]
+    );
+}
+
+/// A variadic closure bound to a fixed (non-`...`) declaration is a clean
+/// `Diagnostic`, not a silent mismatch.
+#[test]
+fn variadic_closure_with_fixed_declaration_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_variadic("app", "log", |_args: &[Value]| Value::Null);
+    let src = r#"
+host "app" {
+    log(string);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "log.kl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+}
+
+/// A `...` declaration bound to an ordinary fixed closure is likewise a clean
+/// `Diagnostic`.
+#[test]
+fn fixed_closure_with_variadic_declaration_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "log", |_s: String| {});
+    let src = r#"
+host "app" {
+    log(...);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "log.kl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+}
+
+/// The Lumen `derive` shape compiles today with no new keel feature: a fixed
+/// `(string, string[], string)` signature, an array literal argument, and a
+/// function referenced by name. Registered state persists so the host can
+/// invoke the named function later.
+#[test]
+fn derive_shape_array_literal_and_named_fn() {
+    let recorded: Rc<RefCell<Vec<(String, Vec<String>, String)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let mut engine = Engine::new();
+    {
+        let recorded = Rc::clone(&recorded);
+        engine.register_host_fn(
+            "lumen",
+            "derive",
+            move |name: String, deps: Vec<String>, f: String| {
+                recorded.borrow_mut().push((name, deps, f));
+            },
+        );
+    }
+
+    let src = r#"
+host "lumen" {
+    derive(string, string[], string);
+}
+fn on_start() {
+    lumen::derive("total", ["price", "qty"], "compute_total");
+}
+fn compute_total(price, qty) { return price * qty; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "derive.kl").expect("compiles");
+    program.call("on_start", &[]).unwrap();
+
+    let recorded = recorded.borrow();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, "total");
+    assert_eq!(recorded[0].1, vec!["price".to_owned(), "qty".to_owned()]);
+    assert_eq!(recorded[0].2, "compute_total");
+
+    // The host can invoke the referenced function by name later.
+    let out = program
+        .call("compute_total", &[6i64.into(), 7i64.into()])
+        .unwrap();
+    assert_eq!(out, Value::Int(42));
+}

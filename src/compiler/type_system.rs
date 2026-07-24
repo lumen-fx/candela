@@ -846,10 +846,8 @@ impl Expr {
                     function_name => {
                         if let Some(lib) = state.dyn_libs.iter().find(|l| l.name == namespace[0])
                             && let Some(FnSignature {
-                                name: _,
-                                args: _,
                                 return_type: fn_return_type,
-                                id: _,
+                                ..
                             }) = lib.fns.iter().find(|x| x.name == function_name)
                         {
                             return fn_return_type.clone();

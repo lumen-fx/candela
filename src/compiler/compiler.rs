@@ -3188,6 +3188,7 @@ fn resolve_types(
                     args: fn_args.clone(),
                     return_type: fn_return_type.clone(),
                     id: dynamic_libs_fns.len() as u16,
+                    variadic: false,
                 };
                 let arg_types: Vec<_> = fn_args.iter().map(|t| t.to_c_type(structs)).collect();
                 let return_type = fn_return_type.to_c_type(structs);
@@ -3233,17 +3234,27 @@ fn resolve_types(
         let fns = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
-                let fn_args = fn_args
-                    .iter()
-                    .map(|t| t.to_datatype(src_file_idx, namespace, sources))
-                    .collect::<Vec<DataType>>()
-                    .into_boxed_slice();
+                // A lone `...` sentinel argument marks a variadic host fn: it
+                // takes no fixed argument types, and the call site forwards
+                // every supplied argument to the registered closure.
+                let variadic = fn_args.len() == 1
+                    && matches!(&fn_args[0], TypeExpr::Identifier(s, _) if s.as_str() == "...");
+                let fn_args = if variadic {
+                    Box::from([])
+                } else {
+                    fn_args
+                        .iter()
+                        .map(|t| t.to_datatype(src_file_idx, namespace, sources))
+                        .collect::<Vec<DataType>>()
+                        .into_boxed_slice()
+                };
                 let fn_return_type = fn_return_type.to_datatype(src_file_idx, namespace, sources);
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
                     return_type: fn_return_type.clone(),
                     id: host_fns.len() as u16,
+                    variadic,
                 };
 
                 let mut types = vec![fn_return_type];
@@ -3252,6 +3263,7 @@ fn resolve_types(
                     types: types.into_boxed_slice(),
                     namespace: host_namespace.clone(),
                     name: fn_name.clone(),
+                    variadic,
                 });
                 return_val
             })

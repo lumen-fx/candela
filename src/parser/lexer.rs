@@ -133,6 +133,8 @@ pub enum Token<'a> {
     RBrace,
     #[token(",")]
     Comma,
+    #[token("...")]
+    Ellipsis,
     #[token("..")]
     RangeDot,
     #[token(".")]

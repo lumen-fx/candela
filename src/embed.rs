@@ -240,6 +240,11 @@ struct RegisteredFn {
     func: HostDispatch,
     arg_types: Vec<HostType>,
     ret_type: HostType,
+    /// Registered via [`Engine::register_host_fn_variadic`]: the closure takes
+    /// a `&[Value]` slice of any length, so `arg_types`/`ret_type` are unused
+    /// and signature validation against the `host` block is skipped (the block
+    /// must declare the fn with `...`).
+    variadic: bool,
 }
 
 /// Extracts a Rust argument from a [`Value`] for a registered host closure.
@@ -516,7 +521,40 @@ impl Engine {
         let (func, arg_types, ret_type) = f.into_host_fn_parts();
         self.registry.insert(
             (namespace.to_owned(), name.to_owned()),
-            RegisteredFn { func, arg_types, ret_type },
+            RegisteredFn { func, arg_types, ret_type, variadic: false },
+        );
+    }
+
+    /// Registers a variadic host function under `namespace.name`.
+    ///
+    /// Unlike [`Engine::register_host_fn`], the closure receives every argument
+    /// as a `&[Value]` slice of any length and returns a single [`Value`], so
+    /// arguments of mixed / dynamically-typed shape can cross the boundary
+    /// without a fixed Rust signature. The `host` block must declare the
+    /// function with a `...` argument list:
+    ///
+    /// ```keel
+    /// host "app" {
+    ///     log(...);
+    /// }
+    /// ```
+    ///
+    /// No arity or per-argument type checking is performed at the call site;
+    /// the closure interprets the slice it is handed. A non-variadic
+    /// declaration bound to a variadic closure (or vice versa) is a clean
+    /// [`Diagnostic`] at [`Engine::compile`] time.
+    pub fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
+    where
+        F: Fn(&[Value]) -> Value + 'static,
+    {
+        self.registry.insert(
+            (namespace.to_owned(), name.to_owned()),
+            RegisteredFn {
+                func: Rc::new(f),
+                arg_types: Vec::new(),
+                ret_type: HostType::Unit,
+                variadic: true,
+            },
         );
     }
 
@@ -607,6 +645,24 @@ fn validate_host_fn(
         message,
         code: String::from("host_fn_signature_mismatch"),
     };
+
+    // A variadic declaration must be bound to a variadic closure and vice
+    // versa; when both agree there is nothing to check — the closure accepts
+    // any argument slice.
+    if sig.variadic || registered.variadic {
+        if sig.variadic != registered.variadic {
+            let (decl, reg) = if sig.variadic {
+                ("variadic (`...`)", "a fixed signature")
+            } else {
+                ("a fixed signature", "variadic")
+            };
+            return Err(err(format!(
+                "host function `{}.{}` is declared with {decl} but the registered closure has {reg}",
+                sig.namespace, sig.name,
+            )));
+        }
+        return Ok(());
+    }
 
     if sig.arg_count() != registered.arg_types.len() {
         return Err(err(format!(

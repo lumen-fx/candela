@@ -97,7 +97,7 @@ pub fn handle_functions(
             span,
             args_indexes,
         )
-    } else if let Some((fn_args, returns_null, dyn_id, is_host)) = state
+    } else if let Some((fn_args, returns_null, dyn_id, is_host, is_variadic)) = state
         .dyn_libs
         .iter()
         .find(|l| l.name == namespace[0])
@@ -108,29 +108,35 @@ pub fn handle_functions(
                     sig.return_type == DataType::Null,
                     sig.id,
                     lib.is_host,
+                    sig.variadic,
                 )
             })
         })
     {
-        check_args(
-            args,
-            fn_args.len(),
-            fn_name,
-            span,
-            state.sources,
-            ctx.file_idx,
-        );
-        for (i, a) in fn_args.iter().enumerate() {
-            check_arg_type(
-                fn_name,
-                v,
-                ctx,
-                state,
+        // A variadic host fn accepts any argument count and any types, so its
+        // arity/type checks are skipped; every supplied argument is still
+        // compiled and stored, and the registered closure receives them all.
+        if !is_variadic {
+            check_args(
                 args,
-                args_indexes,
-                i,
-                slice::from_ref(a),
+                fn_args.len(),
+                fn_name,
+                span,
+                state.sources,
+                ctx.file_idx,
             );
+            for (i, a) in fn_args.iter().enumerate() {
+                check_arg_type(
+                    fn_name,
+                    v,
+                    ctx,
+                    state,
+                    args,
+                    args_indexes,
+                    i,
+                    slice::from_ref(a),
+                );
+            }
         }
 
         for arg in args {
