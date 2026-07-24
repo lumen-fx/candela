@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/transparent-logo.png" alt="Candela" width="220">
+</p>
+
 # Candela
 
 > [!WARNING]
