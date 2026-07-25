@@ -1,0 +1,38 @@
+[package]
+name = "candela-lsp"
+version = "0.1.0"
+edition = "2024"
+description = "Language server for the Candela language (.cdl files)"
+license = "Apache-2.0"
+publish = false
+
+# This crate is a workspace member of the root candela/Cargo.toml (a
+# one-way dependency: candela-lsp -> candela, never the reverse), so the
+# `candela` interpreter binary never sees tower-lsp/tokio/lsp-types in its
+# dependency graph or build. See the root Cargo.toml's [workspace] comment.
+#
+# BUILD NOTE: the workspace's [profile.release] (defined by the candela
+# package, which doubles as the workspace root) sets `panic = "abort"` to
+# keep the interpreter binary small. candela::collect_diagnostic (which this
+# crate's diagnostics pass relies on) catches an internal unwind via
+# `catch_unwind`, which does not work under `panic = "abort"`: a release
+# build of candela-lsp would abort the whole LSP process on the first
+# parse/type error instead of returning a Diagnostic. Build this crate with
+# the default `dev` profile (`cargo build -p candela-lsp`) or the repo's
+# existing `embed` profile (`cargo build -p candela-lsp --profile embed`),
+# both of which use `panic = "unwind"`. Do NOT build/ship a `--release`
+# candela-lsp binary as-is.
+
+[dependencies]
+candela = { path = ".." }
+tower-lsp = "0.20.0"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
+serde_json = "1"
+dashmap = "6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "macros", "process", "time"] }
+
+[[bin]]
+name = "candela-lsp"
+path = "src/main.rs"

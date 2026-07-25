@@ -54,6 +54,7 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
+    #[must_use]
     pub fn to_datatype(
         &self,
         file_idx: u16,
@@ -166,6 +167,7 @@ impl std::fmt::Display for DataType {
 }
 
 impl DataType {
+    #[must_use]
     pub fn format_detailed(&self, state: &State<'_>) -> SmolStr {
         match self {
             Self::Float => SmolStr::new_static("float"),
@@ -226,11 +228,13 @@ impl DataType {
         }
     }
     #[inline(always)]
+    #[must_use]
     pub const fn is_indexable(&self) -> bool {
         matches!(self, Self::String | Self::Array(_) | Self::Unknown)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
     pub fn to_c_type(&self, structs: &[Struct]) -> Type {
         match self {
             Self::Int => libffi::middle::Type::i32(),
@@ -306,6 +310,7 @@ impl std::hash::Hash for DataType {
 }
 
 #[inline(always)]
+#[must_use]
 pub fn struct_field_type_matches(expected: &DataType, received: &DataType) -> bool {
     received == &DataType::Null || expected == received
 }
@@ -412,6 +417,7 @@ pub fn can_reach(
     false
 }
 
+#[must_use]
 pub fn check_if_returns_void(content: &[Expr]) -> bool {
     for content in content {
         match content {
@@ -1068,6 +1074,7 @@ impl Expr {
 }
 
 impl DataType {
+    #[must_use]
     pub fn check_poly(self) -> Self {
         if let Self::Union(ref elems) = self {
             if let Some(new) = reduce_null_struct(elems) {

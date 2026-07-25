@@ -849,6 +849,7 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
     output
 }
 
+#[must_use]
 pub fn parse(input: &str, src: &Source) -> Vec<Expr> {
     parse_file(&mut Parser {
         input: Token::lexer(input).spanned().peekable(),

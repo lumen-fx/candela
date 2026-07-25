@@ -18,8 +18,13 @@ use wasm_bindgen::prelude::*;
 mod array_gc;
 #[cfg(any(target_arch = "wasm32", feature = "embed"))]
 mod captured_output;
+// `pub` so an out-of-tree frontend (candela-lsp) can reuse the lexer, parser,
+// and type-checker directly instead of reimplementing them. The CLI/embed
+// surface above (`Engine`/`Program`/`Diagnostic`) stays the primary API for
+// running scripts; this module is for tooling that needs the AST + spans +
+// symbol table `compile()` produces along the way.
 #[path = "./compiler/compiler.rs"]
-mod compiler;
+pub mod compiler;
 #[path = "./data.rs"]
 mod data;
 mod embed;
@@ -29,8 +34,11 @@ mod errors;
 mod instr;
 #[path = "./vm/gc/map_gc.rs"]
 mod map_gc;
+// `pub` for the same reason as `compiler` above: exported so tooling (or a
+// future incremental parse-only path) can lex/parse standalone without going
+// through a full `compiler::compile`.
 #[path = "./parser/parser.rs"]
-mod parser;
+pub mod parser;
 mod repl;
 #[path = "./vm/gc/string_gc.rs"]
 mod string_gc;
@@ -189,7 +197,7 @@ pub fn main() {
             );
             return;
         } else if next == Some(String::from("--debug-parser")) {
-            compile(contents, filename, false);
+            let _ = compile(contents, filename, false);
             return;
         }
     }

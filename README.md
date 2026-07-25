@@ -79,3 +79,10 @@ candela -h/--help     # Print help
 ```
 
 Candela source files use the `.cdl` extension.
+
+## Editor support
+
+The [VS Code extension](editors/vscode/) provides syntax highlighting plus a
+language server (live diagnostics, hover, completion, outline,
+go-to-definition) via [`candela-lsp`](candela-lsp/), a separate crate in this
+workspace built on candela's own lexer/parser/type-checker.

@@ -120,6 +120,7 @@ pub struct DynamicLibFn {
 
 impl DynamicLibFn {
     #[inline(always)]
+    #[must_use]
     pub fn get_return_type(&self) -> &DataType {
         unsafe { self.types.get_unchecked(0) }
     }
@@ -159,6 +160,7 @@ pub struct Ctx {
 
 impl Ctx {
     #[inline(always)]
+    #[must_use]
     pub const fn no_single_run(self) -> Self {
         Self {
             single_run: false,
@@ -166,6 +168,7 @@ impl Ctx {
         }
     }
     #[inline(always)]
+    #[must_use]
     pub const fn advance_offset(self, output_len: u16) -> Self {
         Self {
             offset: self.offset + output_len,
@@ -173,6 +176,7 @@ impl Ctx {
         }
     }
     #[inline(always)]
+    #[must_use]
     pub const fn set_offset(self, offset: u16) -> Self {
         Self { offset, ..self }
     }

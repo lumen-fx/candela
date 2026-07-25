@@ -1,5 +1,10 @@
 .vscode/**
 .gitignore
-node_modules/**
 *.vsix
 **/*.map
+
+# Unlike the grammar-only 0.1.0 release, this extension now has a runtime
+# dependency (vscode-languageclient) that must ship inside the .vsix, so
+# node_modules is intentionally NOT excluded here. Run `npm install
+# --omit=dev` (or just `npm install`, since there are no devDependencies)
+# before `vsce package` so only the production dependency tree is present.

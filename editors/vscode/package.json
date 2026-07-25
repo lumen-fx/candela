@@ -1,12 +1,12 @@
 {
   "name": "candela",
   "displayName": "Candela",
-  "description": "Syntax highlighting, language configuration, and snippets for the Candela language (.cdl), the Lumen framework's scripting language.",
-  "version": "0.1.0",
+  "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics, hover, completion, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
+  "version": "0.2.0",
   "publisher": "lumen-fx",
   "license": "Apache-2.0",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages"
@@ -26,6 +26,13 @@
     "url": "https://github.com/lumen-fx/candela/issues"
   },
   "homepage": "https://github.com/lumen-fx/candela",
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:candela"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^10.1.0"
+  },
   "contributes": {
     "languages": [
       {
@@ -56,6 +63,16 @@
         "language": "candela",
         "path": "./snippets/candela.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Candela",
+      "properties": {
+        "candela.languageServerPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`. Set this to point at a locally-built server, e.g. one built from the repo's `candela-lsp/` crate."
+        }
+      }
+    }
   }
 }

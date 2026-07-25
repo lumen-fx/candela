@@ -2172,6 +2172,7 @@ pub fn compile_expr(
 }
 
 impl Expr {
+    #[must_use]
     pub const fn is_constant_literal(&self) -> bool {
         matches!(
             self,
@@ -3300,6 +3301,7 @@ pub struct CompileOutput {
     pub free_registers: Vec<u16>,
 }
 
+#[must_use]
 pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     #[cfg(not(target_arch = "wasm32"))]
     let now = std::time::Instant::now();

@@ -12,6 +12,19 @@ homepage = "https://github.com/lumen-fx/candela"
 license = "Apache-2.0"
 documentation = "https://github.com/lumen-fx/candela"
 
+# This manifest is both the `candela` package and the workspace root. Only
+# `candela-lsp` (the language server) is an extra member: it depends on this
+# crate as a plain library (one-way, lsp -> candela, never the reverse) so it
+# can reuse the lexer/parser/type-checker instead of copying them, but its
+# tooling dependencies (tower-lsp, tokio, ...) never touch this crate's
+# dependency graph or the `candela` binary. `default-members` keeps plain
+# `cargo build` / `cargo build --release` at the repo root building only the
+# interpreter (build candela-lsp explicitly with `-p candela-lsp`), so the
+# release binary's size is unaffected by the LSP's dependencies.
+[workspace]
+members = ["candela-lsp"]
+default-members = ["."]
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }

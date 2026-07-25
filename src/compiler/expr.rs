@@ -120,6 +120,7 @@ pub enum Expr {
 
 #[cold]
 #[inline(never)]
+#[must_use]
 pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
     match expr {
         Expr::Mul(_, _, _, _) => "*",
@@ -140,6 +141,7 @@ pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
     }
 }
 
+#[must_use]
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
     code.iter().any(|expr| match expr {
         Expr::VarAssign(n, _, _) => n == var_name,
@@ -156,6 +158,7 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
     })
 }
 
+#[must_use]
 pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) -> Expr {
     if let Expr::Var(n, s) = target {
         Expr::VarAssign(n, Box::from(value), s)
