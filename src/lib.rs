@@ -183,9 +183,14 @@ fn build_subcommand(args: &mut impl Iterator<Item = String>) {
             output = Some(a);
         }
     }
+    // A `-o`/`--output` argument is honored verbatim. Otherwise the default
+    // output name REPLACES the `.cdl` extension with `.cdlb` (so
+    // `program.cdl` -> `program.cdlb`); it never appends a second extension
+    // (never `program.cdl.cdlb`). A path without a `.cdl` suffix just gets
+    // `.cdlb` added.
     let output = output.unwrap_or_else(|| {
-        let stripped = input.strip_suffix(".cdl").unwrap_or(&input);
-        format!("{stripped}.cdlb")
+        let stem = input.strip_suffix(".cdl").unwrap_or(&input);
+        format!("{stem}.cdlb")
     });
 
     let contents = fs::read_to_string(&input).unwrap_or_else(|_| {

@@ -3906,3 +3906,165 @@ pub fn stress_runtime_errors() {
         assert_eq!(d.code, code, "for source: {src}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// OBJECT-ORIENTED METHOD SYNTAX (impl blocks)
+//
+// `impl Type { fn method(self, ...) { ... } }` lowers each method to a mangled
+// per-type free function (`Type#method`) taking the receiver as argument 0.
+// There is no runtime dispatch: the VM only ever sees ordinary function calls.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn method_basic_call() {
+    run_and_check_registers!(
+        "
+        struct Point { x: int, y: int }
+        impl Point {
+            fn sum(self) { return self.x + self.y; }
+        }
+        fn main() {
+            let p = Point { x: 2, y: 3 };
+            print(p.sum());
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn method_with_extra_arg() {
+    run_and_check_registers!(
+        "
+        struct Point { x: int, y: int }
+        impl Point {
+            fn scaled_sum(self, factor) { return (self.x + self.y) * factor; }
+        }
+        fn main() {
+            let p = Point { x: 2, y: 3 };
+            print(p.scaled_sum(4));
+        }
+        ",
+        20.into()
+    );
+}
+
+#[test]
+pub fn method_name_conflict_two_types() {
+    // The heart of the feature: `Point.len` and `Str.len` mangle to distinct
+    // symbols (`Point#len` vs `Str#len`) and each resolves by the receiver's
+    // static type. If they collided the combined value would be wrong.
+    run_and_check_registers!(
+        "
+        struct Point { x: int, y: int }
+        struct Str { chars: int }
+        impl Point { fn len(self) { return self.x + self.y; } }
+        impl Str { fn len(self) { return self.chars * 10; } }
+        fn main() {
+            let p = Point { x: 2, y: 3 };
+            let s = Str { chars: 4 };
+            print(p.len() * 1000 + s.len());
+        }
+        ",
+        5040.into()
+    );
+}
+
+#[test]
+pub fn method_and_free_fn_coexist() {
+    // A method named `area` and a free function named `area` live in separate
+    // namespaces and both resolve.
+    run_and_check_registers!(
+        "
+        struct Rect { w: int, h: int }
+        fn area(a, b) { return a * b; }
+        impl Rect { fn area(self) { return self.w * self.h; } }
+        fn main() {
+            let r = Rect { w: 3, h: 4 };
+            print(area(2, 5) + r.area());
+        }
+        ",
+        22.into()
+    );
+}
+
+#[test]
+pub fn method_chaining() {
+    // Each result's static type drives the next resolution left-to-right:
+    // inc() returns Counter, get() returns int.
+    run_and_check_registers!(
+        "
+        struct Counter { n: int }
+        impl Counter {
+            fn inc(self) { return Counter { n: self.n + 1 }; }
+            fn get(self) { return self.n; }
+        }
+        fn main() {
+            let c = Counter { n: 0 };
+            print(c.inc().inc().inc().get());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn method_vs_field_disambiguation() {
+    // `b.val` (field access, no parens) and `b.val()` (method call, parens) name
+    // the same identifier but are distinguished purely by the call form.
+    run_and_check_registers!(
+        "
+        struct Boxed { val: int }
+        impl Boxed { fn val(self) { return self.val * 2; } }
+        fn main() {
+            let b = Boxed { val: 10 };
+            print(b.val + b.val());
+        }
+        ",
+        30.into()
+    );
+}
+
+#[test]
+pub fn method_alongside_builtin_len() {
+    // A user struct method named `len` does not disturb the builtin string `len`.
+    run_and_check_registers!(
+        "
+        struct Bag { count: int }
+        impl Bag { fn len(self) { return self.count; } }
+        fn main() {
+            let bag = Bag { count: 7 };
+            print(bag.len() + \"hello\".len());
+        }
+        ",
+        12.into()
+    );
+}
+
+#[test]
+pub fn method_error_unknown() {
+    let src = "
+        struct P { x: int }
+        fn main() { let p = P { x: 1 }; print(p.foo()); }
+    ";
+    let d = compile_diag(src, "m.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "no_such_method");
+    assert!(
+        d.message.contains("foo") && d.message.contains('P'),
+        "message: {:?}",
+        d.message
+    );
+}
+
+#[test]
+pub fn method_error_duplicate() {
+    let src = "
+        struct P { x: int }
+        impl P { fn f(self) { return 1; } fn f(self) { return 2; } }
+        fn main() { let p = P { x: 1 }; print(p.f()); }
+    ";
+    let d = compile_diag(src, "m.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "function_already_defined");
+}

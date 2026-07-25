@@ -4,8 +4,8 @@ A lean, VM-only runtime for [Candela](../README.md). It loads a pre-compiled
 `.cdlb` bytecode artifact and runs it -- it links no parser, compiler, or REPL.
 
 ```sh
-candela build program.cdl     # (fat `candela`) emit program.cdlb
-candela-vm program.cdl.cdlb   # load + run the bytecode
+candela build program.cdl     # (via `candela`) emit program.cdlb
+candela-vm program.cdlb       # load + run the bytecode
 ```
 
 `candela-vm` depends on the `candela` crate with its default `compiler` feature

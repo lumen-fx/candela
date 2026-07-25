@@ -22,7 +22,7 @@ documentation = "https://github.com/lumen-fx/candela"
 # interpreter (build candela-lsp explicitly with `-p candela-lsp`), so the
 # release binary's size is unaffected by the LSP's dependencies.
 [workspace]
-members = ["candela-lsp", "candela-vm"]
+members = ["lsp", "vm"]
 default-members = ["."]
 
 [lints.clippy]
@@ -121,10 +121,10 @@ strip = true
 # codegen-units = 1, strip = true) plus dropping the compiler via
 # `default-features = false` on its `candela` dep. That already lands it well
 # under 1 MiB. A per-package `opt-level = "z"` override was measured and made
-# the binary LARGER (850,640 vs 745,768 bytes) -- with fat LTO the leaf crate is
+# the binary LARGER (850,640 vs 745,768 bytes) -- with `lto = "fat"` the leaf crate is
 # folded into the `candela` library codegen (opt-level 3), and "z" pessimizes
 # it -- so no override is applied. The `candela` library stays at opt-level 3,
-# which also keeps the fat `candela` compiler binary fast.
+# which also keeps the full `candela` compiler+VM binary fast.
 
 [profile.debugrelease]
 inherits = "release"

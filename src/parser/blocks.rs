@@ -6,11 +6,13 @@ use super::parser_expr::parse_expr_no_struct;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
+use crate::compiler::expr::mangle_method;
 use crate::parser::Parser;
 use crate::parser::TypeExpr;
 use crate::parser::parse_code;
 use crate::parser::parse_type;
 use smol_strc::SmolStr;
+use std::rc::Rc;
 
 // call right after peeking Token::If
 pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
@@ -347,6 +349,113 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
         }
     }
     Expr::StructDeclare(struct_name, Box::from(fields), span)
+}
+
+/// Parses an `impl Type { fn method(self, ...) { ... } ... }` block.
+///
+/// Each method is lowered on the spot to an ordinary top-level function whose
+/// name is mangled per type (`Type#method`, see [`mangle_method`]) and whose
+/// first parameter is the receiver. There is no dedicated `impl`/method AST
+/// node: the lowered [`Expr::FunctionDecl`]s are pushed straight into `output`,
+/// so downstream compilation treats a method exactly like a free function and
+/// the VM only ever sees ordinary calls. The receiver's static type resolves a
+/// `recv.method(...)` call site back to the matching mangled symbol.
+pub fn parse_impl_block(parser: &mut Parser<'_>, output: &mut Vec<Expr>) {
+    let (t, _) = parser.next_token();
+    debug_assert_eq!(t, Token::Impl);
+    let (next_token, type_span) = parser.next_token();
+    let type_name = if let Token::Identifier(id) = next_token {
+        SmolStr::new(id)
+    } else {
+        cold_path();
+        parser.error(
+            type_span,
+            ParserErr::UnexpectedToken(
+                Token::Identifier(""),
+                next_token,
+                "An impl block must name the type it implements methods for.",
+            ),
+        );
+    };
+    parser.next_token_expect(Token::LBrace, "impl blocks must start with '{'.");
+    loop {
+        if parser.peek_token() == Token::RBrace {
+            parser.next_token();
+            break;
+        }
+        output.push(parse_method(parser, &type_name));
+    }
+}
+
+/// Parses a single `fn method(self, ...) [-> Type] { ... }` inside an impl block
+/// and lowers it to a mangled free [`Expr::FunctionDecl`].
+fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
+    let (t, t_span) = parser.next_token();
+    if t != Token::Function {
+        cold_path();
+        parser.error(
+            t_span,
+            ParserErr::UnexpectedToken(
+                Token::Function,
+                t,
+                "impl blocks may only contain method definitions ('fn ...').",
+            ),
+        );
+    }
+    let (t_id, name_span) = parser.next_token();
+    let Token::Identifier(method_name) = t_id else {
+        cold_path();
+        parser.error(
+            name_span,
+            ParserErr::UnexpectedToken(Token::Identifier(""), t_id, "Invalid method name."),
+        );
+    };
+    let mangled = mangle_method(type_name, method_name);
+    parser.next_token_expect(
+        Token::LParen,
+        "Method arguments must be delimited by parentheses",
+    );
+    let mut args: Vec<(SmolStr, Option<TypeExpr>)> = Vec::with_capacity(4);
+    loop {
+        if parser.peek_token() == Token::RParen {
+            parser.next_token();
+            break;
+        }
+        let (arg, span) = parser.next_token();
+        if let Token::Identifier(arg) = arg {
+            // Parameter types (including the receiver's) are inferred per call
+            // site: candela specialises each function on the actual argument
+            // types, so `self` takes the receiver's concrete struct type
+            // automatically. A `: Type` annotation is accepted for surface-
+            // syntax parity but not recorded (matching free-function params).
+            if parser.peek_token() == Token::Colon {
+                parser.next_token();
+                let _ = parse_type(parser);
+            }
+            args.push((SmolStr::new(arg), None));
+        } else {
+            cold_path();
+            parser.error(
+                span,
+                ParserErr::UnexpectedToken(Token::Identifier(""), arg, "Invalid method argument."),
+            );
+        }
+        if parser.peek_token() == Token::Comma {
+            parser.next_token();
+        } else if parser.peek_token() != Token::RParen {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
+        }
+    }
+    // Optional `-> Type` return annotation: accepted for Rust-style surface
+    // syntax but discarded, since the return type is inferred.
+    if parser.peek_token() == Token::Arrow {
+        parser.next_token();
+        let _ = parse_type(parser);
+    }
+    let code = parse_block(parser);
+    Expr::FunctionDecl(mangled, Box::from(args), Rc::from(code), name_span)
 }
 
 pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {

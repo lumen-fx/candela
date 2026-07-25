@@ -15,6 +15,7 @@ use blocks::parse_condition_block;
 use blocks::parse_eval_block;
 use blocks::parse_for_loop;
 use blocks::parse_function;
+use blocks::parse_impl_block;
 use blocks::parse_loop_block;
 use blocks::parse_match;
 use blocks::parse_struct_declare;
@@ -833,6 +834,12 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while let Some(t) = parser.peek_token_opt() {
+        // An `impl` block lowers to several top-level function declarations, so
+        // it is expanded directly into `output` rather than yielding one Expr.
+        if t == Token::Impl {
+            parse_impl_block(parser, &mut output);
+            continue;
+        }
         output.push(match t {
             Token::Function => parse_function(parser),
             Token::Import => parse_file_import(parser),
@@ -842,7 +849,7 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
             unexpected => {
                 cold_path();
                 let span = parser.peek_token_span();
-                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
+                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
             }
         });
     }

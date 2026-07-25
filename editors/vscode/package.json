@@ -70,7 +70,7 @@
         "candela.languageServerPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`. Set this to point at a locally-built server, e.g. one built from the repo's `candela-lsp/` crate."
+          "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`. Set this to point at a locally-built server, e.g. one built from the repo's `lsp/` crate."
         }
       }
     }

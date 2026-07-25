@@ -15,7 +15,11 @@ use smol_strc::SmolStr;
 use std::slice;
 use user_functions::handle_user_function;
 
-mod user_functions;
+// `pub(crate)` (not the default private) so the sibling `methods` module can
+// reach `handle_user_function` to lower method calls. clippy's
+// `redundant_pub_crate` does not account for that cross-module access.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) mod user_functions;
 
 #[path = "builtin/builtin_functions.rs"]
 mod builtin_functions;

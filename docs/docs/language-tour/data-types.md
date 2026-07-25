@@ -146,6 +146,70 @@ fn main() {
 }
 ```
 
+### Methods (`impl` blocks)
+
+You can attach methods to a struct with an `impl` block. Each method takes the
+receiver as its first parameter, named `self`, and is called with dot syntax:
+
+``` rust
+struct Point { x: int, y: int }
+
+impl Point {
+    // `self` is the receiver -- a `Point` value.
+    fn len(self) { return self.x + self.y; }
+    // Methods can take extra parameters and return new values, including new
+    // instances of the type (which lets you chain calls).
+    fn scaled(self, factor) { return Point { x: self.x * factor, y: self.y * factor }; }
+}
+
+fn main() {
+    let p = Point { x: 2, y: 3 };
+    print(p.len());            // 5
+    print(p.scaled(3).len());  // 15  (method chaining resolves left-to-right)
+}
+```
+
+Methods are pure sugar for free functions: each one compiles to an ordinary
+function that takes `self` as its first argument. There is no runtime method
+dispatch or vtable -- `p.len()` is resolved at compile time (from `p`'s static
+type) to a normal function call. Because methods are namespaced per type, names
+never collide:
+
+``` rust
+struct Point { x: int, y: int }
+struct Text  { chars: int }
+
+impl Point { fn len(self) { return self.x + self.y; } }
+impl Text  { fn len(self) { return self.chars; } }   // distinct from Point.len
+
+fn len(a, b) { return a + b; }   // a free function named `len`, also distinct
+
+fn main() {
+    let p = Point { x: 2, y: 3 };
+    let t = Text { chars: 4 };
+    print(p.len());   // 5  -- Point's method
+    print(t.len());   // 4  -- Text's method
+    print(len(1, 2)); // 3  -- the free function
+}
+```
+
+A call with parentheses (`p.len()`) is a method call; without parentheses
+(`p.x`) it is field access -- so a field and a method may share a name:
+
+``` rust
+struct Boxed { val: int }
+impl Boxed { fn val(self) { return self.val * 2; } }
+
+fn main() {
+    let b = Boxed { val: 10 };
+    print(b.val);     // 10  -- field access
+    print(b.val());   // 20  -- method call
+}
+```
+
+Calling a method that does not exist for a value's type (`p.missing()`), or
+declaring two methods with the same name for one type, is a compile-time error.
+
 ## Map (`{K: V}`)
 A [map](https://wikipedia.org/wiki/Associative_array) is a collection of key-value pairs in which keys are unique. They allow for O(1) retrieval and insertion. Candela maps can only store one key-value type, and their type is written `{K: V}`, `K` representing the type of the keys, which can be any type, and `V` representing the type of the values, which can also be any type. Map keys must be literals.
 

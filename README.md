@@ -92,23 +92,24 @@ Candela ships as two binaries:
   bytecode and links no parser, compiler, or REPL. Release size:
   **~0.71 MiB** (745,768 bytes), comfortably under the 1 MiB target.
 
-This mirrors an AOT model. The fat `candela` binary compiles a `.cdl` source to
-a compact, self-contained `.cdlb` bytecode artifact; `candela-vm` just runs it:
+This mirrors an AOT model. The full `candela` toolchain (compiler + VM) compiles
+a `.cdl` source to a compact, self-contained `.cdlb` bytecode artifact;
+`candela-vm` just runs it:
 
 ```sh
 candela build program.cdl         # emits program.cdlb
-candela-vm program.cdl.cdlb       # loads + runs the bytecode
+candela-vm program.cdlb           # loads + runs the bytecode
 ```
 
 Running a `.cdlb` through `candela-vm` produces output (and, on a runtime error,
 diagnostics -- the source is embedded in the artifact) identical to running the
-`.cdl` directly through the fat `candela`.
+`.cdl` directly through `candela`.
 
 A `.cdlb` artifact is a 4-byte magic (`CDLB`), a 1-byte format version, and a
 `postcard`-encoded image of the program's bytecode, constant pools, struct
 table, and sources; a version mismatch is rejected cleanly. (Programs that load
 dynamic C libraries or declare `host` blocks are not captured in a `.cdlb` yet --
-those still run through the fat binary / embedding API.)
+those still run through the full `candela` binary / embedding API.)
 
 The `candela-vm` crate is built by disabling the `candela` crate's default
 `compiler` feature (`default-features = false`), which drops the parser,
@@ -118,5 +119,5 @@ compiler, REPL, and their dependencies from the build.
 
 The [VS Code extension](editors/vscode/) provides syntax highlighting plus a
 language server (live diagnostics, hover, completion, outline,
-go-to-definition) via [`candela-lsp`](candela-lsp/), a separate crate in this
+go-to-definition) via [`candela-lsp`](lsp/), a separate crate in this
 workspace built on candela's own lexer/parser/type-checker.

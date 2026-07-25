@@ -30,7 +30,7 @@ attribution details.
   `loop`, `match`, `host`, `dylib`, `import`, and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
   diagnostics, hover, completion, document symbols (outline), and
-  go-to-definition. See `../../candela-lsp/README.md` for exactly which of
+  go-to-definition. See `../../lsp/README.md` for exactly which of
   those are real vs. simplified, and why.
 
 ## Language facts
@@ -51,7 +51,7 @@ attribution details.
 
 ## Language server
 
-This extension launches `candela-lsp` (a separate crate at `../../candela-lsp/`
+This extension launches `candela-lsp` (a separate crate at `../../lsp/`
 in this repo) as a subprocess over stdio, the same transport every LSP client
 uses. It looks for a `candela-lsp` (or `candela-lsp.exe` on Windows) binary on
 `PATH` by default; set `candela.languageServerPath` in your settings to point

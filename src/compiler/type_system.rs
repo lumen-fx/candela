@@ -1,5 +1,6 @@
 use super::expr::Expr;
 use super::expr::Span;
+use super::expr::mangle_method;
 use super::expr::symbol_of_expr;
 use crate::compiler::Namespace;
 use crate::compiler::compiler_data::Ctx;
@@ -578,6 +579,78 @@ fn track_return_flow(
     }
 }
 
+/// Infers the return type of a user function specialised for `infered_arg_types`,
+/// caching the result on the function. Shared by direct `FunctionCall`s and by
+/// `impl` method calls (which resolve to a mangled free function with the
+/// receiver as argument 0). `function_name` is only used for diagnostics inside
+/// `track_returns`.
+fn infer_user_fn_return_type(
+    fn_id: usize,
+    infered_arg_types: Vec<DataType>,
+    function_name: &str,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> DataType {
+    let func = &state.fns[fn_id];
+    // Check the return type cache
+    if let Some((_, ret)) = func
+        .return_type_cache
+        .iter()
+        .find(|(args, _)| **args == *infered_arg_types)
+    {
+        return ret.clone();
+    }
+
+    let fn_args = func.args.clone();
+    let fn_code = func.code.clone();
+    let fn_src_file = func.src_file;
+    let v_len_before_args = v.len();
+    for (i, infered_type) in infered_arg_types.iter().cloned().enumerate() {
+        // 0 => placeholder id, it's never used
+        v.push(Variable {
+            name: fn_args[i].0.clone(),
+            register_id: 0,
+            var_type: infered_type,
+        });
+    }
+
+    // Mutual-recursion cycle guard -> if we are already in the middle of
+    // inferring this function's return type, return Unknown to break the cycle
+    let already_inferring = RETURN_TYPE_INFERRING.with(|s| s.borrow().contains(&fn_id));
+    if already_inferring {
+        v.truncate(v_len_before_args);
+        return DataType::Unknown;
+    }
+
+    RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().insert(fn_id));
+
+    let fn_ctx = Ctx {
+        file_idx: fn_src_file,
+        ..ctx
+    };
+    let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
+
+    RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
+
+    let to_return = if fn_type.is_empty() {
+        // If function doesn't return anything, return nothing
+        DataType::Null
+    } else {
+        // If function returns anything, check if it returns the same thing each time
+        DataType::Union(Box::from(fn_type)).check_poly()
+    };
+
+    v.truncate(v_len_before_args);
+
+    // Cache the result
+    state.fns[fn_id]
+        .return_type_cache
+        .push((Box::from(infered_arg_types), to_return.clone()));
+
+    to_return
+}
+
 impl Expr {
     pub fn infer_type(&self, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> DataType {
         match self {
@@ -814,72 +887,50 @@ impl Expr {
                                 }
                             });
 
-                        let func = &state.fns[fn_id];
-                        // Check the return type cache
-                        if let Some((_, ret)) = func
-                            .return_type_cache
-                            .iter()
-                            .find(|(args, _)| **args == *infered_arg_types)
-                        {
-                            return ret.clone();
-                        }
-
-                        let fn_args = func.args.clone();
-                        let fn_code = func.code.clone();
-                        let v_len_before_args = v.len();
-                        for (i, infered_type) in infered_arg_types.iter().cloned().enumerate() {
-                            // 0 => placeholder id, it's never used
-                            v.push(Variable {
-                                name: fn_args[i].0.clone(),
-                                register_id: 0,
-                                var_type: infered_type,
-                            });
-                        }
-
-                        // Mutual-recursion cycle guard -> if we are already in the
-                        // middle of inferring this function's return type, return Null to break the cycle
-                        let already_inferring =
-                            RETURN_TYPE_INFERRING.with(|s| s.borrow().contains(&fn_id));
-                        if already_inferring {
-                            v.truncate(v_len_before_args);
-                            return DataType::Unknown;
-                        }
-
-                        RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().insert(fn_id));
-
-                        let fn_ctx = Ctx {
-                            file_idx: func.src_file,
-                            ..ctx
-                        };
-                        let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
-
-                        RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
-
-                        let to_return = if fn_type.is_empty() {
-                            // If function doesn't return anything, return nothing
-                            DataType::Null
-                        } else {
-                            // If function returns anything, check if it returns the same thing each time
-                            DataType::Union(Box::from(fn_type)).check_poly()
-                        };
-
-                        v.truncate(v_len_before_args);
-
-                        // Cache the result
-                        state
-                            .fns
-                            .iter_mut()
-                            .find(|f| f.name == function_name)
-                            .unwrap()
-                            .return_type_cache
-                            .push((Box::from(infered_arg_types), to_return.clone()));
-
-                        to_return
+                        infer_user_fn_return_type(
+                            fn_id,
+                            infered_arg_types,
+                            function_name,
+                            v,
+                            ctx,
+                            state,
+                        )
                     }
                 }
             }
-            Self::ObjFunctionCall(obj, _, namespace, _, _, _) => {
-                match namespace.last().unwrap().as_str() {
+            Self::ObjFunctionCall(obj, args, namespace, _, fn_span, _) => {
+                let method = namespace.last().unwrap().as_str();
+                let obj_type = obj.infer_type(v, ctx, state);
+                // A user-defined impl method resolves by the receiver's static
+                // struct type to the mangled free function `Type#method`; its
+                // return type is inferred exactly like any free function's. This
+                // is checked BEFORE the builtin-method table so a struct method
+                // that happens to share a name with a builtin (e.g. `len`) uses
+                // its own return type rather than the builtin's.
+                if let DataType::Struct(struct_id) = obj_type {
+                    let struct_name = state.structs[struct_id as usize].name.clone();
+                    let mangled = mangle_method(&struct_name, method);
+                    if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+                        let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
+                        arg_types.push(DataType::Struct(struct_id));
+                        for a in args {
+                            arg_types.push(a.infer_type(v, ctx, state));
+                        }
+                        return infer_user_fn_return_type(
+                            fn_id, arg_types, &mangled, v, ctx, state,
+                        );
+                    }
+                    // No matching method: mirror the compile-time error path so
+                    // inference does not hit the builtin arms with a struct type.
+                    crate::compiler::compiler_errors::error_no_such_method(
+                        method,
+                        &struct_name,
+                        *fn_span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                }
+                match method {
                     "uppercase"
                     | "lowercase"
                     | "replace"

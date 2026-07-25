@@ -1,8 +1,9 @@
 //! Bytecode artifact format (`.cdlb`) and the lean VM-only load/run API.
 //!
-//! This mirrors an AOT model: the fat `candela` binary compiles a `.cdl` source
-//! to a compact, self-contained bytecode artifact (`build_bytecode`), and the
-//! lean `candela-vm` binary loads it (`load_program`) and runs it
+//! This mirrors an AOT model: the full `candela` toolchain (compiler + VM)
+//! compiles a `.cdl` source to a compact, self-contained bytecode artifact
+//! (`build_bytecode`), and the VM-only `candela-vm` binary loads it
+//! (`load_program`) and runs it
 //! (`RuntimeProgram::run`) WITHOUT linking the parser, compiler, or REPL.
 //!
 //! The on-disk format is: a 4-byte magic (`CDLB`), a 1-byte format version, then
@@ -87,7 +88,7 @@ struct SourceImage {
 /// A loaded, ready-to-run program image with owned runtime state.
 ///
 /// Produced by [`load_program`] from `.cdlb` bytes. [`Self::run`] executes it
-/// exactly as the fat `candela` binary runs a freshly compiled program.
+/// exactly as the full `candela` binary runs a freshly compiled program.
 pub struct RuntimeProgram {
     instructions: Vec<Instr>,
     registers: Vec<Data>,
@@ -105,7 +106,7 @@ impl RuntimeProgram {
     /// Runs the program's `main` to completion.
     ///
     /// Runtime errors are printed and abort the process (via the VM's
-    /// `throw_error`), matching the fat `candela <file.cdl>` path exactly.
+    /// `throw_error`), matching the full `candela <file.cdl>` path exactly.
     pub fn run(&mut self) {
         let err_ctx = ErrorCtx {
             instr_src: self.instr_src.clone(),

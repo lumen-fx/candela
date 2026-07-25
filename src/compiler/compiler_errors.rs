@@ -996,6 +996,51 @@ pub fn error_unknown_function(
     )
 }
 
+/// A `recv.method(...)` call where `recv`'s static type is the struct `type_name`
+/// but no `impl type_name { fn method ... }` exists (and `method` is not a field,
+/// which the parser already distinguished by the call parentheses).
+#[cold]
+#[inline(never)]
+pub fn error_no_such_method(
+    method: &str,
+    type_name: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Unknown method")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "No method {} on type {}",
+                        red(method),
+                        blue(type_name),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Define it with {}",
+                blue(format_args!(
+                    "impl {type_name} {{ fn {method}(self, ...) {{ ... }} }}"
+                )),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("No method {method} on type {type_name}"),
+        "no_such_method",
+    )
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespace(

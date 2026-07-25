@@ -3,7 +3,7 @@
 ## 0.2.0
 
 - Added a language client (`vscode-languageclient`) that launches `candela-lsp`
-  (see `../../candela-lsp/`) over stdio for `.cdl` files: live diagnostics
+  (see `../../lsp/`) over stdio for `.cdl` files: live diagnostics
   (parse/type errors), hover, completion, document symbols (outline), and
   go-to-definition. The extension no longer has zero runtime dependencies --
   run `npm install` before packaging (see README.md).

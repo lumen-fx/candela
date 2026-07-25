@@ -109,6 +109,8 @@ pub enum Token<'a> {
     Catch,
     #[token("struct")]
     Struct,
+    #[token("impl")]
+    Impl,
     #[token("return")]
     Return,
     #[token("break")]

@@ -16,7 +16,7 @@ fn main() -> ExitCode {
 
     if path == "--help" || path == "-h" {
         println!(
-            "candela-vm -- runs pre-compiled candela bytecode (.cdlb)\n\nUsage:\n  candela-vm <file.cdlb>\n\nProduce a .cdlb with the fat compiler:\n  candela build <file.cdl> [-o out.cdlb]"
+            "candela-vm -- runs pre-compiled candela bytecode (.cdlb)\n\nUsage:\n  candela-vm <file.cdlb>\n\nProduce a .cdlb with the candela compiler:\n  candela build <file.cdl> [-o out.cdlb]"
         );
         return ExitCode::SUCCESS;
     }
@@ -42,7 +42,7 @@ fn main() -> ExitCode {
     };
 
     // On a runtime error the VM prints a diagnostic and exits the process
-    // itself (matching the fat `candela <file.cdl>` path); on success `run`
+    // itself (matching the full `candela <file.cdl>` path); on success `run`
     // returns and we report success.
     program.run();
     ExitCode::SUCCESS

@@ -1,7 +1,28 @@
 use super::type_system::TypeExpr;
 pub use crate::rt::Span;
 use smol_strc::SmolStr;
+use smol_strc::ToSmolStr;
 use std::{hint::unreachable_unchecked, rc::Rc};
+
+/// Separator between a type name and a method name in a mangled method symbol.
+///
+/// `impl` methods lower to per-type-unique free functions named `Type#method`.
+/// `#` is NOT a legal character in a candela identifier (which is
+/// `[a-zA-Z_][a-zA-Z0-9_]*`) and is never produced by the lexer, so a mangled
+/// name can never collide with a user-written free function or with a method of
+/// another type: `Point#len` and `Str#len` are distinct symbols, and both are
+/// distinct from a free `fn len`.
+pub const METHOD_SEP: char = '#';
+
+/// Builds the mangled free-function symbol an `impl Type { fn method ... }`
+/// lowers to.
+///
+/// Used by the parser when lowering method declarations and by the
+/// compiler/type-checker when resolving a `recv.method(...)` call site.
+#[must_use]
+pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
+    format_args!("{type_name}{METHOD_SEP}{method_name}").to_smolstr()
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -178,4 +199,3 @@ pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) 
         unsafe { unreachable_unchecked() }
     }
 }
-
