@@ -1,26 +1,35 @@
 //! Integration tests for the Candela standard library shipped under `libs/std`.
 //!
 //! Behavior is checked by running each module's `libs/std/tests/*.cdl` file
-//! through the `candela` binary: the file imports a std module, exercises it with
-//! assertions, and prints an "ok" line, so a zero exit with that line means every
-//! check held. This drives the same path a user runs (`candela run file.cdl`).
+//! through the `candela` binary: the file uses `import std::<module>` and prints
+//! an "ok" line, so a zero exit with that line means every check held. These
+//! tests point `CANDELA_LIB_PATH` at this checkout's `libs` directory, since the
+//! test binary is not laid out like an install.
 //!
-//! A separate check confirms a std-importing program builds to a `.cdlb` artifact
-//! with the module bytecode inlined, so the artifact loads with no source tree
-//! present.
+//! One test instead builds an install-style layout (the binary with `libs/`
+//! beside it) and runs from an unrelated directory with nothing set, to confirm
+//! the default exe-relative resolution needs no environment.
+//!
+//! The output-checking tests are compiled out under `--features embed`, where the
+//! VM captures `print` for the embedding host instead of writing to stdout. The
+//! `.cdlb` inlining check does not depend on stdout and always runs.
 
 use candela::{build_bytecode, load_program};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Runs `libs/std/tests/<name>.cdl` through the `candela` binary and returns its
-/// stdout, asserting a clean exit.
+fn repo() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Runs `libs/std/tests/<name>.cdl` through the `candela` binary with the library
+/// path pointed at this checkout, and returns its stdout, asserting a clean exit.
+#[cfg(not(feature = "embed"))]
 fn run_std_test(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("libs/std/tests")
-        .join(format!("{name}.cdl"));
+    let path = repo().join("libs/std/tests").join(format!("{name}.cdl"));
     let output = Command::new(env!("CARGO_BIN_EXE_candela"))
         .arg(&path)
+        .env("CANDELA_LIB_PATH", repo().join("libs"))
         .output()
         .expect("candela binary runs");
     assert!(
@@ -33,46 +42,101 @@ fn run_std_test(name: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+#[cfg(not(feature = "embed"))]
 #[test]
 fn string_module() {
     assert!(run_std_test("test_string").contains("string ok"));
 }
 
+#[cfg(not(feature = "embed"))]
 #[test]
 fn list_reductions() {
     assert!(run_std_test("test_list").contains("list ok"));
 }
 
+#[cfg(not(feature = "embed"))]
 #[test]
 fn list_slices() {
     assert!(run_std_test("test_list_slices").contains("list slices ok"));
 }
 
+#[cfg(not(feature = "embed"))]
 #[test]
 fn convert_module() {
     assert!(run_std_test("test_convert").contains("convert ok"));
 }
 
+#[cfg(not(feature = "embed"))]
 #[test]
 fn assert_module() {
     assert!(run_std_test("test_assert").contains("assert ok"));
+}
+
+/// A program that imports std through the namespaced form must run from any
+/// working directory with nothing set, as long as `libs/` sits beside the
+/// binary. This mirrors a clean install.
+#[cfg(not(feature = "embed"))]
+#[test]
+fn default_resolution_needs_no_env() {
+    let tmp = std::env::temp_dir().join(format!("candela_install_{}", std::process::id()));
+    let bin_dir = tmp.join("bin");
+    let std_dir = tmp.join("bin/libs/std");
+    std::fs::create_dir_all(&std_dir).expect("create install layout");
+
+    // The binary with `libs/std` beside it. `import std::list` needs only
+    // list.cdl, which imports nothing else.
+    let installed_bin = bin_dir.join("candela");
+    std::fs::copy(env!("CARGO_BIN_EXE_candela"), &installed_bin).expect("copy binary");
+    std::fs::copy(repo().join("libs/std/list.cdl"), std_dir.join("list.cdl")).expect("copy module");
+
+    // A program in an unrelated directory.
+    let work = tmp.join("work");
+    std::fs::create_dir_all(&work).expect("create work dir");
+    std::fs::write(
+        work.join("prog.cdl"),
+        "import std::list;\nfn main() { print(list::max([5, 9, 2])); }\n",
+    )
+    .expect("write program");
+
+    let output = Command::new(&installed_bin)
+        .arg("prog.cdl")
+        .current_dir(&work)
+        .env_remove("CANDELA_LIB_PATH")
+        .output()
+        .expect("installed candela runs");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains('9'),
+        "zero-config run failed: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 #[test]
 fn std_inlines_into_cdlb() {
     // A program that imports pure-Candela std modules must build to a `.cdlb`
     // whose image carries the module bytecode inline, so the artifact loads with
-    // no source tree present.
+    // no source tree present. `CANDELA_LIB_PATH` lets the compiler find the
+    // modules from this checkout.
+    unsafe {
+        std::env::set_var("CANDELA_LIB_PATH", repo().join("libs"));
+    }
     let src = r#"
-import "libs/std/list.cdl";
-import "libs/std/string.cdl";
+import std::list;
+import std::string;
 fn main() {
     print(list::sum([1, 2, 3]));
     print(string::capitalize("hi"));
 }
 "#;
-    let filename = concat!(env!("CARGO_MANIFEST_DIR"), "/std_cdlb_probe.cdl");
-    let bytes = build_bytecode(src.to_owned(), filename).expect("builds to bytecode");
+    let filename = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("std_cdlb_probe.cdl")
+        .to_string_lossy()
+        .into_owned();
+    let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
     assert!(
         load_program(&bytes).is_ok(),

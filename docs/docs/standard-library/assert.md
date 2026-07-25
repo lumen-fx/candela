@@ -4,7 +4,7 @@ icon: lucide/check-check
 # Assert library
 
 Assertions for writing Candela tests. Import the library with
-`import "std/assert.cdl";` at the top-level.
+`import std::assert;` at the top-level.
 
 *[at the top-level]: Outside of any function.
 
@@ -18,7 +18,7 @@ imports it builds to a `.cdlb` artifact that runs under `candela-vm` with the
 module bytecode inlined.
 
 ```rust
-import "std/assert.cdl";
+import std::assert;
 
 fn main() {
     assert::assert_eq(1 + 1, 2);

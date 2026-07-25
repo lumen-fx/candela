@@ -77,12 +77,26 @@ if [ ! -f "$TMP/candela" ]; then
     printf "[ERROR] Archive downloaded but binary not found inside. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
+if [ ! -d "$TMP/libs/std" ]; then
+    # The archive ships the standard library in libs/ next to the binary. `import
+    # std::x` resolves relative to the installed binary, so this must be present.
+    printf "[ERROR] Archive downloaded but the standard library (libs/std) is missing. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
+fi
+
+# Copy the whole archive, so the binary AND the libs/ tree (which holds the std
+# library) land together in INSTALL_DIR. The binary resolves `import std::x`
+# relative to its own location, so libs/ must sit beside it: INSTALL_DIR/candela
+# and INSTALL_DIR/libs/std are the single source of truth for that lookup.
 if cp -R "$TMP/." "$INSTALL_DIR" 2>/dev/null; then
     :
 elif command -v sudo >/dev/null 2>&1; then
     sudo cp -R "$TMP/." "$INSTALL_DIR"
 else
     printf "[ERROR] Cannot write to $INSTALL_DIR and sudo is not available. Re-run as root or install sudo.\n"
+fi
+
+if [ ! -d "$INSTALL_DIR/libs/std" ]; then
+    printf "[ERROR] Standard library not installed at $INSTALL_DIR/libs/std. 'import std::x' will not resolve. Please re-run the installer.\n"
 fi
 
 if chmod 755 "$INSTALL_DIR/candela" 2>/dev/null; then

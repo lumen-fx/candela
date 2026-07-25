@@ -3065,35 +3065,47 @@ fn parse_toplevel(
                     is_host: true,
                 });
             }
-            Expr::ImportFile(path, alias, span) => {
-                let file_path = file_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(path.as_str())
-                    .canonicalize()
-                    .unwrap_or_else(|_| {
-                        // The file was not found next to the importing file, so
-                        // fall back to the shipped library directory. `CANDELA_LIB_PATH`
-                        // overrides its location (it names the `libs/` dir that holds
-                        // `std/` and `std_src/`); otherwise it is `libs/` beside the
-                        // running executable.
-                        if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
-                            return PathBuf::from(base).join(path.clone());
-                        }
-                        std::env::current_exe().map_or_else(
-                            |_| {
+            Expr::ImportFile(path, alias, is_logical, span) => {
+                // The shipped library directory: `CANDELA_LIB_PATH` overrides its
+                // location (it names the `libs/` dir that holds `std/` and, for the
+                // C-backed modules, `std_src/`); otherwise it is `libs/` beside the
+                // running executable, which is where the toolchain installs it. This
+                // is the single source of truth for the default std location.
+                let shipped_lib = |path: &SmolStr| -> Option<PathBuf> {
+                    if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
+                        return Some(PathBuf::from(base).join(path.as_str()));
+                    }
+                    std::env::current_exe().ok().map(|p| {
+                        p.canonicalize()
+                            .unwrap_or(p)
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .join("libs")
+                            .join(path.as_str())
+                    })
+                };
+
+                let file_path = if is_logical {
+                    // A namespaced import (`import std::string`) resolves against the
+                    // shipped library directory only, never source-relative, so it
+                    // works from any working directory with nothing set.
+                    shipped_lib(&path).unwrap_or_else(|| {
+                        error_cannot_read_file(span, src_file_idx, sources);
+                    })
+                } else {
+                    // A path-literal import resolves next to the importing file first,
+                    // then falls back to the shipped library directory.
+                    file_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(path.as_str())
+                        .canonicalize()
+                        .unwrap_or_else(|_| {
+                            shipped_lib(&path).unwrap_or_else(|| {
                                 error_cannot_read_file(span, src_file_idx, sources);
-                            },
-                            |p| {
-                                p.canonicalize()
-                                    .unwrap_or(p)
-                                    .parent()
-                                    .unwrap_or_else(|| Path::new("."))
-                                    .join("libs/")
-                                    .join(path.clone())
-                            },
-                        )
-                    });
+                            })
+                        })
+                };
 
                 let child_name = alias.unwrap_or_else(|| {
                     file_path

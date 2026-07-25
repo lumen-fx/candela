@@ -46,22 +46,44 @@ running programs, not against an assumed feature set.
 
 ## Import resolution and ship layout
 
-Imports are written as string paths, `import "std/math.cdl";`, and bind a
-namespace from the file stem (`math::`). There is no `std::x` namespace syntax,
-and this pass does not add one: the string-path form is the existing convention
-and changing it is a language decision, not a library one.
+There are two import forms.
 
-Resolution tries the path relative to the importing file first, then falls back
-to a shipped library directory. This pass adds a `CANDELA_LIB_PATH` override for
-that fallback: when set, it names the `libs/` directory that holds `std/` and
-`std_src/`; otherwise the fallback is `libs/` beside the running executable. The
-standard library therefore ships as `.cdl` files next to the toolchain rather
-than baked into the binary, and a source checkout can point at its own `libs/`
-with the override.
+- A namespaced import, `import std::string;`, is the form for the standard
+  library. It binds the module under `string::` and the resolver maps it to a
+  `.cdl` file in the shipped library directory (`std::string` -> `std/string.cdl`).
+  This is the default a normal user reaches for, and it needs nothing set.
+- A path-literal import, `import "./local.cdl";`, is for a user's own files. It
+  resolves relative to the importing file first, then falls back to the shipped
+  library directory.
 
-Because a C-backed module names its shared object with a path relative to the
-`.cdl` file (`../std_src/math/math`), that path resolves correctly once the
-module itself is found through either the relative or the override route.
+The shipped library directory is the single source of truth for where std lives.
+By default it is `libs/` beside the running executable, found by canonicalizing
+the executable's own path. This is the ship-beside-the-toolchain layout: the
+installer places the binary and `libs/` together, so `import std::string` works
+from any working directory with nothing configured. Namespaced imports resolve
+against this directory only; they are never source-relative, so the working
+directory never matters.
+
+`CANDELA_LIB_PATH` overrides the directory as an escape hatch for source
+checkouts and custom builds where the binary is not laid out like an install. It
+names the `libs/` directory that holds `std/` and, for the C-backed modules,
+`std_src/`. It is not part of normal use and a normal `candela run` never needs
+it.
+
+Because a C-backed module names its shared object with a path relative to its own
+`.cdl` file (`../std_src/math/math`), that path resolves correctly once the module
+itself is found, under either the default or the override.
+
+### Install layout
+
+`install.sh` unpacks the release archive, which carries the binary and the whole
+`libs/` tree, into one directory (`/usr/local/lib/candela` on Linux,
+`/Library/Candela` on macOS) and symlinks the binary onto the PATH. The result is
+`<install-dir>/candela` next to `<install-dir>/libs/std`, which is exactly what
+the resolver's default looks up. The installer verifies `libs/std` is present so
+a normal `candela run` using std works immediately, with nothing set. The
+resolver's default path and the installer's destination are the same location by
+construction, so they cannot drift.
 
 ## Whole-program `.cdlb` model
 

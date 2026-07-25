@@ -1,7 +1,7 @@
 /// Checks for the `convert` module. Prints "convert ok" on success; a failed
 /// check aborts the run with a message.
-import "../convert.cdl" as convert;
-import "../assert.cdl" as assert;
+import std::convert;
+import std::assert;
 
 fn main() {
     assert::assert_eq(convert::to_int("42"), 42);

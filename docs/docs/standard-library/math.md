@@ -7,7 +7,7 @@ icon: lucide/omega
 
     This is highly subject to change.
 
-Import this library with `import "std/math.cdl";` at the top-level.
+Import this library with `import std::math;` at the top-level.
 
 *[at the top-level]: Outside of any function.
 

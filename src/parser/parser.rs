@@ -600,16 +600,48 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Import);
     let (next_token, span) = parser.next_token();
-    let path = if let Token::String(s) = next_token {
-        SmolStr::new(parse_string(s))
+    // Two import forms share this statement:
+    //   * a namespaced logical import, `import std::string;`, which the resolver
+    //     maps to the shipped library directory (`std::string` -> `std/string.cdl`);
+    //   * a path-literal import, `import "./local.cdl";`, resolved source-relative.
+    let (path, is_logical, mut end) = if let Token::String(s) = next_token {
+        (SmolStr::new(parse_string(s)), false, span.end)
+    } else if let Token::Identifier(first) = next_token {
+        let mut segments = String::from(first);
+        let mut end = span.end;
+        // Consume any `::segment` continuations, e.g. `std::text::unicode`.
+        while parser.peek_token_opt() == Some(Token::DoubleColon) {
+            parser.next_token();
+            let (seg_token, seg_span) = parser.next_token();
+            if let Token::Identifier(seg) = seg_token {
+                segments.push('/');
+                segments.push_str(seg);
+                end = seg_span.end;
+            } else {
+                cold_path();
+                parser.error(
+                    seg_span,
+                    ParserErr::UnexpectedToken(
+                        Token::Identifier(""),
+                        seg_token,
+                        "Module path segments must be identifiers.",
+                    ),
+                );
+            }
+        }
+        segments.push_str(".cdl");
+        (SmolStr::new(&segments), true, end)
     } else {
         cold_path();
         parser.error(
             span,
-            ParserErr::UnexpectedToken(Token::String(""), next_token, "Paths must be strings."),
+            ParserErr::UnexpectedToken(
+                Token::String(""),
+                next_token,
+                "An import is either a namespaced module (import std::string) or a path string (import \"./local.cdl\").",
+            ),
         );
     };
-    let end = span.end;
     let peek_token = parser.peek_token_opt();
     if peek_token == Some(Token::As) {
         parser.next_token();
@@ -627,17 +659,18 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
                 ),
             );
         };
+        end = span.end;
         parser.next_token_expect(
             Token::SemiColon,
             "Import statements must end with a semicolon",
         );
-        Expr::ImportFile(path, Some(alias), (start, span.end).into())
+        Expr::ImportFile(path, Some(alias), is_logical, (start, end).into())
     } else {
         parser.next_token_expect(
             Token::SemiColon,
             "Import statements must end with a semicolon",
         );
-        Expr::ImportFile(path, None, (start, end).into())
+        Expr::ImportFile(path, None, is_logical, (start, end).into())
     }
 }
 

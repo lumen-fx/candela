@@ -20,19 +20,14 @@ fn main() {print(mylib::my_func(42));}
 
 ## Importing libraries
 
-Candela libraries are ordinary Candela files.
-The `libs/` folder located next to the Candela executable (currently in `/Library/Candela/` on macOS and `/usr/local/lib/candela/` on Linux) is checked by the `import` keyword if the file isn't found locally, making global Candela libraries possible. As such, by placing `.cdl` files in the `libs/` folder, you can make libraries available globally.
+Import a library by its namespaced name. `import std::string` binds the module's
+functions under `string::`, and the resolver finds the shipped module for you, so
+this works from any working directory with nothing to configure.
 
-Set the `CANDELA_LIB_PATH` environment variable to override where this lookup goes: it names the `libs/` directory to search (the one that holds `std/` and, for the C-backed libraries, `std_src/`), which is useful when running from a source checkout rather than an install.
-
-### Standard library
-
-The standard library lives in `libs/std/`. The `math`, `time`, and `random` libraries are backed by a C library loaded across Candela's dynamic-library FFI. The `string`, `list`, `convert`, and `assert` libraries are written in Candela and use no dynamic library, so a program that imports them builds to a `.cdlb` artifact that runs under `candela-vm` with the module bytecode inlined.
-
-```rs
-import "std/math.cdl";
-import "std/string.cdl";
-import "std/list.cdl";
+```rust
+import std::math;
+import std::string;
+import std::list;
 
 fn main() {
     print(math::cos(3.14159265359));
@@ -40,3 +35,27 @@ fn main() {
     print(list::sum([1, 2, 3, 4]));
 }
 ```
+
+Add `as` to choose a different namespace: `import std::string as s;` makes the
+functions available under `s::`.
+
+### How a namespaced import resolves
+
+A namespaced import maps to a `.cdl` file in the shipped library directory:
+`std::string` resolves to `std/string.cdl` under that directory. The library
+directory is `libs/` next to the Candela executable, which is where the installer
+places it, so a normal install needs nothing set. Set `CANDELA_LIB_PATH` to point
+the lookup at a different `libs/` directory (the one holding `std/` and, for the
+C-backed libraries, `std_src/`); this is an escape hatch for source checkouts and
+custom builds, not part of normal use.
+
+Resolution happens at compile time, so a program built to a `.cdlb` artifact has
+the imported module bytecode inlined and runs under `candela-vm` with no library
+files present.
+
+### Standard library
+
+The standard library lives in the shipped `std/` directory. The `math`, `time`,
+and `random` libraries are backed by a C library loaded across Candela's
+dynamic-library FFI. The `string`, `list`, `convert`, and `assert` libraries are
+written in Candela and use no dynamic library.

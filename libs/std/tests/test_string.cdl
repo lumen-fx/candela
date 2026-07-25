@@ -1,8 +1,8 @@
 /// Checks for the `string` module. Run with `candela run`, or build to a `.cdlb`
 /// and run under `candela-vm`. Prints "string ok" on success; a failed check
 /// aborts the run with a message.
-import "../string.cdl" as string;
-import "../assert.cdl" as assert;
+import std::string;
+import std::assert;
 
 fn main() {
     assert::assert_eq(string::substring("hello world", 6, 5), "world");

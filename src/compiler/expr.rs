@@ -110,8 +110,13 @@ pub enum Expr {
         Span,
     ),
 
-    /// ImportFile(path,alias ,(start, end))
-    ImportFile(SmolStr, Option<SmolStr>, Span),
+    /// ImportFile(path, alias, is_logical, (start, end))
+    ///
+    /// `is_logical` marks a namespaced std/library import (`import std::string`):
+    /// the resolver maps it straight to the shipped library directory and never
+    /// looks source-relative. A path-literal import (`import "./local.cdl"`) has
+    /// `is_logical` false and resolves source-relative first.
+    ImportFile(SmolStr, Option<SmolStr>, bool, Span),
 
     Break,
     Continue,
