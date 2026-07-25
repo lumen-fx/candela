@@ -6,23 +6,15 @@ use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
-use crate::vm::MapPool;
-use crate::vm::ObjectPool;
-use crate::vm::StringPool;
-#[cfg(not(target_arch = "wasm32"))]
-use libloading::Library;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
-#[derive(Debug)]
-pub struct ErrorCatch {
-    pub catch_loc: u32,
-    pub error_reg: u16,
-    pub call_frames_len: u32,
-    pub args_len: u32,
-}
+// Runtime data types moved to `crate::rt` so the VM can be built without the
+// compiler. Re-exported here to keep the compiler's `compiler_data::X` paths
+// working unchanged.
+pub use crate::rt::{DynamicLibFn, ErrorCatch, HostFnSig, InstrSrc, Pools, Source, Struct};
 
 #[derive(Debug)]
 pub struct Function {
@@ -70,81 +62,6 @@ pub struct Dynamiclib {
     pub is_host: bool,
 }
 
-/// Marshalling signature for a `host` function, indexed by
-/// [`FnSignature::id`]. `types[0]` is the return type; `types[1..]` are the
-/// argument types. Mirrors [`DynamicLibFn::types`] but carries no FFI state,
-/// since dispatch goes through a registered Rust closure.
-#[derive(Debug, Clone)]
-pub struct HostFnSig {
-    /// [ return_type, arg_types... ]
-    pub types: Box<[DataType]>,
-    /// The `(namespace, name)` this signature was declared under, used by the
-    /// `Engine` to bind the matching registered closure.
-    pub namespace: SmolStr,
-    pub name: SmolStr,
-    /// Declared with `...` in the `host` block: the call site forwards any
-    /// number of arguments of any type to the registered closure and the
-    /// `Engine` skips signature validation. `types` holds only the return type.
-    pub variadic: bool,
-}
-
-impl HostFnSig {
-    #[inline(always)]
-    #[must_use]
-    pub fn get_return_type(&self) -> &DataType {
-        unsafe { self.types.get_unchecked(0) }
-    }
-    #[inline(always)]
-    #[must_use]
-    pub fn get_arg(&self, idx: usize) -> &DataType {
-        unsafe { self.types.get_unchecked(1 + idx) }
-    }
-    #[inline(always)]
-    #[must_use]
-    pub fn arg_count(&self) -> usize {
-        self.types.len() - 1
-    }
-}
-
-#[derive(Debug)]
-pub struct DynamicLibFn {
-    /// [ return_type, arg_types... ]
-    pub types: Box<[DataType]>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub _lib: Rc<Library>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub ptr: libffi::middle::CodePtr,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub cif: libffi::middle::Cif,
-}
-
-impl DynamicLibFn {
-    #[inline(always)]
-    #[must_use]
-    pub fn get_return_type(&self) -> &DataType {
-        unsafe { self.types.get_unchecked(0) }
-    }
-}
-
-#[derive(Debug)]
-pub struct Struct {
-    pub name: SmolStr,
-    pub fields: Box<[(SmolStr, DataType, Span)]>,
-    pub id: u16,
-    pub name_span: Span,
-}
-
-pub struct Pools {
-    pub objs: ObjectPool,
-    pub maps: MapPool,
-    pub strings: StringPool,
-}
-
-pub struct Source {
-    pub filename: SmolStr,
-    pub contents: String,
-}
-
 #[derive(Clone, Copy)]
 pub struct Ctx {
     pub block_id: u16,
@@ -180,13 +97,6 @@ impl Ctx {
     pub const fn set_offset(self, offset: u16) -> Self {
         Self { offset, ..self }
     }
-}
-
-#[derive(Copy, Clone)]
-pub struct InstrSrc {
-    pub instr: Instr,
-    pub span: Span,
-    pub file_id: u16,
 }
 
 pub struct State<'a> {

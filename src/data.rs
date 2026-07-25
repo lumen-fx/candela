@@ -1,4 +1,4 @@
-use crate::compiler::compiler_data::Struct;
+use crate::rt::Struct;
 use crate::vm::{MapPool, RegisterFile, StringPool};
 use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
 use smol_strc::SmolStr;

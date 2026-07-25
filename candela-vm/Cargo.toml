@@ -1,0 +1,23 @@
+[package]
+name = "candela-vm"
+version = "0.3.0"
+edition = "2024"
+authors = [
+    "Horace Hoff <horace.hoff@gmail.com>",
+    "FizzWizzleDazzle <arturmisiurev@gmail.com>",
+]
+readme = "README.md"
+repository = "https://github.com/lumen-fx/candela"
+homepage = "https://github.com/lumen-fx/candela"
+license = "Apache-2.0"
+description = "Lean VM-only runtime for candela: loads and runs pre-compiled .cdlb bytecode without the parser/compiler/REPL."
+
+# Depends on `candela` with the `compiler` feature OFF, so this binary links only
+# the runtime core (VM + instr + data + gc + embed marshalling + bytecode
+# loader). No parser, no compiler, no REPL, no logos/mimalloc.
+[dependencies]
+candela = { path = "..", default-features = false }
+
+[[bin]]
+name = "candela-vm"
+path = "src/main.rs"

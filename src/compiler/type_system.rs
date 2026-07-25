@@ -25,11 +25,7 @@ use std::collections::HashSet;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::compiler::compiler_data::Struct;
-
-#[cfg(not(target_arch = "wasm32"))]
-use libffi::middle::Type;
+pub use crate::rt::DataType;
 
 // Tracks which user-defined functions are currently being analysed for their
 // return type. Used to break mutual-recursion cycles in type inference
@@ -116,56 +112,6 @@ impl TypeExpr {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum DataType {
-    /// Array(None) = Unknown[]
-    Array(Option<Box<Self>>),
-    Float,
-    Int,
-    Bool,
-    String,
-    Null,
-    Unknown,
-    Union(Box<[Self]>),
-    Fn(u16),
-    Struct(u16),
-    Map(Box<(Option<Self>, Option<Self>)>),
-}
-
-impl std::fmt::Display for DataType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Float => write!(f, "float"),
-            Self::Int => write!(f, "int"),
-            Self::Bool => write!(f, "bool"),
-            Self::String => write!(f, "string"),
-            Self::Array(array_type) => match array_type {
-                Some(array_type) => write!(f, "{array_type}[]"),
-                None => write!(f, "Unknown[]"),
-            },
-            Self::Null => write!(f, "null"),
-            Self::Unknown => write!(f, "Unknown"),
-            Self::Union(types) => write!(
-                f,
-                "{}",
-                types
-                    .into_iter()
-                    .map(|x| format!("{x}"))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            ),
-            Self::Struct(_) => write!(f, "struct"),
-            Self::Map(m) => write!(
-                f,
-                "{{{}: {}}}",
-                m.0.as_ref().unwrap_or(&Self::Unknown),
-                m.1.as_ref().unwrap_or(&Self::Unknown)
-            ),
-            Self::Fn(_) => write!(f, "function"),
-        }
-    }
-}
-
 impl DataType {
     #[must_use]
     pub fn format_detailed(&self, state: &State<'_>) -> SmolStr {
@@ -233,23 +179,6 @@ impl DataType {
         matches!(self, Self::String | Self::Array(_) | Self::Unknown)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[must_use]
-    pub fn to_c_type(&self, structs: &[Struct]) -> Type {
-        match self {
-            Self::Int => libffi::middle::Type::i32(),
-            Self::Float => libffi::middle::Type::f64(),
-            Self::String | Self::Array(_) => libffi::middle::Type::pointer(),
-            Self::Null => libffi::middle::Type::void(),
-            Self::Struct(id) => libffi::middle::Type::structure(
-                structs[*id as usize]
-                    .fields
-                    .iter()
-                    .map(|(_, field_type, _)| field_type.to_c_type(structs)),
-            ),
-            _ => unsafe { unreachable_unchecked() },
-        }
-    }
 }
 
 impl PartialEq for DataType {

@@ -1,28 +1,38 @@
+#[cfg(feature = "compiler")]
 use crate::compiler::compile;
+#[cfg(feature = "compiler")]
 use crate::errors::BOLD;
+#[cfg(feature = "compiler")]
 use crate::errors::ErrorCtx;
+#[cfg(feature = "compiler")]
 use crate::errors::RED;
+#[cfg(feature = "compiler")]
 use crate::errors::RESET;
+#[cfg(feature = "compiler")]
 use crate::repl::repl;
 use crate::vm::RegisterFile;
-#[cfg(feature = "embed")]
+#[cfg(all(feature = "embed", feature = "compiler"))]
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
+#[cfg(feature = "compiler")]
 use std::hint::cold_path;
-#[cfg(feature = "embed")]
+#[cfg(all(feature = "embed", feature = "compiler"))]
 use std::panic::catch_unwind;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 #[path = "./vm/gc/array_gc.rs"]
 mod array_gc;
+// Bytecode artifact format (`.cdlb`) + the lean VM-only load/run API. Always
+// compiled -- this is what `candela-vm` links against.
+mod artifact;
 #[cfg(any(target_arch = "wasm32", feature = "embed"))]
 mod captured_output;
 // `pub` so an out-of-tree frontend (candela-lsp) can reuse the lexer, parser,
-// and type-checker directly instead of reimplementing them. The CLI/embed
-// surface above (`Engine`/`Program`/`Diagnostic`) stays the primary API for
-// running scripts; this module is for tooling that needs the AST + spans +
-// symbol table `compile()` produces along the way.
+// and type-checker directly instead of reimplementing them. Gated behind the
+// `compiler` feature: with `--no-default-features` the crate is the runtime
+// core only (no parser/compiler/repl), which is how `candela-vm` is built.
+#[cfg(feature = "compiler")]
 #[path = "./compiler/compiler.rs"]
 pub mod compiler;
 #[path = "./data.rs"]
@@ -37,13 +47,17 @@ mod map_gc;
 // `pub` for the same reason as `compiler` above: exported so tooling (or a
 // future incremental parse-only path) can lex/parse standalone without going
 // through a full `compiler::compile`.
+#[cfg(feature = "compiler")]
 #[path = "./parser/parser.rs"]
 pub mod parser;
+#[cfg(feature = "compiler")]
 mod repl;
+// Runtime data types shared by the VM and the compiler. Always compiled.
+mod rt;
 #[path = "./vm/gc/string_gc.rs"]
 mod string_gc;
 #[path = "./tests.rs"]
-#[cfg(test)]
+#[cfg(all(test, feature = "compiler"))]
 mod tests;
 #[path = "./util/util.rs"]
 mod util;
@@ -53,17 +67,30 @@ mod vm;
 pub use errors::Diagnostic;
 pub use errors::collect_diagnostic;
 
+#[cfg(feature = "compiler")]
 pub use embed::Engine;
 pub use embed::FromHostValue;
 pub use embed::HostType;
 pub use embed::IntoHostFn;
 pub use embed::IntoHostValue;
+#[cfg(feature = "compiler")]
 pub use embed::Program;
 pub use embed::Value;
+
+// The lean VM-only surface: load a pre-compiled `.cdlb` and run it. Available
+// with and without the `compiler` feature -- this is the API `candela-vm` uses.
+pub use artifact::LoadError;
+pub use artifact::RuntimeProgram;
+pub use artifact::load_program;
+// Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
+// path). Needs the compiler.
+#[cfg(feature = "compiler")]
+pub use artifact::build_bytecode;
 
 /// Runs a freshly compiled program's `main` to completion on the CLI/REPL path.
 /// The embedding API (`Engine`/`Program`) drives the VM directly instead, with
 /// the host-function tables the CLI never has.
+#[cfg(feature = "compiler")]
 fn execute_compiled(out: compiler::CompileOutput) {
     let compiler::CompileOutput {
         instructions,
@@ -100,14 +127,14 @@ pub fn get_output() -> String {
     captured_output::CAPTURED_OUTPUT.with(|o| o.take())
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "compiler"))]
 #[wasm_bindgen]
 pub fn run(code: String) {
     captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     execute_compiled(compile(code, "playground.cdl", false));
 }
 
-#[cfg(feature = "embed")]
+#[cfg(all(feature = "embed", feature = "compiler"))]
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)] // WIP
 pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
@@ -123,7 +150,7 @@ pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
     CString::new(output).unwrap_or_default().into_raw()
 }
 
-#[cfg(feature = "embed")]
+#[cfg(all(feature = "embed", feature = "compiler"))]
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)] // WIP
 pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
@@ -135,6 +162,56 @@ pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
     }
 }
 
+/// Compiles a `.cdl` source file to a `.cdlb` bytecode artifact.
+///
+/// `candela build <file.cdl> [-o out.cdlb]`. The emitted artifact is run by the
+/// lean `candela-vm` binary, which links no parser/compiler/REPL.
+#[cfg(feature = "compiler")]
+fn build_subcommand(args: &mut impl Iterator<Item = String>) {
+    let Some(input) = args.next() else {
+        eprintln!(
+            "{RED}CANDELA ERROR{RESET}\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
+        );
+        std::process::exit(1);
+    };
+
+    let mut output: Option<String> = None;
+    while let Some(a) = args.next() {
+        if a == "-o" || a == "--output" {
+            output = args.next();
+        } else {
+            output = Some(a);
+        }
+    }
+    let output = output.unwrap_or_else(|| {
+        let stripped = input.strip_suffix(".cdl").unwrap_or(&input);
+        format!("{stripped}.cdlb")
+    });
+
+    let contents = fs::read_to_string(&input).unwrap_or_else(|_| {
+        cold_path();
+        eprintln!(
+            "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot read {RED}{BOLD}{input}{RESET}\n--------------",
+        );
+        std::process::exit(1);
+    });
+
+    let bytes = match artifact::build_bytecode(contents, &input) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{RED}CANDELA ERROR{RESET}\nCannot build bytecode: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = fs::write(&output, &bytes) {
+        eprintln!("{RED}CANDELA ERROR{RESET}\nCannot write {output}: {e}");
+        std::process::exit(1);
+    }
+    println!("Wrote {} ({} bytes)", output, bytes.len());
+}
+
+#[cfg(feature = "compiler")]
 pub fn main() {
     #[cfg(not(debug_assertions))]
     std::panic::set_hook(Box::new(|info| {
@@ -151,10 +228,16 @@ pub fn main() {
 
     let next_arg = unsafe { args.next().unwrap_unchecked() };
 
+    if next_arg == "build" || next_arg == "compile" {
+        cold_path();
+        build_subcommand(&mut args);
+        return;
+    }
+
     if next_arg == "--help" || next_arg == "-h" {
         cold_path();
         println!(
-            "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela [-v | --version]",
+            "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]   (compile to bytecode; run with candela-vm)\n  candela [-v | --version]",
             util::CANDELA_LOGO
         );
         return;

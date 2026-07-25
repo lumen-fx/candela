@@ -1,4 +1,7 @@
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Instr {
     Print(u16),
@@ -180,7 +183,7 @@ pub enum Instr {
     Halt(u16),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LibFunc {
     Uppercase = 0,
     Lowercase = 1,
@@ -218,7 +221,7 @@ pub enum LibFunc {
     FsExists = 33,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LibFuncVoid {
     Reverse = 0,
     FsWrite = 1,

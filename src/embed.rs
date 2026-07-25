@@ -22,41 +22,70 @@
 //! values (reusing the `structured-errors` funnel) instead of printing and
 //! aborting the process.
 
-use crate::compiler::CompileOutput;
-use crate::compiler::Namespace;
-use crate::compiler::compile;
-use crate::compiler::compiler_data::Ctx;
-use crate::compiler::compiler_data::DynamicLibFn;
-use crate::compiler::compiler_data::Dynamiclib;
-use crate::compiler::compiler_data::Function;
-use crate::compiler::compiler_data::HostFnSig;
-use crate::compiler::compiler_data::InstrSrc;
-use crate::compiler::compiler_data::Pools;
-use crate::compiler::compiler_data::Source;
-use crate::compiler::compiler_data::State;
-use crate::compiler::compiler_data::Struct;
-use crate::compiler::compiler_data::Variable;
-use crate::compiler::expr::Expr;
-use crate::compiler::expr::Span;
-use crate::compiler::type_system::DataType;
 use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::NULL;
-use crate::errors::Diagnostic;
-use crate::errors::ErrorCtx;
-use crate::errors::collect_diagnostic;
-use crate::instr::Instr;
-use crate::vm;
+use crate::rt::DataType;
+use crate::rt::Struct;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
-use crate::vm::RegisterFile;
 use crate::vm::StringPool;
-use rustc_hash::FxHashMap;
-use smol_strc::SmolStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
+
+// The `Engine`/`Program` embedding surface compiles and drives scripts in
+// process, so it is only available when the `compiler` feature is on. The
+// runtime marshalling types below (`Value`, `HostType`, host-fn traits,
+// `marshal_value`/`unmarshal_value`) are always available -- the VM depends on
+// them and they carry no compiler state.
+#[cfg(feature = "compiler")]
+use crate::compiler::CompileOutput;
+#[cfg(feature = "compiler")]
+use crate::compiler::Namespace;
+#[cfg(feature = "compiler")]
+use crate::compiler::compile;
+#[cfg(feature = "compiler")]
+use crate::compiler::compiler_data::Ctx;
+#[cfg(feature = "compiler")]
+use crate::compiler::compiler_data::Dynamiclib;
+#[cfg(feature = "compiler")]
+use crate::compiler::compiler_data::Function;
+#[cfg(feature = "compiler")]
+use crate::compiler::compiler_data::State;
+#[cfg(feature = "compiler")]
+use crate::compiler::compiler_data::Variable;
+#[cfg(feature = "compiler")]
+use crate::compiler::expr::Expr;
+#[cfg(feature = "compiler")]
+use crate::rt::DynamicLibFn;
+#[cfg(feature = "compiler")]
+use crate::rt::HostFnSig;
+#[cfg(feature = "compiler")]
+use crate::rt::InstrSrc;
+#[cfg(feature = "compiler")]
+use crate::rt::Pools;
+#[cfg(feature = "compiler")]
+use crate::rt::Source;
+#[cfg(feature = "compiler")]
+use crate::rt::Span;
+#[cfg(feature = "compiler")]
+use crate::errors::Diagnostic;
+#[cfg(feature = "compiler")]
+use crate::errors::ErrorCtx;
+#[cfg(feature = "compiler")]
+use crate::errors::collect_diagnostic;
+#[cfg(feature = "compiler")]
+use crate::instr::Instr;
+#[cfg(feature = "compiler")]
+use crate::vm;
+#[cfg(feature = "compiler")]
+use crate::vm::RegisterFile;
+#[cfg(feature = "compiler")]
+use rustc_hash::FxHashMap;
+#[cfg(feature = "compiler")]
+use smol_strc::SmolStr;
 
 /// A candela runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
 type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
@@ -236,6 +265,7 @@ pub type HostDispatch = Rc<dyn Fn(&[Value]) -> Value>;
 /// A registered host function: its erased dispatcher plus the argument/return
 /// type signature derived from the closure, used to validate it against the
 /// script's `host` block at compile time.
+#[cfg(feature = "compiler")]
 struct RegisteredFn {
     func: HostDispatch,
     arg_types: Vec<HostType>,
@@ -496,11 +526,13 @@ impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 /// This is the library analogue of the one-shot [`crate::candela_run`]: it does
 /// not run a script and hand back stdout, it keeps compiler + VM state resident
 /// so the host can call into the script repeatedly.
+#[cfg(feature = "compiler")]
 #[derive(Default)]
 pub struct Engine {
     registry: HashMap<(String, String), RegisteredFn>,
 }
 
+#[cfg(feature = "compiler")]
 impl Engine {
     #[must_use]
     pub fn new() -> Self {
@@ -634,6 +666,7 @@ impl Engine {
 
 /// Checks that a registered closure's derived signature matches the `host`
 /// block declaration it is bound to.
+#[cfg(feature = "compiler")]
 fn validate_host_fn(
     sig: &HostFnSig,
     registered: &RegisteredFn,
@@ -722,6 +755,7 @@ fn validate_host_fn(
 ///
 /// `Program` is single-threaded (`!Send`/`!Sync`): it holds `Rc` dispatchers
 /// and reflects candela's single-threaded VM.
+#[cfg(feature = "compiler")]
 pub struct Program {
     // ---- VM state (persists across calls) ----
     instructions: Vec<Instr>,
@@ -744,6 +778,7 @@ pub struct Program {
     free_registers: Vec<u16>,
 }
 
+#[cfg(feature = "compiler")]
 impl Program {
     /// Invokes the script-defined function `fn_name` with `args`, returning its
     /// value (or [`Value::Null`] for a void function).
@@ -915,6 +950,7 @@ impl Program {
 /// [`Value::Int`] is narrowed here. Returns `None` for non-scalars (arrays/maps),
 /// which cannot be expressed as literal exprs and are instead allocated into the
 /// heap pools and passed as a register handle (see [`Program::call`]).
+#[cfg(feature = "compiler")]
 fn value_to_expr(v: &Value) -> Option<Expr> {
     Some(match v {
         Value::Null => Expr::Null,
@@ -930,6 +966,7 @@ fn value_to_expr(v: &Value) -> Option<Expr> {
 /// argument can be given a type the call site type-checks against. Homogeneous
 /// element/value types are assumed (matching candela's static collection typing);
 /// the first element is sampled, empty collections yield an unknown element type.
+#[cfg(feature = "compiler")]
 fn value_datatype(v: &Value) -> DataType {
     match v {
         Value::Null => DataType::Null,

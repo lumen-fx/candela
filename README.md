@@ -72,13 +72,47 @@ cargo build --release
 ## Usage
 
 ```sh
-candela program.cdl   # Run a file
-candela               # Start the REPL
-candela -v/--version  # Print version
-candela -h/--help     # Print help
+candela program.cdl               # Run a file
+candela build program.cdl         # Compile to program.cdlb bytecode
+candela build program.cdl -o a.cdlb   # ... to a chosen path
+candela                           # Start the REPL
+candela -v/--version              # Print version
+candela -h/--help                 # Print help
 ```
 
 Candela source files use the `.cdl` extension.
+
+## Ahead-of-time bytecode and the lean `candela-vm`
+
+Candela ships as two binaries:
+
+- **`candela`** -- the full toolchain: parser + compiler + VM + REPL + the
+  `Engine`/`Program` embedding API. Release size: **~1.32 MiB** (1,386,240 bytes).
+- **`candela-vm`** -- a lean, VM-only runtime that loads and runs pre-compiled
+  bytecode and links no parser, compiler, or REPL. Release size:
+  **~0.71 MiB** (745,768 bytes), comfortably under the 1 MiB target.
+
+This mirrors an AOT model. The fat `candela` binary compiles a `.cdl` source to
+a compact, self-contained `.cdlb` bytecode artifact; `candela-vm` just runs it:
+
+```sh
+candela build program.cdl         # emits program.cdlb
+candela-vm program.cdl.cdlb       # loads + runs the bytecode
+```
+
+Running a `.cdlb` through `candela-vm` produces output (and, on a runtime error,
+diagnostics -- the source is embedded in the artifact) identical to running the
+`.cdl` directly through the fat `candela`.
+
+A `.cdlb` artifact is a 4-byte magic (`CDLB`), a 1-byte format version, and a
+`postcard`-encoded image of the program's bytecode, constant pools, struct
+table, and sources; a version mismatch is rejected cleanly. (Programs that load
+dynamic C libraries or declare `host` blocks are not captured in a `.cdlb` yet --
+those still run through the fat binary / embedding API.)
+
+The `candela-vm` crate is built by disabling the `candela` crate's default
+`compiler` feature (`default-features = false`), which drops the parser,
+compiler, REPL, and their dependencies from the build.
 
 ## Editor support
 

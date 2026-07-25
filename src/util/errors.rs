@@ -1,6 +1,5 @@
-use crate::compiler::compiler_data::{InstrSrc, Source};
-use crate::compiler::expr::Span;
-use crate::{compiler::type_system::DataType, instr::Instr};
+use crate::rt::{DataType, InstrSrc, Source, Span};
+use crate::instr::Instr;
 use ariadne::FnCache;
 use ariadne::{Color, Label, Report, ReportKind};
 use smol_strc::{SmolStr, ToSmolStr};

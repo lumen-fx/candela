@@ -1,4 +1,5 @@
 use super::type_system::TypeExpr;
+pub use crate::rt::Span;
 use smol_strc::SmolStr;
 use std::{hint::unreachable_unchecked, rc::Rc};
 
@@ -178,64 +179,3 @@ pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) 
     }
 }
 
-/// A span of code in a `Source`'s `contents`
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl Span {
-    #[inline(always)]
-    #[must_use]
-    pub const fn extend(self, span: Self) -> Self {
-        Self {
-            start: self.start,
-            end: span.end,
-        }
-    }
-}
-
-impl From<std::range::Range<usize>> for Span {
-    #[inline(always)]
-    fn from(value: std::range::Range<usize>) -> Self {
-        Self {
-            start: value.start as u32,
-            end: value.end as u32,
-        }
-    }
-}
-
-impl From<std::ops::Range<usize>> for Span {
-    #[inline(always)]
-    fn from(value: std::ops::Range<usize>) -> Self {
-        Self {
-            start: value.start as u32,
-            end: value.end as u32,
-        }
-    }
-}
-
-impl From<Span> for std::ops::Range<usize> {
-    #[inline(always)]
-    fn from(val: Span) -> Self {
-        val.start as usize..val.end as usize
-    }
-}
-
-impl From<(usize, usize)> for Span {
-    #[inline(always)]
-    fn from((start, end): (usize, usize)) -> Self {
-        Self {
-            start: start as u32,
-            end: end as u32,
-        }
-    }
-}
-
-impl From<(u32, u32)> for Span {
-    #[inline(always)]
-    fn from((start, end): (u32, u32)) -> Self {
-        Self { start, end }
-    }
-}
