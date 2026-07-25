@@ -4,22 +4,22 @@ icon: lucide/rocket
 
 # Get started
 
-## What, and why is Candela ?
+## What is Candela, and why?
 
 !!! warning
 
     Candela is experimental and under active development (this documentation too). Little is set in stone.
 
-Candela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.
+Candela is a fast, statically-typed interpreted language that combines Rust-like syntax with Python's ease of use.
 
-Its goal is to provide a (much) faster alternative to Python that sits closer to low-level languages while remaining accessible to a wide audience. In other words, you should like Candela whether you're a seasoned Rust developer or you've barely touched Python and are completely new to programming.
+It aims to be a much faster alternative to Python that sits closer to low-level languages while staying approachable. You should like Candela whether you are a seasoned Rust developer or you have barely touched Python and are new to programming.
 
-Candela's main 'selling points' are:
+Candela's main selling points are:
 
-- ~10x faster than Python, competitive with LuaJIT (-joff)
+- About 10x faster than Python and competitive with LuaJIT (-joff) in our benchmarks
 - Statically typed, with full type inference and zero annotations
-- FFI support, and the ability to call C/dynamic libraries directly from Candela with a native/easy syntax.
-- Embeddable in other programs through a C ABI.
+- FFI support: call C and dynamic libraries directly from Candela with a native, easy syntax
+- Embeddable in other programs through a C ABI and a Rust host API
 
 The goal of this documentation / tutorial is to show Candela's syntax and how it works by example more than by theory.
 

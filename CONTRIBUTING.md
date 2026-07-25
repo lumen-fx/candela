@@ -8,9 +8,9 @@ If you have an idea for a new feature, design change, or anything that modifies 
 
 For any other code changes that don't modify the core logic (typos, docs, performance improvements), feel free to open a PR!
 
-Please note that I have the final say on what gets merged.
+I have the final say on what gets merged.
 
-**AI USE**: Using AI is fine as long as you've actually thoroughly read and understand the part of the codebase you're modifying.
+**AI use**: using AI is fine as long as you have thoroughly read and understand the part of the codebase you are modifying.
 
 Before opening a PR, please make sure:
 - all tests pass

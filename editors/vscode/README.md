@@ -30,8 +30,7 @@ attribution details.
   `loop`, `match`, `host`, `dylib`, `import`, and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
   diagnostics, hover, completion, document symbols (outline), and
-  go-to-definition. See `../../lsp/README.md` for exactly which of
-  those are real vs. simplified, and why.
+  go-to-definition. See `../../lsp/README.md` for the exact scope of each.
 
 ## Language facts
 
@@ -56,8 +55,8 @@ in this repo) as a subprocess over stdio, the same transport every LSP client
 uses. It looks for a `candela-lsp` (or `candela-lsp.exe` on Windows) binary on
 `PATH` by default; set `candela.languageServerPath` in your settings to point
 at a specific binary instead (for example, one built locally with
-`cargo build -p candela-lsp` from the repo root -- see that crate's README for
-why NOT `--release` as-is).
+`cargo build -p candela-lsp` from the repo root; see that crate's README for why
+to avoid `--release`).
 
 If `candela-lsp` cannot be started, the extension shows an error message
 instead of failing silently; the syntax highlighting/snippets/language
@@ -66,11 +65,9 @@ server.
 
 ## Install / development
 
-Unlike the 0.1.x grammar-only release, this extension now has one runtime
-dependency (`vscode-languageclient`) that must be present in `node_modules`
-when packaged, so an `npm install` step is required before packaging (there is
-still no compile/build step -- `src/extension.js` is plain CommonJS, not
-TypeScript).
+This extension has one runtime dependency (`vscode-languageclient`) that must be
+present in `node_modules` when packaged, so run `npm install` before packaging.
+There is no compile step; `src/extension.js` is plain CommonJS, not TypeScript.
 
 - Install dependencies: `npm install` (from this directory).
 - Run from source: open this folder (`editors/vscode`) in VS Code and press

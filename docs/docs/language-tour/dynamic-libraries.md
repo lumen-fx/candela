@@ -40,8 +40,8 @@ The string after `dylib` can be either a **logical library name** or a **path**,
 and Candela resolves them differently so a single Candela file works across
 platforms:
 
-- A **bare logical name** -- no path separator and no extension, e.g. `m`,
-  `sqlite3`, `z` -- is mapped to your OS's library filename convention and
+- A **bare logical name** (no path separator and no extension, e.g. `m`,
+  `sqlite3`, `z`) is mapped to your OS's library filename convention and
   located by the system loader's normal search paths: `libz.so` on Linux,
   `libz.dylib` on macOS, `z.dll` on Windows. Prefer this for system libraries;
   the same source resolves the right file on every platform.
@@ -54,7 +54,7 @@ platforms:
   fn main() { print(z::zlibVersion()); }
   ```
 
-- A **path** -- anything with a path separator (or an explicit extension) -- is
+- A **path** (anything with a path separator, or an explicit extension) is
   resolved relative to the importing Candela file. If the extension is omitted,
   Candela chooses the correct one for your OS and also tries an
   architecture-specific build if one exists next to it, then falls back to the
@@ -78,7 +78,7 @@ An absolute path or an explicit filename (with extension) is honored as written.
 
 When you `candela build` a program into a `.cdlb` artifact, dynamic-library
 imports are captured **by reference, not by value**: the artifact records the
-logical library name, each imported symbol, and its signature -- never the shared
+logical library name, each imported symbol, and its signature, never the shared
 object's bytes. When `candela-vm` loads the artifact it re-opens the library
 through the OS loader and re-binds the symbols by name, applying the same per-OS
 name mapping described above. A `.cdlb` built on one platform therefore resolves

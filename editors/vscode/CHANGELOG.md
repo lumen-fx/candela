@@ -5,8 +5,8 @@
 - Added a language client (`vscode-languageclient`) that launches `candela-lsp`
   (see `../../lsp/`) over stdio for `.cdl` files: live diagnostics
   (parse/type errors), hover, completion, document symbols (outline), and
-  go-to-definition. The extension no longer has zero runtime dependencies --
-  run `npm install` before packaging (see README.md).
+  go-to-definition. The extension now has a runtime dependency, so run
+  `npm install` before packaging (see README.md).
 - Added the `candela.languageServerPath` setting to point at a specific
   `candela-lsp` binary instead of relying on `PATH`.
 - Raised the minimum VS Code version to `^1.91.0` (required by
