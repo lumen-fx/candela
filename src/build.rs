@@ -8,6 +8,8 @@
 use crate::compiler::CompileOutput;
 use crate::compiler::compile;
 use candela_vm::artifact::DynLibFnImage;
+use candela_vm::artifact::EnumImage;
+use candela_vm::artifact::EnumVariantImage;
 use candela_vm::artifact::HostFnImage;
 use candela_vm::artifact::InstrSrcImage;
 use candela_vm::artifact::ProgramImage;
@@ -101,6 +103,24 @@ fn image_from_output(out: CompileOutput) -> ProgramImage {
                     .collect(),
                 id: s.id,
                 name_span: s.name_span,
+            })
+            .collect(),
+        enums: out
+            .enums
+            .iter()
+            .map(|e| EnumImage {
+                name: e.name.to_string(),
+                variants: e
+                    .variants
+                    .iter()
+                    .map(|vt| EnumVariantImage {
+                        name: vt.name.to_string(),
+                        payload: vt.payload.to_vec(),
+                        name_span: vt.name_span,
+                    })
+                    .collect(),
+                id: e.id,
+                name_span: e.name_span,
             })
             .collect(),
         sources: out

@@ -232,6 +232,7 @@ fn format_datatype(dt: &DataType, structs: &[Struct]) -> String {
         DataType::Struct(id) => structs
             .get(*id as usize)
             .map_or_else(|| "struct".to_owned(), |s| s.name.to_string()),
+        DataType::Enum(_) => "enum".to_owned(),
         DataType::Map(kv) => format!(
             "{{{}: {}}}",
             kv.0.as_ref()
@@ -266,7 +267,24 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         | Expr::ImportDylib(..)
         | Expr::HostBlock(..)
         | Expr::ImportFile(..)
-        | Expr::StructDeclare(..) => {}
+        | Expr::StructDeclare(..)
+        | Expr::EnumDeclare(..)
+        | Expr::NamespacedRef(..) => {}
+
+        Expr::Match(scrutinee, arms, wildcard, _) => {
+            visit_expr(scrutinee, src_file, out);
+            for (pat, body) in arms.iter() {
+                visit_expr(pat, src_file, out);
+                for b in body.iter() {
+                    visit_expr(b, src_file, out);
+                }
+            }
+            if let Some(w) = wildcard {
+                for b in w.iter() {
+                    visit_expr(b, src_file, out);
+                }
+            }
+        }
 
         Expr::Array(items, _) => {
             for it in items.iter() {

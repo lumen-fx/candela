@@ -17,6 +17,7 @@ use blocks::parse_for_loop;
 use blocks::parse_function;
 use blocks::parse_impl_block;
 use blocks::parse_loop_block;
+use blocks::parse_enum_declare;
 use blocks::parse_match;
 use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
@@ -383,6 +384,7 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
         Token::Loop => Some(parse_loop_block(parser)),
         Token::Try => Some(parse_try_catch_block(parser)),
         Token::Struct => Some(parse_struct_declare(parser)),
+        Token::Enum => Some(parse_enum_declare(parser)),
         Token::RBrace => None,
         t => Some(parse_line(parser, t)),
     }
@@ -877,12 +879,13 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
             Token::Function => parse_function(parser),
             Token::Import => parse_file_import(parser),
             Token::Struct => parse_struct_declare(parser),
+            Token::Enum => parse_enum_declare(parser),
             Token::Dylib => parse_dylib_import(parser),
             Token::Host => parse_host_block(parser),
             unexpected => {
                 cold_path();
                 let span = parser.peek_token_span();
-                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
+                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'enum' (enum declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
             }
         });
     }

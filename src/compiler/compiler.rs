@@ -28,6 +28,8 @@ use crate::{data::Data, instr::Instr};
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
+use compiler_data::EnumType;
+use compiler_data::EnumVariant;
 use compiler_data::FnSignature;
 use compiler_data::Function;
 use compiler_data::HostFnSig;
@@ -545,6 +547,389 @@ fn compile_struct_literal(
             output.push(Instr::SetFieldStruct(dest_reg, val_reg, slot));
         }
         dest_reg
+    }
+}
+
+/// Resolves a call/reference path to an enum variant `(enum_id, variant_idx)`,
+/// if it names one. A qualified path (`Color::Red`, `mod::Color::Red`) resolves
+/// the enum by its leading segments and the variant by the last segment; a bare
+/// name (`Some`, `None`) resolves by searching every registered enum for a
+/// variant with that name, first match winning. Never raises a compile error,
+/// so callers use it to intercept otherwise-unknown call/reference paths.
+pub(crate) fn resolve_enum_variant(path: &[SmolStr], state: &State<'_>) -> Option<(u16, u16)> {
+    if path.len() >= 2 {
+        let variant = &path[path.len() - 1];
+        let enum_name = &path[path.len() - 2];
+        let module = &path[..path.len() - 2];
+        let eid = state.namespace.find_enum(module, enum_name)?;
+        let vidx = state.enums[eid]
+            .variants
+            .iter()
+            .position(|vt| &vt.name == variant)?;
+        Some((eid as u16, vidx as u16))
+    } else if let Some(name) = path.first() {
+        for e in state.enums.iter() {
+            if let Some(vidx) = e.variants.iter().position(|vt| &vt.name == name) {
+                return Some((e.id, vidx as u16));
+            }
+        }
+        None
+    } else {
+        None
+    }
+}
+
+/// Lowers an enum-variant construction (`Color::Red`, `Some(x)`) to a fresh
+/// enum value. The object-pool template holds the variant tag at element 0 and
+/// the payload at elements `1..`; constant payloads are baked into the template
+/// and dynamic ones are written after a `CloneEnum` with `SetFieldStruct`,
+/// mirroring how a struct literal is built.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_enum_construction(
+    enum_id: u16,
+    variant_idx: u16,
+    args: &[Expr],
+    span: Span,
+    args_indexes: &[Span],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let variant = &state.enums[enum_id as usize].variants[variant_idx as usize];
+    let variant_name = variant.name.clone();
+    let payload_types = variant.payload.clone();
+    let arity = payload_types.len();
+
+    compiler_errors::check_args(
+        args,
+        arity,
+        &variant_name,
+        span,
+        state.sources,
+        ctx.file_idx,
+    );
+    for (i, expected) in payload_types.iter().enumerate() {
+        // An `any` (Unknown) payload accepts a value of any type.
+        if *expected != DataType::Unknown {
+            functions::check_arg_type(
+                &variant_name,
+                v,
+                ctx,
+                state,
+                args,
+                args_indexes,
+                i,
+                std::slice::from_ref(expected),
+            );
+        }
+    }
+
+    let pool_idx = {
+        state.pools.objs.push(Vec::with_capacity(arity + 1));
+        state.pools.objs.len() - 1
+    };
+    state
+        .pools
+        .objs
+        .get_mut(pool_idx)
+        .push(Data::int(i32::from(variant_idx)));
+
+    let mut dynamic: Vec<(u16, u16)> = Vec::with_capacity(arity);
+    for (i, arg) in args.iter().enumerate() {
+        let id = arg
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id();
+        if arg.is_constant_literal() {
+            let d = state.registers[id as usize];
+            state.pools.objs.get_mut(pool_idx).push(d);
+        } else {
+            state.pools.objs.get_mut(pool_idx).push(NULL);
+            dynamic.push((id, (i + 1) as u16));
+        }
+    }
+
+    let template_reg = {
+        state
+            .registers
+            .push(Data::enum_instance(enum_id, pool_idx as u32));
+        (state.registers.len() - 1) as u16
+    };
+    let dest_reg = {
+        state.registers.push(Data::enum_instance(enum_id, 0));
+        (state.registers.len() - 1) as u16
+    };
+    output.push(Instr::CloneEnum(template_reg, dest_reg));
+    for (val_reg, slot) in dynamic {
+        output.push(Instr::SetFieldStruct(dest_reg, val_reg, slot));
+    }
+    dest_reg
+}
+
+/// Registers a nested `enum` declaration (one inside a function body). Top-level
+/// enums are pre-registered by `parse_toplevel`; this mirrors
+/// `compile_struct_definition` for the nested case.
+fn compile_enum_definition(
+    name: &SmolStr,
+    variants: &[(SmolStr, Box<[TypeExpr]>, Span)],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    let enum_id = state.enums.len() as u16;
+    state.enums.push(EnumType {
+        name: name.clone(),
+        variants: Box::from([]),
+        id: enum_id,
+        name_span: span,
+    });
+    state
+        .namespace
+        .symbols
+        .push((name.clone(), SymbolKind::Enum(enum_id)));
+    let resolved = variants
+        .iter()
+        .map(|(vn, payload, vspan)| EnumVariant {
+            name: vn.clone(),
+            payload: payload
+                .iter()
+                .map(|t| t.to_datatype(ctx.file_idx, state.namespace, state.sources))
+                .collect(),
+            name_span: *vspan,
+        })
+        .collect();
+    state.enums[enum_id as usize].variants = resolved;
+}
+
+/// Extracts a match arm's variant pattern: the variant index within `enum_id`
+/// and the payload binder identifiers (`_` ignores a slot). Raises a compile
+/// error for an unknown variant, a wrong-arity pattern, or a non-identifier
+/// binder.
+pub(crate) fn resolve_variant_pattern(
+    enum_id: u16,
+    pattern: &Expr,
+    fallback_span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> (u16, Vec<SmolStr>) {
+    let (variant_name, binders, span): (&SmolStr, Vec<SmolStr>, Span) = match pattern {
+        Expr::Var(name, span) => (name, Vec::new(), *span),
+        Expr::NamespacedRef(path, span) => (&path[path.len() - 1], Vec::new(), *span),
+        Expr::FunctionCall(args, namespace, span, _) => {
+            let mut binders = Vec::with_capacity(args.len());
+            for arg in args {
+                if let Expr::Var(binder, _) = arg {
+                    binders.push(binder.clone());
+                } else {
+                    compiler_errors::error_enum(
+                        "Invalid match pattern",
+                        "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                }
+            }
+            (&namespace[namespace.len() - 1], binders, *span)
+        }
+        _ => compiler_errors::error_enum(
+            "Invalid match pattern",
+            "A match on an enum expects variant patterns, e.g. Circle(r) or Unit",
+            fallback_span,
+            ctx.file_idx,
+            state.sources,
+        ),
+    };
+    let e = &state.enums[enum_id as usize];
+    let Some(variant_idx) = e.variants.iter().position(|vt| &vt.name == variant_name) else {
+        compiler_errors::error_enum(
+            "Unknown enum variant",
+            &format!("{} is not a variant of enum {}", variant_name, e.name),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let expected_arity = e.variants[variant_idx].payload.len();
+    if binders.len() != expected_arity {
+        compiler_errors::error_enum(
+            "Wrong variant payload arity",
+            &format!(
+                "Variant {} binds {} value(s) but the pattern has {}",
+                variant_name,
+                expected_arity,
+                binders.len()
+            ),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    (variant_idx as u16, binders)
+}
+
+/// Lowers a `match` on an enum scrutinee to a variant-tag compare chain with
+/// per-arm payload binding, reusing the ordinary conditional-jump machinery.
+#[allow(clippy::too_many_arguments)]
+fn compile_enum_match(
+    enum_id: u16,
+    scrutinee: &Expr,
+    arms: &[(Expr, Box<[Expr]>)],
+    wildcard: &Option<Box<[Expr]>>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    let scrut_reg = scrutinee
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    // Root the scrutinee for the whole match so its object-pool payload is not
+    // reclaimed and its register is not reused across arm bodies.
+    let v_base = v.len();
+    v.push(Variable {
+        name: SmolStr::new_static("[MATCH SCRUT]"),
+        register_id: scrut_reg,
+        var_type: DataType::Enum(enum_id),
+    });
+
+    let tag_reg = state.alloc_reg();
+    output.push(Instr::GetFieldStruct(scrut_reg, 0, tag_reg));
+
+    let variant_count = state.enums[enum_id as usize].variants.len();
+    let mut covered = vec![false; variant_count];
+    let mut false_jmps: Vec<usize> = Vec::with_capacity(arms.len());
+    let mut arm_starts: Vec<usize> = Vec::with_capacity(arms.len());
+    let mut end_jmps: Vec<usize> = Vec::with_capacity(arms.len());
+
+    for (pattern, body) in arms {
+        let (variant_idx, binders) = resolve_variant_pattern(enum_id, pattern, span, ctx, state);
+        covered[variant_idx as usize] = true;
+
+        arm_starts.push(output.len());
+        let idx_reg = state.alloc_reg();
+        output.push(Instr::SetInt(idx_reg, i32::from(variant_idx)));
+        false_jmps.push(output.len());
+        output.push(Instr::NotEqJmp(tag_reg, idx_reg, 0));
+        state.free_reg(idx_reg, v);
+
+        // Bind the variant payload into fresh locals for the arm body.
+        let v_arm = v.len();
+        for (i, binder) in binders.iter().enumerate() {
+            if binder.as_str() != "_" {
+                let binder_reg = state.alloc_reg();
+                output.push(Instr::GetFieldStruct(scrut_reg, (i + 1) as u16, binder_reg));
+                let payload_type =
+                    state.enums[enum_id as usize].variants[variant_idx as usize].payload[i].clone();
+                v.push(Variable {
+                    name: binder.clone(),
+                    register_id: binder_reg,
+                    var_type: payload_type,
+                });
+            }
+        }
+
+        let arm_code = compile_expr(body, v, ctx.advance_offset(output.len() as u16), state);
+        output.extend(arm_code);
+        v.truncate(v_arm);
+
+        end_jmps.push(output.len());
+        output.push(Instr::Jmp(0));
+    }
+
+    // Where a non-matching last arm (and the wildcard, if any) begins.
+    let after_arms = output.len();
+    if let Some(w) = wildcard {
+        let wild_code = compile_expr(w, v, ctx.advance_offset(output.len() as u16), state);
+        output.extend(wild_code);
+    }
+    let end = output.len();
+
+    for (k, &j) in false_jmps.iter().enumerate() {
+        let target = if k + 1 < arm_starts.len() {
+            arm_starts[k + 1]
+        } else {
+            after_arms
+        };
+        set_jmp_size(&mut output[j], (target - j) as u16);
+    }
+    for &j in &end_jmps {
+        set_jmp_size(&mut output[j], (end - j) as u16);
+    }
+
+    v.truncate(v_base);
+    state.free_reg(tag_reg, v);
+    state.free_reg(scrut_reg, v);
+
+    if wildcard.is_none() && !covered.iter().all(|&c| c) {
+        let missing: Vec<&str> = state.enums[enum_id as usize]
+            .variants
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !covered[*i])
+            .map(|(_, vt)| vt.name.as_str())
+            .collect();
+        compiler_errors::error_enum(
+            "Non-exhaustive match",
+            &format!(
+                "match on enum {} does not cover: {}. Add the missing arm(s) or a `_` wildcard",
+                state.enums[enum_id as usize].name,
+                missing.join(", ")
+            ),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+}
+
+/// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
+/// with payload binding; any other scrutinee reproduces the equality-chain
+/// lowering (`scrutinee == pattern` per arm) that `match` has always had.
+fn compile_match(
+    scrutinee: &Expr,
+    arms: &[(Expr, Box<[Expr]>)],
+    wildcard: &Option<Box<[Expr]>>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    if let DataType::Enum(enum_id) = scrutinee.infer_type(v, ctx, state) {
+        compile_enum_match(
+            enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output,
+        );
+    } else {
+        let obj_var = SmolStr::new_static("[MATCH TEMP]");
+        let (first_pat, first_body) = &arms[0];
+        let mut output_code: Vec<Expr> = Vec::with_capacity(arms.len());
+        output_code.extend(first_body.iter().cloned());
+        for (pat, body) in &arms[1..] {
+            output_code.push(Expr::ElseIfBlock(
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Var(obj_var.clone(), span)),
+                    Box::new(pat.clone()),
+                )),
+                body.clone(),
+            ));
+        }
+        if let Some(w) = wildcard {
+            output_code.push(Expr::ElseBlock(w.clone()));
+        }
+        let desugared = Expr::EvalBlock(Box::from([
+            Expr::VarDeclare(obj_var.clone(), Box::new(scrutinee.clone())),
+            Expr::Condition(
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Var(obj_var, span)),
+                    Box::new(first_pat.clone()),
+                )),
+                Box::from(output_code),
+                span,
+            ),
+        ]));
+        desugared.compile(v, ctx, state, output, None, false, false);
     }
 }
 
@@ -1133,8 +1518,13 @@ fn compile_eq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
-    let is_array = matches!(l_type, DataType::Array(_) | DataType::Struct(_))
-        && matches!(r_type, DataType::Array(_) | DataType::Struct(_));
+    let is_array = matches!(
+        l_type,
+        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
+    ) && matches!(
+        r_type,
+        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
+    );
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
@@ -1166,8 +1556,13 @@ fn compile_neq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
-    let is_array = matches!(l_type, DataType::Array(_) | DataType::Struct(_))
-        && matches!(r_type, DataType::Array(_) | DataType::Struct(_));
+    let is_array = matches!(
+        l_type,
+        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
+    ) && matches!(
+        r_type,
+        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
+    );
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
@@ -2296,6 +2691,20 @@ impl Expr {
                 }) = v.iter().rfind(|v_temp| *name == v_temp.name)
                 {
                     Some(*register_id)
+                } else if let Some((enum_id, variant_idx)) =
+                    resolve_enum_variant(std::slice::from_ref(name), state)
+                {
+                    Some(compile_enum_construction(
+                        enum_id,
+                        variant_idx,
+                        &[],
+                        *span,
+                        &[],
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    ))
                 } else {
                     compiler_errors::error_unknown_variable(
                         name,
@@ -2684,6 +3093,40 @@ impl Expr {
                 compile_struct_definition(name, fields, *span, ctx, state, output);
                 None
             }
+            Self::EnumDeclare(name, variants, span) => {
+                debug_assert!(!uses_id);
+                compile_enum_definition(name, variants, *span, ctx, state);
+                None
+            }
+            Self::Match(scrutinee, arms, wildcard, span) => {
+                debug_assert!(!uses_id);
+                compile_match(scrutinee, arms, wildcard, *span, v, ctx, state, output);
+                None
+            }
+            Self::NamespacedRef(path, span) => {
+                debug_assert!(uses_id);
+                if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, state) {
+                    Some(compile_enum_construction(
+                        enum_id,
+                        variant_idx,
+                        &[],
+                        *span,
+                        &[],
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    ))
+                } else {
+                    compiler_errors::error_enum(
+                        "Unknown enum variant",
+                        &format!("{} does not name an enum variant", path.join("::")),
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                }
+            }
             Self::FunctionCall(args, namespace, markers, args_indexes) if !uses_id => {
                 let output_id = handle_functions(
                     output,
@@ -2794,6 +3237,7 @@ const ARCH_SUFFIX: &str = "";
 pub enum SymbolKind {
     Fn(u16),
     Struct(u16),
+    Enum(u16),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2857,6 +3301,26 @@ impl Namespace {
                 }
             })
     }
+    /// Resolves an enum type id by name (with an optional module path). Returns
+    /// `None` when no enum by that name exists in the resolved namespace; never
+    /// raises a compile error itself so it can be used for speculative
+    /// enum-variant resolution against otherwise-unknown call/reference paths.
+    #[must_use]
+    pub fn find_enum(&self, path: &[SmolStr], enum_name: &str) -> Option<usize> {
+        let mut current = self;
+        for sub in path {
+            current = &current.children.iter().find(|(name, _)| name == sub)?.1;
+        }
+        current.symbols.iter().find_map(|(name, kind)| {
+            if name.as_str() == enum_name
+                && let SymbolKind::Enum(enum_id) = kind
+            {
+                Some(*enum_id as usize)
+            } else {
+                None
+            }
+        })
+    }
     /// Resolves a namespaced function without raising a compile error when the
     /// namespace or function is absent. Used by the array-method auto-prelude,
     /// which routes `arr.map(f)` to `list::map` only when that module resolved.
@@ -2907,6 +3371,7 @@ impl Namespace {
 fn load_auto_prelude(
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
+    enums: &mut Vec<EnumType>,
     fn_registers: &mut Vec<Vec<u16>>,
     dynamic_libs: &mut Vec<Dynamiclib>,
     sources: &mut Vec<Source>,
@@ -2914,6 +3379,7 @@ fn load_auto_prelude(
     files: &mut FxHashMap<PathBuf, Namespace>,
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
+    pending_enums: &mut PendingEnums,
     pending_fns: &mut Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
     pending_dylibs: &mut Vec<(
         u16,
@@ -2984,6 +3450,7 @@ fn load_auto_prelude(
         child_src_idx,
         fns,
         structs,
+        enums,
         fn_registers,
         dynamic_libs,
         sources,
@@ -2991,6 +3458,7 @@ fn load_auto_prelude(
         files,
         file_namespaces,
         pending_structs,
+        pending_enums,
         pending_fns,
         pending_dylibs,
         pending_host,
@@ -3002,12 +3470,18 @@ fn load_auto_prelude(
 }
 
 /// Recursively collects functions, dyn libs, and imported files
+/// Deferred enum-payload resolution: `(enum_id, src_file_idx, variants)`, filled
+/// in `resolve_types` after every type name is registered, so an enum payload
+/// may reference a type declared later.
+type PendingEnums = Vec<(u16, u16, Box<[(SmolStr, Box<[TypeExpr]>, Span)]>)>;
+
 fn parse_toplevel(
     code: Vec<Expr>,
     file_path: &Path,
     src_file_idx: u16,
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
+    enums: &mut Vec<EnumType>,
     fn_registers: &mut Vec<Vec<u16>>,
     dynamic_libs: &mut Vec<Dynamiclib>,
     sources: &mut Vec<Source>,
@@ -3015,6 +3489,7 @@ fn parse_toplevel(
     files: &mut FxHashMap<PathBuf, Namespace>,
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
+    pending_enums: &mut PendingEnums,
     pending_fns: &mut Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: &mut Vec<(
         u16,
@@ -3083,6 +3558,17 @@ fn parse_toplevel(
                     .push((name, SymbolKind::Struct(struct_id)));
                 pending_structs.push((struct_id, src_file_idx, fields));
             }
+            Expr::EnumDeclare(name, variants, span) => {
+                let enum_id = enums.len() as u16;
+                enums.push(EnumType {
+                    name: name.clone(),
+                    variants: Box::from([]),
+                    id: enum_id,
+                    name_span: span,
+                });
+                namespace.symbols.push((name, SymbolKind::Enum(enum_id)));
+                pending_enums.push((enum_id, src_file_idx, variants));
+            }
             #[cfg(target_arch = "wasm32")]
             Expr::ImportDylib(..) => wasm_error("WASM does not support loading dynamic libraries"),
             #[cfg(target_arch = "wasm32")]
@@ -3106,6 +3592,7 @@ fn parse_toplevel(
         load_auto_prelude(
             fns,
             structs,
+            enums,
             fn_registers,
             dynamic_libs,
             sources,
@@ -3113,6 +3600,7 @@ fn parse_toplevel(
             files,
             file_namespaces,
             pending_structs,
+            pending_enums,
             pending_fns,
             pending_dylibs,
             pending_host,
@@ -3292,6 +3780,7 @@ fn parse_toplevel(
                     child_src_idx,
                     fns,
                     structs,
+                    enums,
                     fn_registers,
                     dynamic_libs,
                     sources,
@@ -3299,6 +3788,7 @@ fn parse_toplevel(
                     files,
                     file_namespaces,
                     pending_structs,
+                    pending_enums,
                     pending_fns,
                     #[cfg(not(target_arch = "wasm32"))]
                     pending_dylibs,
@@ -3315,8 +3805,10 @@ fn parse_toplevel(
 
 fn resolve_types(
     structs: &mut [Struct],
+    enums: &mut [EnumType],
     fns: &mut [Function],
     pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
+    pending_enums: PendingEnums,
     pending_fns: Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: Vec<(
         u16,
@@ -3353,6 +3845,20 @@ fn resolve_types(
             })
             .collect();
         structs[struct_id as usize].fields = resolved_fields;
+    }
+    for (enum_id, src_file_idx, variants) in pending_enums {
+        let resolved_variants = variants
+            .iter()
+            .map(|(variant_name, payload, name_span)| EnumVariant {
+                name: variant_name.clone(),
+                payload: payload
+                    .iter()
+                    .map(|t| t.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources))
+                    .collect(),
+                name_span: *name_span,
+            })
+            .collect();
+        enums[enum_id as usize].variants = resolved_variants;
     }
     for (fn_id, src_file_idx, args) in pending_fns {
         let resolved_args = args
@@ -3490,6 +3996,7 @@ pub struct CompileOutput {
     pub allocated_call_depth: usize,
     pub sources: Vec<Source>,
     pub structs: Vec<Struct>,
+    pub enums: Vec<EnumType>,
     pub functions: Vec<Function>,
     pub dyn_libs: Vec<Dynamiclib>,
     pub namespace: Namespace,
@@ -3529,6 +4036,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     let mut fn_registers: Vec<Vec<u16>> = Vec::new();
     let mut functions: Vec<Function> = Vec::new();
     let mut structs: Vec<Struct> = Vec::new();
+    let mut enums: Vec<EnumType> = Vec::new();
     let mut dyn_libs: Vec<Dynamiclib> = Vec::new();
     let mut dyn_lib_fns: Vec<DynamicLibFn> = Vec::new();
     let mut host_fns: Vec<HostFnSig> = Vec::new();
@@ -3546,6 +4054,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     let mut files: FxHashMap<PathBuf, Namespace> = FxHashMap::default();
     let mut file_namespaces: FxHashMap<u16, Namespace> = FxHashMap::default();
     let mut pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)> = Vec::new();
+    let mut pending_enums: PendingEnums = Vec::new();
     let mut pending_fns: Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)> =
         Vec::with_capacity(2);
     #[cfg(not(target_arch = "wasm32"))]
@@ -3571,6 +4080,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         0,
         &mut functions,
         &mut structs,
+        &mut enums,
         &mut fn_registers,
         &mut dyn_libs,
         &mut sources,
@@ -3578,6 +4088,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         &mut files,
         &mut file_namespaces,
         &mut pending_structs,
+        &mut pending_enums,
         &mut pending_fns,
         #[cfg(not(target_arch = "wasm32"))]
         &mut pending_dylibs,
@@ -3585,8 +4096,10 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     );
     resolve_types(
         &mut structs,
+        &mut enums,
         &mut functions,
         pending_structs,
+        pending_enums,
         pending_fns,
         #[cfg(not(target_arch = "wasm32"))]
         pending_dylibs,
@@ -3609,6 +4122,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         registers: &mut registers,
         fns: &mut functions,
         structs: &mut structs,
+        enums: &mut enums,
         pools: &mut pools,
         instr_src: &mut instr_src,
         fn_registers: &mut fn_registers,
@@ -3663,7 +4177,14 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         for (i, data) in registers.iter().enumerate() {
             println!(
                 " [{i}] {}",
-                data.format(&pools.objs, &pools.strings, &pools.maps, &structs, true)
+                data.format(
+                    &pools.objs,
+                    &pools.strings,
+                    &pools.maps,
+                    &structs,
+                    &enums,
+                    true
+                )
             );
         }
         if !instructions.is_empty() {
@@ -3687,6 +4208,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         allocated_call_depth,
         sources,
         structs,
+        enums,
         functions,
         dyn_libs,
         namespace,

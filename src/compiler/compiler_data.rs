@@ -14,7 +14,9 @@ use std::rc::Rc;
 // Runtime data types moved to `crate::rt` so the VM can be built without the
 // compiler. Re-exported here to keep the compiler's `compiler_data::X` paths
 // working unchanged.
-pub use crate::rt::{DynamicLibFn, ErrorCatch, HostFnSig, InstrSrc, Pools, Source, Struct};
+pub use crate::rt::{
+    DynamicLibFn, EnumType, EnumVariant, ErrorCatch, HostFnSig, InstrSrc, Pools, Source, Struct,
+};
 
 #[derive(Debug)]
 pub struct Function {
@@ -103,6 +105,7 @@ pub struct State<'a> {
     pub registers: &'a mut Vec<Data>,
     pub fns: &'a mut Vec<Function>,
     pub structs: &'a mut Vec<Struct>,
+    pub enums: &'a mut Vec<EnumType>,
     pub pools: &'a mut Pools,
     pub instr_src: &'a mut Vec<InstrSrc>,
     pub fn_registers: &'a mut Vec<Vec<u16>>,
@@ -180,6 +183,10 @@ impl State<'_> {
             {
                 self.free_reg(*template_reg, v);
             } else if let Instr::CloneStruct(template_reg, _) = instr
+                && *template_reg >= regs_before
+            {
+                self.free_reg(*template_reg, v);
+            } else if let Instr::CloneEnum(template_reg, _) = instr
                 && *template_reg >= regs_before
             {
                 self.free_reg(*template_reg, v);

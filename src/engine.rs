@@ -46,6 +46,7 @@ use candela_vm::errors::collect_diagnostic;
 use candela_vm::instr::Instr;
 use candela_vm::rt::DataType;
 use candela_vm::rt::DynamicLibFn;
+use candela_vm::rt::EnumType;
 use candela_vm::rt::HostFnSig;
 use candela_vm::rt::InstrSrc;
 use candela_vm::rt::Pools;
@@ -87,7 +88,9 @@ pub struct Engine {
 impl Engine {
     #[must_use]
     pub fn new() -> Self {
-        Self { registry: HashMap::new() }
+        Self {
+            registry: HashMap::new(),
+        }
     }
 
     /// Registers a typed host function under `namespace.name`.
@@ -104,7 +107,12 @@ impl Engine {
         let (func, arg_types, ret_type) = f.into_host_fn_parts();
         self.registry.insert(
             (namespace.to_owned(), name.to_owned()),
-            RegisteredFn { func, arg_types, ret_type, variadic: false },
+            RegisteredFn {
+                func,
+                arg_types,
+                ret_type,
+                variadic: false,
+            },
         );
     }
 
@@ -201,6 +209,7 @@ impl Engine {
             allocated_call_depth: out.allocated_call_depth,
             sources: out.sources,
             structs: out.structs,
+            enums: out.enums,
             functions: out.functions,
             dyn_libs: out.dyn_libs,
             namespace: out.namespace,
@@ -319,6 +328,7 @@ pub struct Program {
     allocated_call_depth: usize,
     sources: Vec<Source>,
     structs: Vec<Struct>,
+    enums: Vec<EnumType>,
     // ---- compiler state (drives on-demand call trampolines) ----
     functions: Vec<Function>,
     dyn_libs: Vec<Dynamiclib>,
@@ -426,6 +436,7 @@ impl Program {
             registers: &mut self.registers,
             fns: &mut self.functions,
             structs: &mut self.structs,
+            enums: &mut self.enums,
             pools: &mut self.pools,
             instr_src: &mut self.instr_src,
             fn_registers: &mut self.fn_registers,
@@ -438,7 +449,15 @@ impl Program {
             reserved_registers: rustc_hash::FxHashSet::default(),
             namespace: &mut self.namespace,
         };
-        let ret = call_expr.compile(&mut variables, ctx, &mut state, &mut output, None, false, true);
+        let ret = call_expr.compile(
+            &mut variables,
+            ctx,
+            &mut state,
+            &mut output,
+            None,
+            false,
+            true,
+        );
         (output, ret)
     }
 
@@ -466,6 +485,7 @@ impl Program {
         let fn_registers = &self.fn_registers;
         let dyn_lib_fns = &self.dyn_lib_fns;
         let structs = &self.structs;
+        let enums = &self.enums;
         let host_sigs = &self.host_sigs;
         let host_dispatch = &self.host_dispatch;
         let allocated_arg_count = self.allocated_arg_count;
@@ -480,6 +500,7 @@ impl Program {
                 fn_registers,
                 dyn_lib_fns,
                 structs,
+                enums,
                 allocated_arg_count,
                 allocated_call_depth,
                 host_sigs,
@@ -520,9 +541,7 @@ fn value_datatype(v: &Value) -> DataType {
         Value::Float(_) => DataType::Float,
         Value::Bool(_) => DataType::Bool,
         Value::String(_) => DataType::String,
-        Value::Array(items) => DataType::Array(
-            items.first().map(|e| Box::new(value_datatype(e))),
-        ),
+        Value::Array(items) => DataType::Array(items.first().map(|e| Box::new(value_datatype(e)))),
         Value::Map(entries) => {
             let value = entries.values().next().map(value_datatype);
             DataType::Map(Box::new((Some(DataType::String), value)))

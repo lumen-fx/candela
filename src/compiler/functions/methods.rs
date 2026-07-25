@@ -54,7 +54,9 @@ pub(crate) fn routed_list_method(
     if !route {
         return None;
     }
-    state.namespace.try_find_function(&[SmolStr::from("list")], name)
+    state
+        .namespace
+        .try_find_function(&[SmolStr::from("list")], name)
 }
 
 pub fn handle_method_calls(
@@ -110,6 +112,34 @@ pub fn handle_method_calls(
         // apply to strings/arrays/maps/numbers, so this is unambiguously a
         // missing method rather than a mistyped builtin.
         error_no_such_method(name, &struct_name, fn_span, ctx.file_idx, state.sources);
+    }
+
+    // An enum receiver dispatches to an `impl` method exactly like a struct: the
+    // mangled free function `Enum#method(recv, args...)`.
+    if let DataType::Enum(enum_id) = obj_type {
+        let enum_name = state.enums[enum_id as usize].name.clone();
+        let mangled = mangle_method(&enum_name, name);
+        if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+            let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
+            call_args.push(obj.clone());
+            call_args.extend_from_slice(args);
+            let mut call_arg_spans: Vec<Span> = Vec::with_capacity(args_indexes.len() + 1);
+            call_arg_spans.push(obj_span);
+            call_arg_spans.extend_from_slice(args_indexes);
+            return handle_user_function(
+                name,
+                fn_id,
+                output,
+                v,
+                ctx,
+                state,
+                tgt_id,
+                &call_args,
+                fn_span,
+                &call_arg_spans,
+            );
+        }
+        error_no_such_method(name, &enum_name, fn_span, ctx.file_idx, state.sources);
     }
 
     // An array-receiver collection method (`arr.map(f)`, `arr.reduce(init, f)`,

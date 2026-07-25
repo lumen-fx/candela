@@ -1,8 +1,8 @@
-use crate::vm::RegisterFile;
 use crate::array_gc::track;
 use crate::data::Data;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
+use crate::vm::RegisterFile;
 use std::collections::HashMap;
 
 pub fn alloc_map(
@@ -66,7 +66,7 @@ pub fn map_gc(
                 map_live,
                 obj_gc_stack,
             );
-        } else if data.is_array() || data.is_struct() {
+        } else if data.is_array() || data.is_struct() || data.is_enum() {
             track(*data, obj_pool, map_pool, live, map_live, obj_gc_stack);
         }
     }
@@ -101,8 +101,10 @@ pub fn track_maps(
     let Some((&first_key, &first_val)) = map.iter().next() else {
         return;
     };
-    let track_keys = first_key.is_array() || first_key.is_struct() || first_key.is_map();
-    let track_vals = first_val.is_array() || first_val.is_struct() || first_val.is_map();
+    let track_keys =
+        first_key.is_array() || first_key.is_struct() || first_key.is_enum() || first_key.is_map();
+    let track_vals =
+        first_val.is_array() || first_val.is_struct() || first_val.is_enum() || first_val.is_map();
     if !track_keys && !track_vals {
         return;
     }

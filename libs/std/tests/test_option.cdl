@@ -1,0 +1,37 @@
+/// Checks for the `option` module. Run with `candela run`, or build to a
+/// `.cdlb` and run under `candela-vm`. Prints "option ok" on success; a failed
+/// check aborts the run with a message.
+import std::option;
+import std::assert;
+
+// An `Option` payload is dynamically typed (`any`), so a mapper works on it
+// through type-agnostic operations like `str`; direct arithmetic on an `any`
+// value needs a concrete type and is not available here.
+fn describe(x) { return str(x); }
+
+fn main() {
+    let s = Some(5);
+    let n = None;
+
+    assert::assert_true(option::is_some(s));
+    assert::assert_false(option::is_some(n));
+    assert::assert_true(option::is_none(n));
+    assert::assert_false(option::is_none(s));
+
+    assert::assert_eq(option::unwrap(s), 5);
+    assert::assert_eq(option::unwrap_or(n, 99), 99);
+    assert::assert_eq(option::unwrap_or(s, 99), 5);
+
+    // Method form.
+    assert::assert_true(s.is_some());
+    assert::assert_eq(s.unwrap(), 5);
+    assert::assert_eq(n.unwrap_or(7), 7);
+
+    // map over the payload.
+    let m = option::map(s, describe);
+    assert::assert_eq(option::unwrap(m), "5");
+    let mn = option::map(n, describe);
+    assert::assert_true(option::is_none(mn));
+
+    print("option ok");
+}

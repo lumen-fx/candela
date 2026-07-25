@@ -30,10 +30,19 @@ functions (`list::map(arr, f)`) and as methods on arrays (`arr.map(f)`,
 explicit import: an auto-prelude implicitly resolves `std::list`. These add
 nothing to `candela-vm`.
 
-Designed, not yet implemented: native enums and payload-binding match (2), the
-`Any` type (3), json (4), the fuller map/set primitives (5), and `option`/
-`result` (7). The rest of this document is the design each of those follows when
-it lands.
+Implemented: native enums and payload-binding match (2), and `option`/`result`
+as std enums (7). An `enum Name { Variant, Variant(T), ... }` declares a native
+tagged union; `Name::Variant(args)` and bare `Some(x)`/`None` construct values;
+`match` binds variant payloads. `option` (`Some`/`None`) and `result`
+(`Ok`/`Err`) ship as `.cdl` enums in `libs/std` with `is_some`/`unwrap`/
+`unwrap_or`/`map` and `is_ok`/`unwrap_err`/... helpers, usable as free functions
+(`option::unwrap(o)`) or methods (`o.unwrap()`). A payload typed `any` holds a
+value of any type. These inline into a `.cdlb` and run under `candela-vm`.
+
+Designed, not yet implemented: the `Any` type as a full feature (3, only the
+`any`-as-payload subset is used by option/result), json (4), and the fuller
+map/set primitives (5). The rest of this document is the design each of those
+follows when it lands.
 
 ## 1. First-class functions (compile-time function references)
 
@@ -273,26 +282,34 @@ object pool for storage rather than adding a second heap pool and GC:
   checking in the type system; declaration registration and the construction /
   match lowering in the code generator.
 
-Status: not yet landed. This is not blocked on any unresolved design question --
-the plan above is complete -- but it is a single coordinated change across the
-parser, type system, code generator, VM value/GC/instruction set, and the
-`.cdlb` format. It is sequenced as its own green commit after the collection
-methods (feature 6), which shipped first.
+Status: landed. The value uses the `NAN_ENUM` tag on the free all-zero type
+field, storing an object-pool index like a struct; the pool entry holds the
+variant tag at element 0 and the payload at `1..`. One new `CloneEnum`
+construction op was added; tag and payload access reuse
+`GetFieldStruct`/`SetFieldStruct`, and `match` lowers to a tag-compare chain over
+the existing conditional-jump machinery. GC traces enum values like structs (no
+new pool). The `.cdlb` format carries an `enums` table behind a version bump.
+Nullary variants currently allocate a one-element pool slot; the inline
+tag-only optimization is a follow-up.
 
 ### Size impact
 
-This is the one feature that grows the VM: a new value tag, an enum pool with its
-own allocation and GC marking, and a match-dispatch instruction. It is the
-largest single delta here and is the reason the budget was loosened toward 1 MiB.
-It is kept small by reusing the object-pool GC pattern the map/array pools already
-use and by special-casing nullary variants to avoid allocation.
+This is the feature that grows the VM: a value tag, a construction instruction,
+and enum handling in equality, formatting, and GC tracing. It reuses the object
+pool and its GC rather than adding a second heap, so the runtime binary stays
+near its prior size, comfortably under the 1 MiB target.
 
 ## 7. option and result
 
-Once feature 2 lands, `option` (`Some`/`None`) and `result` (`Ok`/`Err`) are
-ordinary candela enums in `libs/std`, with helpers (`is_some`, `unwrap`,
-`unwrap_or`, `map`, `ok`, `err`) written as candela functions and methods on top
-of the native enum and feature 1. No further VM change.
+Landed. `option` (`Some`/`None`) and `result` (`Ok`/`Err`) are ordinary candela
+enums in `libs/std/option.cdl` and `libs/std/result.cdl`, with helpers written
+as candela functions and `impl` methods on top of the native enum and feature 1:
+`is_some`/`is_none`/`unwrap`/`unwrap_or`/`map` for option, and
+`is_ok`/`is_err`/`unwrap`/`unwrap_err`/`unwrap_or` for result. Each works as a
+free function (`option::unwrap(o)`) or a method (`o.unwrap()`). The payload is
+typed `any`, so it holds a value of any type; direct arithmetic on an extracted
+`any` value needs a concrete type and is not available (match and rebind, or use
+type-agnostic operations like `str`). No VM change beyond feature 2.
 
 ## Shipping
 

@@ -1041,6 +1041,40 @@ pub fn error_no_such_method(
     )
 }
 
+/// Generic diagnostic for enum-specific compile errors (unknown variant, wrong
+/// payload arity, non-identifier pattern binder, non-exhaustive match).
+#[cold]
+#[inline(never)]
+pub fn error_enum(
+    title: &'static str,
+    message: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message(title)
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(message)
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        message,
+        "enum_error",
+    )
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespace(

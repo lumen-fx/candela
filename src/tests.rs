@@ -25,6 +25,7 @@ macro_rules! run_and_check_registers {
             &out.fn_registers,
             &[],
             &[],
+            &[],
             out.allocated_arg_count,
             out.allocated_call_depth,
             &[],
@@ -58,6 +59,7 @@ macro_rules! run {
                 }],
             },
             &out.fn_registers,
+            &[],
             &[],
             &[],
             out.allocated_arg_count,
@@ -3598,6 +3600,7 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
             &out.fn_registers,
             &[],
             &out.structs,
+            &out.enums,
             out.allocated_arg_count,
             out.allocated_call_depth,
             &[],
@@ -3771,7 +3774,11 @@ pub fn stress_parser_unbalanced_and_huge() {
     let mut cases: Vec<String> = Vec::new();
     // Deeply nested but unclosed / closed delimiters.
     for depth in [1usize, 8, 64, 256, 1024] {
-        cases.push(format!("fn main() {{ let x = {}1{}", "(".repeat(depth), ")".repeat(depth)));
+        cases.push(format!(
+            "fn main() {{ let x = {}1{}",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        ));
         cases.push(format!("fn main() {{ let x = {}1;", "[".repeat(depth)));
         cases.push(format!("fn main() {{ {}", "{".repeat(depth)));
     }
@@ -3780,7 +3787,10 @@ pub fn stress_parser_unbalanced_and_huge() {
     // pre-existing lexer panic rather than a structured error (see the corpus
     // note in stress_parser_random_garbage).
     cases.push(format!("fn main() {{ let {} = 1; }}", "a".repeat(50_000)));
-    cases.push(format!("fn main() {{ let x = {}00000000; }}", "0".repeat(50_000)));
+    cases.push(format!(
+        "fn main() {{ let x = {}00000000; }}",
+        "0".repeat(50_000)
+    ));
     // Unterminated string of growing size.
     for n in [1usize, 100, 10_000] {
         cases.push(format!("fn main() {{ let s = \"{}", "z".repeat(n)));
@@ -3809,14 +3819,29 @@ pub fn stress_compiler_semantic_errors() {
     let cases = [
         ("fn main() { let x = 1 + \"a\"; }", "invalid_operation"), // type mismatch in op
         ("fn main() { print(undefined_var); }", "unknown_variable"), // undefined symbol
-        ("fn main() { undefined_fn(); }", "unknown_function"),    // undefined function
+        ("fn main() { undefined_fn(); }", "unknown_function"),     // undefined function
         ("fn main() { let x = true - false; }", "invalid_operation"), // bad operator operands
-        ("fn main() { let x = [1, \"a\"]; }", "array_element_type_mismatch"), // heterogeneous array
-        ("fn foo(a: int) { return a; } fn main() { foo(); }", "arity_mismatch"), // too few args
-        ("fn foo(a: int) { return a; } fn main() { foo(1, 2); }", "arity_mismatch"), // too many args
-        ("fn main() { return 1; } fn main() { return 2; }", "function_already_defined"), // redefined
-        ("fn foo(a: notatype) { return a; } fn main() { foo(1); }", "unknown_type"), // unknown type annotation
-        ("fn main() { let x = 1 / true; }", "invalid_operation"), // bad division operands
+        (
+            "fn main() { let x = [1, \"a\"]; }",
+            "array_element_type_mismatch",
+        ), // heterogeneous array
+        (
+            "fn foo(a: int) { return a; } fn main() { foo(); }",
+            "arity_mismatch",
+        ), // too few args
+        (
+            "fn foo(a: int) { return a; } fn main() { foo(1, 2); }",
+            "arity_mismatch",
+        ), // too many args
+        (
+            "fn main() { return 1; } fn main() { return 2; }",
+            "function_already_defined",
+        ), // redefined
+        (
+            "fn foo(a: notatype) { return a; } fn main() { foo(1); }",
+            "unknown_type",
+        ), // unknown type annotation
+        ("fn main() { let x = 1 / true; }", "invalid_operation"),  // bad division operands
     ];
     let mut distinct = std::collections::BTreeSet::new();
     for (src, expected_code) in cases {
@@ -3874,14 +3899,18 @@ pub fn stress_compiler_large_and_recursive() {
     for i in 0..500 {
         writeln!(big, "fn helper{i}(a: int) {{ return a + {i}; }}").unwrap();
     }
-    assert!(run_diag(&big, "big.kl").is_ok(), "large valid program should run");
+    assert!(
+        run_diag(&big, "big.kl").is_ok(),
+        "large valid program should run"
+    );
 
     // Mutually recursive type inference must terminate (not loop / overflow).
     let mutual = "fn a() { return b(); } fn b() { return a(); } fn main() { print(1); }";
     let _ = compile_diag(mutual, "mutual.kl"); // Ok or Err, must not hang/abort.
 
     // Self-recursive function (keel's tested idiom uses unannotated params).
-    let selfrec = "fn f(n) { if n == 0 { return 0; } return f(n - 1); } fn main() { print(f(10)); }";
+    let selfrec =
+        "fn f(n) { if n == 0 { return 0; } return f(n - 1); } fn main() { print(f(10)); }";
     assert!(run_diag(selfrec, "rec.kl").is_ok());
 }
 
@@ -3890,9 +3919,18 @@ pub fn stress_runtime_errors() {
     // Each triggers a runtime fault that must surface as a structured diagnostic
     // with the expected stable code.
     let cases = [
-        ("fn main() { let x = 1 / (1 - 1); print(x); }", "division_by_zero"),
-        ("fn main() { let x = 1 % (1 - 1); print(x); }", "modulo_by_zero"),
-        ("fn main() { let a = [1, 2, 3]; print(a[10]); }", "index_out_of_bounds"),
+        (
+            "fn main() { let x = 1 / (1 - 1); print(x); }",
+            "division_by_zero",
+        ),
+        (
+            "fn main() { let x = 1 % (1 - 1); print(x); }",
+            "modulo_by_zero",
+        ),
+        (
+            "fn main() { let a = [1, 2, 3]; print(a[10]); }",
+            "index_out_of_bounds",
+        ),
         (
             "fn main() { let a = [1, 2, 3]; let i = 0 - 1; print(a[i]); }",
             "index_out_of_bounds",
@@ -4118,5 +4156,151 @@ pub fn hof_map_over_array() {
         fn main() { print(sum(map([1, 2, 3], inc))); }
         ",
         9.into()
+    );
+}
+
+// ---- native enums ----
+
+#[test]
+pub fn enum_nullary_match() {
+    run_and_check_registers!(
+        "
+        enum Color { Red, Green, Blue }
+        fn main() {
+            let c = Color::Green;
+            let n = 0;
+            match c {
+                Red => { n = 1; }
+                Green => { n = 2; }
+                Blue => { n = 3; }
+            }
+            print(n);
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn enum_payload_binding() {
+    run_and_check_registers!(
+        "
+        enum Shape { Circle(int), Rect(int, int), Unit }
+        fn main() {
+            let s = Shape::Rect(3, 4);
+            let a = 0;
+            match s {
+                Circle(r) => { a = r; }
+                Rect(w, h) => { a = w * h; }
+                Unit => { a = -1; }
+            }
+            print(a);
+        }
+        ",
+        12.into()
+    );
+}
+
+#[test]
+pub fn enum_match_wildcard() {
+    run_and_check_registers!(
+        "
+        enum Dir { North, South, East, West }
+        fn main() {
+            let d = Dir::West;
+            let n = 0;
+            match d {
+                North => { n = 1; }
+                _ => { n = 9; }
+            }
+            print(n);
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn enum_equality() {
+    run_and_check_registers!(
+        "
+        enum Color { Red, Green, Blue }
+        fn main() {
+            let a = Color::Red;
+            let b = Color::Red;
+            print(a == b);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn enum_inequality_variants() {
+    run_and_check_registers!(
+        "
+        enum Color { Red, Green, Blue }
+        fn main() {
+            let a = Color::Red;
+            let b = Color::Blue;
+            print(a == b);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn enum_payload_equality() {
+    run_and_check_registers!(
+        "
+        enum Box { Val(int), Empty }
+        fn main() {
+            let a = Box::Val(7);
+            let b = Box::Val(7);
+            let c = Box::Val(8);
+            print((a == b) && (a != c));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn enum_returned_from_fn() {
+    run_and_check_registers!(
+        "
+        enum Opt { Some(int), None }
+        fn wrap(x) { return Opt::Some(x); }
+        fn main() {
+            let o = wrap(42);
+            let n = 0;
+            match o {
+                Some(v) => { n = v; }
+                None => { n = -1; }
+            }
+            print(n);
+        }
+        ",
+        42.into()
+    );
+}
+
+#[test]
+pub fn enum_any_payload() {
+    run_and_check_registers!(
+        "
+        enum Any1 { Wrap(any), Nil }
+        fn main() {
+            let a = Any1::Wrap(\"hello\");
+            let out = \"none\";
+            match a {
+                Wrap(v) => { out = v; }
+                Nil => { out = \"nil\"; }
+            }
+            print(out);
+        }
+        ",
+        crate::data::Data::small_str("hello")
     );
 }

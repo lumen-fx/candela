@@ -84,6 +84,46 @@ fn assert_module() {
     assert!(run_std_test("test_assert").contains("assert ok"));
 }
 
+#[cfg(not(feature = "embed"))]
+#[test]
+fn option_module() {
+    assert!(run_std_test("test_option").contains("option ok"));
+}
+
+#[cfg(not(feature = "embed"))]
+#[test]
+fn result_module() {
+    assert!(run_std_test("test_result").contains("result ok"));
+}
+
+/// The option/result enum modules must inline into a `.cdlb` and run under the
+/// VM-only path with no source tree, exactly like the other pure-candela std
+/// modules.
+#[test]
+fn option_result_inline_into_cdlb() {
+    unsafe {
+        std::env::set_var("CANDELA_LIB_PATH", repo().join("libs"));
+    }
+    let src = r#"
+import std::option;
+import std::result;
+fn main() {
+    print(option::unwrap_or(None, 3));
+    print(option::unwrap(Some(7)));
+    print(result::is_ok(Ok(1)));
+    print(result::unwrap_err(Err("x")));
+}
+"#;
+    let filename = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("option_result_probe.cdl")
+        .to_string_lossy()
+        .into_owned();
+    let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
+    assert_eq!(&bytes[0..4], b"CDLB");
+    let mut program = load_program(&bytes).expect("artifact with inlined option/result must load");
+    program.run();
+}
+
 /// A program that imports std through the namespaced form must run from any
 /// working directory with nothing set, as long as `libs/` sits beside the
 /// binary. This mirrors a clean install.

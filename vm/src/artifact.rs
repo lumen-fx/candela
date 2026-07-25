@@ -22,6 +22,8 @@ use crate::errors::ErrorCtx;
 use crate::instr::Instr;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
+use crate::rt::EnumType;
+use crate::rt::EnumVariant;
 use crate::rt::InstrSrc;
 use crate::rt::Pools;
 use crate::rt::Source;
@@ -50,8 +52,9 @@ type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 const MAGIC: [u8; 4] = *b"CDLB";
 /// Bumped whenever the serialized shape changes, so a mismatched artifact is
 /// rejected instead of mis-decoded. Version 2 added the dynamic-library and
-/// host-function recipe tables (`dyn_lib_fns`/`host_fns`).
-const FORMAT_VERSION: u8 = 2;
+/// host-function recipe tables (`dyn_lib_fns`/`host_fns`). Version 3 added the
+/// native-enum type table (`enums`) and the `CloneEnum` instruction.
+const FORMAT_VERSION: u8 = 3;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
@@ -69,6 +72,7 @@ pub struct ProgramImage {
     pub instr_src: Vec<InstrSrcImage>,
     pub fn_registers: Vec<Vec<u16>>,
     pub structs: Vec<StructImage>,
+    pub enums: Vec<EnumImage>,
     pub sources: Vec<SourceImage>,
     pub allocated_arg_count: u64,
     pub allocated_call_depth: u64,
@@ -125,6 +129,21 @@ pub struct StructImage {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct EnumImage {
+    pub name: String,
+    pub variants: Vec<EnumVariantImage>,
+    pub id: u16,
+    pub name_span: Span,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EnumVariantImage {
+    pub name: String,
+    pub payload: Vec<DataType>,
+    pub name_span: Span,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SourceImage {
     pub filename: String,
     pub contents: String,
@@ -142,6 +161,7 @@ pub struct RuntimeProgram {
     fn_registers: Vec<Vec<u16>>,
     dyn_lib_fns: Vec<DynamicLibFn>,
     structs: Vec<Struct>,
+    enums: Vec<EnumType>,
     sources: Vec<Source>,
     allocated_arg_count: usize,
     allocated_call_depth: usize,
@@ -174,6 +194,7 @@ impl RuntimeProgram {
             &self.fn_registers,
             &self.dyn_lib_fns,
             &self.structs,
+            &self.enums,
             self.allocated_arg_count,
             self.allocated_call_depth,
             &[],
@@ -234,6 +255,26 @@ impl RuntimeProgram {
             })
             .collect();
 
+        let enums: Vec<EnumType> = img
+            .enums
+            .into_iter()
+            .map(|e| EnumType {
+                name: SmolStr::from(e.name),
+                variants: e
+                    .variants
+                    .into_iter()
+                    .map(|v| EnumVariant {
+                        name: SmolStr::from(v.name),
+                        payload: v.payload.into_boxed_slice(),
+                        name_span: v.name_span,
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                id: e.id,
+                name_span: e.name_span,
+            })
+            .collect();
+
         // `host` functions need an embedder-supplied closure to dispatch to; the
         // standalone runtime has none, so refuse to load rather than risk an
         // unbound call at runtime. Name the offending function so the failure is
@@ -269,6 +310,7 @@ impl RuntimeProgram {
             fn_registers: img.fn_registers,
             dyn_lib_fns,
             structs,
+            enums,
             sources: img
                 .sources
                 .into_iter()

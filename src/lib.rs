@@ -102,6 +102,7 @@ fn execute_compiled(out: compiler::CompileOutput) {
         fn_registers,
         dyn_lib_fns,
         structs,
+        enums,
         allocated_arg_count,
         allocated_call_depth,
         sources,
@@ -115,6 +116,7 @@ fn execute_compiled(out: compiler::CompileOutput) {
         &fn_registers,
         &dyn_lib_fns,
         &structs,
+        &enums,
         allocated_arg_count,
         allocated_call_depth,
         &[],
@@ -171,9 +173,7 @@ pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
 #[cfg(feature = "compiler")]
 fn build_subcommand(args: &mut impl Iterator<Item = String>) {
     let Some(input) = args.next() else {
-        eprintln!(
-            "{RED}CANDELA ERROR{RESET}\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
-        );
+        eprintln!("{RED}CANDELA ERROR{RESET}\nUsage:\n  candela build <file.cdl> [-o out.cdlb]");
         std::process::exit(1);
     };
 

@@ -135,19 +135,42 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_two_and_v1_is_rejected() {
-    // The version byte was bumped to 2 when the dyn-lib/host recipe tables were
-    // added. A freshly built artifact must carry version 2.
+fn current_format_version_is_three_and_v2_is_rejected() {
+    // The version byte was bumped to 3 when the native-enum table was added. A
+    // freshly built artifact must carry version 3.
     let bytes = candela::build_bytecode("fn main() {}".to_owned(), "v.cdl").expect("compiles");
-    assert_eq!(bytes[4], 2, "current .cdlb format version must be 2");
+    assert_eq!(bytes[4], 3, "current .cdlb format version must be 3");
 
-    // A well-formed magic but the previous version must fail cleanly, not
+    // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant -- the version gate
     // rejects before decoding the body.)
     assert!(matches!(
-        load_program(b"CDLB\x01anything"),
-        Err(candela::LoadError::UnsupportedVersion(1))
+        load_program(b"CDLB\x02anything"),
+        Err(candela::LoadError::UnsupportedVersion(2))
     ));
+}
+
+#[test]
+fn enum_values_roundtrip_through_cdlb() {
+    // A whole-program artifact that constructs and matches an enum with a
+    // payload must serialize and re-run on the VM-only path with no source tree.
+    let src = "
+        enum Shape { Circle(int), Rect(int, int), Unit }
+        fn main() {
+            let s = Shape::Rect(6, 7);
+            let a = 0;
+            match s {
+                Circle(r) => { a = r; }
+                Rect(w, h) => { a = w * h; }
+                Unit => { a = -1; }
+            }
+            print(a);
+        }
+    ";
+    let bytes = candela::build_bytecode(src.to_owned(), "enums.cdl").expect("compiles");
+    assert_eq!(bytes[4], 3);
+    let mut program = load_program(&bytes).expect("enum artifact must load on the VM-only path");
+    program.run();
 }
 
 /// A `.cdlb` must embed the WHOLE program: every imported workspace `.cdl`

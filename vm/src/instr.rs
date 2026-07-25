@@ -138,6 +138,11 @@ pub enum Instr {
 
     CloneStruct(u16, u16),
 
+    /// CloneEnum(template_reg, dest_reg)
+    /// Clones the enum value in `template_reg` into a fresh object-pool entry,
+    /// preserving the enum type tag. Mirrors `CloneStruct` for enum values.
+    CloneEnum(u16, u16),
+
     /// SetElementArray(array_reg_id, new_elem_reg_id, idx)\
     /// Replaces the idx-th element in the array located in array_reg_id with the element located in new_elem_reg_id
     SetElementObj(u16, u16, u16),
@@ -332,6 +337,7 @@ impl Instr {
             | Self::DecIntTo(_, y)
             | Self::StartErrorCatch(_,y)
             | Self::CloneStruct(_, y)
+            | Self::CloneEnum(_, y)
             | Self::CloneMap(_, y)
             | Self::CloneArray(_, y, _) => Some(y),
         }
@@ -432,7 +438,10 @@ impl Instr {
             }
             Self::Halt(x) if x != 0 => f(x),
 
-            Self::CloneArray(src, _, _) | Self::CloneStruct(src, _) | Self::CloneMap(src, _) => {
+            Self::CloneArray(src, _, _)
+            | Self::CloneStruct(src, _)
+            | Self::CloneEnum(src, _)
+            | Self::CloneMap(src, _) => {
                 f(src);
             }
 

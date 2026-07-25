@@ -15,6 +15,24 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
         .iter()
         .rposition(|w| w.get_tgt_id().is_some())
         .unwrap_or(x.len() - 1);
+    // A struct/enum construction (a `Clone*` followed by `SetFieldStruct` writes
+    // into its dest register) cannot be retargeted by rewriting the `Clone`
+    // alone -- the trailing field writes reference the original dest. Retarget
+    // the whole group to `tgt_id`.
+    if let Instr::CloneStruct(_, old) | Instr::CloneEnum(_, old) = x[matching_elem_index] {
+        match x.get_mut(matching_elem_index).unwrap() {
+            Instr::CloneStruct(_, y) | Instr::CloneEnum(_, y) => *y = tgt_id,
+            _ => {}
+        }
+        for instr in &mut x[matching_elem_index + 1..] {
+            if let Instr::SetFieldStruct(struct_reg, _, _) = instr
+                && *struct_reg == old
+            {
+                *struct_reg = tgt_id;
+            }
+        }
+        return;
+    }
     let matching_elem = x.get_mut(matching_elem_index).unwrap();
     match matching_elem {
         Instr::Mov(_, y)

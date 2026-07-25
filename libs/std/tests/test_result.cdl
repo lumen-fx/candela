@@ -1,0 +1,28 @@
+/// Checks for the `result` module. Run with `candela run`, or build to a
+/// `.cdlb` and run under `candela-vm`. Prints "result ok" on success; a failed
+/// check aborts the run with a message.
+import std::result;
+import std::assert;
+
+fn main() {
+    let ok = Ok(5);
+    let err = Err("boom");
+
+    assert::assert_true(result::is_ok(ok));
+    assert::assert_false(result::is_ok(err));
+    assert::assert_true(result::is_err(err));
+    assert::assert_false(result::is_err(ok));
+
+    assert::assert_eq(result::unwrap(ok), 5);
+    assert::assert_eq(result::unwrap_err(err), "boom");
+    assert::assert_eq(result::unwrap_or(err, 42), 42);
+    assert::assert_eq(result::unwrap_or(ok, 42), 5);
+
+    // Method form.
+    assert::assert_true(ok.is_ok());
+    assert::assert_eq(ok.unwrap(), 5);
+    assert::assert_eq(err.unwrap_err(), "boom");
+    assert::assert_eq(err.unwrap_or(3), 3);
+
+    print("result ok");
+}

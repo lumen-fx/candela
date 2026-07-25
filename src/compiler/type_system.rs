@@ -71,11 +71,17 @@ impl TypeExpr {
                 "bool" => DataType::Bool,
                 "string" => DataType::String,
                 "null" => DataType::Null,
+                // A dynamically-typed slot. Written `any`; modeled as `Unknown`,
+                // which the type checker already treats permissively. Used for
+                // enum payloads that hold a value of any type (option/result).
+                "any" => DataType::Unknown,
                 struct_name => {
                     if let Some(struct_id) =
                         namespace.find_struct(&[], struct_name, *span, file_idx, sources)
                     {
                         DataType::Struct(struct_id as u16)
+                    } else if let Some(enum_id) = namespace.find_enum(&[], struct_name) {
+                        DataType::Enum(enum_id as u16)
                     } else {
                         error_unknown_type(*span, file_idx, struct_name, sources, namespace);
                     }
@@ -90,6 +96,10 @@ impl TypeExpr {
                     sources,
                 ) {
                     DataType::Struct(struct_id as u16)
+                } else if let Some(enum_id) =
+                    namespace.find_enum(&s[..s.len() - 1], unsafe { s.last().unwrap_unchecked() })
+                {
+                    DataType::Enum(enum_id as u16)
                 } else {
                     cold_path();
                     error_unknown_type_with_namespace(
@@ -162,6 +172,7 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
             )
             .to_smolstr()
         }
+        DataType::Enum(e) => state.enums[*e as usize].name.clone(),
         DataType::Map(m) => format_args!(
             "{{{}: {}}}",
             m.0.as_ref().unwrap_or(&DataType::Unknown),
@@ -265,6 +276,16 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
                 expr_stack.extend(try_code.iter());
                 expr_stack.extend(catch_code.iter());
             }
+            Expr::Match(scrutinee, arms, wildcard, _) => {
+                expr_stack.push(scrutinee);
+                for (pat, body) in arms {
+                    expr_stack.push(pat);
+                    expr_stack.extend(body.iter());
+                }
+                if let Some(w) = wildcard {
+                    expr_stack.extend(w.iter());
+                }
+            }
             Expr::ArrayGetIndex(x, y, _)
             | Expr::Mul(x, y, _, _)
             | Expr::Div(x, y, _, _)
@@ -322,6 +343,18 @@ pub fn check_if_returns_void(content: &[Expr]) -> bool {
             | Expr::LoopBlock(code)
             | Expr::IntForLoop(_, _, _, code, _, _) => {
                 if !check_if_returns_void(code) {
+                    return false;
+                }
+            }
+            Expr::Match(_, arms, wildcard, _) => {
+                for (_, body) in arms {
+                    if !check_if_returns_void(body) {
+                        return false;
+                    }
+                }
+                if let Some(w) = wildcard
+                    && !check_if_returns_void(w)
+                {
                     return false;
                 }
             }
@@ -519,6 +552,53 @@ fn track_return_flow(
                     }
                 }
             }
+            Expr::Match(scrutinee, arms, wildcard, span) => {
+                let scrut_type = scrutinee.infer_type(v, ctx, state);
+                let is_enum = matches!(scrut_type, DataType::Enum(_));
+                let mut all_return = true;
+                for (pat, body) in arms {
+                    let v_len = v.len();
+                    if let DataType::Enum(enum_id) = scrut_type {
+                        let (vidx, binders) = crate::compiler::resolve_variant_pattern(
+                            enum_id, pat, *span, ctx, state,
+                        );
+                        for (i, binder) in binders.iter().enumerate() {
+                            if binder.as_str() != "_" {
+                                let payload_type = state.enums[enum_id as usize].variants
+                                    [vidx as usize]
+                                    .payload[i]
+                                    .clone();
+                                v.push(Variable {
+                                    name: binder.clone(),
+                                    register_id: 0,
+                                    var_type: payload_type,
+                                });
+                            }
+                        }
+                    }
+                    let flow = track_return_flow(body, v, ctx, state, fn_name);
+                    v.truncate(v_len);
+                    all_return &= flow.always_returns;
+                    extend_return_types!(&mut return_types, flow.types);
+                }
+                let exhaustive = if wildcard.is_some() {
+                    if let Some(w) = wildcard {
+                        let flow = track_scoped_returns(w, v, ctx, state, fn_name);
+                        all_return &= flow.always_returns;
+                        extend_return_types!(&mut return_types, flow.types);
+                    }
+                    true
+                } else {
+                    // An enum match with no wildcard is compile-time exhaustive.
+                    is_enum
+                };
+                if exhaustive && all_return {
+                    return FnReturnFlow {
+                        types: return_types,
+                        always_returns: true,
+                    };
+                }
+            }
             Expr::ReturnVal(return_val) => {
                 if let Some(val) = return_val.as_ref() {
                     let infered = val.infer_type(v, ctx, state);
@@ -627,6 +707,10 @@ impl Expr {
                     // reference (a compile-time value passed to a higher-order
                     // function). Its static type is the callee's Fn id.
                     DataType::Fn(fn_id as u16)
+                } else if let Some((enum_id, _)) =
+                    crate::compiler::resolve_enum_variant(std::slice::from_ref(name), state)
+                {
+                    DataType::Enum(enum_id)
                 } else {
                     error_unknown_variable(name, *span, v, ctx.file_idx, state.sources);
                 }
@@ -809,6 +893,14 @@ impl Expr {
                 _ => unsafe { unreachable_unchecked() },
             },
             Self::FunctionCall(args, namespace, span, _) => {
+                // A qualified enum-variant construction (`Color::Red(x)`) has an
+                // enum type; intercept before the namespaced-function paths.
+                if namespace.len() >= 2
+                    && let Some((enum_id, _)) =
+                        crate::compiler::resolve_enum_variant(namespace, state)
+                {
+                    return DataType::Enum(enum_id);
+                }
                 match namespace.last().unwrap().as_str() {
                     "print" | "write" | "append" | "delete" | "delete_dir" => DataType::Null,
                     "type" | "str" | "input" | "read" => DataType::String,
@@ -854,30 +946,38 @@ impl Expr {
                             .map(|x| x.infer_type(v, ctx, state))
                             .collect::<Vec<DataType>>();
 
-                        let fn_id = state
+                        let Some(fn_id) = state
                             .fns
                             .iter()
                             .rposition(|func| func.name == function_name)
-                            .unwrap_or_else(|| {
-                                if namespace.len() == 1 {
-                                    error_unknown_function(
-                                        function_name,
-                                        *span,
-                                        state.namespace,
-                                        ctx.file_idx,
-                                        state.sources,
-                                    );
-                                } else {
-                                    error_unknown_function_in_namespace(
-                                        function_name,
-                                        state.namespace,
-                                        &namespace[..namespace.len() - 1],
-                                        *span,
-                                        ctx.file_idx,
-                                        state.sources,
-                                    );
-                                }
-                            });
+                        else {
+                            // An unqualified call whose name is an enum variant
+                            // (`Some(x)`) constructs that variant. User functions
+                            // above keep priority.
+                            if let Some((enum_id, _)) =
+                                crate::compiler::resolve_enum_variant(namespace, state)
+                            {
+                                return DataType::Enum(enum_id);
+                            }
+                            if namespace.len() == 1 {
+                                error_unknown_function(
+                                    function_name,
+                                    *span,
+                                    state.namespace,
+                                    ctx.file_idx,
+                                    state.sources,
+                                );
+                            } else {
+                                error_unknown_function_in_namespace(
+                                    function_name,
+                                    state.namespace,
+                                    &namespace[..namespace.len() - 1],
+                                    *span,
+                                    ctx.file_idx,
+                                    state.sources,
+                                );
+                            }
+                        };
 
                         infer_user_fn_return_type(
                             fn_id,
@@ -917,6 +1017,27 @@ impl Expr {
                     crate::compiler::compiler_errors::error_no_such_method(
                         method,
                         &struct_name,
+                        *fn_span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                }
+                if let DataType::Enum(enum_id) = obj_type {
+                    let enum_name = state.enums[enum_id as usize].name.clone();
+                    let mangled = mangle_method(&enum_name, method);
+                    if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+                        let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
+                        arg_types.push(DataType::Enum(enum_id));
+                        for a in args {
+                            arg_types.push(a.infer_type(v, ctx, state));
+                        }
+                        return infer_user_fn_return_type(
+                            fn_id, arg_types, &mangled, v, ctx, state,
+                        );
+                    }
+                    crate::compiler::compiler_errors::error_no_such_method(
+                        method,
+                        &enum_name,
                         *fn_span,
                         ctx.file_idx,
                         state.sources,
@@ -1009,6 +1130,19 @@ impl Expr {
                     }
                 }
                 DataType::Union(Box::from(types)).check_poly()
+            }
+            Self::NamespacedRef(path, span) => {
+                if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(path, state) {
+                    DataType::Enum(enum_id)
+                } else {
+                    crate::compiler::compiler_errors::error_enum(
+                        "Unknown enum variant",
+                        &format!("{} does not name an enum variant", path.join("::")),
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                }
             }
             Self::Struct(namespace, _, span) => {
                 let struct_name = &namespace[namespace.len() - 1];

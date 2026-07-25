@@ -105,24 +105,26 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 Some(Token::DoubleColon) => {
                     parser.next_token();
                     let (namespace, end) = parse_namespace(parser, SmolStr::new(s));
-                    let (next_token, _) = parser.next_token();
-                    if next_token == Token::LParen {
-                        // FUNCTION CALL WITH NAMESPACE:
+                    match parser.peek_token_opt() {
+                        // FUNCTION CALL WITH NAMESPACE (also an enum variant with
+                        // payload, `Enum::Variant(args)`, disambiguated by the
+                        // compiler):
                         // (Identifier DoubleColon)+ Identifier LParen Expr RParen
-                        parse_fn_call(parser, namespace, (t_span.start, end).into())
-                    } else if next_token == Token::LBrace {
-                        // STRUCT WITH NAMESPACE
-                        parse_struct(parser, namespace, start)
-                    } else {
-                        cold_path();
-                        parser.error(
-                            (t_span.start, end).into(),
-                            ParserErr::UnexpectedTokenStr(
-                                "'(' (function call), '{' (struct), or '::' (namespace)",
-                                next_token,
-                                "",
-                            ),
-                        );
+                        Some(Token::LParen) => {
+                            parser.next_token();
+                            parse_fn_call(parser, namespace, (t_span.start, end).into())
+                        }
+                        // STRUCT WITH NAMESPACE. Gated on `allow_struct` so a
+                        // brace that opens a following block (for example a
+                        // `match Enum::Variant { ... }` body) is not mistaken for
+                        // a struct literal.
+                        Some(Token::LBrace) if allow_struct => {
+                            parser.next_token();
+                            parse_struct(parser, namespace, start)
+                        }
+                        // A bare namespaced identifier: a nullary enum-variant
+                        // construction (`Color::Red`), resolved by the compiler.
+                        _ => Expr::NamespacedRef(namespace, (t_span.start, end).into()),
                     }
                 }
                 _ => Expr::Var(SmolStr::new(s), (t_span.start, t_span.end).into()),

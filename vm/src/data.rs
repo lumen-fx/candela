@@ -1,3 +1,4 @@
+use crate::rt::EnumType;
 use crate::rt::Struct;
 use crate::vm::{MapPool, RegisterFile, StringPool};
 use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
@@ -17,6 +18,12 @@ const NAN_NULL: u64 = NAN_BASE | (5 << 48);
 const NAN_INT: u64 = NAN_BASE | (6 << 48);
 const NAN_STRUCT: u64 = NAN_BASE | (7 << 48);
 const NAN_MAP: u64 = NAN_BASE | (7 << 48) | (1 << 47);
+/// Enum values claim the free all-zero type field on the quiet-NaN base
+/// (`NAN_ENUM == NAN_BASE`), which is distinct from every existing tag above
+/// and from computed float NaNs (whose sign bit is clear). The 48-bit payload
+/// packs the enum type id (bits 32-47) and an object-pool index (low 32),
+/// exactly like the struct encoding.
+const NAN_ENUM: u64 = NAN_BASE;
 pub const NULL: Data = Data(NAN_NULL);
 pub const FALSE: Data = Data(NAN_BOOL);
 pub const TRUE: Data = Data(NAN_BOOL | 1);
@@ -157,7 +164,9 @@ impl Data {
     }
     #[inline(always)]
     pub const fn as_array(self) -> usize {
-        debug_assert!(self.is_array() || self.is_struct());
+        // Enum values share the object pool with arrays/structs and are compared
+        // through this accessor in `obj_eq`.
+        debug_assert!(self.is_array() || self.is_struct() || self.is_enum());
         (self.0 & 0xFFFF_FFFF) as usize
     }
     #[inline(always)]
@@ -289,8 +298,29 @@ impl Data {
     }
     #[inline(always)]
     pub const fn as_struct(self) -> usize {
-        debug_assert!(self.is_struct());
+        // Enum values reuse the struct field-access instructions
+        // (`GetFieldStruct`/`SetFieldStruct`), which extract the low-32 object
+        // index regardless of the box tag, so an enum value is accepted here.
+        debug_assert!(self.is_struct() || self.is_enum());
         (self.0 & 0xFFFF_FFFF) as usize
+    }
+    #[inline(always)]
+    pub const fn enum_instance(type_id: u16, id: u32) -> Self {
+        Self(NAN_ENUM | ((type_id as u64) << 32) | id as u64)
+    }
+    #[inline(always)]
+    pub const fn as_enum(self) -> usize {
+        debug_assert!(self.is_enum());
+        (self.0 & 0xFFFF_FFFF) as usize
+    }
+    #[inline(always)]
+    pub const fn enum_type_id(self) -> u16 {
+        debug_assert!(self.is_enum());
+        ((self.0 >> 32) & 0xFFFF) as u16
+    }
+    #[inline(always)]
+    pub const fn is_enum(self) -> bool {
+        (self.0 & !PAYLOAD_MASK) == NAN_ENUM
     }
     #[inline(always)]
     pub const fn struct_type_id(self) -> u16 {
@@ -313,12 +343,14 @@ impl Data {
     pub const fn is_map(self) -> bool {
         (self.0 & !PAYLOAD_MASK) == NAN_STRUCT && (self.0 & (1 << 47)) != 0
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn format(
         self,
         obj_pool: &ObjectPool,
         string_pool: &StringPool,
         map_pool: &MapPool,
         structs: &[Struct],
+        enums: &[EnumType],
         show_str: bool,
     ) -> SmolStr {
         if self.is_float() {
@@ -338,7 +370,7 @@ impl Data {
                 "[{}]",
                 obj_pool[self.as_array()]
                     .iter()
-                    .map(|x| x.format(obj_pool, string_pool, map_pool, structs, false))
+                    .map(|x| x.format(obj_pool, string_pool, map_pool, structs, enums, false))
                     .collect::<Vec<SmolStr>>()
                     .join(",")
             )
@@ -355,7 +387,7 @@ impl Data {
                     .map(|x| {
                         format_args!(
                             "{}",
-                            x.format(obj_pool, string_pool, map_pool, structs, false)
+                            x.format(obj_pool, string_pool, map_pool, structs, enums, false)
                         )
                         .to_smolstr()
                     })
@@ -363,6 +395,25 @@ impl Data {
                     .join(",")
             )
             .to_smolstr()
+        } else if self.is_enum() {
+            let e = unsafe { enums.get_unchecked(self.enum_type_id() as usize) };
+            let entry = &obj_pool[self.as_enum()];
+            let tag = entry[0].as_int() as usize;
+            let variant = unsafe { e.variants.get_unchecked(tag) };
+            if entry.len() <= 1 {
+                variant.name.clone()
+            } else {
+                format_args!(
+                    "{}({})",
+                    variant.name,
+                    entry[1..]
+                        .iter()
+                        .map(|x| x.format(obj_pool, string_pool, map_pool, structs, enums, false))
+                        .collect::<Vec<SmolStr>>()
+                        .join(",")
+                )
+                .to_smolstr()
+            }
         } else if self.is_map() {
             let m = &map_pool[self.as_map()];
             format_args!(
@@ -371,8 +422,8 @@ impl Data {
                     .map(|(key, val)| {
                         format_args!(
                             "{}:{}",
-                            key.format(obj_pool, string_pool, map_pool, structs, false),
-                            val.format(obj_pool, string_pool, map_pool, structs, false),
+                            key.format(obj_pool, string_pool, map_pool, structs, enums, false),
+                            val.format(obj_pool, string_pool, map_pool, structs, enums, false),
                         )
                         .to_smolstr()
                     })

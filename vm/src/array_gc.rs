@@ -57,7 +57,7 @@ fn array_gc(
 
     // Find all used arrays
     for data in registers.0.iter().chain(recursion_stack.0.iter()) {
-        if data.is_array() || data.is_struct() {
+        if data.is_array() || data.is_struct() || data.is_enum() {
             track(*data, obj_pool, map_pool, live, map_live, obj_gc_stack);
         }
     }
@@ -102,15 +102,15 @@ pub fn track(
             continue;
         }
         #[allow(clippy::blocks_in_conditions)]
-        if d.is_struct() {
+        if d.is_struct() || d.is_enum() {
             for e in arr {
-                if e.is_array() || e.is_struct() || e.is_map() {
+                if e.is_array() || e.is_struct() || e.is_enum() || e.is_map() {
                     obj_gc_stack.push(*e);
                 }
             }
         } else if {
             let fst = unsafe { arr.get_unchecked(0) };
-            fst.is_array() || fst.is_struct() || fst.is_map()
+            fst.is_array() || fst.is_struct() || fst.is_enum() || fst.is_map()
         } {
             obj_gc_stack.extend(arr);
         }

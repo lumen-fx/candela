@@ -14,6 +14,7 @@ use crate::compiler::compiler_errors::error_unknown_function;
 use crate::data::Data;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
+use smol_strc::SmolStr;
 
 pub fn builtin_functions(
     name: &str,
@@ -261,6 +262,24 @@ pub fn builtin_functions(
                     span,
                     args_indexes,
                 )
+            } else if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
+                std::slice::from_ref(&SmolStr::new(fn_name)),
+                state,
+            ) {
+                // An otherwise-unknown call whose name is an enum variant
+                // (`Some(x)`, `Ok(v)`) is a variant construction. User functions
+                // above keep priority, so a function never gets shadowed.
+                Some(crate::compiler::compile_enum_construction(
+                    enum_id,
+                    variant_idx,
+                    args,
+                    span,
+                    args_indexes,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
             } else {
                 error_unknown_function(fn_name, span, state.namespace, ctx.file_idx, state.sources);
             }

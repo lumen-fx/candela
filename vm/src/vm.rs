@@ -1,18 +1,11 @@
 use crate::array_gc::alloc_array;
-use crate::rt::DynamicLibFn;
-use crate::rt::ErrorCatch;
-use crate::rt::HostFnSig;
-use crate::rt::Pools;
-use crate::rt::Struct;
-use crate::rt::Span;
-use crate::rt::DataType;
-use crate::embed::HostDispatch;
-use crate::embed::Value;
 use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::FALSE;
 use crate::data::NULL;
 use crate::data::TRUE;
+use crate::embed::HostDispatch;
+use crate::embed::Value;
 use crate::errors::ErrType;
 use crate::errors::ErrorCtx;
 use crate::errors::throw_error;
@@ -20,14 +13,22 @@ use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
 use crate::map_gc::alloc_map;
+use crate::rt::DataType;
+use crate::rt::DynamicLibFn;
+use crate::rt::EnumType;
+use crate::rt::ErrorCatch;
+use crate::rt::HostFnSig;
+use crate::rt::Pools;
+use crate::rt::Span;
+use crate::rt::Struct;
 use lexical_core::FormattedSize;
 use memchr::memmem;
 use smol_strc::ToSmolStr;
 use std::collections::HashMap;
+use std::fs;
 use std::hash::BuildHasherDefault;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
-use std::fs;
 use std::io::Write;
 use std::ops::Index;
 use std::ops::IndexMut;
@@ -58,7 +59,12 @@ fn obj_eq(
     if x.is_string() && y.is_string() {
         return x.as_str(string_pool) == y.as_str(string_pool);
     }
-    if (x.is_array() || x.is_struct()) && (y.is_array() || y.is_struct()) {
+    // Enum values compare like structs: `x.tag() == y.tag()` above already
+    // proved same enum type id, and element 0 of the pool entry is the variant
+    // tag, so an element-wise compare covers variant and payload together.
+    if (x.is_array() || x.is_struct() || x.is_enum())
+        && (y.is_array() || y.is_struct() || y.is_enum())
+    {
         let x_obj = &obj_pool[x.as_array()];
         let y_obj = &obj_pool[y.as_array()];
         if x_obj.len() != y_obj.len() {
@@ -231,6 +237,7 @@ pub fn execute(
     fn_registers: &[Vec<u16>],
     dyn_libs: &[DynamicLibFn],
     structs: &[Struct],
+    enums: &[EnumType],
     allocated_arg_count: usize,
     allocated_call_depth: usize,
     // Embedding: `host` function signatures and the Rust closures they dispatch
@@ -535,8 +542,7 @@ pub fn execute(
                 // Marshal the result back, allocating arrays/maps into the pools.
                 // `Value::Null` (including a void closure's `()`) becomes NULL,
                 // which is what register 0 expects for a discarded result.
-                r[dest] =
-                    crate::embed::marshal_value(&result, obj_pool, map_pool, str_pool);
+                r[dest] = crate::embed::marshal_value(&result, obj_pool, map_pool, str_pool);
             }
             Instr::AddFloat(o1, o2, dest) => {
                 r[dest] = (r[o1].as_float() + r[o2].as_float()).into();
@@ -613,6 +619,30 @@ pub fn execute(
                     std::ptr::copy_nonoverlapping(src_ptr, dst.as_mut_ptr(), len);
                 }
                 r[dest_reg] = Data::struct_instance(src_reg.struct_type_id(), new_id as u32);
+            }
+            Instr::CloneEnum(src_reg, dest_reg) => {
+                let new_id = alloc_array(
+                    obj_pool,
+                    map_pool,
+                    &mut free_arrays,
+                    r,
+                    &recursion_stack,
+                    &mut gc_array_threshold,
+                    &mut array_live,
+                    &mut map_live,
+                    &mut obj_gc_stack,
+                ) as usize;
+                let src_reg = r[src_reg];
+                let src = &obj_pool[src_reg.as_enum()];
+                let len = src.len();
+                unsafe {
+                    let src_ptr = src.as_ptr();
+                    let dst = obj_pool.get_mut(new_id);
+                    dst.reserve_exact(len);
+                    dst.set_len(len);
+                    std::ptr::copy_nonoverlapping(src_ptr, dst.as_mut_ptr(), len);
+                }
+                r[dest_reg] = Data::enum_instance(src_reg.enum_type_id(), new_id as u32);
             }
             Instr::AddArray(o1, o2, dest) => {
                 let arr_a_id = r[o1].as_array();
@@ -856,7 +886,7 @@ pub fn execute(
                         write!(
                             handle,
                             "{}",
-                            item.format(obj_pool, str_pool, map_pool, structs, false)
+                            item.format(obj_pool, str_pool, map_pool, structs, enums, false)
                         )
                         .unwrap();
                     }
@@ -874,11 +904,33 @@ pub fn execute(
                             handle,
                             "{}:{}",
                             unsafe { &s_fields.get_unchecked(idx).0 },
-                            item.format(obj_pool, str_pool, map_pool, structs, false)
+                            item.format(obj_pool, str_pool, map_pool, structs, enums, false)
                         )
                         .unwrap();
                     }
                     writeln!(handle, "}}").unwrap();
+                } else if tgt.is_enum() {
+                    let e = unsafe { enums.get_unchecked(tgt.enum_type_id() as usize) };
+                    let entry = &obj_pool[tgt.as_enum()];
+                    let tag = entry[0].as_int() as usize;
+                    let variant = unsafe { e.variants.get_unchecked(tag) };
+                    if entry.len() <= 1 {
+                        writeln!(handle, "{}", variant.name).unwrap();
+                    } else {
+                        write!(handle, "{}(", variant.name).unwrap();
+                        for (idx, item) in entry[1..].iter().enumerate() {
+                            if idx != 0 {
+                                write!(handle, ",").unwrap();
+                            }
+                            write!(
+                                handle,
+                                "{}",
+                                item.format(obj_pool, str_pool, map_pool, structs, enums, false)
+                            )
+                            .unwrap();
+                        }
+                        writeln!(handle, ")").unwrap();
+                    }
                 } else if tgt.is_map() {
                     let m = &map_pool[tgt.as_map()];
                     write!(handle, "{{").unwrap();
@@ -889,8 +941,8 @@ pub fn execute(
                         write!(
                             handle,
                             "{}:{}",
-                            key.format(obj_pool, str_pool, map_pool, structs, false),
-                            val.format(obj_pool, str_pool, map_pool, structs, false),
+                            key.format(obj_pool, str_pool, map_pool, structs, enums, false),
+                            val.format(obj_pool, str_pool, map_pool, structs, enums, false),
                         )
                         .unwrap();
                     }
@@ -1031,7 +1083,7 @@ pub fn execute(
                     cold_path();
                     error_with_catch!(ErrType::UnknownMapKey(
                         r[key_reg_id]
-                            .format(obj_pool, str_pool, map_pool, structs, false)
+                            .format(obj_pool, str_pool, map_pool, structs, enums, false)
                             .as_str()
                     ));
                 };
@@ -1224,7 +1276,7 @@ pub fn execute(
                 } else {
                     string!(
                         value
-                            .format(obj_pool, str_pool, map_pool, structs, false)
+                            .format(obj_pool, str_pool, map_pool, structs, enums, false)
                             .as_str()
                     )
                 };

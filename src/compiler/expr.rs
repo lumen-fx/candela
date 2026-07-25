@@ -40,6 +40,26 @@ pub enum Expr {
     Struct(Box<[SmolStr]>, Box<[(SmolStr, Self, Span, Span)]>, Span),
     /// StructDeclare(name, fields, span)
     StructDeclare(SmolStr, Box<[(SmolStr, TypeExpr, Span)]>, Span),
+    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span)
+    EnumDeclare(SmolStr, Box<[(SmolStr, Box<[TypeExpr]>, Span)]>, Span),
+    /// NamespacedRef(path, span)
+    ///
+    /// A bare namespaced identifier (`Color::Red`) with no call parentheses or
+    /// struct braces. The only such form candela has is a nullary enum-variant
+    /// construction; the compiler resolves it against the enum registry.
+    NamespacedRef(Box<[SmolStr]>, Span),
+    /// Match(scrutinee, arms: [(pattern_expr, body)], wildcard_body, span)
+    ///
+    /// The arm patterns are parsed as ordinary expressions; the compiler picks
+    /// the lowering by the scrutinee's static type. For an enum scrutinee each
+    /// pattern is a variant pattern (`Circle(r)` binds the payload); otherwise
+    /// each pattern is an equality test against the scrutinee.
+    Match(
+        Box<Self>,
+        Box<[(Self, Box<[Self]>)]>,
+        Option<Box<[Self]>>,
+        Span,
+    ),
     /// GetStructField(struct_expr, field, struct_span, field_span, value_span)
     GetStructField(Box<Self>, SmolStr, Span, Span),
     /// SetStructField(struct_expr, field, new_expr, struct_span, field_span, value_span)
@@ -181,6 +201,13 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
         | Expr::ElseBlock(body)
         | Expr::ForLoop(_, _, body, _)
         | Expr::IntForLoop(_, _, _, body, _, _) => code_modifies_variable(var_name, body),
+        Expr::Match(_, arms, wildcard, _) => {
+            arms.iter()
+                .any(|(_, body)| code_modifies_variable(var_name, body))
+                || wildcard
+                    .as_ref()
+                    .is_some_and(|body| code_modifies_variable(var_name, body))
+        }
         _ => false,
     })
 }

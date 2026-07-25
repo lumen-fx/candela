@@ -104,6 +104,7 @@ pub enum DataType {
     Union(Box<[Self]>),
     Fn(u16),
     Struct(u16),
+    Enum(u16),
     Map(Box<(Option<Self>, Option<Self>)>),
 }
 
@@ -130,6 +131,7 @@ impl std::fmt::Display for DataType {
                     .join("|")
             ),
             Self::Struct(_) => write!(f, "struct"),
+            Self::Enum(_) => write!(f, "enum"),
             Self::Map(m) => write!(
                 f,
                 "{{{}: {}}}",
@@ -156,7 +158,12 @@ impl DataType {
                     .iter()
                     .map(|(_, field_type, _)| field_type.to_c_type(structs)),
             ),
-            _ => unsafe { unreachable_unchecked() },
+            // Enums (and maps, unions, functions) have no C representation, so
+            // they cannot appear in a `dylib`/`host` signature. Reaching here is
+            // a defined panic rather than undefined behavior.
+            other => {
+                panic!("type {other} has no C representation and cannot cross the FFI boundary")
+            }
         }
     }
 }
@@ -372,6 +379,25 @@ pub struct Struct {
     pub name_span: Span,
 }
 
+/// A native tagged-union enum type. Its values are stored in the object pool
+/// like structs: element 0 of the pool entry is the variant tag (an int index
+/// into `variants`), and elements `1..` are the variant's payload in order.
+#[derive(Debug)]
+pub struct EnumType {
+    pub name: SmolStr,
+    pub variants: Box<[EnumVariant]>,
+    pub id: u16,
+    pub name_span: Span,
+}
+
+#[derive(Debug)]
+pub struct EnumVariant {
+    pub name: SmolStr,
+    /// Payload field types, in declaration order. Empty for a nullary variant.
+    pub payload: Box<[DataType]>,
+    pub name_span: Span,
+}
+
 pub struct Pools {
     pub objs: ObjectPool,
     pub maps: MapPool,
@@ -460,6 +486,7 @@ impl PartialEq for DataType {
             (Self::Array(Some(a)), Self::Array(Some(b))) => a == b,
             (Self::Union(a), Self::Union(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
+            (Self::Enum(a), Self::Enum(b)) => a == b,
             (Self::Fn(_), Self::Fn(_)) => true,
             (Self::Map(a), Self::Map(b)) => {
                 (a.0.is_none() || b.0.is_none() || a.0 == b.0)
@@ -493,6 +520,10 @@ impl std::hash::Hash for DataType {
             Self::Struct(s) => {
                 10u8.hash(state);
                 s.hash(state);
+            }
+            Self::Enum(e) => {
+                12u8.hash(state);
+                e.hash(state);
             }
             Self::Map(m) => {
                 11u8.hash(state);

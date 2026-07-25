@@ -464,19 +464,24 @@ pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {
     Expr::LoopBlock(Box::from(parse_block(input)))
 }
 
+/// Parses a `match` block into an [`Expr::Match`] carrying the scrutinee, the
+/// arm patterns (as raw expressions) and their bodies, and an optional wildcard
+/// body. The compiler picks the lowering by the scrutinee's static type: an
+/// enum scrutinee gives variant-pattern matching with payload binding; any
+/// other scrutinee gives the equality-chain behavior.
 pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Match);
     let match_obj = parse_expr_no_struct(parser);
-    let obj_var = SmolStr::new_static("[MATCH TEMP]");
     parser.next_token_expect(Token::LBrace, "Blocks must be delimited by braces");
-    let mut first_condition: Option<Expr> = None;
-    let mut output_code: Vec<Expr> = Vec::with_capacity(2);
+    let mut arms: Vec<(Expr, Box<[Expr]>)> = Vec::with_capacity(2);
+    let mut wildcard: Option<Box<[Expr]>> = None;
+    let mut has_non_wildcard = false;
     let end: u32;
     loop {
         let peek_token = parser.peek_token();
         if peek_token == Token::Identifier("_") {
-            if first_condition.is_none() {
+            if !has_non_wildcard {
                 cold_path();
                 let span = (start, parser.peek_token_span().end).into();
                 parser.error(span, ParserErr::MatchBlockNoNonWildcardArm);
@@ -489,10 +494,10 @@ pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
                 Token::RBrace,
                 "The wildcard must be the last statement in a match",
             );
-            output_code.push(Expr::ElseBlock(Box::from(code)));
+            wildcard = Some(Box::from(code));
             break;
         } else if peek_token == Token::RBrace {
-            if first_condition.is_none() {
+            if !has_non_wildcard {
                 cold_path();
                 let span = (start, parser.peek_token_span().end).into();
                 parser.error(span, ParserErr::MatchBlockZeroArms);
@@ -501,33 +506,96 @@ pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
             parser.next_token();
             break;
         } else {
-            let condition = parse_expr(parser);
-            let end = parser.peek_token_span().end;
+            let pattern = parse_expr(parser);
             parser.next_token_expect(Token::FatArrow, "");
             let code = parse_block(parser);
-            if first_condition.is_none() {
-                first_condition = Some(condition);
-                output_code.extend(code);
-            } else {
-                output_code.push(Expr::ElseIfBlock(
-                    Box::new(Expr::Eq(
-                        Box::new(Expr::Var(obj_var.clone(), (start, end).into())),
-                        Box::new(condition),
-                    )),
-                    Box::from(code),
-                ));
-            }
+            has_non_wildcard = true;
+            arms.push((pattern, Box::from(code)));
         }
     }
-    Expr::EvalBlock(Box::from([
-        Expr::VarDeclare(obj_var.clone(), Box::new(match_obj)),
-        Expr::Condition(
-            Box::from(Expr::Eq(
-                Box::new(Expr::Var(obj_var, (start, end).into())),
-                Box::from(first_condition.unwrap()),
-            )),
-            Box::from(output_code),
-            (start, end).into(),
-        ),
-    ]))
+    Expr::Match(
+        Box::new(match_obj),
+        Box::from(arms),
+        wildcard,
+        (start, end).into(),
+    )
+}
+
+pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
+    let (t, _) = parser.next_token();
+    debug_assert_eq!(t, Token::Enum);
+    let (next_token, span) = parser.next_token();
+    let enum_name = if let Token::Identifier(id) = next_token {
+        SmolStr::new(id)
+    } else {
+        cold_path();
+        parser.error(
+            span,
+            ParserErr::UnexpectedToken(
+                Token::Identifier(""),
+                next_token,
+                "Enum names must be identifiers.",
+            ),
+        );
+    };
+    parser.next_token_expect(Token::LBrace, "Expected '{'");
+    let mut variants: Vec<(SmolStr, Box<[TypeExpr]>, Span)> = Vec::with_capacity(4);
+    loop {
+        if parser.peek_token() == Token::RBrace {
+            parser.next_token();
+            break;
+        }
+        let (next_token, v_span) = parser.next_token();
+        let variant_name = if let Token::Identifier(i) = next_token {
+            SmolStr::new(i)
+        } else {
+            cold_path();
+            parser.error(
+                v_span,
+                ParserErr::UnexpectedToken(
+                    Token::Identifier(""),
+                    next_token,
+                    "Enum variant names must be identifiers.",
+                ),
+            );
+        };
+        // Optional payload types: `Variant(T, U)`.
+        let mut payload: Vec<TypeExpr> = Vec::new();
+        if parser.peek_token() == Token::LParen {
+            parser.next_token();
+            loop {
+                if parser.peek_token() == Token::RParen {
+                    break;
+                }
+                payload.push(parse_type(parser));
+                if parser.peek_token() == Token::Comma {
+                    parser.next_token();
+                } else if parser.peek_token() != Token::RParen {
+                    cold_path();
+                    let span = parser.peek_token_span();
+                    parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
+                }
+            }
+            parser.next_token_expect(Token::RParen, "Unmatched '('");
+        }
+        variants.push((variant_name, Box::from(payload), v_span));
+        let (sep, sep_span) = parser.next_token();
+        if sep == Token::RBrace {
+            break;
+        } else if sep != Token::Comma {
+            cold_path();
+            parser.error(
+                sep_span,
+                ParserErr::UnexpectedToken(
+                    Token::Comma,
+                    sep,
+                    "In enums, variants must be separated by a comma.",
+                ),
+            );
+        } else if parser.peek_token() == Token::RBrace {
+            parser.next_token();
+            break;
+        }
+    }
+    Expr::EnumDeclare(enum_name, Box::from(variants), span)
 }

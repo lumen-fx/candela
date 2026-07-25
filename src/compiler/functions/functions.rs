@@ -71,6 +71,25 @@ pub fn handle_functions(
     span: Span,
     args_indexes: &[Span],
 ) -> Option<u16> {
+    // A qualified enum-variant construction (`Color::Red(x)`, `Option::Some(v)`)
+    // is intercepted before the namespaced-function resolution below, which
+    // would otherwise treat the enum name as a module namespace and error.
+    if namespace.len() >= 2
+        && let Some((enum_id, variant_idx)) =
+            crate::compiler::resolve_enum_variant(namespace, state)
+    {
+        return Some(crate::compiler::compile_enum_construction(
+            enum_id,
+            variant_idx,
+            args,
+            span,
+            args_indexes,
+            v,
+            ctx,
+            state,
+            output,
+        ));
+    }
     let len = namespace.len() - 1;
     let fn_name = namespace[len].as_str();
     let namespace = &namespace[0..len];
