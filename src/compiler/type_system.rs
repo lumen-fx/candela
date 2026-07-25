@@ -922,6 +922,19 @@ impl Expr {
                         state.sources,
                     );
                 }
+                // An array collection method routed to a `std::list` helper
+                // infers its return type from that helper, specialized for the
+                // receiver and argument types.
+                if let Some(fn_id) = crate::compiler::methods::routed_list_method(
+                    method, &obj_type, args, v, ctx, state,
+                ) {
+                    let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
+                    arg_types.push(obj_type.clone());
+                    for a in args {
+                        arg_types.push(a.infer_type(v, ctx, state));
+                    }
+                    return infer_user_fn_return_type(fn_id, arg_types, method, v, ctx, state);
+                }
                 match method {
                     "uppercase"
                     | "lowercase"

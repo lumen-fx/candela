@@ -68,6 +68,12 @@ fn list_higher_order() {
 
 #[cfg(not(feature = "embed"))]
 #[test]
+fn list_methods() {
+    assert!(run_std_test("test_list_methods").contains("list methods ok"));
+}
+
+#[cfg(not(feature = "embed"))]
+#[test]
 fn convert_module() {
     assert!(run_std_test("test_convert").contains("convert ok"));
 }

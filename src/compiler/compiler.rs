@@ -2857,6 +2857,25 @@ impl Namespace {
                 }
             })
     }
+    /// Resolves a namespaced function without raising a compile error when the
+    /// namespace or function is absent. Used by the array-method auto-prelude,
+    /// which routes `arr.map(f)` to `list::map` only when that module resolved.
+    #[must_use]
+    pub fn try_find_function(&self, path: &[SmolStr], function_name: &str) -> Option<usize> {
+        let mut current = self;
+        for sub in path {
+            current = &current.children.iter().find(|(name, _)| name == sub)?.1;
+        }
+        current.symbols.iter().find_map(|(name, kind)| {
+            if name.as_str() == function_name
+                && let SymbolKind::Fn(fn_id) = kind
+            {
+                Some(*fn_id as usize)
+            } else {
+                None
+            }
+        })
+    }
     #[must_use]
     pub fn walk_to_namespace(
         &self,
@@ -2877,6 +2896,109 @@ impl Namespace {
         }
         current
     }
+}
+
+/// Loads the `std::list` module as an implicit `list` child namespace so its
+/// higher-order helpers work as array methods (`arr.map(f)`) with no explicit
+/// import. Resolution mirrors the namespaced-import path (`CANDELA_LIB_PATH` or
+/// `libs/` beside the executable); a missing library directory is not an error,
+/// the prelude is simply absent.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_auto_prelude(
+    fns: &mut Vec<Function>,
+    structs: &mut Vec<Struct>,
+    fn_registers: &mut Vec<Vec<u16>>,
+    dynamic_libs: &mut Vec<Dynamiclib>,
+    sources: &mut Vec<Source>,
+    namespace: &mut Namespace,
+    files: &mut FxHashMap<PathBuf, Namespace>,
+    file_namespaces: &mut FxHashMap<u16, Namespace>,
+    pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
+    pending_fns: &mut Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
+    pending_dylibs: &mut Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        Rc<Library>,
+        SmolStr,
+        Span,
+    )>,
+    pending_host: &mut Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        SmolStr,
+        Span,
+    )>,
+) {
+    const PRELUDE_REL: &str = "std/list.cdl";
+    const PRELUDE_CHILD: &str = "list";
+
+    if namespace
+        .children
+        .iter()
+        .any(|(name, _)| name.as_str() == PRELUDE_CHILD)
+    {
+        return;
+    }
+
+    let path = if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
+        PathBuf::from(base).join(PRELUDE_REL)
+    } else if let Ok(exe) = std::env::current_exe() {
+        exe.canonicalize()
+            .unwrap_or(exe)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("libs")
+            .join(PRELUDE_REL)
+    } else {
+        return;
+    };
+
+    if let Some(cached) = files.get(&path) {
+        namespace
+            .children
+            .push((PRELUDE_CHILD.into(), cached.clone()));
+        return;
+    }
+
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return;
+    };
+
+    let child_src_idx = sources.len() as u16;
+    let file_name: SmolStr = path.to_str().unwrap_or(PRELUDE_REL).into();
+    sources.push(Source {
+        filename: file_name,
+        contents,
+    });
+    let file_code = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+
+    let mut child_namespace = Namespace {
+        symbols: Vec::new(),
+        children: Vec::new(),
+    };
+    parse_toplevel(
+        file_code,
+        &path,
+        child_src_idx,
+        fns,
+        structs,
+        fn_registers,
+        dynamic_libs,
+        sources,
+        &mut child_namespace,
+        files,
+        file_namespaces,
+        pending_structs,
+        pending_fns,
+        pending_dylibs,
+        pending_host,
+    );
+    files.insert(path, child_namespace.clone());
+    namespace
+        .children
+        .push((PRELUDE_CHILD.into(), child_namespace));
 }
 
 /// Recursively collects functions, dyn libs, and imported files
@@ -2973,6 +3095,29 @@ fn parse_toplevel(
     }
 
     files.insert(file_path.to_path_buf(), namespace.clone());
+
+    // Auto-prelude: make the std::list array methods (map/filter/reduce and
+    // friends) callable as methods on arrays without an explicit import. This is
+    // best-effort -- if the shipped library directory is not present (for
+    // example an embedding host with no `libs/` tree), the prelude is skipped and
+    // array methods simply resolve as they did before.
+    #[cfg(not(target_arch = "wasm32"))]
+    if src_file_idx == 0 {
+        load_auto_prelude(
+            fns,
+            structs,
+            fn_registers,
+            dynamic_libs,
+            sources,
+            namespace,
+            files,
+            file_namespaces,
+            pending_structs,
+            pending_fns,
+            pending_dylibs,
+            pending_host,
+        );
+    }
 
     for import in imports {
         match import {

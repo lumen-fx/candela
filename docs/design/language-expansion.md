@@ -22,15 +22,18 @@ entirely in the compiler by monomorphization, so the runtime binary is unchanged
 
 Implemented: first-class function references (feature 1) -- named and anonymous
 functions passed to higher-order functions, non-capturing -- and the collection
-higher-order functions in `std::list` (feature 6) as `map`/`filter`/`reduce`/
-`each`/`find`/`any`/`all`/`sort_by`, taking function values. These add nothing to
-`candela-vm`.
+higher-order functions in `std::list` (feature 6), available both as free
+functions (`list::map(arr, f)`) and as methods on arrays (`arr.map(f)`,
+`arr.filter(f)`, `arr.reduce(init, f)`, `arr.each(f)`, `arr.find(f)`,
+`arr.any(f)`, `arr.all(f)`, `arr.sort_by(f)`, plus the reductions and slicers
+`first`/`last`/`sum`/`min`/`max`/`take`/`drop`/...). The method spelling needs no
+explicit import: an auto-prelude implicitly resolves `std::list`. These add
+nothing to `candela-vm`.
 
 Designed, not yet implemented: native enums and payload-binding match (2), the
-`Any` type (3), json (4), the fuller map/set primitives (5), `option`/`result`
-(7), and the `arr.map(f)` method spelling of the collection functions (feature 6
-currently ships them as free functions `list::map(arr, f)`). The rest of this
-document is the design each of those follows when it lands.
+`Any` type (3), json (4), the fuller map/set primitives (5), and `option`/
+`result` (7). The rest of this document is the design each of those follows when
+it lands.
 
 ## 1. First-class functions (compile-time function references)
 
@@ -107,11 +110,20 @@ Array operations are methods, per the owner directive:
 ### Chosen minimal delta
 
 The methods are candela source in `libs/std/list.cdl`, written against feature 1
-(each takes a function parameter and calls it). The builtin array-method dispatch
+(each takes a function parameter and calls it). The array-method dispatch
 (`methods.rs` array fall-through) recognizes these names on an array receiver and
 lowers `arr.map(f)` to the library call `list::map(arr, f)`, so the method form
 works without the caller importing the module. The library remains usable
 directly as free functions as well.
+
+The module resolves without an explicit import through an auto-prelude: when the
+top-level file is parsed, `std::list` is loaded as an implicit `list` child
+namespace (resolved through the same `CANDELA_LIB_PATH` / exe-relative `libs/`
+path as a namespaced import). Resolution is best-effort, so an embedding host
+with no `libs/` tree still compiles; array methods there simply fall back to the
+normal unknown-method error. `find` routes to the module only when its argument
+is a function value (the predicate form); `find(value)` stays on the builtin
+index search.
 
 ### Size impact
 

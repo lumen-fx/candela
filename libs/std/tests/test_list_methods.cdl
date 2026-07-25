@@ -1,0 +1,54 @@
+/// Checks the collection higher-order helpers in their method spelling
+/// (`arr.map(f)`, `arr.filter(f)`, ...), which resolve without importing
+/// `std::list`: the array-method auto-prelude routes them to the module. Prints
+/// "list methods ok" on success; a failed check aborts the run.
+import std::assert;
+
+fn double(x) {
+    return x * 2;
+}
+
+fn is_even(x) {
+    return x % 2 == 0;
+}
+
+fn main() {
+    let xs = [1, 2, 3, 4];
+
+    // map/filter/reduce as methods, named and anonymous function arguments
+    assert::assert_eq(xs.map(double), [2, 4, 6, 8]);
+    assert::assert_eq(xs.map(fn(x) { return x * x; }), [1, 4, 9, 16]);
+    assert::assert_eq(xs.filter(is_even), [2, 4]);
+    assert::assert_eq(xs.filter(fn(x) { return x > 2; }), [3, 4]);
+    assert::assert_eq(xs.reduce(0, fn(a, b) { return a + b; }), 10);
+    assert::assert_eq(xs.reduce(1, fn(a, b) { return a * b; }), 24);
+
+    // predicate find/any/all as methods
+    assert::assert_eq(xs.find(is_even), 2);
+    assert::assert_true(xs.any(is_even));
+    assert::assert_false(xs.all(is_even));
+    assert::assert_true([2, 4, 6].all(is_even));
+
+    // sort_by as a method
+    assert::assert_eq([3, 1, 2].sort_by(fn(a, b) { return a < b; }), [1, 2, 3]);
+    assert::assert_eq([1, 2, 3].sort_by(fn(a, b) { return a > b; }), [3, 2, 1]);
+
+    // reductions and slicers as methods
+    assert::assert_eq(xs.first(), 1);
+    assert::assert_eq(xs.last(), 4);
+    assert::assert_eq(xs.sum(), 10);
+    assert::assert_eq(xs.min(), 1);
+    assert::assert_eq(xs.max(), 4);
+    assert::assert_eq(xs.take(2), [1, 2]);
+    assert::assert_eq(xs.drop(2), [3, 4]);
+    assert::assert_false(xs.is_empty());
+
+    // chaining methods together
+    assert::assert_eq(xs.filter(is_even).map(double), [4, 8]);
+
+    // each runs its function for its side effect
+    xs.each(double);
+    assert::assert_eq(xs.map(double), [2, 4, 6, 8]);
+
+    print("list methods ok");
+}
