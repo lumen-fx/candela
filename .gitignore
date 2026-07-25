@@ -8,3 +8,5 @@ docs/benchmarks.py
 *.dylib
 .DS_Store
 /.cargo
+*.so
+*.dll

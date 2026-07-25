@@ -21,15 +21,22 @@ fn main() {print(mylib::my_func(42));}
 ## Importing libraries
 
 Candela libraries are ordinary Candela files.
-The `libs/` folder located next to the Candela executable (currently in `/Library/Candela/` on macOS and `/usr/local/lib/candela/` on Linux) is checked by the `import` keyword if the file isn't found locally, making global Candela libraries possible. For example, the `math`, `time`, `random` libraries are located in `libs/std/`. As such, by placing `.cdl` files in the `libs/` folder, you can make libraries available globally.
+The `libs/` folder located next to the Candela executable (currently in `/Library/Candela/` on macOS and `/usr/local/lib/candela/` on Linux) is checked by the `import` keyword if the file isn't found locally, making global Candela libraries possible. As such, by placing `.cdl` files in the `libs/` folder, you can make libraries available globally.
+
+Set the `CANDELA_LIB_PATH` environment variable to override where this lookup goes: it names the `libs/` directory to search (the one that holds `std/` and, for the C-backed libraries, `std_src/`), which is useful when running from a source checkout rather than an install.
+
+### Standard library
+
+The standard library lives in `libs/std/`. The `math`, `time`, and `random` libraries are backed by a C library loaded across Candela's dynamic-library FFI. The `string`, `list`, `convert`, and `assert` libraries are written in Candela and use no dynamic library, so a program that imports them builds to a `.cdlb` artifact that runs under `candela-vm` with the module bytecode inlined.
+
 ```rs
 import "std/math.cdl";
-import "std/time.cdl";
-import "std/random.cdl";
+import "std/string.cdl";
+import "std/list.cdl";
 
 fn main() {
     print(math::cos(3.14159265359));
-    print(random::random_range(10.0,20.0));
-    print(time::format(time::now(), "%x - %X %p"));
+    print(string::capitalize("hello"));
+    print(list::sum([1, 2, 3, 4]));
 }
 ```

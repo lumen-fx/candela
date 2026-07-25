@@ -1,0 +1,51 @@
+/// Assertions for writing Candela tests.
+///
+/// Each assertion raises a catchable error (via `throw`) when it fails, so a
+/// test file runs its checks in sequence and a failure stops the run with a
+/// message. A test harness, or a `try`/`catch` block, can catch the error to
+/// report which check failed.
+///
+/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
+/// under `candela-vm` with no dynamic library.
+
+/// Raises "assertion failed" when `cond` is false.
+fn assert(cond) {
+    if !cond {
+        throw("assertion failed");
+    }
+}
+
+/// Raises `msg` when `cond` is false.
+fn assert_msg(cond, msg) {
+    if !cond {
+        throw(msg);
+    }
+}
+
+/// Raises when `cond` is false.
+fn assert_true(cond) {
+    if !cond {
+        throw("expected true");
+    }
+}
+
+/// Raises when `cond` is true.
+fn assert_false(cond) {
+    if cond {
+        throw("expected false");
+    }
+}
+
+/// Raises a message showing both sides when `a` and `b` differ.
+fn assert_eq(a, b) {
+    if a != b {
+        throw("assert_eq failed: " + str(a) + " != " + str(b));
+    }
+}
+
+/// Raises a message showing the value when `a` and `b` are equal.
+fn assert_ne(a, b) {
+    if a == b {
+        throw("assert_ne failed: both sides are " + str(a));
+    }
+}

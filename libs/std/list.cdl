@@ -1,0 +1,136 @@
+/// List helpers built on Candela's array operators and built-in methods.
+///
+/// The functions are polymorphic through Candela's compile-time monomorphization:
+/// a single definition specializes to whatever element type the call site uses.
+/// Reductions such as `sum`, `min`, and `max` read their seed from the first
+/// element, so they require a non-empty list.
+///
+/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
+/// under `candela-vm` with no dynamic library.
+
+/// The first element. Requires a non-empty list.
+fn first(arr) {
+    return arr[0];
+}
+
+/// The last element. Requires a non-empty list.
+fn last(arr) {
+    return arr[arr.len() - 1];
+}
+
+/// True when `arr` has no elements.
+fn is_empty(arr) {
+    return arr.len() == 0;
+}
+
+/// The sum of the elements. Requires a non-empty list whose element type
+/// supports `+`.
+fn sum(arr) {
+    let total = arr[0];
+    for i in 1..arr.len() {
+        total = total + arr[i];
+    }
+    return total;
+}
+
+/// The product of the elements. Requires a non-empty list whose element type
+/// supports `*`.
+fn product(arr) {
+    let acc = arr[0];
+    for i in 1..arr.len() {
+        acc = acc * arr[i];
+    }
+    return acc;
+}
+
+/// The smallest element. Requires a non-empty list.
+fn min(arr) {
+    let m = arr[0];
+    for x in arr {
+        if x < m {
+            m = x;
+        }
+    }
+    return m;
+}
+
+/// The largest element. Requires a non-empty list.
+fn max(arr) {
+    let m = arr[0];
+    for x in arr {
+        if x > m {
+            m = x;
+        }
+    }
+    return m;
+}
+
+/// The index of the first element equal to `value`, or -1 if there is none.
+fn index_of(arr, value) {
+    for i in 0..arr.len() {
+        if arr[i] == value {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+/// The number of elements equal to `value`.
+fn count(arr, value) {
+    let n = 0;
+    for x in arr {
+        if x == value {
+            n = n + 1;
+        }
+    }
+    return n;
+}
+
+/// A new list with duplicate elements removed, preserving first-seen order.
+fn unique(arr) {
+    if arr.len() == 0 {
+        return arr;
+    }
+    let out = [arr[0]];
+    for i in 1..arr.len() {
+        if !out.contains(arr[i]) {
+            out.push(arr[i]);
+        }
+    }
+    return out;
+}
+
+/// `arr` broken into consecutive sub-lists of at most `size` elements. The final
+/// chunk is shorter when the length is not a multiple of `size`.
+fn chunk(arr, size) {
+    let out = [];
+    let i = 0;
+    while i < arr.len() {
+        let end = i + size;
+        if end > arr.len() {
+            end = arr.len();
+        }
+        out.push(arr[i..end]);
+        i = i + size;
+    }
+    return out;
+}
+
+/// The first `n` elements (all of them when `n` exceeds the length).
+fn take(arr, n) {
+    let count = n;
+    if count > arr.len() {
+        count = arr.len();
+    }
+    return arr[0..count];
+}
+
+/// Every element except the first `n` (an empty list when `n` exceeds the
+/// length).
+fn drop(arr, n) {
+    let start = n;
+    if start > arr.len() {
+        start = arr.len();
+    }
+    return arr[start..arr.len()];
+}

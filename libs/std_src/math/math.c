@@ -34,3 +34,11 @@ EXPORT double candela_cbrt(double x) { return cbrt(x); }
 EXPORT double candela_hypot(double x, double y) { return hypot(x, y); }
 EXPORT double candela_erf(double x) { return erf(x); }
 EXPORT double candela_erfc(double x) { return erfc(x); }
+EXPORT double candela_sqrt(double x) { return sqrt(x); }
+EXPORT double candela_pow(double x, double y) { return pow(x, y); }
+EXPORT double candela_floor(double x) { return floor(x); }
+EXPORT double candela_ceil(double x) { return ceil(x); }
+EXPORT double candela_round(double x) { return round(x); }
+EXPORT double candela_trunc(double x) { return trunc(x); }
+EXPORT double candela_fmod(double x, double y) { return fmod(x, y); }
+EXPORT double candela_copysign(double x, double y) { return copysign(x, y); }

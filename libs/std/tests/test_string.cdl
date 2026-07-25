@@ -1,0 +1,20 @@
+/// Checks for the `string` module. Run with `candela run`, or build to a `.cdlb`
+/// and run under `candela-vm`. Prints "string ok" on success; a failed check
+/// aborts the run with a message.
+import "../string.cdl" as string;
+import "../assert.cdl" as assert;
+
+fn main() {
+    assert::assert_eq(string::substring("hello world", 6, 5), "world");
+    assert::assert_eq(string::char_at("abc", 1), "b");
+    assert::assert_true(string::is_empty(""));
+    assert::assert_false(string::is_empty("x"));
+    assert::assert_eq(string::capitalize("hello"), "Hello");
+    assert::assert_eq(string::capitalize(""), "");
+    assert::assert_eq(string::lines("a\nb\nc").len(), 3);
+    assert::assert_eq(string::pad_left("7", 3, "0"), "007");
+    assert::assert_eq(string::pad_right("7", 3, "0"), "700");
+    assert::assert_eq(string::count("banana", "a"), 3);
+    assert::assert_eq(string::count("aaaa", "aa"), 2);
+    print("string ok");
+}

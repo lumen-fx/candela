@@ -1,0 +1,19 @@
+/// Checks for the `list` module (reductions and lookups). Run with `candela
+/// run`, or build to a `.cdlb` and run under `candela-vm`. Prints "list ok" on
+/// success; a failed check aborts the run with a message.
+import "../list.cdl" as list;
+import "../assert.cdl" as assert;
+
+fn main() {
+    assert::assert_eq(list::first([10, 20, 30]), 10);
+    assert::assert_eq(list::last([10, 20, 30]), 30);
+    assert::assert_true(list::is_empty([]));
+    assert::assert_eq(list::sum([1, 2, 3, 4]), 10);
+    assert::assert_eq(list::sum([1.5, 2.5]), 4.0);
+    assert::assert_eq(list::product([1, 2, 3, 4]), 24);
+    assert::assert_eq(list::min([3, 1, 2]), 1);
+    assert::assert_eq(list::max([3, 1, 2]), 3);
+    assert::assert_eq(list::index_of([5, 6, 7], 6), 1);
+    assert::assert_eq(list::count([1, 1, 2, 1], 1), 3);
+    print("list ok");
+}

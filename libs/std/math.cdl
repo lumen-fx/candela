@@ -26,6 +26,14 @@ dylib "../std_src/math/math" {
     float candela_hypot(float, float);
     float candela_erf(float);
     float candela_erfc(float);
+    float candela_sqrt(float);
+    float candela_pow(float, float);
+    float candela_floor(float);
+    float candela_ceil(float);
+    float candela_round(float);
+    float candela_trunc(float);
+    float candela_fmod(float, float);
+    float candela_copysign(float, float);
 }
 
 fn acos(x) { return math::candela_acos(x); }
@@ -55,3 +63,18 @@ fn cbrt(x) { return math::candela_cbrt(x); }
 fn hypot(x, y) { return math::candela_hypot(x, y); }
 fn erf(x) { return math::candela_erf(x); }
 fn erfc(x) { return math::candela_erfc(x); }
+fn sqrt(x) { return math::candela_sqrt(x); }
+fn pow(x, y) { return math::candela_pow(x, y); }
+fn floor(x) { return math::candela_floor(x); }
+fn ceil(x) { return math::candela_ceil(x); }
+fn round(x) { return math::candela_round(x); }
+fn trunc(x) { return math::candela_trunc(x); }
+fn fmod(x, y) { return math::candela_fmod(x, y); }
+fn copysign(x, y) { return math::candela_copysign(x, y); }
+
+/// The ratio of a circle's circumference to its diameter.
+fn pi() { return 3.141592653589793; }
+/// The base of the natural logarithm.
+fn e() { return 2.718281828459045; }
+/// The ratio of a circle's circumference to its radius (2 * pi).
+fn tau() { return 6.283185307179586; }

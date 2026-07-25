@@ -1,0 +1,72 @@
+/// String helpers built on Candela's string operators and built-in methods.
+///
+/// This module is pure Candela: it uses only indexing, slicing, concatenation,
+/// and the built-in string methods, so it compiles into a `.cdlb` artifact and
+/// runs under `candela-vm` with no dynamic library.
+
+/// The substring of `s` starting at `start` (0-based) and spanning `count`
+/// characters.
+fn substring(s, start, count) {
+    return s[start..start + count];
+}
+
+/// The character at index `i`, returned as a one-character string.
+fn char_at(s, i) {
+    return s[i..i + 1];
+}
+
+/// True when `s` has no characters.
+fn is_empty(s) {
+    return s.len() == 0;
+}
+
+/// `s` with its first character upper-cased and the rest left unchanged.
+fn capitalize(s) {
+    if s.len() == 0 {
+        return s;
+    }
+    return s[0..1].uppercase() + s[1..s.len()];
+}
+
+/// The lines of `s`, split on newline boundaries.
+fn lines(s) {
+    return s.split("\n");
+}
+
+/// `s` padded on the left with the one-character string `fill` until it is at
+/// least `width` characters wide.
+fn pad_left(s, width, fill) {
+    let out = s;
+    while out.len() < width {
+        out = fill + out;
+    }
+    return out;
+}
+
+/// `s` padded on the right with the one-character string `fill` until it is at
+/// least `width` characters wide.
+fn pad_right(s, width, fill) {
+    let out = s;
+    while out.len() < width {
+        out = out + fill;
+    }
+    return out;
+}
+
+/// The number of non-overlapping occurrences of `needle` in `s`.
+fn count(s, needle) {
+    if needle.len() == 0 {
+        return 0;
+    }
+    let n = 0;
+    let i = 0;
+    while i + needle.len() <= s.len() {
+        if s[i..i + needle.len()] == needle {
+            n = n + 1;
+            i = i + needle.len();
+        } else {
+            i = i + 1;
+        }
+    }
+    return n;
+}

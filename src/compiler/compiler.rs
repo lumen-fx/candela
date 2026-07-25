@@ -3072,6 +3072,14 @@ fn parse_toplevel(
                     .join(path.as_str())
                     .canonicalize()
                     .unwrap_or_else(|_| {
+                        // The file was not found next to the importing file, so
+                        // fall back to the shipped library directory. `CANDELA_LIB_PATH`
+                        // overrides its location (it names the `libs/` dir that holds
+                        // `std/` and `std_src/`); otherwise it is `libs/` beside the
+                        // running executable.
+                        if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
+                            return PathBuf::from(base).join(path.clone());
+                        }
                         std::env::current_exe().map_or_else(
                             |_| {
                                 error_cannot_read_file(span, src_file_idx, sources);

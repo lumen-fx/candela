@@ -1,0 +1,25 @@
+/// Type-conversion helpers with names that read as verbs, wrapping Candela's
+/// built-in `int`, `float`, `str`, and `bool` conversions.
+///
+/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
+/// under `candela-vm` with no dynamic library.
+
+/// Parses a string or truncates a float to an `int`.
+fn to_int(x) {
+    return int(x);
+}
+
+/// Parses a string or widens an `int` to a `float`.
+fn to_float(x) {
+    return float(x);
+}
+
+/// Renders any value as its string form.
+fn to_string(x) {
+    return str(x);
+}
+
+/// Parses the strings "true" and "false" into a `bool`.
+fn to_bool(x) {
+    return bool(x);
+}
