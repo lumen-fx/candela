@@ -235,6 +235,50 @@ payload.
   current behavior for non-enum scrutinees) are retained so existing matches keep
   working.
 
+### Implementation plan (minimal-VM shape)
+
+The landing shape that keeps the `candela-vm` delta smallest reuses the existing
+object pool for storage rather than adding a second heap pool and GC:
+
+- Value: a new NaN tag `NAN_ENUM` on the free all-zero type field
+  (`NAN_ENUM == NAN_BASE`, distinct from every existing tag and from computed
+  float NaNs, whose sign bit is clear). The 48-bit payload packs
+  `enum_type_id` (high 16 bits) and an object-pool index (low 32), exactly like
+  the struct encoding. The pool entry is a `Vec<Data>` whose element 0 is the
+  variant tag (an int) and elements `1..` are the payload, so nullary variants
+  are a one-element `[tag]` vector (uniform allocation first; the inline
+  tag-only optimization for `None`/`Unit` is a follow-up).
+- GC: `array_gc` treats an enum value like a struct -- a root when found in a
+  register, and its non-scalar children are marked -- so no new GC path is added.
+- Instructions: one new construction op, `CloneEnum(template_reg, dest_reg)`,
+  mirroring `CloneStruct` but preserving the enum tag. Payload and tag access
+  reuse `GetFieldStruct`/`SetFieldStruct` (they extract the low-32 object index
+  regardless of the box tag; the `as_struct` debug assert is relaxed to accept an
+  enum value). Construction is `CloneEnum` followed by `SetFieldStruct` writes,
+  matching how structs are built from a compile-time template.
+- Match dispatch lowers to a tag-compare chain: evaluate the scrutinee once, read
+  element 0 as the variant tag, then reuse the existing conditional-jump / `if`
+  machinery to select the arm; each arm prefixes payload bindings that lower to
+  `GetFieldStruct` reads into fresh locals. This delivers payload-binding match
+  without a dedicated match opcode, keeping the VM change to the single
+  `CloneEnum` op.
+- Registry and artifact: an `enums` table (`EnumType { name, variants:
+  [(name, arity)] }`) parallel to `structs`, added to `DataType::Enum(u16)` in
+  the runtime `DataType`, threaded through `execute()` and `Data::format()` (so
+  enum values print as `Variant(payload...)`), and serialized into the `.cdlb`
+  image behind a `FORMAT_VERSION` bump.
+- Compiler front end: an `enum` keyword and declaration, variant construction
+  (`Name::Variant(args)`), and `match` patterns with payload identifiers in the
+  parser; `DataType::Enum` inference, variant/arity resolution, and arm type
+  checking in the type system; declaration registration and the construction /
+  match lowering in the code generator.
+
+Status: not yet landed. This is not blocked on any unresolved design question --
+the plan above is complete -- but it is a single coordinated change across the
+parser, type system, code generator, VM value/GC/instruction set, and the
+`.cdlb` format. It is sequenced as its own green commit after the collection
+methods (feature 6), which shipped first.
+
 ### Size impact
 
 This is the one feature that grows the VM: a new value tag, an enum pool with its
