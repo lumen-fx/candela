@@ -62,6 +62,12 @@ fn list_slices() {
 
 #[cfg(not(feature = "embed"))]
 #[test]
+fn list_higher_order() {
+    assert!(run_std_test("test_list_hof").contains("list hof ok"));
+}
+
+#[cfg(not(feature = "embed"))]
+#[test]
 fn convert_module() {
     assert!(run_std_test("test_convert").contains("convert ok"));
 }
@@ -127,8 +133,11 @@ fn std_inlines_into_cdlb() {
     let src = r#"
 import std::list;
 import std::string;
+fn inc(x) { return x + 1; }
 fn main() {
     print(list::sum([1, 2, 3]));
+    print(list::map([1, 2, 3], inc));
+    print(list::filter([1, 2, 3, 4], fn(x) { return x % 2 == 0; }));
     print(string::capitalize("hi"));
 }
 "#;

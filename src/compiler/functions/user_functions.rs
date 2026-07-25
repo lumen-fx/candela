@@ -3,6 +3,7 @@ use super::super::expr::Span;
 use super::super::registers::get_tgt_ids;
 use super::super::registers::move_to_id;
 use super::super::type_system::DataType;
+use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
 use super::super::type_system::track_returns;
 use crate::compiler::SymbolKind;
@@ -136,11 +137,15 @@ pub fn handle_user_function(
         }
     }
 
-    // Try to check if function has already been compiled for these specific arg types
+    // Try to check if function has already been compiled for these specific arg
+    // types. Function-typed arguments must match by exact Fn id: each distinct
+    // function passed to a higher-order function is a distinct specialization, so
+    // the loose type-compatibility `==` (which treats all Fn as equal) cannot be
+    // used as the specialization key.
     let fn_impl_idx = state.fns[fn_id]
         .impls
         .iter()
-        .position(|fn_impl| *fn_impl.arg_types == infered_arg_types);
+        .position(|fn_impl| arg_types_specialize_equal(&fn_impl.arg_types, &infered_arg_types));
 
     if fn_impl_idx.is_none() {
         // If it hasn't, compile it (which adds it to the function's implementation list)
@@ -328,7 +333,7 @@ fn compile_function(
     if !func
         .return_type_cache
         .iter()
-        .any(|(args, _)| **args == *infered_arg_types)
+        .any(|(args, _)| arg_types_specialize_equal(args, infered_arg_types))
     {
         func.return_type_cache
             .push((Box::from(infered_arg_types), return_type));

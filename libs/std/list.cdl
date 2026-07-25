@@ -134,3 +134,95 @@ fn drop(arr, n) {
     }
     return arr[start..arr.len()];
 }
+
+/// Applies `f` to every element and returns the list of results. `f` takes one
+/// element and returns the mapped value.
+fn map(arr, f) {
+    let out = [];
+    for x in arr {
+        out.push(f(x));
+    }
+    return out;
+}
+
+/// The elements for which the predicate `f` returns true, in order. `f` takes
+/// one element and returns a bool.
+fn filter(arr, f) {
+    let out = [];
+    for x in arr {
+        if f(x) {
+            out.push(x);
+        }
+    }
+    return out;
+}
+
+/// Folds the list into a single value. Starts from `init` and combines it with
+/// each element left to right: `acc = f(acc, x)`.
+fn reduce(arr, init, f) {
+    let acc = init;
+    for x in arr {
+        acc = f(acc, x);
+    }
+    return acc;
+}
+
+/// Calls `f` on every element for its side effect and returns null.
+fn each(arr, f) {
+    for x in arr {
+        f(x);
+    }
+}
+
+/// The first element for which the predicate `f` returns true, or null when none
+/// match. `f` takes one element and returns a bool.
+fn find(arr, f) {
+    for x in arr {
+        if f(x) {
+            return x;
+        }
+    }
+    return null;
+}
+
+/// True when the predicate `f` returns true for at least one element.
+fn any(arr, f) {
+    for x in arr {
+        if f(x) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// True when the predicate `f` returns true for every element (including the
+/// empty list).
+fn all(arr, f) {
+    for x in arr {
+        if !f(x) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A new list sorted so that `less(a, b)` is true when `a` comes before `b`.
+/// A stable insertion sort; `less` is a two-argument predicate returning a bool.
+fn sort_by(arr, less) {
+    let out = [];
+    for x in arr {
+        let i = out.len();
+        out.push(x);
+        while i > 0 {
+            if less(out[i], out[i - 1]) {
+                let tmp = out[i - 1];
+                out[i - 1] = out[i];
+                out[i] = tmp;
+                i = i - 1;
+            } else {
+                i = 0;
+            }
+        }
+    }
+    return out;
+}

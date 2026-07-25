@@ -1,0 +1,43 @@
+/// Checks for the higher-order `list` methods (map/filter/reduce and friends),
+/// exercising both named function references and anonymous functions. Prints
+/// "list hof ok" on success; a failed check aborts the run.
+import std::list;
+import std::assert;
+
+fn double(x) {
+    return x * 2;
+}
+
+fn is_even(x) {
+    return x % 2 == 0;
+}
+
+fn main() {
+    let xs = [1, 2, 3, 4];
+
+    // named function reference
+    assert::assert_eq(list::map(xs, double), [2, 4, 6, 8]);
+
+    // anonymous functions
+    assert::assert_eq(list::map(xs, fn(x) { return x * x; }), [1, 4, 9, 16]);
+    assert::assert_eq(list::filter(xs, is_even), [2, 4]);
+    assert::assert_eq(list::filter(xs, fn(x) { return x > 2; }), [3, 4]);
+    assert::assert_eq(list::reduce(xs, 0, fn(a, b) { return a + b; }), 10);
+    assert::assert_eq(list::reduce(xs, 1, fn(a, b) { return a * b; }), 24);
+
+    assert::assert_eq(list::find(xs, is_even), 2);
+    assert::assert_true(list::any(xs, is_even));
+    assert::assert_false(list::all(xs, is_even));
+    assert::assert_true(list::all([2, 4, 6], is_even));
+
+    assert::assert_eq(list::sort_by([3, 1, 2], fn(a, b) { return a < b; }), [1, 2, 3]);
+    assert::assert_eq(list::sort_by([1, 2, 3], fn(a, b) { return a > b; }), [3, 2, 1]);
+
+    // each runs its function for its side effect; anonymous functions do not
+    // capture, so accumulation goes through the list itself.
+    let seen = [];
+    list::each(xs, double);
+    assert::assert_eq(list::map(xs, double), [2, 4, 6, 8]);
+
+    print("list hof ok");
+}

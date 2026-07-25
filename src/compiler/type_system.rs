@@ -25,8 +25,14 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
+use std::rc::Rc;
 
 pub use crate::rt::DataType;
+
+/// Name prefix for the synthetic top-level function an anonymous function is
+/// hoisted to. `<` is not a legal identifier character, so a hoisted name can
+/// never collide with a user-written function.
+const ANON_FN_PREFIX: &str = "<anon>";
 
 // Tracks which user-defined functions are currently being analysed for their
 // return type. Used to break mutual-recursion cycles in type inference
@@ -181,6 +187,23 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
 #[must_use]
 pub fn struct_field_type_matches(expected: &DataType, received: &DataType) -> bool {
     received == &DataType::Null || expected == received
+}
+
+/// Equality for monomorphization and return-type cache keys.
+///
+/// Identical to the loose type `==` except that function-typed arguments compare
+/// by exact `Fn` id, so each distinct function passed to a higher-order function
+/// keys its own specialization. Function references are always top-level
+/// arguments (a function is passed directly, never nested inside an array or
+/// map), so only the top-level `Fn` case needs the stricter rule.
+#[must_use]
+pub fn arg_types_specialize_equal(a: &[DataType], b: &[DataType]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| match (x, y) {
+            (DataType::Fn(i), DataType::Fn(j)) => i == j,
+            (DataType::Fn(_), _) | (_, DataType::Fn(_)) => false,
+            _ => x == y,
+        })
 }
 
 /// Collect all the function calls in the given code
@@ -535,7 +558,7 @@ fn infer_user_fn_return_type(
     if let Some((_, ret)) = func
         .return_type_cache
         .iter()
-        .find(|(args, _)| **args == *infered_arg_types)
+        .find(|(args, _)| arg_types_specialize_equal(args, &infered_arg_types))
     {
         return ret.clone();
     }
@@ -592,14 +615,22 @@ fn infer_user_fn_return_type(
 impl Expr {
     pub fn infer_type(&self, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> DataType {
         match self {
-            Self::Var(name, span) => v
-                .iter()
-                .rfind(|x| &x.name == name)
-                .unwrap_or_else(|| {
+            Self::Var(name, span) => {
+                if let Some(var) = v.iter().rfind(|x| &x.name == name) {
+                    var.var_type.clone()
+                } else if let Some(fn_id) =
+                    state
+                        .namespace
+                        .find_function(&[], name, *span, ctx.file_idx, state.sources)
+                {
+                    // A bare identifier that names a function is a function
+                    // reference (a compile-time value passed to a higher-order
+                    // function). Its static type is the callee's Fn id.
+                    DataType::Fn(fn_id as u16)
+                } else {
                     error_unknown_variable(name, *span, v, ctx.file_idx, state.sources);
-                })
-                .var_type
-                .clone(),
+                }
+            }
             Self::Float(_) => DataType::Float,
             Self::Int(_) => DataType::Int,
             Self::String(_) => DataType::String,
@@ -787,6 +818,29 @@ impl Expr {
                     "range" => DataType::Array(Some(Box::from(DataType::Int))),
                     "argv" => DataType::Array(Some(Box::from(DataType::String))),
                     function_name => {
+                        // A call to a function-typed parameter (a higher-order
+                        // function calling the function it was handed): resolve
+                        // the concrete callee from the parameter's static Fn type
+                        // and infer that function's return type.
+                        if namespace.len() == 1
+                            && let Some(DataType::Fn(fn_id)) = v
+                                .iter()
+                                .rfind(|var| var.name.as_str() == function_name)
+                                .map(|var| var.var_type.clone())
+                        {
+                            let infered_arg_types = args
+                                .iter()
+                                .map(|x| x.infer_type(v, ctx, state))
+                                .collect::<Vec<DataType>>();
+                            return infer_user_fn_return_type(
+                                fn_id as usize,
+                                infered_arg_types,
+                                function_name,
+                                v,
+                                ctx,
+                                state,
+                            );
+                        }
                         if let Some(lib) = state.dyn_libs.iter().find(|l| l.name == namespace[0])
                             && let Some(FnSignature {
                                 return_type: fn_return_type,
@@ -955,36 +1009,35 @@ impl Expr {
                         }) as u16,
                 )
             }
-            Self::AnonymousFunction(_, _, _) => {
-                todo!("Anonymous functions are WIP")
-                // let fn_name =
-                //     format_args!("{}{}{}", ctx.current_src_file, span.start, span.end).to_smolstr();
-                // if let Some(id) = state
-                //     .fns
-                //     .iter()
-                //     .rposition(|f| f.name == fn_name && &f.args == args)
-                // {
-                //     return DataType::Fn(id as u16);
-                // }
-                // let returns_null = check_if_returns_void(code);
-                // let mut callees = Vec::new();
-                // collect_direct_fn_calls(code, &mut callees);
-                // let id = state.fns.len() as u16;
-                // state.fns.push(Function {
-                //     name: fn_name,
-                //     args: args.clone(),
-                //     code: Rc::from(code.clone()),
-                //     impls: Vec::new(),
-                //     is_recursive: None,
-                //     returns_null,
-                //     src_file: ctx.current_src_file,
-                //     return_type_cache: Vec::new(),
-                //     direct_calls: callees.into_boxed_slice(),
-                //     name_span: *span,
-                // });
-                // state.fn_registers.push(Vec::new());
-                // // state.namespace.fns.push((x.clone(), id));
-                // DataType::Fn(id)
+            Self::AnonymousFunction(args, code, span) => {
+                // An anonymous function is hoisted to a synthetic non-capturing
+                // top-level function and referred to by its Fn id, exactly like a
+                // named function reference. Inference runs many times, so the
+                // hoist is keyed by source span and reused: the first encounter
+                // registers the function, later ones resolve to the same id.
+                let fn_name =
+                    format_args!("{ANON_FN_PREFIX}{}:{}", span.start, span.end).to_smolstr();
+                if let Some(id) = state.fns.iter().rposition(|f| f.name == fn_name) {
+                    return DataType::Fn(id as u16);
+                }
+                let returns_null = check_if_returns_void(code);
+                let mut callees = Vec::new();
+                collect_direct_fn_calls(code, &mut callees);
+                let id = state.fns.len() as u16;
+                state.fns.push(Function {
+                    name: fn_name,
+                    args: args.iter().map(|a| (a.clone(), None)).collect(),
+                    code: Rc::from(code.clone()),
+                    impls: Vec::new(),
+                    is_recursive: None,
+                    returns_null,
+                    src_file: ctx.file_idx,
+                    return_type_cache: Vec::new(),
+                    direct_calls: callees.into_boxed_slice(),
+                    name_span: *span,
+                });
+                state.fn_registers.push(Vec::new());
+                DataType::Fn(id)
             }
             _ => unsafe { unreachable_unchecked() },
         }

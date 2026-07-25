@@ -4068,3 +4068,55 @@ pub fn method_error_duplicate() {
     assert_wellformed(&d, src);
     assert_eq!(d.code, "function_already_defined");
 }
+
+#[test]
+pub fn hof_named_function_reference() {
+    run_and_check_registers!(
+        "
+        fn double(x) { return x * 2; }
+        fn apply(f, n) { return f(n); }
+        fn main() { print(apply(double, 21)); }
+        ",
+        42.into()
+    );
+}
+
+#[test]
+pub fn hof_anonymous_function() {
+    run_and_check_registers!(
+        "
+        fn apply(f, n) { return f(n); }
+        fn main() { print(apply(fn(x) { return x * x; }, 9)); }
+        ",
+        81.into()
+    );
+}
+
+#[test]
+pub fn hof_specialization_is_per_function() {
+    // The same higher-order function called with two different functions must
+    // specialize separately: 20 + 30 = 50 (not 40, which a collapsed
+    // specialization would produce by reusing the first function).
+    run_and_check_registers!(
+        "
+        fn double(x) { return x * 2; }
+        fn triple(x) { return x * 3; }
+        fn apply(f, n) { return f(n); }
+        fn main() { print(apply(double, 10) + apply(triple, 10)); }
+        ",
+        50.into()
+    );
+}
+
+#[test]
+pub fn hof_map_over_array() {
+    run_and_check_registers!(
+        "
+        fn inc(x) { return x + 1; }
+        fn map(arr, f) { let o = []; for x in arr { o.push(f(x)); } return o; }
+        fn sum(arr) { let s = 0; for x in arr { s = s + x; } return s; }
+        fn main() { print(sum(map([1, 2, 3], inc))); }
+        ",
+        9.into()
+    );
+}
