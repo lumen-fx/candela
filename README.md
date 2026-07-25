@@ -87,10 +87,10 @@ Candela source files use the `.cdl` extension.
 Candela ships as two binaries:
 
 - **`candela`** -- the full toolchain: parser + compiler + VM + REPL + the
-  `Engine`/`Program` embedding API. Release size: **~1.37 MiB** (1,439,808 bytes).
-- **`candela-vm`** -- a lean, VM-only runtime that loads and runs pre-compiled
-  bytecode and links no parser, compiler, or REPL. Release size:
-  **~0.71 MiB** (745,768 bytes), comfortably under the 1 MiB target.
+  `Engine`/`Program` embedding API.
+- **`candela-vm`** -- a small, standalone runtime that loads and runs
+  pre-compiled bytecode and carries no parser, compiler, or REPL. Our goal is to
+  keep it under 1 MiB.
 
 This mirrors an AOT model. The full `candela` toolchain (compiler + VM) compiles
 a `.cdl` source to a compact, self-contained `.cdlb` bytecode artifact;
@@ -107,15 +107,32 @@ diagnostics -- the source is embedded in the artifact) identical to running the
 
 A `.cdlb` artifact is a 4-byte magic (`CDLB`), a 1-byte format version, and a
 `postcard`-encoded image of the program's bytecode, constant pools, struct
-table, and sources; a version mismatch is rejected cleanly. (Programs that load
-dynamic C libraries or declare `host` blocks are not captured in a `.cdlb` yet --
-those still run through the full `candela` binary / embedding API.)
+table, and sources; a version mismatch is rejected cleanly.
 
-`candela-vm` is its own self-contained crate: it holds the VM executor,
-bytecode/data types, GC, value marshalling, and the `.cdlb` load/run API, and
-depends on nothing from the compiler crate. The dependency direction is strictly
-`candela -> candela-vm`, so the full `candela` binary compiles that same one VM
-into itself -- the executor is never duplicated between the two binaries.
+A `.cdlb` captures the **whole program**: every imported workspace `.cdl` module
+is linked into the single artifact, so `candela-vm app.cdlb` runs with no source
+tree present.
+
+`dylib` imports are captured **by reference, never by value**: the artifact
+stores only the logical library name, each imported symbol, and its signature --
+never the shared object's bytes. At load, `candela-vm` re-opens the library
+through the OS loader and re-binds the symbols by name. A `dylib` referenced by a
+bare logical name (e.g. `z`, `sqlite3`) is mapped to the per-OS filename
+convention at load time -- `libz.so` on Linux, `libz.dylib` on macOS, `z.dll` on
+Windows -- so the same source builds and runs across platforms; an explicit path
+or filename is honored as given. (The library itself must be present on the
+machine that runs the `.cdlb`, exactly as when running the `.cdl` directly.)
+
+`host` blocks are also captured as recipes (the host function's name and
+signature). Because a `host` function is bound by an embedding runtime, a
+`host`-using `.cdlb` run through the standalone `candela-vm` fails to load with a
+clear error naming the host function it cannot provide; such programs run through
+the embedding `Engine`/`Program` API, which supplies the bindings.
+
+`candela-vm` is the standalone runtime: it holds the VM executor, bytecode/data
+types, GC, value marshalling, and the `.cdlb` load/run API. The full `candela`
+binary runs on that same runtime, so a program behaves identically whether you
+run its source through `candela` or its `.cdlb` through `candela-vm`.
 
 ## Editor support
 

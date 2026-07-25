@@ -209,6 +209,14 @@ impl HostFnSig {
 pub struct DynamicLibFn {
     /// [ return_type, arg_types... ]
     pub types: Box<[DataType]>,
+    /// The library spec exactly as written in the source `dylib "..."` block: a
+    /// bare logical name (`z`, `sqlite3`) or a path. Recorded so a `.cdlb`
+    /// artifact can re-resolve the library by name at load time; it is not read
+    /// on the live call path (the resolved `_lib`/`ptr`/`cif` below are).
+    pub library: SmolStr,
+    /// The C symbol this binding resolves to. Recorded alongside `library` so a
+    /// `.cdlb` can re-bind the symbol at load without the source tree.
+    pub symbol: SmolStr,
     // Keeps the loaded library alive for as long as its function pointers are
     // callable; `pub` so the compiler can construct it, `_`-prefixed because it
     // is never read directly.
@@ -218,6 +226,134 @@ pub struct DynamicLibFn {
     pub ptr: libffi::middle::CodePtr,
     #[cfg(not(target_arch = "wasm32"))]
     pub cif: libffi::middle::Cif,
+}
+
+/// Target operating system for dynamic-library filename resolution.
+///
+/// Kept explicit -- rather than only branching on `cfg!(target_os)` at the call
+/// site -- so the logical-name -> filename mapping ([`resolve_library_filename`])
+/// can be unit-tested for every platform on any build host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetOs {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl TargetOs {
+    /// The OS this runtime was built for. Targets that are none of
+    /// Linux/macOS/Windows fall back to the Linux convention.
+    pub const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::Macos
+    } else if cfg!(target_os = "windows") {
+        Self::Windows
+    } else {
+        Self::Linux
+    };
+
+    /// Dynamic-library filename extension for this OS (no leading dot).
+    #[must_use]
+    pub const fn dynamic_lib_extension(self) -> &'static str {
+        match self {
+            Self::Linux => "so",
+            Self::Macos => "dylib",
+            Self::Windows => "dll",
+        }
+    }
+
+    /// Filename prefix a bare logical name gets on this OS (`lib` on
+    /// Linux/macOS, none on Windows).
+    #[must_use]
+    pub const fn dynamic_lib_prefix(self) -> &'static str {
+        match self {
+            Self::Linux | Self::Macos => "lib",
+            Self::Windows => "",
+        }
+    }
+}
+
+/// Maps a candela `dylib`/`import` library spec to a concrete filename for `os`.
+///
+/// A bare logical name (`m`, `sqlite3`, `z`) -- no path separator and no
+/// extension -- becomes the platform convention: `libm.so` on Linux,
+/// `libm.dylib` on macOS, `m.dll` on Windows. The same candela source therefore
+/// names the right file on every target, and the OS loader searches its standard
+/// library paths for it.
+///
+/// A spec that already carries a path separator or an explicit extension is
+/// treated as an explicit path and honored: an extension is kept as-is; a path
+/// with no extension is completed with the platform extension (and gets no `lib`
+/// prefix). This keeps absolute and workspace-relative library paths working
+/// across all three targets.
+#[must_use]
+pub fn resolve_library_filename(spec: &str, os: TargetOs) -> String {
+    let has_separator = spec.contains('/') || spec.contains('\\');
+    let has_extension = std::path::Path::new(spec).extension().is_some();
+    if has_extension {
+        spec.to_owned()
+    } else if has_separator {
+        format!("{spec}.{}", os.dynamic_lib_extension())
+    } else {
+        format!(
+            "{}{spec}.{}",
+            os.dynamic_lib_prefix(),
+            os.dynamic_lib_extension()
+        )
+    }
+}
+
+#[cfg(test)]
+mod dynlib_tests {
+    use super::TargetOs;
+    use super::resolve_library_filename;
+
+    #[test]
+    fn logical_name_maps_to_each_os_convention() {
+        assert_eq!(resolve_library_filename("m", TargetOs::Linux), "libm.so");
+        assert_eq!(resolve_library_filename("m", TargetOs::Macos), "libm.dylib");
+        assert_eq!(resolve_library_filename("m", TargetOs::Windows), "m.dll");
+
+        assert_eq!(
+            resolve_library_filename("sqlite3", TargetOs::Linux),
+            "libsqlite3.so"
+        );
+        assert_eq!(
+            resolve_library_filename("sqlite3", TargetOs::Macos),
+            "libsqlite3.dylib"
+        );
+        assert_eq!(
+            resolve_library_filename("sqlite3", TargetOs::Windows),
+            "sqlite3.dll"
+        );
+    }
+
+    #[test]
+    fn explicit_extension_is_honored_on_every_os() {
+        for os in [TargetOs::Linux, TargetOs::Macos, TargetOs::Windows] {
+            assert_eq!(resolve_library_filename("libfoo.so.6", os), "libfoo.so.6");
+            assert_eq!(
+                resolve_library_filename("/usr/lib/libz.so", os),
+                "/usr/lib/libz.so"
+            );
+            assert_eq!(resolve_library_filename("plugin.dll", os), "plugin.dll");
+        }
+    }
+
+    #[test]
+    fn path_without_extension_gets_platform_extension_and_no_prefix() {
+        assert_eq!(
+            resolve_library_filename("../std_src/math/math", TargetOs::Linux),
+            "../std_src/math/math.so"
+        );
+        assert_eq!(
+            resolve_library_filename("../std_src/math/math", TargetOs::Macos),
+            "../std_src/math/math.dylib"
+        );
+        assert_eq!(
+            resolve_library_filename("./plugins/foo", TargetOs::Windows),
+            "./plugins/foo.dll"
+        );
+    }
 }
 
 impl DynamicLibFn {

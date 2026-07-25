@@ -10,6 +10,24 @@
 //! sources.
 
 use candela::load_program;
+use std::path::Path;
+use std::path::PathBuf;
+
+/// A unique scratch directory under the system temp dir. `.cdlb` builds resolve
+/// `import "..."` relative to the main file's path, so multi-file tests need
+/// real files on disk.
+fn scratch_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "candela_cdlb_{tag}_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
 
 const STRUCT_PROGRAM: &str = "
 struct Point { x: int, y: int }
@@ -114,4 +132,181 @@ fn unknown_version_is_rejected() {
         load_program(b"CDLB\xff"),
         Err(candela::LoadError::UnsupportedVersion(0xff))
     ));
+}
+
+#[test]
+fn current_format_version_is_two_and_v1_is_rejected() {
+    // The version byte was bumped to 2 when the dyn-lib/host recipe tables were
+    // added. A freshly built artifact must carry version 2.
+    let bytes = candela::build_bytecode("fn main() {}".to_owned(), "v.cdl").expect("compiles");
+    assert_eq!(bytes[4], 2, "current .cdlb format version must be 2");
+
+    // A well-formed magic but the previous version must fail cleanly, not
+    // mis-decode. (Bytes after the header are irrelevant -- the version gate
+    // rejects before decoding the body.)
+    assert!(matches!(
+        load_program(b"CDLB\x01anything"),
+        Err(candela::LoadError::UnsupportedVersion(1))
+    ));
+}
+
+/// A `.cdlb` must embed the WHOLE program: every imported workspace `.cdl`
+/// module is linked into the single artifact, so it runs under the VM-only path
+/// with the entire source tree absent.
+#[test]
+fn multi_file_program_is_captured_whole() {
+    let dir = scratch_dir("multifile");
+    let util = dir.join("util.cdl");
+    let app = dir.join("app.cdl");
+    std::fs::write(&util, "fn double(x) { return x * 2; }\n").unwrap();
+    std::fs::write(
+        &app,
+        "import \"util.cdl\" as util;\n\nfn main() { print(util::double(21)); }\n",
+    )
+    .unwrap();
+
+    // Build with the imported module present; the artifact must fold util.cdl's
+    // bytecode in.
+    let source = std::fs::read_to_string(&app).unwrap();
+    let bytes = candela::build_bytecode(source, app.to_str().unwrap())
+        .expect("multi-file program compiles to a whole-program artifact");
+
+    // Delete BOTH source files: nothing on disk to fall back to.
+    std::fs::remove_file(&app).unwrap();
+    std::fs::remove_file(&util).unwrap();
+
+    // The artifact still loads and runs -- proof the imported module was
+    // captured, not merely referenced.
+    let mut program =
+        load_program(&bytes).expect("whole-program artifact must load with sources absent");
+    program.run();
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A program that `dylib`-imports a ubiquitous system library round-trips
+/// through `.cdlb` and re-resolves the symbol by name at load. Uses zlib's
+/// `zlibVersion()` (a zero-arg `const char*`), guarded so it skips cleanly where
+/// `libz` is not present as a dlopen-able `lib<name>` file.
+#[test]
+fn dyn_lib_program_round_trips_and_rebinds() {
+    // Match how the loader resolves a bare logical name on this OS, and only run
+    // when that file is actually openable here.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let openable = unsafe { libloading::Library::new("libz.so") }.is_ok()
+            || unsafe { libloading::Library::new("libz.dylib") }.is_ok()
+            || unsafe { libloading::Library::new("z.dll") }.is_ok();
+        if !openable {
+            eprintln!(
+                "skipping dyn_lib_program_round_trips_and_rebinds: libz not dlopen-able here"
+            );
+            return;
+        }
+
+        let src =
+            "dylib \"z\" { string zlibVersion(); }\n\nfn main() { print(z::zlibVersion()); }\n";
+        let bytes = candela::build_bytecode(src.to_owned(), "zt.cdl")
+            .expect("dyn-lib program must now build to a .cdlb artifact");
+
+        // The artifact stores only the recipe (name `z`, symbol `zlibVersion`,
+        // signature) -- never the shared object's bytes.
+        assert!(
+            !contains_subslice(&bytes, b"\x7fELF"),
+            "artifact must not embed the shared object's ELF bytes"
+        );
+
+        // Load re-opens libz through the OS loader and rebuilds the libffi CIF,
+        // then runs to completion (prints the zlib version).
+        let mut program = load_program(&bytes).expect("dyn-lib artifact must re-resolve and load");
+        program.run();
+    }
+}
+
+/// Scans for a byte subsequence (used to assert the .so bytes are NOT embedded).
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// A `host` block program now BUILDS to a `.cdlb` (the recipe is captured), but
+/// the standalone runtime has no embedder to bind the host fn to, so loading it
+/// must fail with a clear error that names the missing function.
+#[test]
+fn host_block_program_builds_but_load_names_missing_host_fn() {
+    let src = "host \"app\" { int rows(string); }\n\nfn main() { print(\"start\"); }\n";
+    let bytes = candela::build_bytecode(src.to_owned(), "h.cdl")
+        .expect("host-block program must now build to a .cdlb artifact");
+
+    match load_program(&bytes) {
+        Err(candela::LoadError::MissingHostFn(name)) => {
+            assert_eq!(name, "app::rows", "the missing host fn must be named");
+        }
+        Err(e) => panic!("expected MissingHostFn, got: {e}"),
+        Ok(_) => panic!("standalone load must not silently succeed for a host-block artifact"),
+    }
+}
+
+/// Full CLI round-trip: compile source with `candela`, run the `.cdlb` with the
+/// VM-only `candela-vm` with the source tree removed, and require byte-identical
+/// stdout to running the source directly. Skips if the `candela-vm` binary is
+/// not built alongside `candela` (e.g. a plain `cargo test` that did not build
+/// the vm package).
+#[test]
+fn cli_whole_program_output_matches_source_run() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping cli_whole_program_output_matches_source_run: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("cli");
+    let util = dir.join("util.cdl");
+    let app = dir.join("app.cdl");
+    std::fs::write(&util, "fn triple(x) { return x * 3; }\n").unwrap();
+    std::fs::write(
+        &app,
+        "import \"util.cdl\" as util;\n\nfn main() { print(util::triple(14)); print(\"done\"); }\n",
+    )
+    .unwrap();
+
+    // Reference output: run the source directly.
+    let src_out = std::process::Command::new(candela)
+        .arg(&app)
+        .output()
+        .expect("run source via candela");
+    assert!(src_out.status.success(), "candela source run failed");
+
+    // Build the artifact, then delete the whole source tree.
+    let cdlb = dir.join("app.cdlb");
+    let build = std::process::Command::new(candela)
+        .arg("build")
+        .arg(&app)
+        .arg("-o")
+        .arg(&cdlb)
+        .output()
+        .expect("candela build");
+    assert!(build.status.success(), "candela build failed");
+    std::fs::remove_file(&app).unwrap();
+    std::fs::remove_file(&util).unwrap();
+
+    // Run the artifact with the VM-only binary and require identical stdout.
+    let vm_out = std::process::Command::new(&candela_vm)
+        .arg(&cdlb)
+        .output()
+        .expect("run .cdlb via candela-vm");
+    assert!(vm_out.status.success(), "candela-vm run failed");
+    assert_eq!(
+        vm_out.stdout, src_out.stdout,
+        "candela-vm output must match the source run byte-for-byte"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }

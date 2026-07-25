@@ -21,6 +21,8 @@ use crate::errors::RED;
 use crate::errors::RESET;
 use crate::instr::LibFunc;
 use crate::parser;
+use crate::rt::TargetOs;
+use crate::rt::resolve_library_filename;
 use crate::vm::Pool;
 use crate::{data::Data, instr::Instr};
 use compiler_data::Ctx;
@@ -2781,13 +2783,6 @@ impl Expr {
     }
 }
 
-#[cfg(target_os = "macos")]
-const DYLIB_EXT: &str = "dylib";
-#[cfg(target_os = "linux")]
-const DYLIB_EXT: &str = "so";
-#[cfg(target_os = "windows")]
-const DYLIB_EXT: &str = "dll";
-
 #[cfg(target_arch = "aarch64")]
 const ARCH_SUFFIX: &str = "-aarch64";
 #[cfg(target_arch = "x86_64")]
@@ -2904,6 +2899,9 @@ fn parse_toplevel(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
+        // Library spec exactly as written in the source (logical name or path),
+        // carried to the artifact recipe so a `.cdlb` re-resolves it by name.
+        SmolStr,
         Span,
     )>,
     pending_host: &mut Vec<(
@@ -2980,35 +2978,62 @@ fn parse_toplevel(
         match import {
             #[cfg(not(target_arch = "wasm32"))]
             Expr::ImportDylib(path, fn_signatures, span) => {
-                let base_path = if Path::new(path.as_str()).is_relative() {
-                    file_path
-                        .parent()
-                        .unwrap_or_else(|| Path::new("."))
-                        .join(path.as_str())
-                        .to_string_lossy()
-                        .to_smolstr()
+                // The spec exactly as written; recorded in the artifact recipe so
+                // a `.cdlb` re-resolves the library by name (per-OS) at load.
+                let spec = path.clone();
+                // A bare logical name (no path separator, not absolute, no
+                // extension -- e.g. `z`, `sqlite3`) names a system library the
+                // OS loader searches for. Anything with a separator or extension
+                // is an explicit path resolved relative to the importing file.
+                let is_logical = !spec.contains('/')
+                    && !spec.contains('\\')
+                    && !Path::new(spec.as_str()).is_absolute()
+                    && Path::new(spec.as_str()).extension().is_none();
+
+                let (open_target, dylib_name): (SmolStr, SmolStr) = if is_logical {
+                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`; passed bare
+                    // so dlopen/LoadLibrary searches the standard library paths.
+                    (
+                        resolve_library_filename(spec.as_str(), TargetOs::CURRENT).into(),
+                        spec.clone(),
+                    )
                 } else {
-                    path.clone()
-                };
-                let dylib_name = std::path::PathBuf::from(base_path.as_str())
-                    .file_prefix()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(base_path.as_str())
-                    .to_smolstr();
-                // If the extension is omitted, the extension is chosen based on the target OS.
-                // An architecture-specific suffix is also tried before the extension
-                let path = if Path::new(base_path.as_str()).extension().is_none() {
-                    let arch_path = format!("{base_path}{ARCH_SUFFIX}.{DYLIB_EXT}");
-                    if Path::new(&arch_path).exists() {
-                        SmolStr::from(arch_path)
+                    let base_path = if Path::new(spec.as_str()).is_relative() {
+                        file_path
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .join(spec.as_str())
+                            .to_string_lossy()
+                            .to_smolstr()
                     } else {
-                        format_args!("{base_path}.{DYLIB_EXT}").to_smolstr()
-                    }
-                } else {
-                    base_path
+                        spec.clone()
+                    };
+                    let dylib_name = PathBuf::from(base_path.as_str())
+                        .file_prefix()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(base_path.as_str())
+                        .to_smolstr();
+                    // When the extension is omitted, prefer an arch-specific
+                    // build if one is present next to the base path, else fall
+                    // back to the per-OS filename convention.
+                    let resolved = if Path::new(base_path.as_str()).extension().is_none() {
+                        let arch_path = format!(
+                            "{base_path}{ARCH_SUFFIX}.{}",
+                            TargetOs::CURRENT.dynamic_lib_extension()
+                        );
+                        if Path::new(&arch_path).exists() {
+                            SmolStr::from(arch_path)
+                        } else {
+                            resolve_library_filename(base_path.as_str(), TargetOs::CURRENT).into()
+                        }
+                    } else {
+                        base_path
+                    };
+                    (resolved, dylib_name)
                 };
+
                 let lib = Rc::new(unsafe {
-                    libloading::Library::new(path.as_str()).unwrap_or_else(|_| {
+                    libloading::Library::new(open_target.as_str()).unwrap_or_else(|_| {
                         error_cannot_load_dynlib(span, src_file_idx, sources);
                     })
                 });
@@ -3017,6 +3042,7 @@ fn parse_toplevel(
                     dynamic_libs.len() as u16,
                     fn_signatures,
                     lib,
+                    spec,
                     span,
                 ));
                 dynamic_libs.push(Dynamiclib {
@@ -3132,6 +3158,9 @@ fn resolve_types(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
+        // Library spec exactly as written in the source (logical name or path),
+        // carried to the artifact recipe so a `.cdlb` re-resolves it by name.
+        SmolStr,
         Span,
     )>,
     pending_host: Vec<(
@@ -3175,7 +3204,7 @@ fn resolve_types(
         fns[fn_id as usize].args = resolved_args;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    for (src_file_idx, dynlib_id, fn_signatures, lib, span) in pending_dylibs {
+    for (src_file_idx, dynlib_id, fn_signatures, lib, library_spec, span) in pending_dylibs {
         let namespace = &file_namespaces[&src_file_idx];
         let fns = fn_signatures
             .iter()
@@ -3218,6 +3247,8 @@ fn resolve_types(
 
                 dynamic_libs_fns.push(DynamicLibFn {
                     types: Box::from(types),
+                    library: library_spec.clone(),
+                    symbol: fn_name.clone(),
                     _lib: Rc::clone(&lib),
                     ptr,
                     cif,
@@ -3358,6 +3389,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
+        SmolStr,
         Span,
     )> = Vec::new();
     let mut pending_host: Vec<(

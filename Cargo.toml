@@ -88,6 +88,11 @@ mimalloc = { version = "0.1.52", optional = true }
 wasm-bindgen = "*"
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
+# Integration tests probe dyn-lib availability through the same OS loader the
+# runtime uses, so they can skip cleanly when a system library is absent.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+libloading = "0.9.0"
+
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 

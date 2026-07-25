@@ -7,6 +7,8 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::compile;
+use candela_vm::artifact::DynLibFnImage;
+use candela_vm::artifact::HostFnImage;
 use candela_vm::artifact::InstrSrcImage;
 use candela_vm::artifact::ProgramImage;
 use candela_vm::artifact::SourceImage;
@@ -15,30 +17,51 @@ use candela_vm::artifact::serialize_image;
 
 /// Compiles a `.cdl` source string to a `.cdlb` bytecode artifact.
 ///
+/// The artifact captures the WHOLE program -- every imported workspace `.cdl`
+/// module is linked into the single serialized image, so the resulting `.cdlb`
+/// runs under `candela-vm` with no source tree present. Dynamic-library `import`s
+/// and `host` blocks are captured as recipes (logical name + symbol +
+/// signature) that the VM re-binds by name at load time, never as embedded
+/// binary bytes.
+///
 /// # Errors
 ///
-/// Returns an error string if the program uses features that cannot be captured
-/// in a standalone artifact yet (dynamic C-library `import`s or `host` blocks),
-/// or if serialization fails.
+/// Returns an error string if serialization fails.
 pub fn build_bytecode(source: String, filename: &str) -> Result<Vec<u8>, String> {
     let out = compile(source, filename, false);
-    let image = image_from_output(out)?;
+    let image = image_from_output(out);
     serialize_image(&image)
 }
 
-fn image_from_output(out: CompileOutput) -> Result<ProgramImage, String> {
-    if !out.dyn_lib_fns.is_empty() {
-        return Err(String::from(
-            "dynamic C-library imports (`import \"lib.so\"`) are not yet supported in .cdlb artifacts",
-        ));
-    }
-    if !out.host_fns.is_empty() {
-        return Err(String::from(
-            "`host` blocks require an embedding Engine and cannot be captured in a .cdlb artifact",
-        ));
-    }
+fn image_from_output(out: CompileOutput) -> ProgramImage {
+    // Dynamic-library bindings become referenced-by-name recipes: the logical
+    // library name, the symbol, and the marshalling signature -- never the
+    // shared object's bytes. The VM re-opens the library and rebuilds the libffi
+    // CIF from these at load time.
+    let dyn_lib_fns = out
+        .dyn_lib_fns
+        .iter()
+        .map(|d| DynLibFnImage {
+            library: d.library.to_string(),
+            symbol: d.symbol.to_string(),
+            types: d.types.to_vec(),
+        })
+        .collect();
+    // `host` functions are captured as name + signature so an embedding runtime
+    // can re-bind them; standalone `candela-vm` reports a clear error naming the
+    // function it cannot provide.
+    let host_fns = out
+        .host_fns
+        .iter()
+        .map(|h| HostFnImage {
+            namespace: h.namespace.to_string(),
+            name: h.name.to_string(),
+            types: h.types.to_vec(),
+            variadic: h.variadic,
+        })
+        .collect();
 
-    Ok(ProgramImage {
+    ProgramImage {
         instructions: out.instructions,
         registers: out.registers.iter().map(|d| d.0).collect(),
         objs: out
@@ -90,5 +113,7 @@ fn image_from_output(out: CompileOutput) -> Result<ProgramImage, String> {
             .collect(),
         allocated_arg_count: out.allocated_arg_count as u64,
         allocated_call_depth: out.allocated_call_depth as u64,
-    })
+        dyn_lib_fns,
+        host_fns,
+    }
 }
