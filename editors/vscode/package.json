@@ -1,0 +1,61 @@
+{
+  "name": "candela",
+  "displayName": "Candela",
+  "description": "Syntax highlighting, language configuration, and snippets for the Candela language (.cdl), the Lumen framework's scripting language.",
+  "version": "0.1.0",
+  "publisher": "lumen-fx",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "candela",
+    "cdl",
+    "lumen",
+    "keel"
+  ],
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lumen-fx/candela"
+  },
+  "bugs": {
+    "url": "https://github.com/lumen-fx/candela/issues"
+  },
+  "homepage": "https://github.com/lumen-fx/candela",
+  "contributes": {
+    "languages": [
+      {
+        "id": "candela",
+        "aliases": [
+          "Candela",
+          "candela"
+        ],
+        "extensions": [
+          ".cdl"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "candela",
+        "scopeName": "source.candela",
+        "path": "./syntaxes/candela.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "candela",
+        "path": "./snippets/candela.json"
+      }
+    ]
+  }
+}

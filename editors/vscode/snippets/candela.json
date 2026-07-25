@@ -1,0 +1,138 @@
+{
+  "Main function": {
+    "prefix": "main",
+    "body": [
+      "fn main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Program entry point"
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:args}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function definition"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:int},",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "Let binding": {
+    "prefix": "let",
+    "body": [
+      "let ${1:name} = ${0:value};"
+    ],
+    "description": "Variable binding"
+  },
+  "If / else": {
+    "prefix": "ifelse",
+    "body": [
+      "if ${1:condition} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If / else block"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If block"
+  },
+  "For range loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i} in ${2:0}..${3:n} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For range loop"
+  },
+  "For each loop": {
+    "prefix": "forin",
+    "body": [
+      "for ${1:item} in ${2:collection} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For each loop over a collection"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "Loop": {
+    "prefix": "loop",
+    "body": [
+      "loop {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Indefinite loop"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value} {",
+      "\t${2:pattern} => {",
+      "\t\t$3",
+      "\t}",
+      "\t_ => {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Match statement"
+  },
+  "Host block": {
+    "prefix": "host",
+    "body": [
+      "host \"${1:namespace}\" {",
+      "\t${2:int} ${3:func_name}(${4:int});",
+      "}"
+    ],
+    "description": "Host function block"
+  },
+  "Dylib block": {
+    "prefix": "dylib",
+    "body": [
+      "dylib \"${1:path}\" {",
+      "\t${2:int} ${3:func_name}(${4:int});",
+      "}"
+    ],
+    "description": "Dynamic library import block"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": [
+      "import \"${1:path.cdl}\"${2: as ${3:alias}};"
+    ],
+    "description": "Import another Candela file"
+  },
+  "Print": {
+    "prefix": "print",
+    "body": [
+      "print($0);"
+    ],
+    "description": "Print to stdout"
+  }
+}
