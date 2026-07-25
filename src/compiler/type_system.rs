@@ -524,6 +524,8 @@ fn track_return_flow(
                     DataType::Array(inner) => inner.map_or(DataType::Unknown, |t| *t),
                     DataType::String => DataType::String,
                     DataType::Unknown => DataType::Unknown,
+                    // A map iterates its keys.
+                    DataType::Map(m) => m.0.map_or(DataType::Unknown, |t| t),
                     _ => unsafe { unreachable_unchecked() },
                 };
                 let v_len = v.len();
@@ -732,10 +734,9 @@ impl Expr {
             }),
             Self::Map(kv_pairs, _) => {
                 if kv_pairs.is_empty() {
-                    DataType::Map(Box::from((
-                        Some(DataType::Unknown),
-                        Some(DataType::Unknown),
-                    )))
+                    // An empty map literal has no key/value types yet, like an
+                    // empty array (`Array(None)`); `insert` fills them in.
+                    DataType::Map(Box::from((None, None)))
                 } else {
                     let kv_type = kv_pairs
                         .iter()
@@ -903,12 +904,20 @@ impl Expr {
                 }
                 match namespace.last().unwrap().as_str() {
                     "print" | "write" | "append" | "delete" | "delete_dir" => DataType::Null,
-                    "type" | "str" | "input" | "read" => DataType::String,
-                    "float" => DataType::Float,
-                    "int" | "the_answer" => DataType::Int,
-                    "bool" | "exists" => DataType::Bool,
+                    "type" | "str" | "input" | "read" | "json_stringify" | "as_str" => {
+                        DataType::String
+                    }
+                    "float" | "as_float" => DataType::Float,
+                    "int" | "the_answer" | "as_int" => DataType::Int,
+                    "bool" | "exists" | "as_bool" | "is_int" | "is_float" | "is_str"
+                    | "is_bool" | "is_list" | "is_map" | "is_null" => DataType::Bool,
                     "range" => DataType::Array(Some(Box::from(DataType::Int))),
                     "argv" => DataType::Array(Some(Box::from(DataType::String))),
+                    // A downcast to a collection yields an element/entry type of
+                    // `any` (Unknown); json::parse yields a fully dynamic value.
+                    "as_list" => DataType::Array(None),
+                    "as_map" => DataType::Map(Box::from((None, None))),
+                    "json_parse" => DataType::Unknown,
                     function_name => {
                         // A call to a function-typed parameter (a higher-order
                         // function calling the function it was handed): resolve
@@ -1106,6 +1115,22 @@ impl Expr {
                         let obj_type = obj.infer_type(v, ctx, state);
                         if let DataType::Map(m) = obj_type {
                             m.1.unwrap_or(DataType::Unknown)
+                        } else {
+                            unsafe { unreachable_unchecked() }
+                        }
+                    }
+                    "keys" => {
+                        let obj_type = obj.infer_type(v, ctx, state);
+                        if let DataType::Map(m) = obj_type {
+                            DataType::Array(m.0.map(Box::new))
+                        } else {
+                            unsafe { unreachable_unchecked() }
+                        }
+                    }
+                    "values" => {
+                        let obj_type = obj.infer_type(v, ctx, state);
+                        if let DataType::Map(m) = obj_type {
+                            DataType::Array(m.1.map(Box::new))
                         } else {
                             unsafe { unreachable_unchecked() }
                         }

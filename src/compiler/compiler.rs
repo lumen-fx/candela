@@ -2037,9 +2037,17 @@ fn compile_for_loop(
 
     // parse the array, get its id (the target array is the first Expr in array_code)
     let array_type = array.infer_type(v, ctx, state);
-    let array = array
+    let mut array = array
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
+
+    // Iterating a map walks its keys: materialize the key array and iterate that
+    // with the ordinary array machinery. The loop variable binds each key.
+    if matches!(array_type, DataType::Map(_)) {
+        let keys_reg = state.alloc_reg();
+        output.push(Instr::CallLibFunc(LibFunc::Keys, array, keys_reg));
+        array = keys_reg;
+    }
 
     let array_len_id = state.alloc_reg();
 
@@ -2074,6 +2082,8 @@ fn compile_for_loop(
             var_type: match array_type {
                 DataType::String => DataType::String,
                 DataType::Array(a_type) => a_type.map_or(DataType::Null, |t| *t),
+                // A map iterates its keys; the loop variable is a key.
+                DataType::Map(m) => m.0.map_or(DataType::Unknown, |t| t),
                 t => {
                     error_type_not_indexable(&t, span, true, ctx.file_idx, state.sources);
                 }

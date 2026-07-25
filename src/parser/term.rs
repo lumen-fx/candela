@@ -303,6 +303,11 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         Token::LBrace => {
             let mut kv_pairs: Vec<(Expr, Span, Expr, Span)> = Vec::with_capacity(2);
             let end: u32;
+            // Empty map literal `{}`: no key-value pairs.
+            if parser.peek_token() == Token::RBrace {
+                end = parser.next_token().1.end;
+                return Expr::Map(Box::from(kv_pairs), (t_span.start, end).into());
+            }
             loop {
                 let key_start = parser.peek_token_span().start;
                 let key = parse_term(parser, allow_struct);

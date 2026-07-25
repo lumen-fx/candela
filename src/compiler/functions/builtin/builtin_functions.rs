@@ -225,6 +225,62 @@ pub fn builtin_functions(
             output.push(Instr::Halt(halt_code));
             None
         }
+        // Runtime type tests and checked downcasts on an `any` value. `is_*`
+        // returns a bool; `as_*` returns the value typed concretely (the type
+        // checker assigns the target type) and raises a catchable error when the
+        // runtime type differs. `json_parse`/`json_stringify` back `std::json`.
+        "is_int" | "is_float" | "is_str" | "is_bool" | "is_list" | "is_map" | "is_null"
+        | "as_int" | "as_float" | "as_str" | "as_bool" | "as_list" | "as_map"
+        | "json_stringify" => {
+            check_args(args, 1, name, span, state.sources, ctx.file_idx);
+            let (libfunc, throws) = match name {
+                "is_int" => (LibFunc::IsIntVal, false),
+                "is_float" => (LibFunc::IsFloatVal, false),
+                "is_str" => (LibFunc::IsStrVal, false),
+                "is_bool" => (LibFunc::IsBoolVal, false),
+                "is_list" => (LibFunc::IsListVal, false),
+                "is_map" => (LibFunc::IsMapVal, false),
+                "is_null" => (LibFunc::IsNullVal, false),
+                "as_int" => (LibFunc::AsIntVal, true),
+                "as_float" => (LibFunc::AsFloatVal, true),
+                "as_str" => (LibFunc::AsStrVal, true),
+                "as_bool" => (LibFunc::AsBoolVal, true),
+                "as_list" => (LibFunc::AsListVal, true),
+                "as_map" => (LibFunc::AsMapVal, true),
+                _ => (LibFunc::JsonStringify, false),
+            };
+            let id = args[0]
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id();
+            state.free_reg(id, v);
+            let output_id = state.alloc_reg_tgt(tgt_id);
+            output.push(Instr::CallLibFunc(libfunc, id, output_id));
+            if throws {
+                state.add_to_src(ctx, output, span);
+            }
+            Some(output_id)
+        }
+        "json_parse" => {
+            check_args(args, 1, name, span, state.sources, ctx.file_idx);
+            check_arg_type(
+                name,
+                v,
+                ctx,
+                state,
+                args,
+                args_indexes,
+                0,
+                &[DataType::String],
+            );
+            let id = args[0]
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id();
+            state.free_reg(id, v);
+            let output_id = state.alloc_reg_tgt(tgt_id);
+            output.push(Instr::CallLibFunc(LibFunc::JsonParse, id, output_id));
+            state.add_to_src(ctx, output, span);
+            Some(output_id)
+        }
         "throw" => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             check_arg_type(

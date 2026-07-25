@@ -133,8 +133,12 @@ pub fn builtin_methods(
         }
         "len" => {
             check!(
-                DataType::Array(_) | DataType::String,
-                &[DataType::String, DataType::Array(None)],
+                DataType::Array(_) | DataType::String | DataType::Map(_),
+                &[
+                    DataType::String,
+                    DataType::Array(None),
+                    DataType::Map(Box::from((None, None)))
+                ],
                 name,
                 0
             );
@@ -142,10 +146,36 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFunc(LibFunc::Len, id, output_id));
             Some(output_id)
         }
+        "keys" => {
+            check!(
+                DataType::Map(_),
+                &[DataType::Map(Box::from((None, None)))],
+                name,
+                0
+            );
+            let output_id = state.alloc_reg_tgt(tgt_id);
+            output.push(Instr::CallLibFunc(LibFunc::Keys, id, output_id));
+            Some(output_id)
+        }
+        "values" => {
+            check!(
+                DataType::Map(_),
+                &[DataType::Map(Box::from((None, None)))],
+                name,
+                0
+            );
+            let output_id = state.alloc_reg_tgt(tgt_id);
+            output.push(Instr::CallLibFunc(LibFunc::Values, id, output_id));
+            Some(output_id)
+        }
         "contains" => {
             check!(
-                DataType::Array(_) | DataType::String,
-                &[DataType::String, DataType::Array(None)],
+                DataType::Array(_) | DataType::String | DataType::Map(_),
+                &[
+                    DataType::String,
+                    DataType::Array(None),
+                    DataType::Map(Box::from((None, None)))
+                ],
                 name,
                 1
             );
@@ -161,6 +191,11 @@ pub fn builtin_methods(
                     0,
                     &[DataType::String],
                 );
+            } else if let DataType::Map(m) = &obj_type
+                && let Some(key_type) = &m.0
+            {
+                let key_type = key_type.clone();
+                check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[key_type]);
             }
 
             add_args!();
@@ -505,12 +540,26 @@ pub fn builtin_methods(
                 name,
                 2
             );
-            if let DataType::Map(m) = obj_type {
-                if let Some(t) = m.0 {
+            if let DataType::Map(m) = &obj_type {
+                if let Some(t) = &m.0 {
+                    let t = t.clone();
                     check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[t]);
                 }
-                if let Some(t) = m.1 {
+                if let Some(t) = &m.1 {
+                    let t = t.clone();
                     check_arg_type(name, v, ctx, state, args, args_indexes, 1, &[t]);
+                }
+            }
+            // An untyped empty map (`{}`) takes its key/value types from the
+            // first insert, mirroring how an empty array upgrades on `push`, so
+            // later `get`/iteration see concrete types instead of `any`.
+            if obj_type == DataType::Map(Box::from((None, None)))
+                && let Expr::Var(var_name, _) = obj
+            {
+                let key_type = args[0].infer_type(v, ctx, state);
+                let val_type = args[1].infer_type(v, ctx, state);
+                if let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name) {
+                    var.var_type = DataType::Map(Box::from((Some(key_type), Some(val_type))));
                 }
             }
             let key_id = args[0]
