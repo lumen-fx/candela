@@ -1,0 +1,23 @@
+/// json parse and stringify.
+///
+/// `parse` turns a json string into candela values: an object becomes a map
+/// keyed by strings, an array becomes a list, and a scalar becomes an int,
+/// float, string, bool, or null. The result is typed `any`, so read a field
+/// back with a downcast (`as_int`, `as_str`, `as_map`, `as_list`, ...) or a
+/// type test (`is_int`, `is_map`, ...). A malformed string raises a catchable
+/// error.
+///
+/// `stringify` serializes any candela value back to a json string.
+///
+/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
+/// under `candela-vm` with no dynamic library.
+
+/// Parses a json string into a value (typed `any`).
+fn parse(text) {
+    return json_parse(text);
+}
+
+/// Serializes a value to a json string.
+fn stringify(value) {
+    return json_stringify(value);
+}

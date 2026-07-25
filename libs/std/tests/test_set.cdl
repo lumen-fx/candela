@@ -1,0 +1,52 @@
+/// Checks for the `set` module. Prints "set ok" on success; a failed check
+/// aborts the run with a message.
+import std::set;
+import std::assert;
+
+fn main() {
+    let s = set::new();
+    assert::assert_true(set::is_empty(s));
+
+    set::add(s, 1);
+    set::add(s, 2);
+    set::add(s, 2); // duplicate, no effect
+    set::add(s, 3);
+    assert::assert_eq(set::len(s), 3);
+    assert::assert_false(set::is_empty(s));
+
+    assert::assert_true(set::contains(s, 2));
+    assert::assert_false(set::contains(s, 9));
+    assert::assert_eq(set::members(s).len(), 3);
+
+    // Set algebra.
+    let a = set::new();
+    set::add(a, 1);
+    set::add(a, 2);
+    set::add(a, 3);
+    let b = set::new();
+    set::add(b, 2);
+    set::add(b, 3);
+    set::add(b, 4);
+
+    assert::assert_eq(set::len(set::union(a, b)), 4);
+    assert::assert_eq(set::len(set::intersection(a, b)), 2);
+    assert::assert_eq(set::len(set::difference(a, b)), 1);
+
+    let inter = set::intersection(a, b);
+    assert::assert_true(set::contains(inter, 2));
+    assert::assert_true(set::contains(inter, 3));
+    assert::assert_false(set::contains(inter, 1));
+
+    let diff = set::difference(a, b);
+    assert::assert_true(set::contains(diff, 1));
+    assert::assert_false(set::contains(diff, 2));
+
+    // String members.
+    let words = set::new();
+    set::add(words, "hi");
+    set::add(words, "hi");
+    set::add(words, "bye");
+    assert::assert_eq(set::len(words), 2);
+
+    print("set ok");
+}

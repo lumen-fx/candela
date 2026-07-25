@@ -39,10 +39,21 @@ tagged union; `Name::Variant(args)` and bare `Some(x)`/`None` construct values;
 (`option::unwrap(o)`) or methods (`o.unwrap()`). A payload typed `any` holds a
 value of any type. These inline into a `.cdlb` and run under `candela-vm`.
 
-Designed, not yet implemented: the `Any` type as a full feature (3, only the
-`any`-as-payload subset is used by option/result), json (4), and the fuller
-map/set primitives (5). The rest of this document is the design each of those
-follows when it lands.
+Implemented: the full `any` dynamic type (3), json (4), and the fuller map/set
+primitives (5). The language expansion is complete.
+
+`any` is the type checker's top type, realized over the existing self-describing
+runtime value: type tests (`is_int`/`is_float`/`is_str`/`is_bool`/`is_list`/
+`is_map`/`is_null`) and checked downcasts (`as_int`/`as_float`/`as_str`/
+`as_bool`/`as_list`/`as_map`) turn a value pulled from json or an enum payload
+back into a concrete type. Arithmetic on an `any` value is expressed by
+downcasting first (`as_int(v) * 2`); the downcast gives the compiler the concrete
+type it needs to pick the op, closing the ergonomics gap the enum pass left.
+`json_parse`/`json_stringify` are native runtime functions wrapped by `std::json`
+(`parse`/`stringify`). Maps gained an empty literal (`{}`), `len`, `keys`,
+`values`, `contains`, and key iteration (`for k in m`), with `std::map` and
+`std::set` helper modules on top. All of these inline into a `.cdlb` and run
+under `candela-vm`.
 
 ## 1. First-class functions (compile-time function references)
 
@@ -150,34 +161,61 @@ that are not all the same type.
 
 The runtime value (`Data`) is already a NaN-boxed tagged union: every value
 carries its own type at runtime, so the VM already holds "any value" without
-change. What restricts heterogeneity is the compiler's static type system. The
-delta is one type, `DataType::Any`, that is assignment-compatible in both
-directions (a top type): anything may be used where `Any` is expected, and an
-`Any` may be used where anything is expected, with runtime dispatch already
-guaranteed by the tagged representation. It is written `any` in source.
+change. What restricts heterogeneity is the compiler's static type system.
+
+`any` is the type checker's top type. It is realized over the existing `Unknown`
+type rather than a distinct `DataType::Any` variant: `Unknown` is already the
+permissive top the checker threads through inference, so reusing it needs no new
+`DataType` variant, no `.cdlb` format change for the type table, and no new
+closed-set match arms in equality, hashing, or Display. `any` in source maps to
+`Unknown`.
+
+The delta that makes `any` usable is a set of runtime operations on a value:
+
+- Type tests `is_int`, `is_float`, `is_str`, `is_bool`, `is_list`, `is_map`,
+  `is_null`: read the box tag and return a bool.
+- Checked downcasts `as_int`, `as_float`, `as_str`, `as_bool`, `as_list`,
+  `as_map`: pass the value through when the tag matches and give the compiler the
+  concrete result type; a mismatch raises a catchable `bad_downcast` error rather
+  than reinterpreting the bits.
+
+Arithmetic on an `any` value is expressed by downcasting first. The VM's ops are
+type-specialized (`AddInt` vs `AddFloat`), so the compiler needs a concrete type
+to select one; `as_int(v)` supplies it, and `as_int(v) * 2` compiles. Direct
+arithmetic on an undowncast `any` is a compile error, which points the author at
+the downcast. This is deliberately not heavy dynamic-dispatch numeric dispatch in
+the VM: a downcast keeps the runtime small.
 
 ### Size impact
 
-None on `candela-vm`. `Any` exists only in the compiler's type checker; the
-runtime representation is the existing `Data`.
+Small on `candela-vm`: the type tests and downcasts are a handful of library-
+function arms that read the existing box tag. The type checker uses the existing
+`Unknown`; no new runtime value type.
 
 ## 4. json
 
 ### Chosen minimal delta
 
-A native parse builtin implemented in Rust that turns a json string into existing
-`Data`: objects become maps (`{string: any}`), arrays become arrays, and scalars
-become the existing int/float/string/bool/null. No new value type is needed
-because every json shape maps onto a value candela already has, with `Any` (from
-feature 3) as the map value type. A `std::json` candela module wraps this with
-`parse` and `stringify`; `stringify` walks a value with the existing formatting
-path. Parse errors surface as catchable candela errors.
+A native parse function implemented in Rust that turns a json string into
+existing `Data`: objects become maps keyed by strings, arrays become arrays, and
+scalars become the existing int/float/string/bool/null. No new value type is
+needed because every json shape maps onto a value candela already has, with `any`
+(feature 3) as the element/value type read back through a downcast. A `std::json`
+candela module wraps the native `json_parse`/`json_stringify` as `parse` and
+`stringify`. Parse errors surface as catchable `json_parse_error` errors.
+
+The parser materializes values with direct pool pushes rather than the GC-aware
+allocation helpers: a json document builds in one uninterrupted pass, and a
+partially built graph is not yet reachable from any register, so running the
+collector mid-parse could reclaim it. Direct pushes never invoke the collector.
+`stringify` walks the value graph, escaping strings and keeping a decimal point
+on floats so a float round-trips back to a float rather than an int.
 
 ### Size impact
 
-Small and confined to the `candela` toolchain for the parser front end. The
-native parse routine is modest Rust; it reuses the existing map/array/string
-allocation paths in the VM rather than adding new ones.
+Small on `candela-vm`: a hand-rolled recursive-descent parser and a serializer,
+both reusing the existing map/array/string pools. No new value type, and no new
+dependency.
 
 ## 5. Map and set primitives
 
@@ -205,6 +243,14 @@ Maps already exist as a runtime value with `get`/`insert`. The additions are:
   reusing map rather than a dedicated primitive is purely size: a separate set
   value would duplicate the map pool, its GC, and its NaN-box tag for no
   behavior that map keys do not already provide.
+
+Status: landed. `keys`/`values` are library functions that read the map pool and
+emit an array; `len`/`contains` extend the existing operations to a map receiver;
+`for k in m` materializes the key array and iterates it with the ordinary array
+loop. The empty literal `{}` types as an untyped map (like an empty array) and
+takes its key/value types from the first `insert`, so later `get`/iteration see
+concrete types instead of `any`. `set` is `libs/std/set.cdl` over a map, and
+`std::map` adds free-function helpers. Both inline into a `.cdlb`.
 
 ### Size impact
 
@@ -307,9 +353,9 @@ as candela functions and `impl` methods on top of the native enum and feature 1:
 `is_some`/`is_none`/`unwrap`/`unwrap_or`/`map` for option, and
 `is_ok`/`is_err`/`unwrap`/`unwrap_err`/`unwrap_or` for result. Each works as a
 free function (`option::unwrap(o)`) or a method (`o.unwrap()`). The payload is
-typed `any`, so it holds a value of any type; direct arithmetic on an extracted
-`any` value needs a concrete type and is not available (match and rebind, or use
-type-agnostic operations like `str`). No VM change beyond feature 2.
+typed `any`, so it holds a value of any type; an extracted `any` value is read
+back with the feature-3 downcasts (`as_int(v) * 2`) or type tests. No VM change
+beyond feature 2.
 
 ## Shipping
 

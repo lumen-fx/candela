@@ -1,0 +1,79 @@
+/// A set of unique values, built as a thin layer over a map.
+///
+/// A set stores its members as the keys of a map (the values are a unit), so it
+/// reuses the map's storage, hashing, and garbage collection rather than adding
+/// a separate runtime type. Membership, size, and iteration all defer to the
+/// underlying map. Create one with `set::new()`, then `add` and test with
+/// `contains`; iterate the members through `members` or by iterating the map
+/// the set wraps.
+///
+/// The functions are polymorphic through Candela's compile-time
+/// monomorphization: a single definition specializes to the member type at the
+/// call site.
+///
+/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
+/// under `candela-vm` with no dynamic library.
+
+/// A new empty set.
+fn new() {
+    return {};
+}
+
+/// Adds `x`. A member already present is unchanged.
+fn add(s, x) {
+    s.insert(x, true);
+}
+
+/// True when `x` is a member.
+fn contains(s, x) {
+    return s.contains(x);
+}
+
+/// The number of members.
+fn len(s) {
+    return s.len();
+}
+
+/// True when the set has no members.
+fn is_empty(s) {
+    return s.len() == 0;
+}
+
+/// A list of the members.
+fn members(s) {
+    return s.keys();
+}
+
+/// A new set with every member of either `a` or `b`.
+fn union(a, b) {
+    let r = {};
+    for x in a {
+        r.insert(x, true);
+    }
+    for x in b {
+        r.insert(x, true);
+    }
+    return r;
+}
+
+/// A new set with the members present in both `a` and `b`.
+fn intersection(a, b) {
+    let r = {};
+    for x in a {
+        if b.contains(x) {
+            r.insert(x, true);
+        }
+    }
+    return r;
+}
+
+/// A new set with the members of `a` that are not in `b`.
+fn difference(a, b) {
+    let r = {};
+    for x in a {
+        if !b.contains(x) {
+            r.insert(x, true);
+        }
+    }
+    return r;
+}

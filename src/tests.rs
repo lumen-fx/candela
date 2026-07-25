@@ -4304,3 +4304,251 @@ pub fn enum_any_payload() {
         crate::data::Data::small_str("hello")
     );
 }
+
+// ---------------------------------------------------------------------------
+// ANY / DOWNCAST, JSON, AND MAP/SET PRIMITIVES
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn any_downcast_int_arithmetic() {
+    // A value pulled out of an `any` payload downcasts to a concrete int and is
+    // then usable in arithmetic -- the ergonomic gap the enum pass left open.
+    run_and_check_registers!(
+        "
+        enum Box1 { Val(any) }
+        fn main() {
+            let b = Box1::Val(21);
+            let n = 0;
+            match b { Val(v) => { n = as_int(v) * 2; } }
+            print(n);
+        }
+        ",
+        42.into()
+    );
+}
+
+#[test]
+pub fn any_type_tests() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let j = json_parse(\"{\\\"n\\\": 5}\");
+            print(is_map(j));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn any_is_int_true() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let v = json_parse(\"7\");
+            print(is_int(v));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn any_is_int_false_on_string() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let v = json_parse(\"\\\"x\\\"\");
+            print(is_int(v));
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn any_bad_downcast_is_catchable() {
+    // A downcast to the wrong type raises a catchable error rather than
+    // producing a garbage value.
+    run_and_check_registers!(
+        "
+        fn main() {
+            let r = 0;
+            try {
+                let x = as_int(json_parse(\"\\\"str\\\"\"));
+                r = 1;
+            } catch e {
+                r = 2;
+            }
+            print(r);
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn any_as_str() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(as_str(json_parse(\"\\\"hi\\\"\")));
+        }
+        ",
+        crate::data::Data::small_str("hi")
+    );
+}
+
+#[test]
+pub fn any_as_bool() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(as_bool(json_parse(\"true\")));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn json_parse_scalar_int() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(as_int(json_parse(\"42\")) + 1);
+        }
+        ",
+        43.into()
+    );
+}
+
+#[test]
+pub fn json_parse_object_field() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let obj = as_map(json_parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\"));
+            print(as_int(obj.get(\"x\")) + as_int(obj.get(\"y\")));
+        }
+        ",
+        30.into()
+    );
+}
+
+#[test]
+pub fn json_parse_nested_array() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let obj = as_map(json_parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\"));
+            let arr = as_list(obj.get(\"nums\"));
+            print(arr.len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn json_roundtrip_preserves_int() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let obj = as_map(json_parse(json_stringify(json_parse(\"{\\\"a\\\": 7}\"))));
+            print(as_int(obj.get(\"a\")));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn json_roundtrip_preserves_float() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let v = json_parse(json_stringify(json_parse(\"2.5\")));
+            print(as_float(v));
+        }
+        ",
+        crate::data::Data::float(2.5)
+    );
+}
+
+#[test]
+pub fn map_empty_literal_and_len() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {};
+            m.insert(\"a\", 1);
+            m.insert(\"b\", 2);
+            print(m.len());
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn map_contains() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {};
+            m.insert(\"a\", 1);
+            print(m.contains(\"a\"));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn map_contains_absent() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {\"a\": 1};
+            print(m.contains(\"z\"));
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn map_keys_values_len() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {};
+            m.insert(1, 10);
+            m.insert(2, 20);
+            m.insert(3, 30);
+            print(m.keys().len() + m.values().len());
+        }
+        ",
+        6.into()
+    );
+}
+
+#[test]
+pub fn map_iteration_over_keys() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {};
+            m.insert(1, 10);
+            m.insert(2, 20);
+            let s = 0;
+            for k in m {
+                s += m.get(k);
+            }
+            print(s);
+        }
+        ",
+        30.into()
+    );
+}

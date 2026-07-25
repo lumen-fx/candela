@@ -1,0 +1,69 @@
+/// Checks for the `json` module. Run with `candela run`, or build to a `.cdlb`
+/// and run under `candela-vm`. Prints "json ok" on success; a failed check
+/// aborts the run with a message.
+import std::json;
+import std::assert;
+
+fn main() {
+    // Scalars.
+    assert::assert_eq(as_int(json::parse("42")), 42);
+    assert::assert_eq(as_float(json::parse("3.5")), 3.5);
+    assert::assert_true(as_bool(json::parse("true")));
+    assert::assert_false(as_bool(json::parse("false")));
+    assert::assert_true(is_null(json::parse("null")));
+    assert::assert_eq(as_str(json::parse("\"hi\"")), "hi");
+    assert::assert_eq(as_int(json::parse("-17")), -17);
+
+    // Array.
+    let arr = as_list(json::parse("[10, 20, 30]"));
+    assert::assert_eq(arr.len(), 3);
+    assert::assert_eq(as_int(arr[1]), 20);
+
+    // Object.
+    let obj = as_map(json::parse("{\"x\": 1, \"y\": 2}"));
+    assert::assert_eq(obj.len(), 2);
+    assert::assert_eq(as_int(obj.get("x")), 1);
+    assert::assert_eq(as_int(obj.get("y")), 2);
+
+    // Nested object/array.
+    let nested = as_map(json::parse("{\"name\": \"a\", \"nums\": [1, 2, 3], \"meta\": {\"ok\": true}}"));
+    assert::assert_eq(as_str(nested.get("name")), "a");
+    let nums = as_list(nested.get("nums"));
+    assert::assert_eq(nums.len(), 3);
+    assert::assert_eq(as_int(nums[2]), 3);
+    let meta = as_map(nested.get("meta"));
+    assert::assert_true(as_bool(meta.get("ok")));
+
+    // Escapes.
+    assert::assert_eq(as_str(json::parse("\"a\\nb\"")), "a\nb");
+    assert::assert_eq(as_str(json::parse("\"q\\\"q\"")), "q\"q");
+
+    // Round-trip: parse . stringify . parse preserves structure.
+    let text = "{\"a\": [1, 2.5, true, null, \"z\"], \"b\": {\"c\": 9}}";
+    let once = json::parse(text);
+    let again = as_map(json::parse(json::stringify(once)));
+    let a = as_list(again.get("a"));
+    assert::assert_eq(a.len(), 5);
+    assert::assert_eq(as_int(a[0]), 1);
+    assert::assert_eq(as_float(a[1]), 2.5);
+    assert::assert_true(as_bool(a[2]));
+    assert::assert_true(is_null(a[3]));
+    assert::assert_eq(as_str(a[4]), "z");
+    let b = as_map(again.get("b"));
+    assert::assert_eq(as_int(b.get("c")), 9);
+
+    // Empty collections round-trip.
+    assert::assert_eq(as_list(json::parse("[]")).len(), 0);
+    assert::assert_eq(as_map(json::parse("{}")).len(), 0);
+
+    // A malformed document raises a catchable error.
+    let caught = false;
+    try {
+        json::parse("{bad}");
+    } catch e {
+        caught = true;
+    }
+    assert::assert_true(caught);
+
+    print("json ok");
+}
