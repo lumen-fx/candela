@@ -87,7 +87,7 @@ Candela source files use the `.cdl` extension.
 Candela ships as two binaries:
 
 - **`candela`** -- the full toolchain: parser + compiler + VM + REPL + the
-  `Engine`/`Program` embedding API. Release size: **~1.32 MiB** (1,386,240 bytes).
+  `Engine`/`Program` embedding API. Release size: **~1.37 MiB** (1,439,808 bytes).
 - **`candela-vm`** -- a lean, VM-only runtime that loads and runs pre-compiled
   bytecode and links no parser, compiler, or REPL. Release size:
   **~0.71 MiB** (745,768 bytes), comfortably under the 1 MiB target.
@@ -111,9 +111,11 @@ table, and sources; a version mismatch is rejected cleanly. (Programs that load
 dynamic C libraries or declare `host` blocks are not captured in a `.cdlb` yet --
 those still run through the full `candela` binary / embedding API.)
 
-The `candela-vm` crate is built by disabling the `candela` crate's default
-`compiler` feature (`default-features = false`), which drops the parser,
-compiler, REPL, and their dependencies from the build.
+`candela-vm` is its own self-contained crate: it holds the VM executor,
+bytecode/data types, GC, value marshalling, and the `.cdlb` load/run API, and
+depends on nothing from the compiler crate. The dependency direction is strictly
+`candela -> candela-vm`, so the full `candela` binary compiles that same one VM
+into itself -- the executor is never duplicated between the two binaries.
 
 ## Editor support
 

@@ -154,7 +154,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
                 src.filename.as_str(),
                 ariadne::Source::from(src.contents.as_str()),
             ),
-            crate::captured_output::CapturedOutputWriter,
+            candela_vm::captured_output::CapturedOutputWriter,
         )
         .unwrap();
 
@@ -310,7 +310,7 @@ impl<'a> Parser<'a> {
                     self.ctx.src.filename.as_str(),
                     ariadne::Source::from(self.ctx.src.contents.as_str()),
                 ),
-                crate::captured_output::CapturedOutputWriter,
+                candela_vm::captured_output::CapturedOutputWriter,
             )
             .unwrap();
 

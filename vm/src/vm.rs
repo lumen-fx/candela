@@ -16,7 +16,6 @@ use crate::data::TRUE;
 use crate::errors::ErrType;
 use crate::errors::ErrorCtx;
 use crate::errors::throw_error;
-use crate::fs;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
@@ -28,11 +27,12 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
+use std::fs;
 use std::io::Write;
 use std::ops::Index;
 use std::ops::IndexMut;
 
-#[path = "./ffi/ffi.rs"]
+#[path = "ffi.rs"]
 mod ffi;
 
 #[cfg(target_arch = "wasm32")]

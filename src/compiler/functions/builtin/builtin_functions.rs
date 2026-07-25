@@ -1,6 +1,7 @@
 use super::super::expr::Expr;
 use super::super::expr::Span;
 use super::super::type_system::DataType;
+use super::super::type_system::format_detailed;
 use super::check_arg_type;
 use super::user_functions::handle_user_function;
 use crate::compiler::UnwrapId;
@@ -40,7 +41,7 @@ pub fn builtin_functions(
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             let infered = args[0].infer_type(v, ctx, state);
             state.registers.push(Data::p_str(
-                infered.format_detailed(state).as_str(),
+                format_detailed(&infered, state).as_str(),
                 &mut state.pools.strings,
             ));
             Some((state.registers.len() - 1) as u16)

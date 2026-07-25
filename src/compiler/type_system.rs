@@ -113,128 +113,66 @@ impl TypeExpr {
     }
 }
 
-impl DataType {
-    #[must_use]
-    pub fn format_detailed(&self, state: &State<'_>) -> SmolStr {
-        match self {
-            Self::Float => SmolStr::new_static("float"),
-            Self::Int => SmolStr::new_static("int"),
-            Self::Bool => SmolStr::new_static("bool"),
-            Self::String => SmolStr::new_static("string"),
-            Self::Array(array_type) => match array_type {
-                Some(array_type) => {
-                    format_args!("{}[]", array_type.format_detailed(state)).to_smolstr()
-                }
-                None => SmolStr::new_static("Unknown[]"),
-            },
-            Self::Null => SmolStr::new_static("null"),
-            Self::Unknown => SmolStr::new_static("Unknown"),
-            Self::Union(types) => format_args!(
-                "{}",
-                types
-                    .into_iter()
-                    .map(|x| x.format_detailed(state))
+/// Renders a [`DataType`] with full struct/function detail (field names, arg
+/// names) for diagnostics, resolving `Struct`/`Fn` ids against the compiler
+/// `State`. The plain `Display` impl (in `candela-vm`) has no `State`, so it
+/// renders those variants opaquely; this is the compiler-side detailed form.
+#[must_use]
+pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
+    match t {
+        DataType::Float => SmolStr::new_static("float"),
+        DataType::Int => SmolStr::new_static("int"),
+        DataType::Bool => SmolStr::new_static("bool"),
+        DataType::String => SmolStr::new_static("string"),
+        DataType::Array(array_type) => match array_type {
+            Some(array_type) => {
+                format_args!("{}[]", format_detailed(array_type, state)).to_smolstr()
+            }
+            None => SmolStr::new_static("Unknown[]"),
+        },
+        DataType::Null => SmolStr::new_static("null"),
+        DataType::Unknown => SmolStr::new_static("Unknown"),
+        DataType::Union(types) => format_args!(
+            "{}",
+            types
+                .into_iter()
+                .map(|x| format_detailed(x, state))
+                .collect::<Vec<SmolStr>>()
+                .join("|")
+        )
+        .to_smolstr(),
+        DataType::Struct(s) => {
+            let s = &state.structs[*s as usize];
+            format_args!(
+                "{} {{{}}}",
+                s.name,
+                s.fields
+                    .iter()
+                    .map(|(n, t, _)| {
+                        format_args!("{n}: {}", format_detailed(t, state)).to_smolstr()
+                    })
                     .collect::<Vec<SmolStr>>()
-                    .join("|")
+                    .join(", ")
             )
-            .to_smolstr(),
-            Self::Struct(s) => {
-                let s = &state.structs[*s as usize];
-                format_args!(
-                    "{} {{{}}}",
-                    s.name,
-                    s.fields
-                        .iter()
-                        .map(
-                            |(n, t, _)| format_args!("{n}: {}", t.format_detailed(state))
-                                .to_smolstr()
-                        )
-                        .collect::<Vec<SmolStr>>()
-                        .join(", ")
-                )
-                .to_smolstr()
-            }
-            Self::Map(m) => format_args!(
-                "{{{}: {}}}",
-                m.0.as_ref().unwrap_or(&Self::Unknown),
-                m.1.as_ref().unwrap_or(&Self::Unknown)
+            .to_smolstr()
+        }
+        DataType::Map(m) => format_args!(
+            "{{{}: {}}}",
+            m.0.as_ref().unwrap_or(&DataType::Unknown),
+            m.1.as_ref().unwrap_or(&DataType::Unknown)
+        )
+        .to_smolstr(),
+        DataType::Fn(id) => {
+            let f = &state.fns[*id as usize];
+            format_args!(
+                "fn ({})",
+                f.args
+                    .iter()
+                    .map(|(a, _)| a.clone())
+                    .collect::<Vec<SmolStr>>()
+                    .join(", ")
             )
-            .to_smolstr(),
-            Self::Fn(id) => {
-                let f = &state.fns[*id as usize];
-                format_args!(
-                    "fn ({})",
-                    f.args
-                        .iter()
-                        .map(|(a, _)| a.clone())
-                        .collect::<Vec<SmolStr>>()
-                        .join(", ")
-                )
-                .to_smolstr()
-            }
-        }
-    }
-    #[inline(always)]
-    #[must_use]
-    pub const fn is_indexable(&self) -> bool {
-        matches!(self, Self::String | Self::Array(_) | Self::Unknown)
-    }
-
-}
-
-impl PartialEq for DataType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            // Array(None) is compatible with any array type
-            (Self::Float, Self::Float)
-            | (Self::Int, Self::Int)
-            | (Self::Bool, Self::Bool)
-            | (Self::String, Self::String)
-            | (Self::Null, Self::Null)
-            | (Self::Unknown, Self::Unknown)
-            | (Self::Array(_), Self::Array(None))
-            | (Self::Array(None), Self::Array(_)) => true,
-            (Self::Array(Some(a)), Self::Array(Some(b))) => a == b,
-            (Self::Union(a), Self::Union(b)) => a == b,
-            (Self::Struct(a), Self::Struct(b)) => a == b,
-            (Self::Fn(_), Self::Fn(_)) => true,
-            (Self::Map(a), Self::Map(b)) => {
-                (a.0.is_none() || b.0.is_none() || a.0 == b.0)
-                    && (a.1.is_none() || b.1.is_none() || a.1 == b.1)
-            }
-            (t, Self::Union(p)) | (Self::Union(p), t) => p.contains(t),
-            _ => false,
-        }
-    }
-}
-
-impl std::hash::Hash for DataType {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // All Array variants hash identically, which is required because Array(None) == Array(Some(_))
-        match self {
-            Self::Array(_) => 0u8.hash(state),
-            Self::Float => 1u8.hash(state),
-            Self::Int => 2u8.hash(state),
-            Self::Bool => 3u8.hash(state),
-            Self::String => 4u8.hash(state),
-            Self::Null => 6u8.hash(state),
-            Self::Unknown => 7u8.hash(state),
-            Self::Union(p) => {
-                8u8.hash(state);
-                p.hash(state);
-            }
-            Self::Fn(f) => {
-                9u8.hash(state);
-                f.hash(state);
-            }
-            Self::Struct(s) => {
-                10u8.hash(state);
-                s.hash(state);
-            }
-            Self::Map(m) => {
-                11u8.hash(state);
-                m.hash(state);
-            }
+            .to_smolstr()
         }
     }
 }
@@ -1051,51 +989,4 @@ impl Expr {
             _ => unsafe { unreachable_unchecked() },
         }
     }
-}
-
-impl DataType {
-    #[must_use]
-    pub fn check_poly(self) -> Self {
-        if let Self::Union(ref elems) = self {
-            if let Some(new) = reduce_null_struct(elems) {
-                return new;
-            }
-            let mut concrete = elems
-                .iter()
-                .filter(|elem_type| **elem_type != Self::Unknown);
-            if let Some(first_type) = concrete.next() {
-                if concrete.all(|x| x == first_type) {
-                    first_type.clone()
-                } else {
-                    self
-                }
-            } else if !elems.is_empty() {
-                Self::Unknown
-            } else {
-                unsafe { unreachable_unchecked() }
-            }
-        } else {
-            unsafe { unreachable_unchecked() }
-        }
-    }
-}
-
-fn reduce_null_struct(types: &[DataType]) -> Option<DataType> {
-    let mut struct_type = None;
-    for t in types {
-        match t {
-            DataType::Null | DataType::Unknown => {}
-            DataType::Struct(_) => {
-                if let Some(struct_type) = &struct_type {
-                    if struct_type != t {
-                        return None;
-                    }
-                } else {
-                    struct_type = Some(t.clone());
-                }
-            }
-            _ => return None,
-        }
-    }
-    struct_type
 }

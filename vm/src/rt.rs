@@ -1,12 +1,11 @@
 //! Runtime data types shared by the VM and the compiler.
 //!
-//! These definitions used to live inside the `compiler` module (in
-//! `compiler_data`, `type_system`, and `expr`). They were extracted here so the
-//! runtime core (`vm` + `data` + `gc` + `embed` + `artifact`) can be built with
-//! `--no-default-features` -- i.e. WITHOUT linking the parser, the compiler, or
-//! the REPL. The compiler module (gated behind the `compiler` feature)
-//! re-exports every type from here, so its own source keeps its old import
-//! paths (`compiler_data::Struct`, `type_system::DataType`, `expr::Span`).
+//! These live in the self-contained `candela-vm` crate so the runtime core
+//! (`vm` + `data` + `gc` + `embed` + `artifact`) links WITHOUT the parser,
+//! compiler, or REPL. The `candela` compiler crate depends on this crate and
+//! re-exports these types (aliasing `candela_vm::rt` as `crate::rt`, etc.), so
+//! its own source keeps its import paths (`compiler_data::Struct`,
+//! `type_system::DataType`, `expr::Span`).
 
 use crate::instr::Instr;
 use crate::vm::MapPool;
@@ -171,7 +170,7 @@ pub struct ErrorCatch {
 }
 
 /// Marshalling signature for a `host` function, indexed by
-/// [`crate::compiler::compiler_data::FnSignature::id`]. `types[0]` is the return
+/// the compiler's `FnSignature::id`. `types[0]` is the return
 /// type; `types[1..]` are the argument types.
 #[derive(Debug, Clone)]
 pub struct HostFnSig {
@@ -253,4 +252,116 @@ pub struct InstrSrc {
     pub instr: Instr,
     pub span: Span,
     pub file_id: u16,
+}
+
+impl DataType {
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_indexable(&self) -> bool {
+        matches!(self, Self::String | Self::Array(_) | Self::Unknown)
+    }
+
+    /// Collapses a union of return types to a single type when they all agree
+    /// (ignoring `Unknown`), or to `Unknown` when only unknowns remain.
+    #[must_use]
+    pub fn check_poly(self) -> Self {
+        if let Self::Union(ref elems) = self {
+            if let Some(new) = reduce_null_struct(elems) {
+                return new;
+            }
+            let mut concrete = elems
+                .iter()
+                .filter(|elem_type| **elem_type != Self::Unknown);
+            if let Some(first_type) = concrete.next() {
+                if concrete.all(|x| x == first_type) {
+                    first_type.clone()
+                } else {
+                    self
+                }
+            } else if !elems.is_empty() {
+                Self::Unknown
+            } else {
+                unsafe { unreachable_unchecked() }
+            }
+        } else {
+            unsafe { unreachable_unchecked() }
+        }
+    }
+}
+
+fn reduce_null_struct(types: &[DataType]) -> Option<DataType> {
+    let mut struct_type = None;
+    for t in types {
+        match t {
+            DataType::Null | DataType::Unknown => {}
+            DataType::Struct(_) => {
+                if let Some(struct_type) = &struct_type {
+                    if struct_type != t {
+                        return None;
+                    }
+                } else {
+                    struct_type = Some(t.clone());
+                }
+            }
+            _ => return None,
+        }
+    }
+    struct_type
+}
+
+impl PartialEq for DataType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Array(None) is compatible with any array type
+            (Self::Float, Self::Float)
+            | (Self::Int, Self::Int)
+            | (Self::Bool, Self::Bool)
+            | (Self::String, Self::String)
+            | (Self::Null, Self::Null)
+            | (Self::Unknown, Self::Unknown)
+            | (Self::Array(_), Self::Array(None))
+            | (Self::Array(None), Self::Array(_)) => true,
+            (Self::Array(Some(a)), Self::Array(Some(b))) => a == b,
+            (Self::Union(a), Self::Union(b)) => a == b,
+            (Self::Struct(a), Self::Struct(b)) => a == b,
+            (Self::Fn(_), Self::Fn(_)) => true,
+            (Self::Map(a), Self::Map(b)) => {
+                (a.0.is_none() || b.0.is_none() || a.0 == b.0)
+                    && (a.1.is_none() || b.1.is_none() || a.1 == b.1)
+            }
+            (t, Self::Union(p)) | (Self::Union(p), t) => p.contains(t),
+            _ => false,
+        }
+    }
+}
+
+impl std::hash::Hash for DataType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // All Array variants hash identically, which is required because Array(None) == Array(Some(_))
+        match self {
+            Self::Array(_) => 0u8.hash(state),
+            Self::Float => 1u8.hash(state),
+            Self::Int => 2u8.hash(state),
+            Self::Bool => 3u8.hash(state),
+            Self::String => 4u8.hash(state),
+            Self::Null => 6u8.hash(state),
+            Self::Unknown => 7u8.hash(state),
+            Self::Union(p) => {
+                8u8.hash(state);
+                p.hash(state);
+            }
+            Self::Fn(f) => {
+                9u8.hash(state);
+                f.hash(state);
+            }
+            Self::Struct(s) => {
+                10u8.hash(state);
+                s.hash(state);
+            }
+            Self::Map(m) => {
+                11u8.hash(state);
+                m.hash(state);
+            }
+        }
+    }
 }

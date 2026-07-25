@@ -10,14 +10,39 @@ readme = "README.md"
 repository = "https://github.com/lumen-fx/candela"
 homepage = "https://github.com/lumen-fx/candela"
 license = "Apache-2.0"
-description = "Lean VM-only runtime for candela: loads and runs pre-compiled .cdlb bytecode without the parser/compiler/REPL."
+description = "VM-only runtime for candela: the executor, bytecode/data types, value marshalling, and the .cdlb load/run API. Self-contained -- depends on nothing from the compiler crate."
 
-# Depends on `candela` with the `compiler` feature OFF, so this binary links only
-# the runtime core (VM + instr + data + gc + embed marshalling + bytecode
-# loader). No parser, no compiler, no REPL, no logos/mimalloc.
-[dependencies]
-candela = { path = "..", default-features = false }
+# This is the SELF-CONTAINED runtime core. It links no parser, compiler, or
+# REPL and depends on NOTHING from the `candela` (compiler) crate; the
+# dependency direction is strictly candela -> candela-vm. Both the `candela-vm`
+# binary (a `[[bin]]` here) and the full `candela` compiler binary use this one
+# VM implementation, so the VM is never duplicated.
+[lib]
+name = "candela_vm"
+path = "src/lib.rs"
 
 [[bin]]
 name = "candela-vm"
-path = "src/main.rs"
+path = "src/bin/candela-vm.rs"
+
+[features]
+# Route runtime output through the captured-output sink instead of real stdout
+# (used by the C-ABI / embedding hosts). Off by default for the lean binary.
+embed = []
+
+[dependencies]
+smol_strc = "0.3.6"
+ariadne = "0.6.0"
+memchr = "2.8.3"
+lexical-core = "1.0.6"
+zmij = "1.0.21"
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libloading = "0.9.0"
+libffi = "5.1.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "*"
+getrandom = { version = "0.3.4", features = ["wasm_js"] }

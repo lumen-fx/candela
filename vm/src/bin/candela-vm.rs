@@ -33,7 +33,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut program = match candela::load_program(&bytes) {
+    let mut program = match candela_vm::load_program(&bytes) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("candela-vm: {e}");

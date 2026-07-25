@@ -1,3 +1,14 @@
+//! `candela` -- the full toolchain: lexer, parser, type-checker, compiler,
+//! REPL, the `Engine`/`Program` embedding API, and the `candela build`
+//! subcommand.
+//!
+//! The runtime core (the VM executor, bytecode/data types, GC, value
+//! marshalling, and the `.cdlb` load/run API) lives in the self-contained
+//! `candela-vm` crate. This crate depends on it (strictly `candela ->
+//! candela-vm`) and aliases its modules under `crate::` so the compiler keeps
+//! its `crate::data` / `crate::instr` / `crate::rt` / `crate::errors` /
+//! `crate::vm` paths.
+
 #[cfg(feature = "compiler")]
 use crate::compiler::compile;
 #[cfg(feature = "compiler")]
@@ -21,71 +32,62 @@ use std::panic::catch_unwind;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[path = "./vm/gc/array_gc.rs"]
-mod array_gc;
-// Bytecode artifact format (`.cdlb`) + the lean VM-only load/run API. Always
-// compiled -- this is what `candela-vm` links against.
-mod artifact;
-#[cfg(any(target_arch = "wasm32", feature = "embed"))]
-mod captured_output;
+// The runtime core is the `candela-vm` crate. Alias its modules under `crate::`
+// so the compiler/parser/REPL keep their existing paths, and re-export its
+// public runtime API from this crate's surface.
+pub(crate) use candela_vm::data;
+pub(crate) use candela_vm::errors;
+pub(crate) use candela_vm::instr;
+pub(crate) use candela_vm::rt;
+pub(crate) use candela_vm::vm;
+
 // `pub` so an out-of-tree frontend (candela-lsp) can reuse the lexer, parser,
 // and type-checker directly instead of reimplementing them. Gated behind the
-// `compiler` feature: with `--no-default-features` the crate is the runtime
-// core only (no parser/compiler/repl), which is how `candela-vm` is built.
+// `compiler` feature.
 #[cfg(feature = "compiler")]
 #[path = "./compiler/compiler.rs"]
 pub mod compiler;
-#[path = "./data.rs"]
-mod data;
-mod embed;
-#[path = "./util/errors.rs"]
-mod errors;
-#[path = "./instr.rs"]
-mod instr;
-#[path = "./vm/gc/map_gc.rs"]
-mod map_gc;
-// `pub` for the same reason as `compiler` above: exported so tooling (or a
-// future incremental parse-only path) can lex/parse standalone without going
-// through a full `compiler::compile`.
+// The embedding API (`Engine`/`Program`), built on top of the compiler and the
+// `candela-vm` marshalling types.
+#[cfg(feature = "compiler")]
+mod engine;
+// The `candela build` path: compile a `.cdl` source into a `.cdlb` artifact.
+#[cfg(feature = "compiler")]
+mod build;
+// `pub` for the same reason as `compiler`: exported so tooling can lex/parse
+// standalone without going through a full `compiler::compile`.
 #[cfg(feature = "compiler")]
 #[path = "./parser/parser.rs"]
 pub mod parser;
 #[cfg(feature = "compiler")]
 mod repl;
-// Runtime data types shared by the VM and the compiler. Always compiled.
-mod rt;
-#[path = "./vm/gc/string_gc.rs"]
-mod string_gc;
 #[path = "./tests.rs"]
 #[cfg(all(test, feature = "compiler"))]
 mod tests;
 #[path = "./util/util.rs"]
 mod util;
-#[path = "./vm/vm.rs"]
-mod vm;
 
-pub use errors::Diagnostic;
-pub use errors::collect_diagnostic;
+pub use candela_vm::Diagnostic;
+pub use candela_vm::collect_diagnostic;
 
+pub use candela_vm::FromHostValue;
+pub use candela_vm::HostType;
+pub use candela_vm::IntoHostFn;
+pub use candela_vm::IntoHostValue;
+pub use candela_vm::Value;
 #[cfg(feature = "compiler")]
-pub use embed::Engine;
-pub use embed::FromHostValue;
-pub use embed::HostType;
-pub use embed::IntoHostFn;
-pub use embed::IntoHostValue;
+pub use engine::Engine;
 #[cfg(feature = "compiler")]
-pub use embed::Program;
-pub use embed::Value;
+pub use engine::Program;
 
-// The lean VM-only surface: load a pre-compiled `.cdlb` and run it. Available
-// with and without the `compiler` feature -- this is the API `candela-vm` uses.
-pub use artifact::LoadError;
-pub use artifact::RuntimeProgram;
-pub use artifact::load_program;
+// The VM-only surface: load a pre-compiled `.cdlb` and run it.
+pub use candela_vm::LoadError;
+pub use candela_vm::RuntimeProgram;
+pub use candela_vm::load_program;
 // Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
-pub use artifact::build_bytecode;
+pub use build::build_bytecode;
 
 /// Runs a freshly compiled program's `main` to completion on the CLI/REPL path.
 /// The embedding API (`Engine`/`Program`) drives the VM directly instead, with
@@ -124,13 +126,13 @@ fn execute_compiled(out: compiler::CompileOutput) {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn get_output() -> String {
-    captured_output::CAPTURED_OUTPUT.with(|o| o.take())
+    candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take())
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "compiler"))]
 #[wasm_bindgen]
 pub fn run(code: String) {
-    captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     execute_compiled(compile(code, "playground.cdl", false));
 }
 
@@ -142,11 +144,11 @@ pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
     let code = unsafe { CStr::from_ptr(code) }
         .to_string_lossy()
         .to_string();
-    captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let _ = catch_unwind(|| {
         execute_compiled(compile(code, "embedded.cdl", false));
     });
-    let output = captured_output::CAPTURED_OUTPUT.with(|o| o.take());
+    let output = candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take());
     CString::new(output).unwrap_or_default().into_raw()
 }
 
@@ -165,7 +167,7 @@ pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
 /// Compiles a `.cdl` source file to a `.cdlb` bytecode artifact.
 ///
 /// `candela build <file.cdl> [-o out.cdlb]`. The emitted artifact is run by the
-/// lean `candela-vm` binary, which links no parser/compiler/REPL.
+/// VM-only `candela-vm` binary, which links no parser/compiler/REPL.
 #[cfg(feature = "compiler")]
 fn build_subcommand(args: &mut impl Iterator<Item = String>) {
     let Some(input) = args.next() else {
@@ -201,7 +203,7 @@ fn build_subcommand(args: &mut impl Iterator<Item = String>) {
         std::process::exit(1);
     });
 
-    let bytes = match artifact::build_bytecode(contents, &input) {
+    let bytes = match build::build_bytecode(contents, &input) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{RED}CANDELA ERROR{RESET}\nCannot build bytecode: {e}");

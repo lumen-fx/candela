@@ -82,6 +82,7 @@ name = "candela"
 version = "0.3.0"
 dependencies = [
  "ariadne",
+ "candela-vm",
  "getrandom",
  "lexical-core",
  "libffi",
@@ -89,12 +90,9 @@ dependencies = [
  "logos",
  "memchr",
  "mimalloc",
- "postcard",
  "rustc-hash",
- "serde",
  "smol_strc",
  "wasm-bindgen",
- "zmij",
 ]
 
 [[package]]
@@ -112,7 +110,17 @@ dependencies = [
 name = "candela-vm"
 version = "0.3.0"
 dependencies = [
- "candela",
+ "ariadne",
+ "getrandom",
+ "lexical-core",
+ "libffi",
+ "libloading",
+ "memchr",
+ "postcard",
+ "serde",
+ "smol_strc",
+ "wasm-bindgen",
+ "zmij",
 ]
 
 [[package]]

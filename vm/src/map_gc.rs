@@ -1,4 +1,4 @@
-use crate::RegisterFile;
+use crate::vm::RegisterFile;
 use crate::array_gc::track;
 use crate::data::Data;
 use crate::vm::MapPool;

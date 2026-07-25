@@ -1,16 +1,20 @@
-//! Bytecode artifact format (`.cdlb`) and the lean VM-only load/run API.
+//! Bytecode artifact format (`.cdlb`) and the VM-only load/run API.
 //!
 //! This mirrors an AOT model: the full `candela` toolchain (compiler + VM)
 //! compiles a `.cdl` source to a compact, self-contained bytecode artifact
-//! (`build_bytecode`), and the VM-only `candela-vm` binary loads it
-//! (`load_program`) and runs it
-//! (`RuntimeProgram::run`) WITHOUT linking the parser, compiler, or REPL.
+//! ([`ProgramImage`] serialized via [`serialize_image`]), and the VM-only
+//! `candela-vm` binary loads it ([`load_program`]) and runs it
+//! ([`RuntimeProgram::run`]) WITHOUT the parser, compiler, or REPL.
 //!
 //! The on-disk format is: a 4-byte magic (`CDLB`), a 1-byte format version, then
 //! a `postcard`-encoded [`ProgramImage`]. `postcard` was chosen over `bincode`
 //! because it is `no_std`/`alloc`-friendly and its varint encoding keeps the
 //! artifact small; it also pulls in the least code, which matters for the
 //! `candela-vm` binary-size budget.
+//!
+//! [`ProgramImage`] carries `pub` fields so the `candela` crate's `build`
+//! subcommand can populate it from a fresh compile; everything needed to LOAD
+//! and RUN it lives here.
 
 use crate::data::Data;
 use crate::data::DataHash;
@@ -48,41 +52,42 @@ const FORMAT_VERSION: u8 = 1;
 ///
 /// A dedicated DTO keeps `serde` off the hot runtime types: `Data` becomes a raw
 /// `u64`, `SmolStr` becomes `String`, maps become key/value pairs. Only [`Instr`],
-/// [`Span`], and [`DataType`] carry `serde` derives directly.
+/// [`Span`], and [`DataType`] carry `serde` derives directly. Fields are `pub`
+/// so the compiler front-end can build an image from a fresh compile.
 #[derive(Serialize, Deserialize)]
-struct ProgramImage {
-    instructions: Vec<Instr>,
-    registers: Vec<u64>,
-    objs: Vec<Vec<u64>>,
-    maps: Vec<Vec<(u64, u64)>>,
-    strings: Vec<String>,
-    instr_src: Vec<InstrSrcImage>,
-    fn_registers: Vec<Vec<u16>>,
-    structs: Vec<StructImage>,
-    sources: Vec<SourceImage>,
-    allocated_arg_count: u64,
-    allocated_call_depth: u64,
+pub struct ProgramImage {
+    pub instructions: Vec<Instr>,
+    pub registers: Vec<u64>,
+    pub objs: Vec<Vec<u64>>,
+    pub maps: Vec<Vec<(u64, u64)>>,
+    pub strings: Vec<String>,
+    pub instr_src: Vec<InstrSrcImage>,
+    pub fn_registers: Vec<Vec<u16>>,
+    pub structs: Vec<StructImage>,
+    pub sources: Vec<SourceImage>,
+    pub allocated_arg_count: u64,
+    pub allocated_call_depth: u64,
 }
 
 #[derive(Serialize, Deserialize)]
-struct InstrSrcImage {
-    instr: Instr,
-    span: Span,
-    file_id: u16,
+pub struct InstrSrcImage {
+    pub instr: Instr,
+    pub span: Span,
+    pub file_id: u16,
 }
 
 #[derive(Serialize, Deserialize)]
-struct StructImage {
-    name: String,
-    fields: Vec<(String, DataType, Span)>,
-    id: u16,
-    name_span: Span,
+pub struct StructImage {
+    pub name: String,
+    pub fields: Vec<(String, DataType, Span)>,
+    pub id: u16,
+    pub name_span: Span,
 }
 
 #[derive(Serialize, Deserialize)]
-struct SourceImage {
-    filename: String,
-    contents: String,
+pub struct SourceImage {
+    pub filename: String,
+    pub contents: String,
 }
 
 /// A loaded, ready-to-run program image with owned runtime state.
@@ -259,89 +264,17 @@ pub fn load_program(bytes: &[u8]) -> Result<RuntimeProgram, LoadError> {
     Ok(RuntimeProgram::from(img))
 }
 
-/// Compiles a `.cdl` source string to a `.cdlb` bytecode artifact.
+/// Serializes a [`ProgramImage`] to `.cdlb` bytes (magic + version + body).
 ///
 /// # Errors
 ///
-/// Returns an error string if the program uses features that cannot be captured
-/// in a standalone artifact yet (dynamic C-library `import`s or `host` blocks),
-/// or if serialization fails.
-#[cfg(feature = "compiler")]
-pub fn build_bytecode(source: String, filename: &str) -> Result<Vec<u8>, String> {
-    let out = crate::compiler::compile(source, filename, false);
-    let image = image_from_output(out)?;
+/// Returns the serialization error as a string if the `postcard` body cannot be
+/// encoded.
+pub fn serialize_image(image: &ProgramImage) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&MAGIC);
     bytes.push(FORMAT_VERSION);
-    let body = postcard::to_allocvec(&image).map_err(|e| e.to_string())?;
+    let body = postcard::to_allocvec(image).map_err(|e| e.to_string())?;
     bytes.extend_from_slice(&body);
     Ok(bytes)
-}
-
-#[cfg(feature = "compiler")]
-fn image_from_output(out: crate::compiler::CompileOutput) -> Result<ProgramImage, String> {
-    if !out.dyn_lib_fns.is_empty() {
-        return Err(String::from(
-            "dynamic C-library imports (`import \"lib.so\"`) are not yet supported in .cdlb artifacts",
-        ));
-    }
-    if !out.host_fns.is_empty() {
-        return Err(String::from(
-            "`host` blocks require an embedding Engine and cannot be captured in a .cdlb artifact",
-        ));
-    }
-
-    Ok(ProgramImage {
-        instructions: out.instructions,
-        registers: out.registers.iter().map(|d| d.0).collect(),
-        objs: out
-            .pools
-            .objs
-            .0
-            .iter()
-            .map(|v| v.iter().map(|d| d.0).collect())
-            .collect(),
-        maps: out
-            .pools
-            .maps
-            .0
-            .iter()
-            .map(|m| m.iter().map(|(k, v)| (k.0, v.0)).collect())
-            .collect(),
-        strings: out.pools.strings.0.clone(),
-        instr_src: out
-            .instr_src
-            .iter()
-            .map(|s| InstrSrcImage {
-                instr: s.instr,
-                span: s.span,
-                file_id: s.file_id,
-            })
-            .collect(),
-        fn_registers: out.fn_registers,
-        structs: out
-            .structs
-            .iter()
-            .map(|s| StructImage {
-                name: s.name.to_string(),
-                fields: s
-                    .fields
-                    .iter()
-                    .map(|(n, t, sp)| (n.to_string(), t.clone(), *sp))
-                    .collect(),
-                id: s.id,
-                name_span: s.name_span,
-            })
-            .collect(),
-        sources: out
-            .sources
-            .iter()
-            .map(|s| SourceImage {
-                filename: s.filename.to_string(),
-                contents: s.contents.clone(),
-            })
-            .collect(),
-        allocated_arg_count: out.allocated_arg_count as u64,
-        allocated_call_depth: out.allocated_call_depth as u64,
-    })
 }
