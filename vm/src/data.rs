@@ -343,6 +343,33 @@ impl Data {
     pub const fn is_map(self) -> bool {
         (self.0 & !PAYLOAD_MASK) == NAN_STRUCT && (self.0 & (1 << 47)) != 0
     }
+    /// A short runtime type name, used in downcast error messages. Reads only
+    /// the box tag, so it needs no pools.
+    #[must_use]
+    pub const fn type_name(self) -> &'static str {
+        if self.is_int() {
+            "int"
+        } else if self.is_float() {
+            "float"
+        } else if self.is_bool() {
+            "bool"
+        } else if self.is_null() {
+            "null"
+        } else if self.is_string() {
+            "string"
+        } else if self.is_array() {
+            "list"
+        } else if self.is_map() {
+            "map"
+        } else if self.is_struct() {
+            "struct"
+        } else if self.is_enum() {
+            "enum"
+        } else {
+            "value"
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn format(
         self,

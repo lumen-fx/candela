@@ -224,6 +224,36 @@ pub enum LibFunc {
     Reverse = 31,
     FsRead = 32,
     FsExists = 33,
+    /// Map key array. Reads the map in the source register and emits a fresh
+    /// array of its keys.
+    Keys = 34,
+    /// Map value array. Reads the map in the source register and emits a fresh
+    /// array of its values.
+    Values = 35,
+    /// json::parse. Parses the source string into a value graph (maps, arrays,
+    /// scalars); a malformed string raises a catchable error.
+    JsonParse = 36,
+    /// json::stringify. Serializes the source value to a json string.
+    JsonStringify = 37,
+    // Runtime type tests on an `any` value: read the source register's tag and
+    // emit a bool. The `Val` suffix separates these from the string-parsing
+    // `IsInt`/`IsFloat` above.
+    IsIntVal = 38,
+    IsFloatVal = 39,
+    IsStrVal = 40,
+    IsBoolVal = 41,
+    IsListVal = 42,
+    IsMapVal = 43,
+    IsNullVal = 44,
+    // Checked downcasts of an `any` value to a concrete type: pass the value
+    // through when the tag matches, otherwise raise a catchable error. The
+    // compiler types the result as the target type so it can be used directly.
+    AsIntVal = 45,
+    AsFloatVal = 46,
+    AsStrVal = 47,
+    AsBoolVal = 48,
+    AsListVal = 49,
+    AsMapVal = 50,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

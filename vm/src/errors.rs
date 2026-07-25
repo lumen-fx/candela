@@ -284,6 +284,11 @@ pub enum ErrType<'a> {
     InvalidReturnType(&'a DataType),
     DivisionByZero,
     ModuloByZero,
+    /// A json string could not be parsed. Carries a short static reason.
+    JsonParse(&'static str),
+    /// A downcast of an `any` value found a different runtime type than the
+    /// requested one. Carries (requested, found) type names.
+    BadDowncast(&'static str, &'static str),
 }
 
 impl From<ErrType<'_>> for SmolStr {
@@ -315,6 +320,8 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::InvalidReturnType(t) => format_args!("Invalid return type: {RED}{BOLD}{t}{RESET}").to_smolstr(),
             ErrType::CArrayReturnTypeNotSupported => "Array return types are not supported: C does not convey the length of a returned array".into(),
             ErrType::UnknownMapKey(key) => format_args!("Unknown key {RED}{BOLD}{key}{RESET}").to_smolstr(),
+            ErrType::JsonParse(reason) => format_args!("Invalid JSON: {RED}{BOLD}{reason}{RESET}").to_smolstr(),
+            ErrType::BadDowncast(want, got) => format_args!("Cannot read this {RED}{BOLD}{got}{RESET} value as {BLUE}{BOLD}{want}{RESET}").to_smolstr(),
         }
     }
 }
@@ -348,6 +355,8 @@ impl ErrType<'_> {
             ErrType::CArrayReturnTypeNotSupported => "c_array_return_type_not_supported",
             ErrType::InvalidReturnType(_) => "invalid_return_type",
             ErrType::UnknownMapKey(_) => "unknown_map_key",
+            ErrType::JsonParse(_) => "json_parse_error",
+            ErrType::BadDowncast(_, _) => "bad_downcast",
         }
     }
 }

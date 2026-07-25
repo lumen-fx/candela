@@ -53,8 +53,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// Bumped whenever the serialized shape changes, so a mismatched artifact is
 /// rejected instead of mis-decoded. Version 2 added the dynamic-library and
 /// host-function recipe tables (`dyn_lib_fns`/`host_fns`). Version 3 added the
-/// native-enum type table (`enums`) and the `CloneEnum` instruction.
-const FORMAT_VERSION: u8 = 3;
+/// native-enum type table (`enums`) and the `CloneEnum` instruction. Version 4
+/// added the map/json/any library functions (`Keys`/`Values`/`JsonParse`/
+/// `JsonStringify` and the `is_*`/`as_*` value ops).
+const FORMAT_VERSION: u8 = 4;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

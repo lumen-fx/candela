@@ -1131,6 +1131,9 @@ pub fn execute(
                 } else if reg.is_array() {
                     let arg = r[args.pop_unchecked()];
                     r[dest] = obj_pool[reg.as_array()].contains(&arg).into();
+                } else if reg.is_map() {
+                    let arg = r[args.pop_unchecked()];
+                    r[dest] = map_pool[reg.as_map()].contains_key(&arg).into();
                 }
             }
             Instr::CallLibFunc(LibFunc::Trim, tgt, dest) => {
@@ -1326,6 +1329,128 @@ pub fn execute(
                     r[dest] = (map_pool[reg.as_map()].len() as i32).into();
                 } else {
                     unsafe { unreachable_unchecked() }
+                }
+            }
+            Instr::CallLibFunc(LibFunc::Keys, tgt, dest) => {
+                let map_data = r[tgt];
+                let out_id = alloc_array(
+                    obj_pool,
+                    map_pool,
+                    &mut free_arrays,
+                    r,
+                    &recursion_stack,
+                    &mut gc_array_threshold,
+                    &mut array_live,
+                    &mut map_live,
+                    &mut obj_gc_stack,
+                );
+                let keys: Vec<Data> = map_pool[map_data.as_map()].keys().copied().collect();
+                let out = obj_pool.get_mut(out_id as usize);
+                out.clear();
+                out.extend(keys);
+                r[dest] = Data::array(out_id);
+            }
+            Instr::CallLibFunc(LibFunc::Values, tgt, dest) => {
+                let map_data = r[tgt];
+                let out_id = alloc_array(
+                    obj_pool,
+                    map_pool,
+                    &mut free_arrays,
+                    r,
+                    &recursion_stack,
+                    &mut gc_array_threshold,
+                    &mut array_live,
+                    &mut map_live,
+                    &mut obj_gc_stack,
+                );
+                let vals: Vec<Data> = map_pool[map_data.as_map()].values().copied().collect();
+                let out = obj_pool.get_mut(out_id as usize);
+                out.clear();
+                out.extend(vals);
+                r[dest] = Data::array(out_id);
+            }
+            Instr::CallLibFunc(LibFunc::JsonParse, tgt, dest) => {
+                let input = r[tgt].as_str(str_pool).to_owned();
+                match crate::json::json_parse(&input, obj_pool, map_pool, str_pool) {
+                    Ok(value) => r[dest] = value,
+                    Err(reason) => {
+                        error_with_catch!(ErrType::JsonParse(reason));
+                    }
+                }
+            }
+            Instr::CallLibFunc(LibFunc::JsonStringify, tgt, dest) => {
+                let json = crate::json::json_stringify(
+                    r[tgt], obj_pool, map_pool, str_pool, structs, enums,
+                );
+                r[dest] = string!(json);
+            }
+            Instr::CallLibFunc(LibFunc::IsIntVal, tgt, dest) => {
+                r[dest] = r[tgt].is_int().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsFloatVal, tgt, dest) => {
+                r[dest] = r[tgt].is_float().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsStrVal, tgt, dest) => {
+                r[dest] = r[tgt].is_string().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsBoolVal, tgt, dest) => {
+                r[dest] = r[tgt].is_bool().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsListVal, tgt, dest) => {
+                r[dest] = r[tgt].is_array().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsMapVal, tgt, dest) => {
+                r[dest] = r[tgt].is_map().into();
+            }
+            Instr::CallLibFunc(LibFunc::IsNullVal, tgt, dest) => {
+                r[dest] = r[tgt].is_null().into();
+            }
+            Instr::CallLibFunc(LibFunc::AsIntVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_int() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("int", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsFloatVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_float() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("float", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsStrVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_string() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("string", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsBoolVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_bool() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("bool", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsListVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_array() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("list", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsMapVal, tgt, dest) => {
+                let v = r[tgt];
+                if v.is_map() {
+                    r[dest] = v;
+                } else {
+                    error_with_catch!(ErrType::BadDowncast("map", v.type_name()));
                 }
             }
             Instr::CallLibFunc(LibFunc::StartsWith, source_register, dest_register) => {

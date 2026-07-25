@@ -135,11 +135,11 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_three_and_v2_is_rejected() {
-    // The version byte was bumped to 3 when the native-enum table was added. A
-    // freshly built artifact must carry version 3.
+fn current_format_version_is_four_and_v2_is_rejected() {
+    // The version byte was bumped to 4 when the map/json/any library functions
+    // were added. A freshly built artifact must carry version 4.
     let bytes = candela::build_bytecode("fn main() {}".to_owned(), "v.cdl").expect("compiles");
-    assert_eq!(bytes[4], 3, "current .cdlb format version must be 3");
+    assert_eq!(bytes[4], 4, "current .cdlb format version must be 4");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant -- the version gate
@@ -168,7 +168,7 @@ fn enum_values_roundtrip_through_cdlb() {
         }
     ";
     let bytes = candela::build_bytecode(src.to_owned(), "enums.cdl").expect("compiles");
-    assert_eq!(bytes[4], 3);
+    assert_eq!(bytes[4], 4);
     let mut program = load_program(&bytes).expect("enum artifact must load on the VM-only path");
     program.run();
 }
