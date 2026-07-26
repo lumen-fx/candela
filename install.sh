@@ -77,6 +77,12 @@ if [ ! -f "$TMP/candela" ]; then
     printf "[ERROR] Archive downloaded but binary not found inside. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
+if [ ! -f "$TMP/candela-vm" ]; then
+    # The release archive ships the VM-only runtime (candela-vm) alongside the
+    # full compiler (candela) so a `.cdlb` can run without the compiler.
+    printf "[ERROR] Archive downloaded but candela-vm not found inside. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
+fi
+
 if [ ! -d "$TMP/libs/std" ]; then
     # The archive ships the standard library in libs/ next to the binary. `import
     # std::x` resolves relative to the installed binary, so this must be present.
@@ -105,6 +111,12 @@ elif command -v sudo >/dev/null 2>&1; then
     sudo chmod 755 "$INSTALL_DIR/candela"
 fi
 
+if chmod 755 "$INSTALL_DIR/candela-vm" 2>/dev/null; then
+    :
+elif command -v sudo >/dev/null 2>&1; then
+    sudo chmod 755 "$INSTALL_DIR/candela-vm"
+fi
+
 if ln -sf "$INSTALL_DIR/candela" /usr/local/bin/candela 2>/dev/null; then
     :
 elif command -v sudo >/dev/null 2>&1; then
@@ -113,5 +125,14 @@ else
     printf "[ERROR] Cannot write to /usr/local/bin and sudo is not available. Re-run as root or install sudo.\n"
 fi
 
+if ln -sf "$INSTALL_DIR/candela-vm" /usr/local/bin/candela-vm 2>/dev/null; then
+    :
+elif command -v sudo >/dev/null 2>&1; then
+    sudo ln -sf "$INSTALL_DIR/candela-vm" /usr/local/bin/candela-vm
+else
+    printf "[ERROR] Cannot write to /usr/local/bin and sudo is not available. Re-run as root or install sudo.\n"
+fi
+
 printf "[Candela] Installed $("$INSTALL_DIR/candela" --version) in $INSTALL_DIR/candela\n"
+printf "[Candela] Installed candela-vm in $INSTALL_DIR/candela-vm\n"
 printf "[Candela] Run 'candela' to get started.\n"
