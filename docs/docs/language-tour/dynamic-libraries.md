@@ -41,10 +41,15 @@ and Candela resolves them differently so a single Candela file works across
 platforms:
 
 - A **bare logical name** (no path separator and no extension, e.g. `m`,
-  `sqlite3`, `z`) is mapped to your OS's library filename convention and
-  located by the system loader's normal search paths: `libz.so` on Linux,
-  `libz.dylib` on macOS, `z.dll` on Windows. Prefer this for system libraries;
-  the same source resolves the right file on every platform.
+  `sqlite3`, `z`) is mapped to your OS's library filename convention: `libz.so`
+  on Linux, `libz.dylib` on macOS, `z.dll` on Windows. Candela then looks for
+  that file next to the importing Candela file, then in the current
+  directory, and only then falls back to the system loader's normal search
+  paths (`LD_LIBRARY_PATH`, `ld.so.cache`, and similar). This mirrors Windows,
+  where `LoadLibrary` searches the application directory and the current
+  directory before the system paths. Use a bare logical name both for system
+  libraries you expect to be installed and for a library you build and ship
+  next to your `.cdl` file.
 
   ```rust
   // Resolves to libz.so / libz.dylib / z.dll depending on the OS.

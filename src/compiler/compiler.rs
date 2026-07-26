@@ -3479,6 +3479,42 @@ fn load_auto_prelude(
         .push((PRELUDE_CHILD.into(), child_namespace));
 }
 
+/// Opens the dynamic library a `dylib` import resolved to.
+///
+/// `filename` is the OS-mapped name (`resolve_library_filename`'s output) for a
+/// logical import, or the already-resolved explicit path otherwise.
+///
+/// A bare filename handed to the OS loader (`dlopen` on Linux/macOS) is
+/// resolved only through the system search path -- the run-path,
+/// `LD_LIBRARY_PATH`, `ld.so.cache`, `/lib`, `/usr/lib` -- never the current
+/// directory or the importing file's directory. Windows' `LoadLibraryA`
+/// differs: it also searches the application directory and the current
+/// directory by default. A library built to sit next to the `.cdl` file
+/// (rather than installed as a system library) therefore loads on Windows but
+/// silently fails on Linux/macOS.
+///
+/// To match Windows' default search order, a logical import is tried, in
+/// order: next to the importing file, then in the current directory, and only
+/// then handed to the OS loader bare -- so genuine system libraries (`z`, `m`,
+/// `sqlite3`) still resolve exactly as before.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_dylib(file_path: &Path, filename: &str, is_logical: bool) -> Option<libloading::Library> {
+    if is_logical {
+        let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut candidates = vec![file_dir.join(filename)];
+        let cwd_candidate = Path::new(".").join(filename);
+        if !candidates.contains(&cwd_candidate) {
+            candidates.push(cwd_candidate);
+        }
+        for candidate in &candidates {
+            if let Ok(lib) = unsafe { libloading::Library::new(candidate) } {
+                return Some(lib);
+            }
+        }
+    }
+    unsafe { libloading::Library::new(filename) }.ok()
+}
+
 /// Recursively collects functions, dyn libs, and imported files
 /// Deferred enum-payload resolution: `(enum_id, src_file_idx, variants)`, filled
 /// in `resolve_types` after every type name is registered, so an enum payload
@@ -3634,8 +3670,8 @@ fn parse_toplevel(
                     && Path::new(spec.as_str()).extension().is_none();
 
                 let (open_target, dylib_name): (SmolStr, SmolStr) = if is_logical {
-                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`; passed bare
-                    // so dlopen/LoadLibrary searches the standard library paths.
+                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`. Resolution
+                    // of WHERE that file is found happens in `open_dylib` below.
                     (
                         resolve_library_filename(spec.as_str(), TargetOs::CURRENT).into(),
                         spec.clone(),
@@ -3675,11 +3711,10 @@ fn parse_toplevel(
                     (resolved, dylib_name)
                 };
 
-                let lib = Rc::new(unsafe {
-                    libloading::Library::new(open_target.as_str()).unwrap_or_else(|_| {
-                        error_cannot_load_dynlib(span, src_file_idx, sources);
-                    })
-                });
+                let lib = Rc::new(
+                    open_dylib(file_path, open_target.as_str(), is_logical)
+                        .unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources)),
+                );
                 pending_dylibs.push((
                     src_file_idx,
                     dynamic_libs.len() as u16,
