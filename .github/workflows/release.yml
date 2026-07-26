@@ -127,11 +127,17 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo pgo optimize -- --target ${{ matrix.target }}
 
+      - name: Build candela-vm runtime
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/candela dist/
+          cp target/${{ matrix.target }}/release/candela-vm dist/
           cp -R libs dist/
           cp LICENSE THIRD-PARTY-LICENSE dist/
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
@@ -141,6 +147,7 @@ jobs:
         run: |
           New-Item -ItemType "Directory" -Force -Path "dist"
           Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
+          Copy-Item "target/${{ matrix.target }}/release/candela-vm.exe" "dist/"
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
