@@ -79,11 +79,11 @@ jobs:
 
       - name: Build PGO dylib (macOS)
         if: runner.os == 'macOS'
-        run: clang -dynamiclib -O2 -o pgo/pgo_dynlib.dylib pgo/pgo_dynlib.c
+        run: clang -dynamiclib -O2 -o pgo/libpgo_dynlib.dylib pgo/pgo_dynlib.c
 
       - name: Build PGO dylib (Linux)
         if: runner.os == 'Linux'
-        run: clang -shared -fPIC -O2 -o pgo/pgo_dynlib.so pgo/pgo_dynlib.c
+        run: clang -shared -fPIC -O2 -o pgo/libpgo_dynlib.so pgo/pgo_dynlib.c
 
       - name: Build PGO dylib (Windows)
         if: runner.os == 'Windows'
