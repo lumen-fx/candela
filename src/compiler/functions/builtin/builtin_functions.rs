@@ -228,7 +228,7 @@ pub fn builtin_functions(
         // Runtime type tests and checked downcasts on an `any` value. `is_*`
         // returns a bool; `as_*` returns the value typed concretely (the type
         // checker assigns the target type) and raises a catchable error when the
-        // runtime type differs. `json_parse`/`json_stringify` back `std::json`.
+        // runtime type differs. `json_parse`/`json_stringify` back `std/json`.
         "is_int" | "is_float" | "is_str" | "is_bool" | "is_list" | "is_map" | "is_null"
         | "as_int" | "as_float" | "as_str" | "as_bool" | "as_list" | "as_map"
         | "json_stringify" => {

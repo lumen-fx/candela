@@ -5,7 +5,7 @@ icon: lucide/repeat
 
 Type-conversion helpers with names that read as verbs, wrapping Candela's
 built-in `int`, `float`, `str`, and `bool` conversions. Import the library with
-`import std::convert;` at the top-level.
+`import "std/convert";` at the top-level.
 
 *[at the top-level]: Outside of any function.
 

@@ -46,21 +46,26 @@ running programs, not against an assumed feature set.
 
 ## Import resolution and ship layout
 
-There are two import forms.
+An import names a quoted path, and the path's shape picks the resolver.
 
-- A namespaced import, `import std::string;`, is the form for the standard
-  library. It binds the module under `string::` and the resolver maps it to a
-  `.cdl` file in the shipped library directory (`std::string` -> `std/string.cdl`).
-  This is the default a normal user reaches for, and it needs nothing set.
-- A path-literal import, `import "./local.cdl";`, is for a user's own files. It
+- An extensionless path, `import "std/string";`, is the form for the standard
+  library. The resolver appends `.cdl` and maps it to a file in the shipped
+  library directory (`"std/string"` -> `std/string.cdl`). This is the default a
+  normal user reaches for, and it needs nothing set.
+- A `.cdl` path, `import "./local.cdl";`, is for a user's own files. It
   resolves relative to the importing file first, then falls back to the shipped
   library directory.
+
+A bare import merges the module's symbols into the importing file's own scope;
+`import "..." as name;` binds them under the `name::` namespace instead. A bare
+import that would redefine a name is a compile-time error naming the symbol and
+both sources.
 
 The shipped library directory is the single source of truth for where std lives.
 By default it is `libs/` beside the running executable, found by canonicalizing
 the executable's own path. This is the ship-beside-the-toolchain layout: the
-installer places the binary and `libs/` together, so `import std::string` works
-from any working directory with nothing configured. Namespaced imports resolve
+installer places the binary and `libs/` together, so `import "std/string";` works
+from any working directory with nothing configured. Extensionless imports resolve
 against this directory only; they are never source-relative, so the working
 directory never matters.
 

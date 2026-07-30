@@ -128,6 +128,13 @@
     ],
     "description": "Import another Candela file"
   },
+  "Import library": {
+    "prefix": "importlib",
+    "body": [
+      "import \"${1:std/list}\"${2: as ${3:alias}};"
+    ],
+    "description": "Import a shipped library (extensionless path)"
+  },
   "Print": {
     "prefix": "print",
     "body": [

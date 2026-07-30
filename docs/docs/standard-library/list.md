@@ -4,7 +4,7 @@ icon: lucide/list
 # List library
 
 Helpers that build on Candela's array operators and built-in methods. Import the
-library with `import std::list;` at the top-level.
+library with `import "std/list";` at the top-level.
 
 *[at the top-level]: Outside of any function.
 

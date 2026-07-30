@@ -45,8 +45,9 @@ attribution details.
   libraries and `host "namespace" { rettype name(argtypes); ... }` for
   host-registered closures. A trailing `...` argument marks a variadic host
   function.
-- Modules: `import "file.cdl";` or `import "file.cdl" as alias;`, then call via
-  `alias::func()`.
+- Modules: `import "file.cdl";` for a file, `import "std/list";` for a shipped
+  library. A bare import merges the module's symbols into the file's scope;
+  `import "..." as alias;` keeps them behind `alias::`.
 
 ## Language server
 

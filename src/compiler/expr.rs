@@ -132,10 +132,13 @@ pub enum Expr {
 
     /// ImportFile(path, alias, is_logical, (start, end))
     ///
-    /// `is_logical` marks a namespaced std/library import (`import std::string`):
-    /// the resolver maps it straight to the shipped library directory and never
-    /// looks source-relative. A path-literal import (`import "./local.cdl"`) has
-    /// `is_logical` false and resolves source-relative first.
+    /// `is_logical` marks a library import (`import "std/string";`, an
+    /// extensionless path): the resolver maps it straight to the shipped
+    /// library directory and never looks source-relative. A `.cdl` file import
+    /// (`import "./local.cdl";`) has `is_logical` false and resolves
+    /// source-relative first. `alias` is `Some` for `import ... as name;`,
+    /// which binds the module under `name::`; a bare import (`None`) merges
+    /// the module's symbols into the importing file's scope.
     ImportFile(SmolStr, Option<SmolStr>, bool, Span),
 
     Break,

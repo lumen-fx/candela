@@ -13,7 +13,7 @@ use smol_strc::SmolStr;
 #[path = "builtin/builtin_methods.rs"]
 mod builtin_methods;
 
-/// Resolves an array-receiver method call to a `std::list` helper when the
+/// Resolves an array-receiver method call to a `std/list` helper when the
 /// method is one of the collection higher-order functions (`map`, `filter`,
 /// `reduce`, `each`, `any`, `all`, `sort_by`) or the reductions/slicers the
 /// module provides (`first`, `last`, `sum`, ...). Returns the list function id
@@ -143,7 +143,7 @@ pub fn handle_method_calls(
     }
 
     // An array-receiver collection method (`arr.map(f)`, `arr.reduce(init, f)`,
-    // ...) lowers to the `std::list` helper of the same name with the receiver
+    // ...) lowers to the `std/list` helper of the same name with the receiver
     // as argument 0, reusing the ordinary user-function call path.
     if let Some(fn_id) = routed_list_method(name, &obj_type, args, v, ctx, state) {
         let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);

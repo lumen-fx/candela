@@ -3,59 +3,80 @@ icon: lucide/package
 ---
 # Modules
 
-## Importing other Candela files
+## Importing
 
-You can import other Candela files with the `import` keyword at the top-level.
-
-Imports can be nested, and circular imports are detected and produce an error.
+Import other Candela code with the `import` keyword at the top-level. An
+import names a quoted path:
 
 *[at the top-level]: Outside of any function.
 
-```rust
-import "fibonacci_lib.cdl"; // all functions/structs are available under fibonacci_lib::
-import "other_lib.cdl" as mylib; // all functions/structs are available under mylib::
+- A path ending in `.cdl` imports that file, resolved relative to the
+  importing file.
+- A path without an extension imports a library from the shipped library
+  directory: `import "std/string";` resolves to `std/string.cdl` there.
 
-fn main() {print(mylib::my_func(42));}
-```
+Imports can be nested, and circular imports are detected and produce an error.
 
-## Importing libraries
-
-Import a library by its namespaced name. `import std::string` binds the module's
-functions under `string::`, and the resolver finds the shipped module for you, so
-this works from any working directory with nothing to configure.
+A bare import merges the module's functions, structs, enums, and methods into
+the importing file's own scope, so you call them directly:
 
 ```rust
-import std::math;
-import std::string;
-import std::list;
+import "std/math";
+import "std/string";
+import "std/list";
 
 fn main() {
-    print(math::cos(3.14159265359));
-    print(string::capitalize("hello"));
-    print(list::sum([1, 2, 3, 4]));
+    print(cos(3.14159265359));
+    print(capitalize("hello"));
+    print(sum([1, 2, 3, 4]));
 }
 ```
 
-Add `as` to choose a different namespace: `import std::string as s;` makes the
-functions available under `s::`.
+## Namespaced imports
 
-### How a namespaced import resolves
+Add `as` to keep a module behind a namespace instead. Its symbols are then
+only reachable through the alias:
 
-A namespaced import maps to a `.cdl` file in the shipped library directory:
-`std::string` resolves to `std/string.cdl` under that directory. The library
-directory is `libs/` next to the Candela executable, which is where the installer
-places it, so a normal install needs nothing set. Set `CANDELA_LIB_PATH` to point
-the lookup at a different `libs/` directory (the one holding `std/` and, for the
-C-backed libraries, `std_src/`); this is an escape hatch for source checkouts and
-custom builds, not part of normal use.
+```rust
+import "fibonacci_lib.cdl" as fib;
+import "std/string" as string;
 
-Resolution happens at compile time, so a program built to a `.cdlb` artifact has
-the imported module bytecode inlined and runs under `candela-vm` with no library
-files present.
+fn main() {
+    print(fib::fibonacci(30));
+    print(string::capitalize("hello"));
+}
+```
 
-### Standard library
+## Name collisions
 
-The standard library lives in the shipped `std/` directory. The `math`, `time`,
-and `random` libraries are backed by a C library loaded across Candela's
-dynamic-library FFI. The `string`, `list`, `convert`, and `assert` libraries are
-written in Candela and use no dynamic library.
+A bare import that would redefine a name (against a local definition or
+another bare import) is a compile-time error naming the symbol and both
+sources. Nothing is shadowed silently. Resolve a collision by renaming the
+local symbol or by giving one of the imports a namespace with `as`.
+
+Two modules that both import the same third module bring in the same
+underlying symbols; that is not a collision.
+
+## How a library import resolves
+
+An extensionless import maps to a `.cdl` file in the shipped library
+directory: `"std/string"` resolves to `std/string.cdl` under that directory.
+The library directory is `libs/` next to the Candela executable, which is
+where the installer places it, so a normal install needs nothing set. Set
+`CANDELA_LIB_PATH` to point the lookup at a different `libs/` directory (the
+one holding `std/` and, for the C-backed libraries, `std_src/`); this is an
+escape hatch for source checkouts and custom builds, not part of normal use.
+
+A `.cdl` file import resolves next to the importing file first and falls back
+to the shipped library directory.
+
+Resolution happens at compile time, so a program built to a `.cdlb` artifact
+has the imported module bytecode inlined and runs under `candela-vm` with no
+library files present.
+
+## Standard library
+
+The standard library lives in the shipped `std/` directory. The `math`,
+`time`, and `random` libraries are backed by a C library loaded across
+Candela's dynamic-library FFI. The `string`, `list`, `convert`, and `assert`
+libraries are written in Candela and use no dynamic library.

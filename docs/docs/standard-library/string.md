@@ -4,7 +4,7 @@ icon: lucide/type
 # String library
 
 Helpers that build on Candela's string operators and built-in methods. Import
-the library with `import std::string;` at the top-level.
+the library with `import "std/string";` at the top-level.
 
 *[at the top-level]: Outside of any function.
 

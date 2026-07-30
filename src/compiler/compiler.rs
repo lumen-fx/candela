@@ -3383,9 +3383,9 @@ impl Namespace {
     }
 }
 
-/// Loads the `std::list` module as an implicit `list` child namespace so its
+/// Loads the `std/list` module as an implicit `list` child namespace so its
 /// higher-order helpers work as array methods (`arr.map(f)`) with no explicit
-/// import. Resolution mirrors the namespaced-import path (`CANDELA_LIB_PATH` or
+/// import. Resolution mirrors the library-import path (`CANDELA_LIB_PATH` or
 /// `libs/` beside the executable); a missing library directory is not an error,
 /// the prelude is simply absent.
 #[cfg(not(target_arch = "wasm32"))]
@@ -3779,14 +3779,15 @@ fn parse_toplevel(
                 };
 
                 let file_path = if is_logical {
-                    // A namespaced import (`import std::string`) resolves against the
-                    // shipped library directory only, never source-relative, so it
-                    // works from any working directory with nothing set.
+                    // A library import (`import "std/string";`, extensionless)
+                    // resolves against the shipped library directory only, never
+                    // source-relative, so it works from any working directory
+                    // with nothing set.
                     shipped_lib(&path).unwrap_or_else(|| {
                         error_cannot_read_file(span, src_file_idx, sources);
                     })
                 } else {
-                    // A path-literal import resolves next to the importing file first,
+                    // A `.cdl` file import resolves next to the importing file first,
                     // then falls back to the shipped library directory.
                     file_path
                         .parent()

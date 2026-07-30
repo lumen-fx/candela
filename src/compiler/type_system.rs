@@ -1052,7 +1052,7 @@ impl Expr {
                         state.sources,
                     );
                 }
-                // An array collection method routed to a `std::list` helper
+                // An array collection method routed to a `std/list` helper
                 // infers its return type from that helper, specialized for the
                 // receiver and argument types.
                 if let Some(fn_id) = crate::compiler::methods::routed_list_method(

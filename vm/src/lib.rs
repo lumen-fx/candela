@@ -22,7 +22,7 @@ pub mod vm;
 
 pub mod embed;
 
-// json parse/stringify over the runtime value graph, backing `std::json`.
+// json parse/stringify over the runtime value graph, backing `std/json`.
 pub mod json;
 
 // The `.cdlb` bytecode artifact format plus the load/run API.

@@ -22,12 +22,12 @@ entirely in the compiler by monomorphization, so the runtime binary is unchanged
 
 Implemented: first-class function references (feature 1) -- named and anonymous
 functions passed to higher-order functions, non-capturing -- and the collection
-higher-order functions in `std::list` (feature 6), available both as free
+higher-order functions in `std/list` (feature 6), available both as free
 functions (`list::map(arr, f)`) and as methods on arrays (`arr.map(f)`,
 `arr.filter(f)`, `arr.reduce(init, f)`, `arr.each(f)`, `arr.find(f)`,
 `arr.any(f)`, `arr.all(f)`, `arr.sort_by(f)`, plus the reductions and slicers
 `first`/`last`/`sum`/`min`/`max`/`take`/`drop`/...). The method spelling needs no
-explicit import: an auto-prelude implicitly resolves `std::list`. These add
+explicit import: an auto-prelude implicitly resolves `std/list`. These add
 nothing to `candela-vm`.
 
 Implemented: native enums and payload-binding match (2), and `option`/`result`
@@ -49,10 +49,10 @@ runtime value: type tests (`is_int`/`is_float`/`is_str`/`is_bool`/`is_list`/
 back into a concrete type. Arithmetic on an `any` value is expressed by
 downcasting first (`as_int(v) * 2`); the downcast gives the compiler the concrete
 type it needs to pick the op, closing the ergonomics gap the enum pass left.
-`json_parse`/`json_stringify` are native runtime functions wrapped by `std::json`
+`json_parse`/`json_stringify` are native runtime functions wrapped by `std/json`
 (`parse`/`stringify`). Maps gained an empty literal (`{}`), `len`, `keys`,
-`values`, `contains`, and key iteration (`for k in m`), with `std::map` and
-`std::set` helper modules on top. All of these inline into a `.cdlb` and run
+`values`, `contains`, and key iteration (`for k in m`), with `std/map` and
+`std/set` helper modules on top. All of these inline into a `.cdlb` and run
 under `candela-vm`.
 
 ## 1. First-class functions (compile-time function references)
@@ -137,7 +137,7 @@ works without the caller importing the module. The library remains usable
 directly as free functions as well.
 
 The module resolves without an explicit import through an auto-prelude: when the
-top-level file is parsed, `std::list` is loaded as an implicit `list` child
+top-level file is parsed, `std/list` is loaded as an implicit `list` child
 namespace (resolved through the same `CANDELA_LIB_PATH` / exe-relative `libs/`
 path as a namespaced import). Resolution is best-effort, so an embedding host
 with no `libs/` tree still compiles; array methods there simply fall back to the
@@ -200,7 +200,7 @@ A native parse function implemented in Rust that turns a json string into
 existing `Data`: objects become maps keyed by strings, arrays become arrays, and
 scalars become the existing int/float/string/bool/null. No new value type is
 needed because every json shape maps onto a value candela already has, with `any`
-(feature 3) as the element/value type read back through a downcast. A `std::json`
+(feature 3) as the element/value type read back through a downcast. A `std/json`
 candela module wraps the native `json_parse`/`json_stringify` as `parse` and
 `stringify`. Parse errors surface as catchable `json_parse_error` errors.
 
@@ -250,7 +250,7 @@ emit an array; `len`/`contains` extend the existing operations to a map receiver
 loop. The empty literal `{}` types as an untyped map (like an empty array) and
 takes its key/value types from the first `insert`, so later `get`/iteration see
 concrete types instead of `any`. `set` is `libs/std/set.cdl` over a map, and
-`std::map` adds free-function helpers. Both inline into a `.cdlb`.
+`std/map` adds free-function helpers. Both inline into a `.cdlb`.
 
 ### Size impact
 
@@ -359,8 +359,8 @@ beyond feature 2.
 
 ## Shipping
 
-The pure-candela parts (the list methods, `std::json`, `std::map`/`std::set`
+The pure-candela parts (the list methods, `std/json`, `std/map`/`std/set`
 helpers, `option`/`result`) ship as `.cdl` files beside the toolchain, resolved
-by the existing zero-config `import std::x` path, and inline into a `.cdlb`
+by the existing zero-config `import "std/x"` path, and inline into a `.cdlb`
 whole-program image so a shipped program runs under `candela-vm` with no source
 tree.
