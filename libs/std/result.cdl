@@ -1,14 +1,14 @@
 /// The `Result` type: either a success (`Ok`) or a failure (`Err`), built on
 /// candela's native enums.
 ///
-///     import std::result;
+///     import "std/result";
 ///     let r = Ok(5);
 ///     match r {
 ///         Ok(v) => { print(v); }
 ///         Err(e) => { print(e); }
 ///     }
 ///
-/// The helpers below work either as free functions (`result::unwrap(r)`) or as
+/// The helpers below work either as free functions (`unwrap(r)`, with a bare import) or as
 /// methods on the value (`r.unwrap()`). This module is pure candela and inlines
 /// into a `.cdlb`, so it runs under `candela-vm` with no source tree.
 

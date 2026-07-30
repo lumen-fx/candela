@@ -1,8 +1,8 @@
 /// Checks for the `list` module (slicing and reshaping). Kept separate from the
 /// reduction checks so each test program stays small. Prints "list slices ok" on
 /// success; a failed check aborts the run with a message.
-import std::list;
-import std::assert;
+import "std/list" as list;
+import "std/assert" as assert;
 
 fn main() {
     assert::assert_eq(list::unique([1, 2, 2, 3, 1]), [1, 2, 3]);

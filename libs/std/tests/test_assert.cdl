@@ -1,15 +1,15 @@
 /// Checks for the `assert` module: the passing paths must run without raising.
 /// Prints "assert ok" on success; a failed check aborts the run with a message.
-import std::assert;
+import "std/assert";
 
 fn main() {
-    assert::assert(true);
-    assert::assert_msg(true, "unused");
-    assert::assert_true(1 == 1);
-    assert::assert_false(1 == 2);
-    assert::assert_eq("a", "a");
-    assert::assert_eq(42, 42);
-    assert::assert_ne("a", "b");
-    assert::assert_ne(1, 2);
+    assert(true);
+    assert_msg(true, "unused");
+    assert_true(1 == 1);
+    assert_false(1 == 2);
+    assert_eq("a", "a");
+    assert_eq(42, 42);
+    assert_ne("a", "b");
+    assert_ne(1, 2);
     print("assert ok");
 }

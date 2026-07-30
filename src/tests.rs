@@ -3680,6 +3680,31 @@ pub fn diagnostics_runtime_error_code_and_span() {
 }
 
 #[test]
+pub fn diagnostics_legacy_namespaced_import() {
+    // The removed `import std::list;` form parses far enough to suggest the
+    // exact quoted-path replacement.
+    let src = "import std::list;\nfn main() { print(1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "legacy_namespaced_import");
+    assert!(
+        d.message.contains("import \"std/list\";"),
+        "message: {:?}",
+        d.message
+    );
+    assert_eq!(&src[d.span], "std::list");
+}
+
+#[test]
+pub fn diagnostics_import_path_bad_extension() {
+    // An import path either ends in `.cdl` or has no extension.
+    let src = "import \"helpers.txt\";\nfn main() { print(1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "import_path_bad_extension");
+}
+
+#[test]
 pub fn diagnostics_sink_is_scoped() {
     // A failed collection must not poison later compilations (or the CLI path)
     assert!(compile_diag("fn main() { print(1); }", "ok.kl").is_ok());

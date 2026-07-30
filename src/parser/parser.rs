@@ -50,7 +50,7 @@ struct Parser<'a> {
     last_token_end: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ParserErr<'a> {
     UnexpectedEOF,
     UnknownToken,
@@ -67,6 +67,10 @@ enum ParserErr<'a> {
     TryBlockNoCatch,
     MatchBlockNoNonWildcardArm,
     MatchBlockZeroArms,
+    /// The removed `import std::string;` form; carries the path segments
+    /// joined with `/` so the error suggests the exact replacement.
+    LegacyNamespacedImport(String),
+    ImportPathBadExtension,
 }
 
 impl ParserErr<'_> {
@@ -86,6 +90,8 @@ impl ParserErr<'_> {
             ParserErr::TryBlockNoCatch => "try_block_no_catch",
             ParserErr::MatchBlockNoNonWildcardArm => "match_block_no_non_wildcard_arm",
             ParserErr::MatchBlockZeroArms => "match_block_zero_arms",
+            ParserErr::LegacyNamespacedImport(_) => "legacy_namespaced_import",
+            ParserErr::ImportPathBadExtension => "import_path_bad_extension",
         }
     }
 }
@@ -119,6 +125,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::MatchBlockZeroArms => {
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one arm{RESET}"
         }
+        ParserErr::LegacyNamespacedImport(ref path) => &format!(
+            "This import form was removed. Write {BLUE}{BOLD}import \"{path}\";{RESET} instead: a quoted path with no extension imports the library from the shipped library directory"
+        ),
+        ParserErr::ImportPathBadExtension => &format!(
+            "An import path either ends in {BLUE}{BOLD}.cdl{RESET} (a file import) or has no extension (a library import from the shipped library directory)"
+        ),
     };
     if crate::errors::diagnostics_enabled() {
         crate::errors::emit_diagnostic(
@@ -602,16 +614,32 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Import);
     let (next_token, span) = parser.next_token();
-    // Two import forms share this statement:
-    //   * a namespaced logical import, `import std::string;`, which the resolver
-    //     maps to the shipped library directory (`std::string` -> `std/string.cdl`);
-    //   * a path-literal import, `import "./local.cdl";`, resolved source-relative.
+    // One import form: a quoted path.
+    //   * A path ending in `.cdl` is a file import, resolved next to the
+    //     importing file (with the shipped library directory as fallback).
+    //   * A path with no extension is a library import: the resolver appends
+    //     `.cdl` and looks it up in the shipped library directory only
+    //     (`import "std/string";` -> `std/string.cdl`).
     let (path, is_logical, mut end) = if let Token::String(s) = next_token {
-        (SmolStr::new(parse_string(s)), false, span.end)
+        let raw = parse_string(s);
+        if raw.ends_with(".cdl") {
+            (raw, false, span.end)
+        } else {
+            let last_segment = raw.rsplit(['/', '\\']).next().unwrap_or(raw.as_str());
+            if last_segment.contains('.') {
+                cold_path();
+                parser.error(span, ParserErr::ImportPathBadExtension);
+            }
+            let mut with_ext = String::with_capacity(raw.len() + 4);
+            with_ext.push_str(raw.as_str());
+            with_ext.push_str(".cdl");
+            (SmolStr::new(&with_ext), true, span.end)
+        }
     } else if let Token::Identifier(first) = next_token {
+        // The old namespaced form (`import std::string;`) parses far enough to
+        // suggest the exact replacement, then errors.
         let mut segments = String::from(first);
         let mut end = span.end;
-        // Consume any `::segment` continuations, e.g. `std::text::unicode`.
         while parser.peek_token_opt() == Some(Token::DoubleColon) {
             parser.next_token();
             let (seg_token, seg_span) = parser.next_token();
@@ -620,19 +648,14 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
                 segments.push_str(seg);
                 end = seg_span.end;
             } else {
-                cold_path();
-                parser.error(
-                    seg_span,
-                    ParserErr::UnexpectedToken(
-                        Token::Identifier(""),
-                        seg_token,
-                        "Module path segments must be identifiers.",
-                    ),
-                );
+                break;
             }
         }
-        segments.push_str(".cdl");
-        (SmolStr::new(&segments), true, end)
+        cold_path();
+        parser.error(
+            (span.start, end).into(),
+            ParserErr::LegacyNamespacedImport(segments),
+        );
     } else {
         cold_path();
         parser.error(
@@ -640,7 +663,7 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
             ParserErr::UnexpectedToken(
                 Token::String(""),
                 next_token,
-                "An import is either a namespaced module (import std::string) or a path string (import \"./local.cdl\").",
+                "An import is a quoted path: import \"./local.cdl\"; for a file, import \"std/string\"; for a library.",
             ),
         );
     };

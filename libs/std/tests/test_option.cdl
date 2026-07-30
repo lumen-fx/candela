@@ -1,8 +1,8 @@
 /// Checks for the `option` module. Run with `candela run`, or build to a
 /// `.cdlb` and run under `candela-vm`. Prints "option ok" on success; a failed
 /// check aborts the run with a message.
-import std::option;
-import std::assert;
+import "std/option" as option;
+import "std/assert" as assert;
 
 // An `Option` payload is dynamically typed (`any`), so a mapper works on it
 // through type-agnostic operations like `str`; direct arithmetic on an `any`

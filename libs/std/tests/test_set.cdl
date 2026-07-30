@@ -1,7 +1,7 @@
 /// Checks for the `set` module. Prints "set ok" on success; a failed check
 /// aborts the run with a message.
-import std::set;
-import std::assert;
+import "std/set" as set;
+import "std/assert" as assert;
 
 fn main() {
     let s = set::new();

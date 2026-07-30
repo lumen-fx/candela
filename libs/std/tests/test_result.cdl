@@ -1,8 +1,8 @@
 /// Checks for the `result` module. Run with `candela run`, or build to a
 /// `.cdlb` and run under `candela-vm`. Prints "result ok" on success; a failed
 /// check aborts the run with a message.
-import std::result;
-import std::assert;
+import "std/result" as result;
+import "std/assert" as assert;
 
 fn main() {
     let ok = Ok(5);

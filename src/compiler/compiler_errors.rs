@@ -1609,3 +1609,47 @@ pub fn error_range_invalid_type(
         "range_element_type_mismatch",
     );
 }
+
+#[inline(never)]
+#[cold]
+pub fn error_import_symbol_collision(
+    symbol: &str,
+    existing_origin: &str,
+    module: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Import symbol collision")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "Importing \"{}\" brings in {}, which is already {}",
+                        blue(module),
+                        blue(symbol),
+                        existing_origin,
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(format_args!(
+                "A bare import merges the module's symbols into this file's scope. Write {} to keep the module behind a namespace instead",
+                green(format_args!("import \"{module}\" as name;")),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "Import symbol collision: importing \"{module}\" brings in {symbol}, which is already {existing_origin}"
+        ),
+        "import_symbol_collision",
+    );
+}

@@ -1,13 +1,13 @@
 /// Checks for the `convert` module. Prints "convert ok" on success; a failed
 /// check aborts the run with a message.
-import std::convert;
-import std::assert;
+import "std/convert";
+import "std/assert";
 
 fn main() {
-    assert::assert_eq(convert::to_int("42"), 42);
-    assert::assert_eq(convert::to_float("1.5"), 1.5);
-    assert::assert_eq(convert::to_string(42), "42");
-    assert::assert_true(convert::to_bool("true"));
-    assert::assert_false(convert::to_bool("false"));
+    assert_eq(to_int("42"), 42);
+    assert_eq(to_float("1.5"), 1.5);
+    assert_eq(to_string(42), "42");
+    assert_true(to_bool("true"));
+    assert_false(to_bool("false"));
     print("convert ok");
 }

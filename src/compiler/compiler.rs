@@ -3250,6 +3250,17 @@ pub enum SymbolKind {
     Enum(u16),
 }
 
+/// Whether two symbols are the same underlying definition (same kind, same
+/// id in the global fn/struct/enum tables).
+const fn symbol_ids_equal(a: SymbolKind, b: SymbolKind) -> bool {
+    match (a, b) {
+        (SymbolKind::Fn(x), SymbolKind::Fn(y))
+        | (SymbolKind::Struct(x), SymbolKind::Struct(y))
+        | (SymbolKind::Enum(x), SymbolKind::Enum(y)) => x == y,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Namespace {
     pub symbols: Vec<(SmolStr, SymbolKind)>,
@@ -3653,6 +3664,10 @@ fn parse_toplevel(
         );
     }
 
+    // Names merged into this file's scope by bare imports, with the module
+    // each came from; consulted to report both sources on a collision.
+    let mut merged_symbol_origins: Vec<(SmolStr, SmolStr)> = Vec::new();
+
     for import in imports {
         match import {
             #[cfg(not(target_arch = "wasm32"))]
@@ -3785,62 +3800,96 @@ fn parse_toplevel(
                         })
                 };
 
-                let child_name = alias.unwrap_or_else(|| {
-                    file_path
-                        .file_prefix()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(path.as_str())
-                        .to_smolstr()
-                });
+                let child_namespace = if let Some(cached) = files.get(&file_path) {
+                    cached.clone()
+                } else {
+                    let file_contents =
+                        std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
+                            error_cannot_read_file(span, src_file_idx, sources);
+                        });
+                    let file_name: SmolStr = file_path.to_str().unwrap_or(path.as_str()).into();
 
-                if let Some(cached) = files.get(&file_path) {
-                    namespace.children.push((child_name, cached.clone()));
-                    continue;
-                }
+                    let child_src_idx = sources.len() as u16;
 
-                let file_contents = std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
-                    error_cannot_read_file(span, src_file_idx, sources);
-                });
-                let file_name: SmolStr = file_path.to_str().unwrap_or(path.as_str()).into();
+                    sources.push(Source {
+                        filename: file_name.clone(),
+                        contents: file_contents,
+                    });
 
-                let child_src_idx = sources.len() as u16;
+                    // Parse the imported file's contents
+                    let file_code =
+                        parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
 
-                sources.push(Source {
-                    filename: file_name.clone(),
-                    contents: file_contents,
-                });
+                    let mut child_namespace = Namespace {
+                        symbols: Vec::new(),
+                        children: Vec::new(),
+                    };
 
-                // Parse the imported file's contents
-                let file_code =
-                    parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
-
-                let mut child_namespace = Namespace {
-                    symbols: Vec::new(),
-                    children: Vec::new(),
+                    parse_toplevel(
+                        file_code,
+                        &file_path,
+                        child_src_idx,
+                        fns,
+                        structs,
+                        enums,
+                        fn_registers,
+                        dynamic_libs,
+                        sources,
+                        &mut child_namespace,
+                        files,
+                        file_namespaces,
+                        pending_structs,
+                        pending_enums,
+                        pending_fns,
+                        #[cfg(not(target_arch = "wasm32"))]
+                        pending_dylibs,
+                        pending_host,
+                    );
+                    files.insert(file_path.clone(), child_namespace.clone());
+                    child_namespace
                 };
 
-                parse_toplevel(
-                    file_code,
-                    &file_path,
-                    child_src_idx,
-                    fns,
-                    structs,
-                    enums,
-                    fn_registers,
-                    dynamic_libs,
-                    sources,
-                    &mut child_namespace,
-                    files,
-                    file_namespaces,
-                    pending_structs,
-                    pending_enums,
-                    pending_fns,
-                    #[cfg(not(target_arch = "wasm32"))]
-                    pending_dylibs,
-                    pending_host,
-                );
-                files.insert(file_path, child_namespace.clone());
-                namespace.children.push((child_name, child_namespace));
+                if let Some(alias) = alias {
+                    // `import "..." as name;` binds the module under a
+                    // namespace: its symbols are reachable as `name::symbol`.
+                    namespace.children.push((alias, child_namespace));
+                } else {
+                    // A bare import merges the module's symbols into this
+                    // file's own scope. The module path as written, used to
+                    // name the source in a collision error.
+                    let module_display: SmolStr = if is_logical {
+                        path.strip_suffix(".cdl").unwrap_or(path.as_str()).into()
+                    } else {
+                        path.clone()
+                    };
+                    for (name, kind) in child_namespace.symbols {
+                        if let Some((_, existing)) =
+                            namespace.symbols.iter().find(|(n, _)| n == &name)
+                        {
+                            // The same underlying symbol arriving through two
+                            // routes (for example two modules that both import
+                            // a third) is not a conflict.
+                            if symbol_ids_equal(*existing, kind) {
+                                continue;
+                            }
+                            let existing_origin = merged_symbol_origins
+                                .iter()
+                                .find(|(n, _)| n == &name)
+                                .map(|(_, module)| format!("imported from \"{module}\""))
+                                .unwrap_or_else(|| "defined in this file".to_string());
+                            compiler_errors::error_import_symbol_collision(
+                                &name,
+                                &existing_origin,
+                                &module_display,
+                                span,
+                                src_file_idx,
+                                sources,
+                            );
+                        }
+                        merged_symbol_origins.push((name.clone(), module_display.clone()));
+                        namespace.symbols.push((name, kind));
+                    }
+                }
             }
             _ => unsafe { unreachable_unchecked() },
         }

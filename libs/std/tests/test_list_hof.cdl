@@ -1,8 +1,8 @@
 /// Checks for the higher-order `list` methods (map/filter/reduce and friends),
 /// exercising both named function references and anonymous functions. Prints
 /// "list hof ok" on success; a failed check aborts the run.
-import std::list;
-import std::assert;
+import "std/list" as list;
+import "std/assert" as assert;
 
 fn double(x) {
     return x * 2;

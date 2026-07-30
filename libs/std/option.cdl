@@ -4,14 +4,14 @@
 /// `Option` is an ordinary enum, so `Some(x)` and `None` are constructed
 /// directly and matched with payload binding:
 ///
-///     import std::option;
+///     import "std/option";
 ///     let o = Some(5);
 ///     match o {
 ///         Some(v) => { print(v); }
 ///         None => { print("nothing"); }
 ///     }
 ///
-/// The helpers below work either as free functions (`option::unwrap(o)`) or as
+/// The helpers below work either as free functions (`unwrap(o)`, with a bare import) or as
 /// methods on the value (`o.unwrap()`). This module is pure candela and inlines
 /// into a `.cdlb`, so it runs under `candela-vm` with no source tree.
 

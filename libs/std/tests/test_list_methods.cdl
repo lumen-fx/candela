@@ -2,7 +2,7 @@
 /// (`arr.map(f)`, `arr.filter(f)`, ...), which resolve without importing
 /// `std::list`: the array-method auto-prelude routes them to the module. Prints
 /// "list methods ok" on success; a failed check aborts the run.
-import std::assert;
+import "std/assert" as assert;
 
 fn double(x) {
     return x * 2;

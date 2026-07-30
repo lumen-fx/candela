@@ -1,8 +1,8 @@
 /// Checks for the `list` module (reductions and lookups). Run with `candela
 /// run`, or build to a `.cdlb` and run under `candela-vm`. Prints "list ok" on
 /// success; a failed check aborts the run with a message.
-import std::list;
-import std::assert;
+import "std/list" as list;
+import "std/assert" as assert;
 
 fn main() {
     assert::assert_eq(list::first([10, 20, 30]), 10);

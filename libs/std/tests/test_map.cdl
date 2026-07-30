@@ -1,7 +1,7 @@
 /// Checks for the `map` module and the map primitives. Prints "map ok" on
 /// success; a failed check aborts the run with a message.
-import std::map;
-import std::assert;
+import "std/map" as map;
+import "std/assert" as assert;
 
 fn main() {
     // Empty-literal, insert, len.
