@@ -17,8 +17,8 @@ use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::data::NULL;
 use crate::instr::Instr;
+use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 pub fn handle_user_function(
@@ -38,7 +38,7 @@ pub fn handle_user_function(
         is_recursive
     } else {
         let name = state.fns[fn_id].name.clone();
-        let mut visited = HashSet::new();
+        let mut visited = FxHashSet::default();
         visited.insert(name.clone());
         let is_recursive = can_reach(&name, &name, state.fns, &mut visited);
         state.fns[fn_id].is_recursive = Some(is_recursive);

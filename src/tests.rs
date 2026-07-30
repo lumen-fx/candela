@@ -148,7 +148,7 @@ pub fn while_and_condition() {
         print(result);
         }
         ",
-        109376.into()
+        109_376.into()
     );
 }
 
@@ -171,7 +171,7 @@ pub fn iter_fib_40() {
         print(c);
         }
         ",
-        102334155.into()
+        102_334_155.into()
     );
 }
 #[test]
@@ -194,7 +194,7 @@ pub fn iter_fib_40_loop() {
             print(sum);
         }
         ",
-        1000000.into()
+        1_000_000.into()
     );
 }
 
@@ -326,7 +326,7 @@ pub fn recursive_factorial() {
             print(fact(10));
         }
         ",
-        3628800.into()
+        3_628_800.into()
     );
 }
 
@@ -466,12 +466,12 @@ pub fn float_to_int_conversion() {
 #[test]
 pub fn int_to_str_conversion() {
     run_and_check_registers!(
-        r#"
+        r"
         fn main() {
             let x = str(42);
             print(x.len());
         }
-        "#,
+        ",
         2.into()
     );
 }
@@ -533,13 +533,13 @@ pub fn string_repeat() {
 #[test]
 pub fn array_repeat() {
     run_and_check_registers!(
-        r#"
+        r"
         fn main() {
             let s = [1,2];
             let t = s.repeat(3);
             print(t.len()+t[2]);
         }
-        "#,
+        ",
         7.into()
     );
 }
@@ -894,7 +894,7 @@ pub fn bubble_sort() {
 #[test]
 pub fn quicksort() {
     run_and_check_registers!(
-        r#"
+        r"
         fn quicksort(arr) {
             if arr.len() <= 1 {
                 return arr;
@@ -922,7 +922,7 @@ pub fn quicksort() {
             let sorted = quicksort(nums);
             print(sorted[0] + sorted[6]);
         }
-        "#,
+        ",
         85.into()
     );
 }
@@ -1317,7 +1317,7 @@ pub fn int_wraps_on_overflow() {
             print(x);
         }
         ",
-        (-2147483648_i32).into()
+        (-2_147_483_648_i32).into()
     );
 }
 
@@ -1331,7 +1331,7 @@ pub fn int_wraps_on_underflow() {
             print(x);
         }
         ",
-        2147483647_i32.into()
+        2_147_483_647_i32.into()
     );
 }
 
@@ -1344,7 +1344,7 @@ pub fn negative_int_literal() {
             print(x);
         }
         ",
-        (-2147483648_i32).into()
+        (-2_147_483_648_i32).into()
     );
 }
 
@@ -1769,7 +1769,7 @@ pub fn expr_eval_mutual_recursion() {
             print(checksum);
         }
         "#,
-        90023650.into()
+        90_023_650.into()
     );
 }
 
@@ -1858,7 +1858,7 @@ pub fn unreachable_return_after_exhaustive_condition() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn partial_return_flow_with_null() {
     run!(
         r#"
@@ -1920,7 +1920,7 @@ pub fn return_flow_exhaustive_condition_ignores_later_conflicting_return() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn return_flow_return_inside_for_loop_is_not_total() {
     run!(
         r#"
@@ -1938,7 +1938,7 @@ pub fn return_flow_return_inside_for_loop_is_not_total() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn return_flow_return_inside_while_loop_is_not_total() {
     run!(
         r#"
@@ -1956,7 +1956,7 @@ pub fn return_flow_return_inside_while_loop_is_not_total() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn return_flow_branch_returns_null() {
     run!(
         "
@@ -2735,28 +2735,28 @@ pub fn type_function() {
 #[test]
 pub fn array_slice() {
     run_and_check_registers!(
-        r#"
+        r"
         fn main() {
             let x = [0,1,2,3,4,5];
             let y = x[3..5];
             print(y[0]);
         }
-        "#,
+        ",
         3.into()
     );
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn array_slice_negative_index() {
     run_and_check_registers!(
-        r#"
+        r"
         fn main() {
             let x = [0,1,2,3,4,5];
             let y = x[3..-5];
             print(y[0]);
         }
-        "#,
+        ",
         3.into()
     );
 }
@@ -2776,7 +2776,7 @@ pub fn string_slice() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn string_slice_negative_index() {
     run_and_check_registers!(
         r#"
@@ -2913,7 +2913,7 @@ pub fn try_catch_division_by_zero() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn try_catch_insufficient() {
     run!(
         "
@@ -3237,7 +3237,7 @@ pub fn struct_field_condition() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_unknown_name() {
     run!(
         "
@@ -3249,7 +3249,7 @@ pub fn struct_unknown_name() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_missing_field() {
     run!(
         "
@@ -3262,7 +3262,7 @@ pub fn struct_missing_field() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_unknown_field() {
     run!(
         "
@@ -3275,7 +3275,7 @@ pub fn struct_unknown_field() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_field_wrong_type() {
     run!(
         "
@@ -3288,7 +3288,7 @@ pub fn struct_field_wrong_type() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_unknown_field_access() {
     run!(
         "
@@ -3302,7 +3302,7 @@ pub fn struct_unknown_field_access() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "explicit panic")]
 pub fn struct_field_assign_wrong_type() {
     run!(
         "
@@ -3318,7 +3318,7 @@ pub fn struct_field_assign_wrong_type() {
 #[test]
 pub fn nbody() {
     run_and_check_registers!(
-        r#"
+        r"
         struct Body {
             x: float,
             y: float,
@@ -3459,15 +3459,15 @@ pub fn nbody() {
             advance(0.01, 10, bodies, pairs);
             report_energy(bodies, pairs);
         }
-        "#,
-        (-0.1690730217146998).into()
+        ",
+        (-0.169_073_021_714_699_8).into()
     );
 }
 
 #[test]
 pub fn loop_function_reg_interference() {
     run_and_check_registers!(
-        r#"
+        r"
         struct Test { v: int }
         fn f(s) { return 0; }
 
@@ -3484,7 +3484,7 @@ pub fn loop_function_reg_interference() {
         fn main() {
             print(run(Test { v: 42 }));
         }
-        "#,
+        ",
         1.into()
     );
 }
@@ -3724,7 +3724,7 @@ pub fn diagnostics_sink_is_scoped() {
 /// pulling in an `rand` dependency.
 struct Rng(u64);
 impl Rng {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -3732,7 +3732,7 @@ impl Rng {
         self.0 = x;
         x
     }
-    fn below(&mut self, n: usize) -> usize {
+    const fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
 }

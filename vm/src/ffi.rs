@@ -207,8 +207,12 @@ pub fn candela_struct_to_c_struct(
                 buf.get_unchecked_mut(offset..offset + 8)
                     .copy_from_slice_unchecked(&ptr);
             } else if field.is_struct() {
-                let b =
-                    candela_struct_to_c_struct(field.as_struct(), obj_pool, string_pool, keep_alive);
+                let b = candela_struct_to_c_struct(
+                    field.as_struct(),
+                    obj_pool,
+                    string_pool,
+                    keep_alive,
+                );
                 buf.get_unchecked_mut(offset..offset + b.len())
                     .copy_from_slice_unchecked(&b);
             } else {

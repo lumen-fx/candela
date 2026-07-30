@@ -59,7 +59,9 @@ pub fn error_array_diff_types(
         sources,
         file_idx,
         array_span,
-        &format!("Invalid array types: this array holds elements of type {array_elem_type} but an element of type {failing_elem_type} was found"),
+        &format!(
+            "Invalid array types: this array holds elements of type {array_elem_type} but an element of type {failing_elem_type} was found"
+        ),
         "array_element_type_mismatch",
     );
 }
@@ -105,7 +107,9 @@ pub fn error_invalid_type(
         sources,
         file_idx,
         span,
-        &format!("Invalid type: expected {expected_type}, but this expression's type is {perceived_type}"),
+        &format!(
+            "Invalid type: expected {expected_type}, but this expression's type is {perceived_type}"
+        ),
         "invalid_type",
     );
 }
@@ -155,7 +159,11 @@ pub fn error_division_by_zero(modulo: bool, span: Span, file_idx: u16, sources: 
         file_idx,
         span,
         &format!("{} by zero", if modulo { "Modulo" } else { "Division" }),
-        if modulo { "modulo_by_zero" } else { "division_by_zero" },
+        if modulo {
+            "modulo_by_zero"
+        } else {
+            "division_by_zero"
+        },
     );
 }
 
@@ -244,8 +252,19 @@ pub fn error_type_not_indexable(
         sources,
         file_idx,
         span,
-        &format!("This expression's type is {t}, which cannot be {}", if iterator_error { "iterated on" } else { "indexed" }),
-        if iterator_error { "type_not_iterable" } else { "type_not_indexable" },
+        &format!(
+            "This expression's type is {t}, which cannot be {}",
+            if iterator_error {
+                "iterated on"
+            } else {
+                "indexed"
+            }
+        ),
+        if iterator_error {
+            "type_not_iterable"
+        } else {
+            "type_not_indexable"
+        },
     );
 }
 
@@ -411,7 +430,9 @@ pub fn error_map_diff_types(
         sources,
         file_idx,
         map_span,
-        &format!("Invalid map types: this map holds entries of type {map_elem_type} but an expression of type {failing_elem_type} was found"),
+        &format!(
+            "Invalid map types: this map holds entries of type {map_elem_type} but an expression of type {failing_elem_type} was found"
+        ),
         "map_entry_type_mismatch",
     );
 }
@@ -527,7 +548,15 @@ pub fn error_struct_missing_fields(
         sources,
         file_idx,
         struct_literal_span,
-        &format!("Missing struct field{}: {}", if missing_fields.len() > 1 { "s" } else { "" }, missing_fields.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")),
+        &format!(
+            "Missing struct field{}: {}",
+            if missing_fields.len() > 1 { "s" } else { "" },
+            missing_fields
+                .iter()
+                .map(|f| f.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         "struct_missing_fields",
     );
 }
@@ -565,7 +594,10 @@ pub fn check_args(
             sources,
             file_idx,
             span,
-            &format!("Function {fn_name} expects {expected_args_len} arguments but {} arguments were supplied", args.len()),
+            &format!(
+                "Function {fn_name} expects {expected_args_len} arguments but {} arguments were supplied",
+                args.len()
+            ),
             "arity_mismatch",
         );
     }
@@ -605,7 +637,14 @@ pub fn error_invalid_obj_type(
         sources,
         file_idx,
         span,
-        &format!("Function {fn_name} expects this expression's type to be {} but here its type is {perceived_type}", expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join(" or ")),
+        &format!(
+            "Function {fn_name} expects this expression's type to be {} but here its type is {perceived_type}",
+            expected_type
+                .iter()
+                .map(|s| s.to_smolstr())
+                .collect::<Vec<SmolStr>>()
+                .join(" or ")
+        ),
         "invalid_object_type",
     );
 }
@@ -677,7 +716,9 @@ pub fn check_args_user_fn(
             state.sources,
             file_idx,
             span,
-            &format!("Function {fn_name} expects {expected_args_len} arguments but {args_len} arguments were supplied"),
+            &format!(
+                "Function {fn_name} expects {expected_args_len} arguments but {args_len} arguments were supplied"
+            ),
             "arity_mismatch",
         );
     }
@@ -740,7 +781,10 @@ pub fn check_args_range(
             sources,
             file_idx,
             span,
-            &format!("Function {fn_name} expects at least {min_args_len} and at most {max_args_len} arguments but {} were supplied", args.len()),
+            &format!(
+                "Function {fn_name} expects at least {min_args_len} and at most {max_args_len} arguments but {} were supplied",
+                args.len()
+            ),
             "arity_mismatch_range",
         );
     }
@@ -860,7 +904,9 @@ pub fn error_struct_field_invalid_type(
         sources,
         file_idx,
         value_span,
-        &format!("Field {struct_field_name} in struct {struct_name} expects type {struct_field_type}, but this expression is of type {value_type}"),
+        &format!(
+            "Field {struct_field_name} in struct {struct_name} expects type {struct_field_type}, but this expression is of type {value_type}"
+        ),
         "struct_field_type_mismatch",
     );
 }
@@ -1517,7 +1563,9 @@ pub fn error_function_arg_invalid_type(
         sources,
         file_idx,
         arg_span,
-        &format!("Function {fn_name} expects this argument's type to be {expected_type}, but this expression's type is {perceived_type}"),
+        &format!(
+            "Function {fn_name} expects this argument's type to be {expected_type}, but this expression's type is {perceived_type}"
+        ),
         "argument_type_mismatch",
     );
 }
@@ -1562,7 +1610,14 @@ pub fn error_function_arg_invalid_type_multiple(
         sources,
         file_idx,
         arg_span,
-        &format!("Function {fn_name} expects this argument to be of type {}, but this expression's type is {perceived_type}", expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join(" or ")),
+        &format!(
+            "Function {fn_name} expects this argument to be of type {}, but this expression's type is {perceived_type}",
+            expected_type
+                .iter()
+                .map(|s| s.to_smolstr())
+                .collect::<Vec<SmolStr>>()
+                .join(" or ")
+        ),
         "argument_type_mismatch",
     );
 }
@@ -1605,7 +1660,9 @@ pub fn error_range_invalid_type(
         sources,
         file_idx,
         span,
-        &format!("Invalid type in range: expected int, but this expression's type is {perceived_type}"),
+        &format!(
+            "Invalid type in range: expected int, but this expression's type is {perceived_type}"
+        ),
         "range_element_type_mismatch",
     );
 }

@@ -775,7 +775,7 @@ fn compile_enum_match(
     enum_id: u16,
     scrutinee: &Expr,
     arms: &[(Expr, Box<[Expr]>)],
-    wildcard: &Option<Box<[Expr]>>,
+    wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -890,7 +890,7 @@ fn compile_enum_match(
 fn compile_match(
     scrutinee: &Expr,
     arms: &[(Expr, Box<[Expr]>)],
-    wildcard: &Option<Box<[Expr]>>,
+    wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -916,7 +916,7 @@ fn compile_match(
             ));
         }
         if let Some(w) = wildcard {
-            output_code.push(Expr::ElseBlock(w.clone()));
+            output_code.push(Expr::ElseBlock(Box::from(w)));
         }
         let desugared = Expr::EvalBlock(Box::from([
             Expr::VarDeclare(obj_var.clone(), Box::new(scrutinee.clone())),
@@ -3110,7 +3110,16 @@ impl Expr {
             }
             Self::Match(scrutinee, arms, wildcard, span) => {
                 debug_assert!(!uses_id);
-                compile_match(scrutinee, arms, wildcard, *span, v, ctx, state, output);
+                compile_match(
+                    scrutinee,
+                    arms,
+                    wildcard.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
                 None
             }
             Self::NamespacedRef(path, span) => {
@@ -3804,10 +3813,9 @@ fn parse_toplevel(
                 let child_namespace = if let Some(cached) = files.get(&file_path) {
                     cached.clone()
                 } else {
-                    let file_contents =
-                        std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
-                            error_cannot_read_file(span, src_file_idx, sources);
-                        });
+                    let file_contents = std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
+                        error_cannot_read_file(span, src_file_idx, sources);
+                    });
                     let file_name: SmolStr = file_path.to_str().unwrap_or(path.as_str()).into();
 
                     let child_src_idx = sources.len() as u16;
@@ -3876,8 +3884,10 @@ fn parse_toplevel(
                             let existing_origin = merged_symbol_origins
                                 .iter()
                                 .find(|(n, _)| n == &name)
-                                .map(|(_, module)| format!("imported from \"{module}\""))
-                                .unwrap_or_else(|| "defined in this file".to_string());
+                                .map_or_else(
+                                    || String::from("defined in this file"),
+                                    |(_, module)| format!("imported from \"{module}\""),
+                                );
                             compiler_errors::error_import_symbol_collision(
                                 &name,
                                 &existing_origin,

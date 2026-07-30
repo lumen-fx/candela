@@ -47,39 +47,75 @@ pub enum Value {
 impl Value {
     #[must_use]
     pub const fn as_i64(&self) -> Option<i64> {
-        if let Self::Int(i) = self { Some(*i) } else { None }
+        if let Self::Int(i) = self {
+            Some(*i)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn as_f64(&self) -> Option<f64> {
-        if let Self::Float(f) = self { Some(*f) } else { None }
+        if let Self::Float(f) = self {
+            Some(*f)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn as_bool(&self) -> Option<bool> {
-        if let Self::Bool(b) = self { Some(*b) } else { None }
+        if let Self::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn as_str(&self) -> Option<&str> {
-        if let Self::String(s) = self { Some(s.as_str()) } else { None }
+        if let Self::String(s) = self {
+            Some(s.as_str())
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn as_array(&self) -> Option<&Vec<Self>> {
-        if let Self::Array(a) = self { Some(a) } else { None }
+        if let Self::Array(a) = self {
+            Some(a)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn as_map(&self) -> Option<&BTreeMap<String, Self>> {
-        if let Self::Map(m) = self { Some(m) } else { None }
+        if let Self::Map(m) = self {
+            Some(m)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub fn into_string(self) -> Option<String> {
-        if let Self::String(s) = self { Some(s) } else { None }
+        if let Self::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub fn into_array(self) -> Option<Vec<Self>> {
-        if let Self::Array(a) = self { Some(a) } else { None }
+        if let Self::Array(a) = self {
+            Some(a)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub fn into_map(self) -> Option<BTreeMap<String, Self>> {
-        if let Self::Map(m) = self { Some(m) } else { None }
+        if let Self::Map(m) = self {
+            Some(m)
+        } else {
+            None
+        }
     }
     #[must_use]
     pub const fn is_null(&self) -> bool {
@@ -175,7 +211,9 @@ impl HostType {
                     Some(DataType::String) | None => {}
                     Some(_) => return None,
                 }
-                let value = kv.1.as_ref().map_or(Some(Self::Unit), Self::from_datatype)?;
+                let value =
+                    kv.1.as_ref()
+                        .map_or(Some(Self::Unit), Self::from_datatype)?;
                 Some(Self::Map(Box::new(value)))
             }
             _ => None,
@@ -258,17 +296,27 @@ impl<T: FromHostValue> FromHostValue for Vec<T> {
 impl<T: FromHostValue> FromHostValue for BTreeMap<String, T> {
     fn from_host_value(v: &Value) -> Self {
         v.as_map()
-            .map(|m| m.iter().map(|(k, val)| (k.clone(), T::from_host_value(val))).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, val)| (k.clone(), T::from_host_value(val)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
     fn host_type() -> HostType {
         HostType::Map(Box::new(T::host_type()))
     }
 }
-impl<T: FromHostValue, S: std::hash::BuildHasher + Default> FromHostValue for HashMap<String, T, S> {
+impl<T: FromHostValue, S: std::hash::BuildHasher + Default> FromHostValue
+    for HashMap<String, T, S>
+{
     fn from_host_value(v: &Value) -> Self {
         v.as_map()
-            .map(|m| m.iter().map(|(k, val)| (k.clone(), T::from_host_value(val))).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, val)| (k.clone(), T::from_host_value(val)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
     fn host_type() -> HostType {
@@ -340,7 +388,11 @@ impl IntoHostValue for () {
 }
 impl<T: IntoHostValue> IntoHostValue for Vec<T> {
     fn into_host_value(self) -> Value {
-        Value::Array(self.into_iter().map(IntoHostValue::into_host_value).collect())
+        Value::Array(
+            self.into_iter()
+                .map(IntoHostValue::into_host_value)
+                .collect(),
+        )
     }
     fn host_type() -> HostType {
         HostType::Array(Box::new(T::host_type()))
@@ -348,7 +400,11 @@ impl<T: IntoHostValue> IntoHostValue for Vec<T> {
 }
 impl<T: IntoHostValue> IntoHostValue for BTreeMap<String, T> {
     fn into_host_value(self) -> Value {
-        Value::Map(self.into_iter().map(|(k, v)| (k, v.into_host_value())).collect())
+        Value::Map(
+            self.into_iter()
+                .map(|(k, v)| (k, v.into_host_value()))
+                .collect(),
+        )
     }
     fn host_type() -> HostType {
         HostType::Map(Box::new(T::host_type()))
@@ -356,7 +412,11 @@ impl<T: IntoHostValue> IntoHostValue for BTreeMap<String, T> {
 }
 impl<T: IntoHostValue, S: std::hash::BuildHasher> IntoHostValue for HashMap<String, T, S> {
     fn into_host_value(self) -> Value {
-        Value::Map(self.into_iter().map(|(k, v)| (k, v.into_host_value())).collect())
+        Value::Map(
+            self.into_iter()
+                .map(|(k, v)| (k, v.into_host_value()))
+                .collect(),
+        )
     }
     fn host_type() -> HostType {
         HostType::Map(Box::new(T::host_type()))
@@ -516,7 +576,10 @@ pub fn unmarshal_value(
             .iter()
             .zip(values.iter())
             .map(|((name, _, _), val)| {
-                (name.to_string(), unmarshal_value(*val, objs, maps, strings, structs))
+                (
+                    name.to_string(),
+                    unmarshal_value(*val, objs, maps, strings, structs),
+                )
             })
             .collect();
         Value::Map(record)

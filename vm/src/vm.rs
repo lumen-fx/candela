@@ -112,6 +112,10 @@ pub trait UncheckedVecOps<T> {
     fn pop_unchecked(&mut self) -> T;
 }
 pub trait UncheckedSliceOps<T: Copy> {
+    /// # Safety
+    ///
+    /// `src` must not be longer than `self`; the copy is unchecked in release
+    /// builds.
     unsafe fn copy_from_slice_unchecked(&mut self, src: &[T]);
 }
 
@@ -194,6 +198,10 @@ impl RegisterFile {
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.0.len()
+    }
+    #[inline(always)]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

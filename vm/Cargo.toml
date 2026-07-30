@@ -25,6 +25,12 @@ path = "src/lib.rs"
 name = "candela-vm"
 path = "src/bin/candela-vm.rs"
 
+[lints.clippy]
+# The VM's hot paths thread their state as explicit borrowed arguments instead
+# of a context struct; the compiler crate makes the same choice (see the
+# root manifest).
+too_many_arguments = "allow"
+
 [features]
 # Route runtime output through the captured-output sink instead of real stdout
 # (used by the C-ABI / embedding hosts). Off by default for the lean binary.

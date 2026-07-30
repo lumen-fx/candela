@@ -12,12 +12,12 @@ use ariadne::Label;
 use ariadne::Report;
 use ariadne::ReportKind;
 use blocks::parse_condition_block;
+use blocks::parse_enum_declare;
 use blocks::parse_eval_block;
 use blocks::parse_for_loop;
 use blocks::parse_function;
 use blocks::parse_impl_block;
 use blocks::parse_loop_block;
-use blocks::parse_enum_declare;
 use blocks::parse_match;
 use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
@@ -80,7 +80,9 @@ impl ParserErr<'_> {
         match self {
             ParserErr::UnexpectedEOF => "unexpected_eof",
             ParserErr::UnknownToken => "unknown_token",
-            ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => "unexpected_token",
+            ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => {
+                "unexpected_token"
+            }
             ParserErr::ArrayElementsMissingComma => "array_elements_missing_comma",
             ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
             ParserErr::DivisionByZero => "division_by_zero",
@@ -99,6 +101,7 @@ impl ParserErr<'_> {
 #[cold]
 #[inline(never)]
 fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> ! {
+    let kind = t.kind();
     let err_message = match t {
         ParserErr::UnexpectedEOF => "Unexpected EOF",
         ParserErr::UnknownToken => "Unknown token",
@@ -125,7 +128,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::MatchBlockZeroArms => {
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one arm{RESET}"
         }
-        ParserErr::LegacyNamespacedImport(ref path) => &format!(
+        ParserErr::LegacyNamespacedImport(path) => &format!(
             "This import form was removed. Write {BLUE}{BOLD}import \"{path}\";{RESET} instead: a quoted path with no extension imports the library from the shipped library directory"
         ),
         ParserErr::ImportPathBadExtension => &format!(
@@ -137,7 +140,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             src.filename.as_str(),
             (start as usize)..(end as usize),
             crate::errors::strip_ansi(err_message),
-            t.kind(),
+            kind,
         );
     }
     eprintln!("{RED}CANDELA ERROR{RESET}");
@@ -532,74 +535,86 @@ fn error_unclosed_delimiter(
             "This {opener_token} is never closed: expected {expected_closer_token} but found {actual_closer_token}"
         )
     } else {
-        format!("This {opener_token} is never closed: expected {expected_closer_token} but the file ends here")
-    };
-    parser.throw_parser_err(|| {
-        let mut report = Report::build(
-            ariadne::ReportKind::Error,
-            (parser.ctx.src.filename.as_str(), opener_span.into()),
+        format!(
+            "This {opener_token} is never closed: expected {expected_closer_token} but the file ends here"
         )
-        .with_message("Unclosed delimiter")
-        .with_label(
-            Label::new((parser.ctx.src.filename.as_str(), opener_span.into()))
-                .with_message(format_args!("This {opener_token} is never closed"))
-                .with_color(ariadne::Color::Red),
-        );
-
-        if let Some((actual_closer_token, actual_closer_token_span)) = end {
-            report = report.with_label(
-                Label::new((
-                    parser.ctx.src.filename.as_str(),
-                    actual_closer_token_span.into(),
-                ))
-                .with_message(format_args!(
-                    "Expected {expected_closer_token} but found {actual_closer_token}"
-                ))
-                .with_color(ariadne::Color::Red),
+    };
+    parser.throw_parser_err(
+        || {
+            let mut report = Report::build(
+                ariadne::ReportKind::Error,
+                (parser.ctx.src.filename.as_str(), opener_span.into()),
+            )
+            .with_message("Unclosed delimiter")
+            .with_label(
+                Label::new((parser.ctx.src.filename.as_str(), opener_span.into()))
+                    .with_message(format_args!("This {opener_token} is never closed"))
+                    .with_color(ariadne::Color::Red),
             );
-        } else {
-            report = report
-                .with_label(
-                    Label::new((parser.ctx.src.filename.as_str(), parser.eof_span().into()))
-                        .with_message(format_args!(
-                            "Expected {expected_closer_token} but the file ends here"
-                        ))
-                        .with_color(ariadne::Color::Red),
-                )
-                .with_help(format_args!(
-                    "Add a {} here to close it",
-                    blue(expected_closer_token)
-                ));
-        }
 
-        report.finish()
-    }, opener_span, &message, "unclosed_delimiter")
+            if let Some((actual_closer_token, actual_closer_token_span)) = end {
+                report = report.with_label(
+                    Label::new((
+                        parser.ctx.src.filename.as_str(),
+                        actual_closer_token_span.into(),
+                    ))
+                    .with_message(format_args!(
+                        "Expected {expected_closer_token} but found {actual_closer_token}"
+                    ))
+                    .with_color(ariadne::Color::Red),
+                );
+            } else {
+                report = report
+                    .with_label(
+                        Label::new((parser.ctx.src.filename.as_str(), parser.eof_span().into()))
+                            .with_message(format_args!(
+                                "Expected {expected_closer_token} but the file ends here"
+                            ))
+                            .with_color(ariadne::Color::Red),
+                    )
+                    .with_help(format_args!(
+                        "Add a {} here to close it",
+                        blue(expected_closer_token)
+                    ));
+            }
+
+            report.finish()
+        },
+        opener_span,
+        &message,
+        "unclosed_delimiter",
+    )
 }
 
 #[cold]
 #[inline(never)]
 fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
     let span: Span = (parser.last_token_end as u32, parser.last_token_end as u32).into();
-    parser.throw_parser_err(|| {
-        Report::build(
-            ariadne::ReportKind::Error,
-            (
-                parser.ctx.src.filename.as_str(),
-                (parser.last_token_end..parser.last_token_end),
-            ),
-        )
-        .with_message("Missing semicolon")
-        .with_label(
-            Label::new((
-                parser.ctx.src.filename.as_str(),
-                (parser.last_token_end..parser.last_token_end),
-            ))
-            .with_message(format_args!("Add a {} here", blue(';')))
-            .with_color(ariadne::Color::Blue),
-        )
-        .with_help("All statements end with a ';'")
-        .finish()
-    }, span, "Missing semicolon", "missing_semicolon")
+    parser.throw_parser_err(
+        || {
+            Report::build(
+                ariadne::ReportKind::Error,
+                (
+                    parser.ctx.src.filename.as_str(),
+                    (parser.last_token_end..parser.last_token_end),
+                ),
+            )
+            .with_message("Missing semicolon")
+            .with_label(
+                Label::new((
+                    parser.ctx.src.filename.as_str(),
+                    (parser.last_token_end..parser.last_token_end),
+                ))
+                .with_message(format_args!("Add a {} here", blue(';')))
+                .with_color(ariadne::Color::Blue),
+            )
+            .with_help("All statements end with a ';'")
+            .finish()
+        },
+        span,
+        "Missing semicolon",
+        "missing_semicolon",
+    )
 }
 
 fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {

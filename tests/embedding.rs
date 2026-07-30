@@ -139,8 +139,14 @@ fn main() {}
 
     let mut program = engine.compile(src, "m.cdl").unwrap();
     assert_eq!(program.call("ai", &[41i64.into()]).unwrap(), Value::Int(42));
-    assert_eq!(program.call("hf", &[9.0f64.into()]).unwrap(), Value::Float(4.5));
-    assert_eq!(program.call("ng", &[true.into()]).unwrap(), Value::Bool(false));
+    assert_eq!(
+        program.call("hf", &[9.0f64.into()]).unwrap(),
+        Value::Float(4.5)
+    );
+    assert_eq!(
+        program.call("ng", &[true.into()]).unwrap(),
+        Value::Bool(false)
+    );
     assert_eq!(
         program.call("sh", &["hi".into()]).unwrap(),
         Value::String("HI".to_owned())
@@ -212,7 +218,10 @@ fn main() {}
     assert!(err.is_err(), "expected a runtime diagnostic");
 
     // The program remains usable for a subsequent good call.
-    assert_eq!(program.call("ok", &[2i64.into(), 3i64.into()]).unwrap(), Value::Int(5));
+    assert_eq!(
+        program.call("ok", &[2i64.into(), 3i64.into()]).unwrap(),
+        Value::Int(5)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +247,10 @@ fn main() {}
 
     // Array passed from the host through a script fn into the host closure.
     let sum = program
-        .call("total", &[Value::Array(vec![10.into(), 20.into(), 5.into()])])
+        .call(
+            "total",
+            &[Value::Array(vec![10.into(), 20.into(), 5.into()])],
+        )
         .unwrap();
     assert_eq!(sum, Value::Int(35));
 
@@ -246,7 +258,12 @@ fn main() {}
     let arr = program.call("make", &[]).unwrap();
     assert_eq!(
         arr,
-        Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+        Value::Array(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4)
+        ])
     );
 }
 
@@ -265,7 +282,10 @@ fn main() {}
 "#;
     let mut program = engine.compile(src, "seq.cdl").unwrap();
     let got = program.call("get", &[]).unwrap();
-    assert_eq!(got, Value::Array(vec![Value::Int(7), Value::Int(8), Value::Int(9)]));
+    assert_eq!(
+        got,
+        Value::Array(vec![Value::Int(7), Value::Int(8), Value::Int(9)])
+    );
 }
 
 /// A string-keyed map round-trips both directions.

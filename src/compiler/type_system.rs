@@ -22,7 +22,6 @@ use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
 use std::rc::Rc;
@@ -129,10 +128,12 @@ impl TypeExpr {
     }
 }
 
-/// Renders a [`DataType`] with full struct/function detail (field names, arg
-/// names) for diagnostics, resolving `Struct`/`Fn` ids against the compiler
-/// `State`. The plain `Display` impl (in `candela-vm`) has no `State`, so it
-/// renders those variants opaquely; this is the compiler-side detailed form.
+/// Renders a [`DataType`] with full struct/function detail for diagnostics.
+///
+/// Field and argument names are resolved against the compiler `State` by
+/// `Struct`/`Fn` id. The plain `Display` impl (in `candela-vm`) has no
+/// `State`, so it renders those variants opaquely; this is the compiler-side
+/// detailed form.
 #[must_use]
 pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
     match t {
@@ -218,6 +219,11 @@ pub fn arg_types_specialize_equal(a: &[DataType], b: &[DataType]) -> bool {
 }
 
 /// Collect all the function calls in the given code
+///
+/// # Panics
+///
+/// Panics when a `FunctionCall` node carries an empty namespace path, which
+/// the parser never produces.
 pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
     let mut expr_stack: Vec<&Expr> = content.iter().collect();
     while let Some(expression) = expr_stack.pop() {
@@ -310,11 +316,11 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
 }
 
 /// Check if the function src_fn can call target_fn
-pub fn can_reach(
+pub fn can_reach<S: std::hash::BuildHasher>(
     src_fn: &str,
     target_fn: &str,
     fns: &[Function],
-    visited: &mut HashSet<SmolStr>,
+    visited: &mut std::collections::HashSet<SmolStr, S>,
 ) -> bool {
     if let Some(from_fn) = fns.iter().find(|f| f.name.as_str() == src_fn) {
         for callee in &from_fn.direct_calls {
@@ -695,6 +701,12 @@ fn infer_user_fn_return_type(
 }
 
 impl Expr {
+    /// Infers this expression's static [`DataType`] without emitting code.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a call node carries an empty namespace path, which the
+    /// parser never produces.
     pub fn infer_type(&self, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> DataType {
         match self {
             Self::Var(name, span) => {

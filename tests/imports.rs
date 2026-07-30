@@ -13,7 +13,10 @@ use std::process::{Command, Output};
 /// Creates a fresh scratch directory, writes the given files into it, runs
 /// `prog.cdl` through the `candela` binary, and cleans up.
 fn run_program(test_name: &str, files: &[(&str, &str)]) -> Output {
-    let dir = std::env::temp_dir().join(format!("candela_imports_{test_name}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "candela_imports_{test_name}_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     for (name, contents) in files {
         std::fs::write(dir.join(name), contents).expect("write test file");
@@ -38,7 +41,10 @@ fn bare_file_import_merges_into_scope() {
         "bare_merge",
         &[
             ("helper.cdl", "fn ping() { return 5; }\n"),
-            ("prog.cdl", "import \"helper.cdl\";\nfn main() { print(ping()); }\n"),
+            (
+                "prog.cdl",
+                "import \"helper.cdl\";\nfn main() { print(ping()); }\n",
+            ),
         ],
     );
     assert!(
@@ -122,8 +128,14 @@ fn diamond_bare_imports_are_not_a_collision() {
         "diamond",
         &[
             ("base.cdl", "fn shared() { return 7; }\n"),
-            ("a.cdl", "import \"base.cdl\";\nfn from_a() { return shared(); }\n"),
-            ("b.cdl", "import \"base.cdl\";\nfn from_b() { return shared() + 1; }\n"),
+            (
+                "a.cdl",
+                "import \"base.cdl\";\nfn from_a() { return shared(); }\n",
+            ),
+            (
+                "b.cdl",
+                "import \"base.cdl\";\nfn from_b() { return shared() + 1; }\n",
+            ),
             (
                 "prog.cdl",
                 "import \"a.cdl\";\nimport \"b.cdl\";\nfn main() { print(from_a() + from_b()); }\n",
@@ -142,17 +154,11 @@ fn diamond_bare_imports_are_not_a_collision() {
 fn legacy_namespaced_import_suggests_replacement() {
     let output = run_program(
         "legacy_form",
-        &[(
-            "prog.cdl",
-            "import std::list;\nfn main() { print(1); }\n",
-        )],
+        &[("prog.cdl", "import std::list;\nfn main() { print(1); }\n")],
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("import \"std/list\";"),
-        "stderr: {stderr}"
-    );
+    assert!(stderr.contains("import \"std/list\";"), "stderr: {stderr}");
 }
 
 /// A bare library import merges the shipped module into scope; the enum, its

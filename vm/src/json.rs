@@ -266,9 +266,7 @@ impl JsonParser<'_> {
             Ok(t) => t,
             Err(_) => return Err("invalid number"),
         };
-        if !is_float
-            && let Ok(n) = text.parse::<i32>()
-        {
+        if !is_float && let Ok(n) = text.parse::<i32>() {
             return Ok(Data::int(n));
         }
         match text.parse::<f64>() {

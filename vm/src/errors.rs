@@ -1,5 +1,5 @@
-use crate::rt::{DataType, InstrSrc, Source, Span};
 use crate::instr::Instr;
+use crate::rt::{DataType, InstrSrc, Source, Span};
 use ariadne::FnCache;
 use ariadne::{Color, Label, Report, ReportKind};
 use smol_strc::{SmolStr, ToSmolStr};
@@ -44,13 +44,17 @@ struct HookState {
     previous: Option<BoxedHook>,
 }
 
-static HOOK_STATE: std::sync::Mutex<HookState> =
-    std::sync::Mutex::new(HookState { depth: 0, previous: None });
+static HOOK_STATE: std::sync::Mutex<HookState> = std::sync::Mutex::new(HookState {
+    depth: 0,
+    previous: None,
+});
 
 /// Recover the guarded state even if a previous panic-hook invocation poisoned
 /// the mutex (a chained host hook is allowed to panic without wedging us).
 fn lock_hook_state() -> std::sync::MutexGuard<'static, HookState> {
-    HOOK_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    HOOK_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Installs the silencing hook for the duration of a `collect_diagnostic` scope,
@@ -82,7 +86,9 @@ fn enter_silencing_hook() {
 fn leave_silencing_hook() {
     let mut state = lock_hook_state();
     state.depth -= 1;
-    if state.depth == 0 && let Some(previous) = state.previous.take() {
+    if state.depth == 0
+        && let Some(previous) = state.previous.take()
+    {
         std::panic::set_hook(previous);
     }
 }
