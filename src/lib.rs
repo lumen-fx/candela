@@ -1,4 +1,4 @@
-//! `candela` -- the full toolchain: lexer, parser, type-checker, compiler,
+//! `candela` is the full toolchain: lexer, parser, type-checker, compiler,
 //! REPL, the `Engine`/`Program` embedding API, and the `candela build`
 //! subcommand.
 //!
@@ -186,7 +186,7 @@ fn build_subcommand(args: &mut impl Iterator<Item = String>) {
         }
     }
     // A `-o`/`--output` argument is honored verbatim. Otherwise the default
-    // output name REPLACES the `.cdl` extension with `.cdlb` (so
+    // output name replaces the `.cdl` extension with `.cdlb` (so
     // `program.cdl` -> `program.cdlb`); it never appends a second extension
     // (never `program.cdl.cdlb`). A path without a `.cdl` suffix just gets
     // `.cdlb` added.

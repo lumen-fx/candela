@@ -3743,7 +3743,7 @@ pub fn stress_parser_random_garbage() {
     // brackets and quotes, and truncated valid programs.
     // NOTE: deliberately no i32-overflowing integer literal in this corpus.
     // Such a literal panics in the lexer (lexer.rs `panic!("Invalid float")`)
-    // rather than routing through throw_parser_error — a pre-existing keel bug,
+    // rather than routing through throw_parser_error, a pre-existing keel bug,
     // out of scope for this change. See the crate notes / PR description.
     let tokens = [
         "fn", "main", "let", "if", "else", "while", "for", "return", "match", "try", "catch",
@@ -3788,8 +3788,8 @@ pub fn stress_parser_random_garbage() {
             }
         }
     }
-    // The corpus is overwhelmingly invalid; make sure we actually exercised the
-    // error path (and that at least some inputs still compiled cleanly).
+    // The corpus is overwhelmingly invalid; make sure the error path was
+    // exercised (and that at least some inputs still compiled cleanly).
     assert!(errors > 3000, "only {errors} errors from 4000 inputs");
     assert!(ok > 0, "no inputs compiled");
 }
@@ -3808,7 +3808,7 @@ pub fn stress_parser_unbalanced_and_huge() {
         cases.push(format!("fn main() {{ {}", "{".repeat(depth)));
     }
     // Huge identifier and a huge (but valid, within-i32) numeric literal.
-    // NOTE: an i32-overflowing literal is intentionally omitted here — it hits a
+    // An i32-overflowing literal is intentionally omitted here; it hits a
     // pre-existing lexer panic rather than a structured error (see the corpus
     // note in stress_parser_random_garbage).
     cases.push(format!("fn main() {{ let {} = 1; }}", "a".repeat(50_000)));
@@ -3826,7 +3826,7 @@ pub fn stress_parser_unbalanced_and_huge() {
     cases.push(String::from(";;;;;;"));
 
     for src in &cases {
-        // Must return a value (Ok or a well-formed Err) — never panic/abort.
+        // Must return a value (Ok or a well-formed Err), never panic/abort.
         if let Err(d) = compile_diag(src, "fuzz.kl") {
             assert_wellformed(&d, src);
         }
@@ -3836,8 +3836,8 @@ pub fn stress_parser_unbalanced_and_huge() {
 #[test]
 pub fn stress_compiler_semantic_errors() {
     // Each of these parses but fails during type/name/arity checking. Every one
-    // must yield a well-formed compiler diagnostic rather than exiting, and —
-    // crucially — carry a *specific* stable code, never the blanket
+    // must yield a well-formed compiler diagnostic rather than exiting, and must
+    // carry a specific stable code, never the blanket
     // "compile_error" that every compiler error used to collapse to. The
     // (source, expected code) pairing pins the codes so they can't silently
     // drift.
@@ -3880,7 +3880,7 @@ pub fn stress_compiler_semantic_errors() {
         distinct.insert(d.code.clone());
     }
     // The corpus deliberately spans many distinct error kinds; make sure the
-    // codes actually differentiate them rather than all being equal.
+    // codes differentiate them rather than all being equal.
     assert!(
         distinct.len() >= 6,
         "expected the compiler errors to be differentiated by code, saw only {distinct:?}"
@@ -3889,10 +3889,10 @@ pub fn stress_compiler_semantic_errors() {
 
 #[test]
 pub fn genuine_panic_propagates_through_collect() {
-    // A genuine panic (a real bug, not the internal FatalError unwind that
-    // carries a Diagnostic) must NOT be captured as a diagnostic: it has to
+    // A panic that signals a bug (not the internal FatalError unwind that
+    // carries a Diagnostic) must not be captured as a diagnostic: it has to
     // propagate out of `collect_diagnostic` unchanged via `resume_unwind`.
-    // Keep the test output clean by installing a no-op hook for the duration —
+    // Keep the test output clean by installing a no-op hook for the duration;
     // `collect_diagnostic` captures and forwards to it, then restores it.
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -4337,7 +4337,7 @@ pub fn enum_any_payload() {
 #[test]
 pub fn any_downcast_int_arithmetic() {
     // A value pulled out of an `any` payload downcasts to a concrete int and is
-    // then usable in arithmetic -- the ergonomic gap the enum pass left open.
+    // then usable in arithmetic; the ergonomic gap the enum pass left open.
     run_and_check_registers!(
         "
         enum Box1 { Val(any) }

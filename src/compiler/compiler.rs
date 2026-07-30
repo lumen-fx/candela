@@ -2111,7 +2111,7 @@ fn compile_for_loop(
     let mut len = (cond_code.len() + 3) as u16 + pending;
     add_cmp_false(condition_id, &mut len, output, true);
 
-    // make the current_element_id register actually hold the element's value
+    // load the element's value into the current_element_id register
     if real_var {
         if is_str {
             output.push(Instr::GetIndexString(array, index_id, current_element_id));
@@ -3505,8 +3505,8 @@ fn load_auto_prelude(
 /// logical import, or the already-resolved explicit path otherwise.
 ///
 /// A bare filename handed to the OS loader (`dlopen` on Linux/macOS) is
-/// resolved only through the system search path -- the run-path,
-/// `LD_LIBRARY_PATH`, `ld.so.cache`, `/lib`, `/usr/lib` -- never the current
+/// resolved only through the system search path (the run-path,
+/// `LD_LIBRARY_PATH`, `ld.so.cache`, `/lib`, `/usr/lib`), never the current
 /// directory or the importing file's directory. Windows' `LoadLibraryA`
 /// differs: it also searches the application directory and the current
 /// directory by default. A library built to sit next to the `.cdl` file
@@ -3515,7 +3515,7 @@ fn load_auto_prelude(
 ///
 /// To match Windows' default search order, a logical import is tried, in
 /// order: next to the importing file, then in the current directory, and only
-/// then handed to the OS loader bare -- so genuine system libraries (`z`, `m`,
+/// then handed to the OS loader bare, so genuine system libraries (`z`, `m`,
 /// `sqlite3`) still resolve exactly as before.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_dylib(file_path: &Path, filename: &str, is_logical: bool) -> Option<libloading::Library> {
@@ -3650,7 +3650,7 @@ fn parse_toplevel(
 
     // Auto-prelude: make the std::list array methods (map/filter/reduce and
     // friends) callable as methods on arrays without an explicit import. This is
-    // best-effort -- if the shipped library directory is not present (for
+    // best-effort: if the shipped library directory is not present (for
     // example an embedding host with no `libs/` tree), the prelude is skipped and
     // array methods simply resolve as they did before.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3685,7 +3685,7 @@ fn parse_toplevel(
                 // a `.cdlb` re-resolves the library by name (per-OS) at load.
                 let spec = path.clone();
                 // A bare logical name (no path separator, not absolute, no
-                // extension -- e.g. `z`, `sqlite3`) names a system library the
+                // extension, e.g. `z`, `sqlite3`) names a system library the
                 // OS loader searches for. Anything with a separator or extension
                 // is an explicit path resolved relative to the importing file.
                 let is_logical = !spec.contains('/')
@@ -3695,7 +3695,7 @@ fn parse_toplevel(
 
                 let (open_target, dylib_name): (SmolStr, SmolStr) = if is_logical {
                     // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`. Resolution
-                    // of WHERE that file is found happens in `open_dylib` below.
+                    // of where that file is found happens in `open_dylib` below.
                     (
                         resolve_library_filename(spec.as_str(), TargetOs::CURRENT).into(),
                         spec.clone(),

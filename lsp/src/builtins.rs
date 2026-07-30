@@ -1,6 +1,6 @@
 //! Static tables for keywords and built-in functions/methods.
 //!
-//! These are NOT derived from the frontend: candela's lexer keywords are
+//! These are not derived from the frontend: candela's lexer keywords are
 //! fixed tokens (`src/parser/lexer.rs`) and its built-ins are Rust match
 //! arms in `src/compiler/functions/builtin/{builtin_functions,
 //! builtin_methods}.rs`, neither of which is exposed as a runtime-queryable

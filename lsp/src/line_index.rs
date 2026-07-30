@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn offset_position_multibyte() {
-        // "let s = \"caf\u{e9}\";" -- the e-acute is 2 bytes in UTF-8, 1 UTF-16 unit.
+        // "let s = \"caf\u{e9}\";": the e-acute is 2 bytes in UTF-8, 1 UTF-16 unit.
         let text = "let s = \"caf\u{e9}\";";
         let e_acute_byte_offset = text.find('\u{e9}').unwrap() as u32;
         let pos = offset_to_position(text, e_acute_byte_offset);

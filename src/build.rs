@@ -19,7 +19,7 @@ use candela_vm::artifact::serialize_image;
 
 /// Compiles a `.cdl` source string to a `.cdlb` bytecode artifact.
 ///
-/// The artifact captures the WHOLE program -- every imported workspace `.cdl`
+/// The artifact captures the whole program: every imported workspace `.cdl`
 /// module is linked into the single serialized image, so the resulting `.cdlb`
 /// runs under `candela-vm` with no source tree present. Dynamic-library `import`s
 /// and `host` blocks are captured as recipes (logical name + symbol +
@@ -37,7 +37,7 @@ pub fn build_bytecode(source: String, filename: &str) -> Result<Vec<u8>, String>
 
 fn image_from_output(out: CompileOutput) -> ProgramImage {
     // Dynamic-library bindings become referenced-by-name recipes: the logical
-    // library name, the symbol, and the marshalling signature -- never the
+    // library name, the symbol, and the marshalling signature, never the
     // shared object's bytes. The VM re-opens the library and rebuilds the libffi
     // CIF from these at load time.
     let dyn_lib_fns = out

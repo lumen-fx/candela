@@ -142,7 +142,7 @@ fn current_format_version_is_four_and_v2_is_rejected() {
     assert_eq!(bytes[4], 4, "current .cdlb format version must be 4");
 
     // A well-formed magic but a previous version must fail cleanly, not
-    // mis-decode. (Bytes after the header are irrelevant -- the version gate
+    // mis-decode. (Bytes after the header are irrelevant; the version gate
     // rejects before decoding the body.)
     assert!(matches!(
         load_program(b"CDLB\x02anything"),
@@ -173,7 +173,7 @@ fn enum_values_roundtrip_through_cdlb() {
     program.run();
 }
 
-/// A `.cdlb` must embed the WHOLE program: every imported workspace `.cdl`
+/// A `.cdlb` must embed the whole program: every imported workspace `.cdl`
 /// module is linked into the single artifact, so it runs under the VM-only path
 /// with the entire source tree absent.
 #[test]
@@ -194,11 +194,11 @@ fn multi_file_program_is_captured_whole() {
     let bytes = candela::build_bytecode(source, app.to_str().unwrap())
         .expect("multi-file program compiles to a whole-program artifact");
 
-    // Delete BOTH source files: nothing on disk to fall back to.
+    // Delete both source files: nothing on disk to fall back to.
     std::fs::remove_file(&app).unwrap();
     std::fs::remove_file(&util).unwrap();
 
-    // The artifact still loads and runs -- proof the imported module was
+    // The artifact still loads and runs, proof the imported module was
     // captured, not merely referenced.
     let mut program =
         load_program(&bytes).expect("whole-program artifact must load with sources absent");
@@ -214,7 +214,7 @@ fn multi_file_program_is_captured_whole() {
 #[test]
 fn dyn_lib_program_round_trips_and_rebinds() {
     // Match how the loader resolves a bare logical name on this OS, and only run
-    // when that file is actually openable here.
+    // when that file is openable here.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let openable = unsafe { libloading::Library::new("libz.so") }.is_ok()
@@ -233,7 +233,7 @@ fn dyn_lib_program_round_trips_and_rebinds() {
             .expect("dyn-lib program must now build to a .cdlb artifact");
 
         // The artifact stores only the recipe (name `z`, symbol `zlibVersion`,
-        // signature) -- never the shared object's bytes.
+        // signature), never the shared object's bytes.
         assert!(
             !contains_subslice(&bytes, b"\x7fELF"),
             "artifact must not embed the shared object's ELF bytes"
@@ -246,12 +246,12 @@ fn dyn_lib_program_round_trips_and_rebinds() {
     }
 }
 
-/// Scans for a byte subsequence (used to assert the .so bytes are NOT embedded).
+/// Scans for a byte subsequence (used to assert the .so bytes are not embedded).
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// A `host` block program now BUILDS to a `.cdlb` (the recipe is captured), but
+/// A `host` block program builds to a `.cdlb` (the recipe is captured), but
 /// the standalone runtime has no embedder to bind the host fn to, so loading it
 /// must fail with a clear error that names the missing function.
 #[test]

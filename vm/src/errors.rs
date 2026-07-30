@@ -38,7 +38,7 @@ type BoxedHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'sta
 /// [`collect_diagnostic`]. `depth` counts how many `collect_diagnostic` calls
 /// are currently active across all threads; `previous` holds the host's own
 /// panic hook, captured when the first collection begins and restored when the
-/// last one ends — so the host's hook is never *permanently* clobbered.
+/// last one ends, so the host's hook is never permanently clobbered.
 struct HookState {
     depth: usize,
     previous: Option<BoxedHook>,
@@ -125,15 +125,15 @@ pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code
 ///
 /// An error that would normally print a report and exit/panic instead records a
 /// [`Diagnostic`] and unwinds back here. Nested calls are supported (the
-/// previous state is restored), and genuine panics (real bugs) are *not*
-/// swallowed — they propagate through unchanged.
+/// previous state is restored), and panics that signal bugs are not
+/// swallowed; they propagate through unchanged.
 ///
 /// # Requires
 ///
 /// **An unwinding panic strategy (`panic = "unwind"`).** This function catches
 /// the internal unwind used to carry a diagnostic out of the error funnels via
-/// [`std::panic::catch_unwind`]. Under `panic = "abort"` — which is candela's own
-/// `[profile.release]` default — that unwind cannot be caught: the process
+/// [`std::panic::catch_unwind`]. Under `panic = "abort"`, which is candela's own
+/// `[profile.release]` default, that unwind cannot be caught: the process
 /// aborts on the first error instead of this returning `Err`. Embedders that
 /// rely on `collect_diagnostic` therefore **must** build with `panic = "unwind"`
 /// (see the `embed` profile in candela's `Cargo.toml`). The CLI never calls this,

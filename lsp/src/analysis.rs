@@ -6,12 +6,12 @@
 //! (hover, completion, go-to-definition, document symbols).
 //!
 //! `compile()` (as opposed to `candela::Engine::compile`) parses,
-//! type-checks, and code-generates a program WITHOUT running `main`, so
+//! type-checks, and code-generates a program without running `main`, so
 //! running this on every keystroke has no script side effects (no `print`
 //! output, no host calls, no infinite loops from the user's own code).
 //!
 //! candela's error funnel (parser + compiler + runtime) is fatal-on-first-
-//! error: `collect_diagnostic` yields at most ONE `Diagnostic` per call, not
+//! error: `collect_diagnostic` yields at most one `Diagnostic` per call, not
 //! a full list. That is a property of the underlying compiler, not a
 //! limitation added here; see the crate README for what this means for
 //! `publishDiagnostics`.
@@ -20,7 +20,7 @@
 //! tagged with the source file that declared it. To decide whether a struct
 //! declaration belongs to the buffer currently open in the editor (as
 //! opposed to one pulled in via `import`), this module checks that the
-//! struct's `name_span` actually indexes back to its own name in the buffer
+//! struct's `name_span` indexes back to its own name in the buffer
 //! text. That is a heuristic (documented on `struct_is_in_buffer`), not a
 //! compiler-guaranteed invariant.
 
@@ -37,14 +37,14 @@ pub struct FunctionSymbol {
     pub name: String,
     pub name_span: Span,
     /// Rendered parameter list, e.g. `["a: int", "b"]` (untyped params show
-    /// only their name -- their type is inferred per call site, see
+    /// only their name; their type is inferred per call site, see
     /// `signatures`).
     pub params: Vec<String>,
-    /// Concrete `(params) -> return` signatures this function has actually
+    /// Concrete `(params) -> return` signatures this function has
     /// been specialized for, sourced from `Function::return_type_cache`.
     /// Empty when the function has not been called anywhere in the compiled
-    /// program yet, in which case its return type has genuinely not been
-    /// inferred -- this is surfaced as such, not guessed.
+    /// program yet, in which case its return type has not been
+    /// inferred; this is surfaced as such, not guessed.
     pub signatures: Vec<String>,
     /// Index into `ProgramSummary::source_files`.
     pub src_file: u16,
@@ -93,7 +93,7 @@ pub struct ProgramSummary {
 }
 
 /// The result of analyzing one buffer: a `Diagnostic` on failure (parse or
-/// type error), or a `ProgramSummary` on success. Never both -- candela's
+/// type error), or a `ProgramSummary` on success. Never both; candela's
 /// compiler does not currently support returning partial results alongside
 /// an error.
 #[derive(Debug, Clone, Default)]
@@ -184,7 +184,7 @@ fn function_symbol(f: &Function, structs: &[Struct]) -> FunctionSymbol {
 
 /// `Struct` carries no source-file id (unlike `Function`), so this
 /// approximates "does this struct's `name_span` land inside `buffer_text`"
-/// by checking that slicing `buffer_text` at that byte range actually yields
+/// by checking that slicing `buffer_text` at that byte range yields
 /// the struct's own name. A struct declared in a different, imported file
 /// would need a wildly coincidental span + name collision to pass this
 /// check, which is an acceptable false-positive rate for an editor feature
@@ -446,8 +446,8 @@ impl ProgramSummary {
 
     /// The innermost call/struct-literal reference whose span contains
     /// `offset`, restricted to references that live in the buffer itself
-    /// (`src_file == 0`) -- a reference from an imported file's body would
-    /// have a span relative to that *other* file's text, which is
+    /// (`src_file == 0`); a reference from an imported file's body would
+    /// have a span relative to that other file's text, which is
     /// meaningless against this buffer's offsets.
     #[must_use]
     pub fn reference_at(&self, offset: u32) -> Option<&RefSite> {
@@ -475,7 +475,7 @@ impl ProgramSummary {
     }
 
     /// All function declarations (from this buffer or an import) with the
-    /// given bare name -- used to resolve a `RefSite::target_name`.
+    /// given bare name, used to resolve a `RefSite::target_name`.
     pub fn functions_named<'a>(
         &'a self,
         name: &'a str,

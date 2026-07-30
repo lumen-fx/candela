@@ -1,0 +1,7 @@
+# Auto-loaded by ascii-sanitize.py (one path per line, # comments).
+# Files where the exact codepoint is load-bearing.
+
+# upstream license text, copyright signs stay verbatim
+THIRD-PARTY-LICENSE
+# sample of the ariadne error report; the box-drawing IS the output
+docs/docs/reference/errors.md

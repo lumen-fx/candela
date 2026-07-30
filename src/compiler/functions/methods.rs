@@ -80,7 +80,7 @@ pub fn handle_method_calls(
     // the mangled free function `Type#method(recv, args...)`. The receiver's
     // static type picks the type-unique symbol, so `Point.len()` and `Str.len()`
     // resolve to distinct functions and neither collides with a free `fn len`.
-    // Field access (`recv.method` without parens) never reaches here -- the
+    // Field access (`recv.method` without parens) never reaches here; the
     // parser only produces an `ObjFunctionCall` when the call parentheses are
     // present.
     if let DataType::Struct(struct_id) = obj_type {
@@ -88,7 +88,7 @@ pub fn handle_method_calls(
         let mangled = mangle_method(&struct_name, name);
         if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
             // Prepend the receiver as argument 0, then reuse the ordinary
-            // user-function call path -- the VM sees a normal function call.
+            // user-function call path; the VM sees a normal function call.
             let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
             call_args.push(obj.clone());
             call_args.extend_from_slice(args);

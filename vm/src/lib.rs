@@ -1,16 +1,15 @@
-//! `candela-vm` -- the self-contained runtime core for candela.
+//! `candela-vm` is the self-contained runtime core for candela.
 //!
-//! This crate is everything needed to LOAD and RUN candela bytecode, and
+//! This crate is everything needed to load and run candela bytecode, and
 //! nothing else: the register VM ([`vm::execute`]), the bytecode instruction set
 //! ([`instr`]), the NaN-boxed value representation ([`data`]) and shared runtime
 //! types ([`rt`]), the garbage collector, the host/script value marshalling
 //! ([`embed`]), the runtime error/diagnostic machinery ([`errors`]), and the
 //! `.cdlb` artifact format ([`artifact`]).
 //!
-//! It depends on NOTHING from the compiler (`candela`) crate -- the dependency
-//! direction is strictly `candela -> candela-vm`. Both the `candela-vm` binary
-//! and the full `candela` compiler binary link this one VM, so the executor is
-//! never duplicated.
+//! It depends on nothing from the compiler (`candela`) crate. Both the
+//! `candela-vm` binary and the full `candela` compiler binary link this one VM,
+//! so the executor is never duplicated.
 
 pub mod data;
 pub mod errors;

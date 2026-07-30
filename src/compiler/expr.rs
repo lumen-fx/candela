@@ -7,7 +7,7 @@ use std::{hint::unreachable_unchecked, rc::Rc};
 /// Separator between a type name and a method name in a mangled method symbol.
 ///
 /// `impl` methods lower to per-type-unique free functions named `Type#method`.
-/// `#` is NOT a legal character in a candela identifier (which is
+/// `#` is not a legal character in a candela identifier (which is
 /// `[a-zA-Z_][a-zA-Z0-9_]*`) and is never produced by the lexer, so a mangled
 /// name can never collide with a user-written free function or with a method of
 /// another type: `Point#len` and `Str#len` are distinct symbols, and both are
@@ -83,7 +83,7 @@ pub enum Expr {
     FunctionCall(Box<[Self]>, Box<[SmolStr]>, Span, Box<[Span]>),
     /// ObjFunctionCall(obj, args, namespace, obj_span, fn_span, arg_markers)
     ObjFunctionCall(
-        // WILL BE REMOVED SOON
+        // Will be removed soon.
         Box<Self>,
         Box<[Self]>,
         Box<[SmolStr]>,

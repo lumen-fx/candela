@@ -1,7 +1,7 @@
 //! Runtime data types shared by the VM and the compiler.
 //!
 //! These live in the self-contained `candela-vm` crate so the runtime core
-//! (`vm` + `data` + `gc` + `embed` + `artifact`) links WITHOUT the parser,
+//! (`vm` + `data` + `gc` + `embed` + `artifact`) links without the parser,
 //! compiler, or REPL. The `candela` compiler crate depends on this crate and
 //! re-exports these types (aliasing `candela_vm::rt` as `crate::rt`, etc.), so
 //! its own source keeps its import paths (`compiler_data::Struct`,
@@ -237,8 +237,8 @@ pub struct DynamicLibFn {
 
 /// Target operating system for dynamic-library filename resolution.
 ///
-/// Kept explicit -- rather than only branching on `cfg!(target_os)` at the call
-/// site -- so the logical-name -> filename mapping ([`resolve_library_filename`])
+/// Kept explicit, rather than only branching on `cfg!(target_os)` at the call
+/// site, so the logical-name -> filename mapping ([`resolve_library_filename`])
 /// can be unit-tested for every platform on any build host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetOs {
@@ -281,8 +281,8 @@ impl TargetOs {
 
 /// Maps a candela `dylib`/`import` library spec to a concrete filename for `os`.
 ///
-/// A bare logical name (`m`, `sqlite3`, `z`) -- no path separator and no
-/// extension -- becomes the platform convention: `libm.so` on Linux,
+/// A bare logical name (`m`, `sqlite3`, `z`), no path separator and no
+/// extension, becomes the platform convention: `libm.so` on Linux,
 /// `libm.dylib` on macOS, `m.dll` on Windows. The same candela source therefore
 /// names the right file on every target, and the OS loader searches its standard
 /// library paths for it.

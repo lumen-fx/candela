@@ -150,7 +150,7 @@ pub fn handle_user_function(
     if fn_impl_idx.is_none() {
         // If it hasn't, compile it (which adds it to the function's implementation list)
 
-        // Clone only when actually compiling a new specialisation
+        // Clone only when compiling a new specialisation
         let fn_args = state.fns[fn_id]
             .args
             .iter()

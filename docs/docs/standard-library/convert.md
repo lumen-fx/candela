@@ -14,11 +14,11 @@ imports it builds to a `.cdlb` artifact that runs under `candela-vm` with the
 module bytecode inlined.
 
 ### To int
-`to_int(x) -> int` -- parses a string or truncates a float to an `int`.
+`to_int(x) -> int`: parses a string or truncates a float to an `int`.
 ### To float
-`to_float(x) -> float` -- parses a string or widens an `int` to a `float`.
+`to_float(x) -> float`: parses a string or widens an `int` to a `float`.
 ### To string
-`to_string(x) -> string` -- renders any value as its string form.
+`to_string(x) -> string`: renders any value as its string form.
 ### To bool
-`to_bool(x: string) -> bool` -- parses the strings "true" and "false" into a
+`to_bool(x: string) -> bool`: parses the strings "true" and "false" into a
 `bool`.

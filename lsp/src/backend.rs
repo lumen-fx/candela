@@ -92,7 +92,7 @@ impl Backend {
     /// buffer's own in-memory text. For a declaration pulled in via
     /// `import` (`src_file != 0`), candela records that file's absolute,
     /// canonicalized path (see `ImportFile` handling in
-    /// `compiler.rs`) but not its text, so this reads it from disk -- a
+    /// `compiler.rs`) but not its text, so this reads it from disk. This is a
     /// synchronous read on the async task, acceptable for the small scripts
     /// candela targets, but a known limitation (see README) for very large
     /// imported files or files that only exist unsaved in another editor

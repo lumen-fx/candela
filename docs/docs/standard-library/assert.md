@@ -28,15 +28,15 @@ fn main() {
 ```
 
 ### Assert
-`assert(cond: bool)` -- raises "assertion failed" when `cond` is false.
+`assert(cond: bool)`: raises "assertion failed" when `cond` is false.
 ### Assert msg
-`assert_msg(cond: bool, msg: string)` -- raises `msg` when `cond` is false.
+`assert_msg(cond: bool, msg: string)`: raises `msg` when `cond` is false.
 ### Assert true
-`assert_true(cond: bool)` -- raises when `cond` is false.
+`assert_true(cond: bool)`: raises when `cond` is false.
 ### Assert false
-`assert_false(cond: bool)` -- raises when `cond` is true.
+`assert_false(cond: bool)`: raises when `cond` is true.
 ### Assert eq
-`assert_eq(a, b)` -- raises a message showing both sides when `a` and `b` differ.
+`assert_eq(a, b)`: raises a message showing both sides when `a` and `b` differ.
 ### Assert ne
-`assert_ne(a, b)` -- raises a message showing the value when `a` and `b` are
+`assert_ne(a, b)`: raises a message showing the value when `a` and `b` are
 equal.

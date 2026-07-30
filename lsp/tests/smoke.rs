@@ -1,7 +1,7 @@
 //! Headless stdio smoke test for `candela-lsp`.
 //!
 //! Spawns the built `candela-lsp` binary as a real subprocess (no editor, no
-//! window -- just the LSP JSON-RPC protocol over stdin/stdout, per this
+//! window, just the LSP JSON-RPC protocol over stdin/stdout, per this
 //! repo's "verify headless" convention), sends `initialize` + `initialized`,
 //! then `textDocument/didOpen` with a deliberately broken `.cdl` snippet, and
 //! asserts a non-empty `textDocument/publishDiagnostics` notification comes
@@ -60,14 +60,14 @@ async fn read_message(reader: &mut (impl AsyncBufReadExt + Unpin)) -> Value {
 }
 
 /// Sends the standard LSP `shutdown` request followed by an `exit`
-/// notification, and asserts the server process actually terminates.
+/// notification, and asserts the server process terminates.
 ///
 /// `shutdown`/`exit` take no parameters in the LSP spec; tower-lsp's
 /// JSON-RPC layer rejects a literal `"params": null` for them (it wants the
 /// field omitted, not present-and-null).
 ///
 /// tower-lsp's own read loop (`Server::serve`) does not proactively hang up
-/// on an `exit` notification -- like a real client, it relies on the pipe
+/// on an `exit` notification; like a real client, it relies on the pipe
 /// being closed to end the read loop and let `serve().await` (and thus
 /// `main()`) return. This takes `stdin` by value and drops it (closing the
 /// write half, so the child sees EOF) right after sending `exit`, exactly
@@ -152,7 +152,7 @@ async fn broken_program_produces_a_live_diagnostic() {
     )
     .await;
 
-    // Missing the right-hand side of `1 +` -- a parser error, not merely a
+    // Missing the right-hand side of `1 +`, a parser error, not merely a
     // type error, so this also exercises the parser half of the frontend.
     let broken_source = "fn main() {\n    let x = 1 +\n}\n";
     write_message(

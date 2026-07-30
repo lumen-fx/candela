@@ -5,7 +5,7 @@
 //! the shapes that can cross, the `FromHostValue`/`IntoHostValue`/`IntoHostFn`
 //! traits adapt Rust closures into registered host functions, and
 //! [`marshal_value`]/[`unmarshal_value`] convert between [`Value`] and the VM's
-//! NaN-boxed [`Data`]. They carry no compiler state -- the VM depends on them --
+//! NaN-boxed [`Data`]. They carry no compiler state and the VM depends on them,
 //! so they live in the VM-only crate. The `Engine`/`Program` embedding surface
 //! (which compiles and drives scripts) lives in the `candela` crate on top.
 
@@ -426,12 +426,12 @@ impl<T: IntoHostValue, S: std::hash::BuildHasher> IntoHostValue for HashMap<Stri
 /// Adapts a Rust closure into a registered host function.
 ///
 /// The `Marker` type parameter disambiguates the blanket impls by arity (and,
-/// for `&str`, by borrow) -- the same trick `rhai`/`bevy` use to make
+/// for `&str`, by borrow), the same trick `rhai`/`bevy` use to make
 /// `register_fn` accept closures of many shapes without annotations.
 pub trait IntoHostFn<Marker> {
     /// Internal adapter: yields the erased dispatcher plus the argument and
     /// return type signature derived from the closure. Not meant to be called
-    /// directly -- `Engine::register_host_fn` drives it.
+    /// directly; `Engine::register_host_fn` drives it.
     fn into_host_fn_parts(self) -> (HostDispatch, Vec<HostType>, HostType);
 }
 
@@ -507,7 +507,7 @@ impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 /// Scalars become NaN-boxed values directly; arrays/maps are pushed into the
 /// object/map pools (nested structures allocated depth-first) and referenced by
 /// handle. Strings go through [`Data::p_str`], which interns without triggering
-/// the GC -- safe because these direct pushes never invoke the collector, so
+/// the GC. This is safe because these direct pushes never invoke the collector, so
 /// intermediate handles cannot be reclaimed mid-construction.
 pub fn marshal_value(
     v: &Value,

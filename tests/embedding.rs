@@ -1,8 +1,8 @@
 //! Integration tests for the candela embedding / library API (`Engine`/`Program`).
 //!
-//! These exercise the exact shape the author asked for: register typed host
+//! These exercise the embedding shape: register typed host
 //! functions, declare them in a `host "..."` block, compile a script that calls
-//! them, and invoke script functions by name with marshalled arguments — with
+//! them, and invoke script functions by name with marshalled arguments, with
 //! state persisting between calls and errors surfaced as `Diagnostic` values.
 
 use candela::{Engine, Value};

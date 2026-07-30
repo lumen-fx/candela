@@ -3,7 +3,7 @@
 //! This is the persistent, in-process entry point a Rust host (such as Lumen)
 //! uses to embed candela the way it embeds `rhai`/`mlua`: register typed host
 //! functions, compile a script to a reusable [`Program`], and invoke
-//! script-defined functions by name with marshalled arguments -- all while
+//! script-defined functions by name with marshalled arguments, all while
 //! keeping interpreter state (registers + heap pools) alive between calls.
 //!
 //! ```no_run
@@ -239,7 +239,7 @@ fn validate_host_fn(
     };
 
     // A variadic declaration must be bound to a variadic closure and vice
-    // versa; when both agree there is nothing to check -- the closure accepts
+    // versa; when both agree there is nothing to check, the closure accepts
     // any argument slice.
     if sig.variadic || registered.variadic {
         if sig.variadic != registered.variadic {

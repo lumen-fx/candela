@@ -1512,7 +1512,7 @@ pub fn error_not_literal_map_key(
                     .with_message(format_args!("This map key is not a literal."))
                     .with_color(ariadne::Color::Blue),
             )
-            .with_note("Map keys must be literals. However, fret not, this requirement™ will soon be removed!")
+            .with_note("Map keys must be literals. However, fret not, this requirement will soon be removed!")
             .finish()
         },
         sources,

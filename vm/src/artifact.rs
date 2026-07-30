@@ -80,7 +80,7 @@ pub struct ProgramImage {
     pub allocated_call_depth: u64,
     /// Recipe for each dynamic-library binding, in `DynamicLibFn` id order. The
     /// artifact stores only the logical library name, symbol, and marshalling
-    /// signature -- never the shared object's bytes -- so the VM re-opens the
+    /// signature, never the shared object's bytes, so the VM re-opens the
     /// library and re-binds the symbol by name at load time (see
     /// [`resolve_library_filename`]).
     pub dyn_lib_fns: Vec<DynLibFnImage>,

@@ -17,7 +17,7 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
         .unwrap_or(x.len() - 1);
     // A struct/enum construction (a `Clone*` followed by `SetFieldStruct` writes
     // into its dest register) cannot be retargeted by rewriting the `Clone`
-    // alone -- the trailing field writes reference the original dest. Retarget
+    // alone; the trailing field writes reference the original dest. Retarget
     // the whole group to `tgt_id`.
     if let Instr::CloneStruct(_, old) | Instr::CloneEnum(_, old) = x[matching_elem_index] {
         match x.get_mut(matching_elem_index).unwrap() {

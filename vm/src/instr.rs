@@ -271,7 +271,7 @@ impl Instr {
     #[must_use]
     pub const fn get_tgt_id(self) -> Option<u16> {
         match self {
-            // ↓ INSTRUCTIONS THAT DON'T MODIFY ANY REGISTER ↓
+            // Instructions that modify no register.
             Self::Print(_)
             | Self::Jmp(_)
             | Self::JmpBack(_)

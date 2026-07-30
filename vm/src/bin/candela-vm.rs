@@ -1,8 +1,8 @@
-//! `candela-vm` -- the lean VM-only runtime.
+//! `candela-vm` is the lean VM-only runtime.
 //!
 //! Loads a pre-compiled `.cdlb` bytecode artifact (produced by
 //! `candela build <file.cdl>`) and runs it. It links no parser, compiler, or
-//! REPL -- only the candela runtime core.
+//! REPL, only the candela runtime core.
 
 use std::process::ExitCode;
 

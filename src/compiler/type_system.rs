@@ -1017,7 +1017,7 @@ impl Expr {
                 // A user-defined impl method resolves by the receiver's static
                 // struct type to the mangled free function `Type#method`; its
                 // return type is inferred exactly like any free function's. This
-                // is checked BEFORE the builtin-method table so a struct method
+                // is checked before the builtin-method table so a struct method
                 // that happens to share a name with a builtin (e.g. `len`) uses
                 // its own return type rather than the builtin's.
                 if let DataType::Struct(struct_id) = obj_type {
