@@ -34,7 +34,6 @@ fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn bare_file_import_merges_into_scope() {
     let output = run_program(
@@ -55,7 +54,6 @@ fn bare_file_import_merges_into_scope() {
     assert!(String::from_utf8_lossy(&output.stdout).contains('5'));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn aliased_import_stays_namespaced() {
     // Two modules exporting the same name coexist behind aliases.
@@ -119,7 +117,6 @@ fn bare_import_collision_between_two_imports_errors() {
     );
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn diamond_bare_imports_are_not_a_collision() {
     // Two modules that both bare-import a third re-export the same underlying
@@ -163,7 +160,6 @@ fn legacy_namespaced_import_suggests_replacement() {
 
 /// A bare library import merges the shipped module into scope; the enum, its
 /// impl methods, and the free helpers all arrive.
-#[cfg(not(feature = "embed"))]
 #[test]
 fn bare_library_import_merges_enum_and_methods() {
     let dir = std::env::temp_dir().join(format!("candela_imports_lib_{}", std::process::id()));

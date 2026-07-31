@@ -6,6 +6,7 @@ use smol_strc::{SmolStr, ToSmolStr};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
+use std::io::Write;
 use std::ops::Range;
 
 /// A structured compile/runtime error, produced instead of printing + exiting
@@ -395,7 +396,8 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
         );
     }
     let err_message: SmolStr = t.into();
-    eprintln!("{RED}CANDELA ERROR{RESET}");
+    let mut out = crate::captured_output::stderr();
+    let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
     let report = Report::build(
         ReportKind::Error,
         (src.filename.as_str(), (*start as usize)..(*end as usize)),
@@ -407,22 +409,13 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
     )
     .finish();
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
-    report
-        .eprint((
-            src.filename.as_str(),
-            ariadne::Source::from(src.contents.as_str()),
-        ))
-        .unwrap();
-
-    #[cfg(any(target_arch = "wasm32", feature = "embed"))]
     report
         .write(
             (
                 src.filename.as_str(),
                 ariadne::Source::from(src.contents.as_str()),
             ),
-            crate::captured_output::CapturedOutputWriter,
+            &mut out,
         )
         .unwrap();
 
@@ -457,9 +450,8 @@ pub fn throw_compiler_error<'a>(
     }
     let report = report();
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
     report
-        .eprint(
+        .write(
             FnCache::new((move |id| Err(format!("Failed to fetch source {id}"))) as fn(&_) -> _)
                 .with_sources(
                     sources
@@ -469,25 +461,7 @@ pub fn throw_compiler_error<'a>(
                         })
                         .collect(),
                 ),
-        )
-        .unwrap();
-
-    #[cfg(any(target_arch = "wasm32", feature = "embed"))]
-    report
-        .write(
-            FnCache::new((move |id| Err(format!("Failed to fetch source {id}"))) as fn(&_) -> _)
-                .with_sources(
-                    sources
-                        .iter()
-                        .map(|src| {
-                            (
-                                src.filename.as_str(),
-                                ariadne::Source::from(src.contents.as_str()),
-                            )
-                        })
-                        .collect(),
-                ),
-            crate::captured_output::CapturedOutputWriter,
+            crate::captured_output::stderr(),
         )
         .unwrap();
 

@@ -28,6 +28,7 @@ use parser_expr::add_op;
 use parser_expr::parse_expr;
 use smol_strc::SmolStr;
 use std::hint::{cold_path, unreachable_unchecked};
+use std::io::Write;
 use std::iter::Peekable;
 
 use lexer::Token;
@@ -143,7 +144,8 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             kind,
         );
     }
-    eprintln!("{RED}CANDELA ERROR{RESET}");
+    let mut out = candela_vm::captured_output::stderr();
+    let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
     let report = Report::build(
         ReportKind::Error,
         (src.filename.as_str(), (start as usize)..(end as usize)),
@@ -155,22 +157,13 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     )
     .finish();
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
-    report
-        .eprint((
-            src.filename.as_str(),
-            ariadne::Source::from(src.contents.as_str()),
-        ))
-        .unwrap();
-
-    #[cfg(any(target_arch = "wasm32", feature = "embed"))]
     report
         .write(
             (
                 src.filename.as_str(),
                 ariadne::Source::from(src.contents.as_str()),
             ),
-            candela_vm::captured_output::CapturedOutputWriter,
+            &mut out,
         )
         .unwrap();
 
@@ -311,22 +304,13 @@ impl<'a> Parser<'a> {
         }
         let report = report();
 
-        #[cfg(not(any(target_arch = "wasm32", feature = "embed")))]
-        report
-            .eprint((
-                self.ctx.src.filename.as_str(),
-                ariadne::Source::from(self.ctx.src.contents.as_str()),
-            ))
-            .unwrap();
-
-        #[cfg(any(target_arch = "wasm32", feature = "embed"))]
         report
             .write(
                 (
                     self.ctx.src.filename.as_str(),
                     ariadne::Source::from(self.ctx.src.contents.as_str()),
                 ),
-                candela_vm::captured_output::CapturedOutputWriter,
+                candela_vm::captured_output::stderr(),
             )
             .unwrap();
 

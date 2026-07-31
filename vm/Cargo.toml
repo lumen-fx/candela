@@ -32,8 +32,11 @@ path = "src/bin/candela-vm.rs"
 too_many_arguments = "allow"
 
 [features]
-# Route runtime output through the captured-output sink instead of real stdout
-# (used by the C-ABI / embedding hosts). Off by default for the lean binary.
+# Build the runtime for life inside a host process: a fatal error unwinds
+# instead of exiting, so the host stays alive and can catch it. Off by default,
+# for the standalone binary that owns its process. Output routing is not part
+# of this feature; a host redirects program output and error reports at runtime
+# with `captured_output::set_capturing`.
 embed = []
 
 [dependencies]

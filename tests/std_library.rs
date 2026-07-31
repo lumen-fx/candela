@@ -9,10 +9,6 @@
 //! One test instead builds an install-style layout (the binary with `libs/`
 //! beside it) and runs from an unrelated directory with nothing set, to confirm
 //! the default exe-relative resolution needs no environment.
-//!
-//! The output-checking tests are compiled out under `--features embed`, where the
-//! VM captures `print` for the embedding host instead of writing to stdout. The
-//! `.cdlb` inlining check does not depend on stdout and always runs.
 
 use candela::{build_bytecode, load_program};
 use std::path::{Path, PathBuf};
@@ -24,7 +20,6 @@ fn repo() -> PathBuf {
 
 /// Runs `libs/std/tests/<name>.cdl` through the `candela` binary with the library
 /// path pointed at this checkout, and returns its stdout, asserting a clean exit.
-#[cfg(not(feature = "embed"))]
 fn run_std_test(name: &str) -> String {
     let path = repo().join("libs/std/tests").join(format!("{name}.cdl"));
     let output = Command::new(env!("CARGO_BIN_EXE_candela"))
@@ -42,73 +37,61 @@ fn run_std_test(name: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn string_module() {
     assert!(run_std_test("test_string").contains("string ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn list_reductions() {
     assert!(run_std_test("test_list").contains("list ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn list_slices() {
     assert!(run_std_test("test_list_slices").contains("list slices ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn list_higher_order() {
     assert!(run_std_test("test_list_hof").contains("list hof ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn list_methods() {
     assert!(run_std_test("test_list_methods").contains("list methods ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn convert_module() {
     assert!(run_std_test("test_convert").contains("convert ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn assert_module() {
     assert!(run_std_test("test_assert").contains("assert ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn option_module() {
     assert!(run_std_test("test_option").contains("option ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn result_module() {
     assert!(run_std_test("test_result").contains("result ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn json_module() {
     assert!(run_std_test("test_json").contains("json ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn map_module() {
     assert!(run_std_test("test_map").contains("map ok"));
 }
 
-#[cfg(not(feature = "embed"))]
 #[test]
 fn set_module() {
     assert!(run_std_test("test_set").contains("set ok"));
@@ -145,7 +128,6 @@ fn main() {
 /// A program that imports a library through a bare quoted path must run from any
 /// working directory with nothing set, as long as `libs/` sits beside the
 /// binary. This mirrors a clean install.
-#[cfg(not(feature = "embed"))]
 #[test]
 fn default_resolution_needs_no_env() {
     let tmp = std::env::temp_dir().join(format!("candela_install_{}", std::process::id()));

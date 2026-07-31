@@ -147,9 +147,13 @@ pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
         .to_string_lossy()
         .to_string();
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    // The caller gets the program's output and any error report back as the
+    // returned string, so redirect both for the duration of the run.
+    let was_capturing = candela_vm::captured_output::set_capturing(true);
     let _ = catch_unwind(|| {
         execute_compiled(compile(code, "embedded.cdl", false));
     });
+    candela_vm::captured_output::set_capturing(was_capturing);
     let output = candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take());
     CString::new(output).unwrap_or_default().into_raw()
 }

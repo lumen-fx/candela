@@ -33,8 +33,8 @@ mod array_gc;
 mod map_gc;
 mod string_gc;
 
-// Routes runtime output through a captured sink for wasm / embedding hosts.
-#[cfg(any(target_arch = "wasm32", feature = "embed"))]
+// Routes program output and error reports to the process streams, or into a
+// buffer that an embedding host reads back.
 pub mod captured_output;
 
 // ---- public runtime API ----
