@@ -150,12 +150,25 @@ fn default_resolution_needs_no_env() {
     )
     .expect("write program");
 
-    let output = Command::new(&installed_bin)
-        .arg("prog.cdl")
-        .current_dir(&work)
-        .env_remove("CANDELA_LIB_PATH")
-        .output()
-        .expect("installed candela runs");
+    // A sibling test spawning its own child can inherit the write handle this
+    // copy just closed, which makes the fresh binary briefly unexecutable
+    // ("text file busy"). The handle goes away with that child, so retry.
+    let mut attempt = 0;
+    let output = loop {
+        match Command::new(&installed_bin)
+            .arg("prog.cdl")
+            .current_dir(&work)
+            .env_remove("CANDELA_LIB_PATH")
+            .output()
+        {
+            Ok(output) => break output,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => panic!("installed candela runs: {e}"),
+        }
+    };
 
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
