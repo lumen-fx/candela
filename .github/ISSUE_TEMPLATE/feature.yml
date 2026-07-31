@@ -1,0 +1,25 @@
+name: feature request
+description: propose a language, standard library, or tooling change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: problem
+      description: what you are trying to write and where the language gets in the way
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: proposed behavior
+      description: the syntax or semantics you want, with a short example
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: alternatives
+      description: what you can write today instead, and why it falls short

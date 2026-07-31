@@ -1,0 +1,57 @@
+name: bug report
+description: a program compiles, runs, or fails differently than it should
+labels: [bug]
+body:
+  - type: textarea
+    id: snippet
+    attributes:
+      label: snippet
+      description: the smallest .cdl program that shows the problem
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: expected output
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: actual output
+      description: what you got, including any diagnostic in full
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: candela version
+      description: output of `candela --version`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: vm
+    attributes:
+      label: reproduces on candela-vm
+      description: >
+        run `candela build snippet.cdl` then `candela-vm snippet.cdlb` and
+        compare
+      options:
+        - "yes"
+        - "no"
+        - not tried
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: os and version
+      placeholder: Arch Linux (kernel 6.15), Windows 11 24H2, macOS 15.3
+    validations:
+      required: true
