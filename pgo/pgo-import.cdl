@@ -1,10 +1,10 @@
 import "pgo_import_test.cdl";
-import "pgo-import-test2.cdl" as test;
+import "pgo-import-test2.cdl" as other;
 
 fn main() {
-    pgo_import_test::test();
-    let x = pgo_import_test::Test {x:42,y:67};
+    test();
+    let x = Test {x:42,y:67};
     print(x);
-    let y = test::Test {x:42,y:67};
-    test::test();
+    let y = other::Test {x:42,y:67};
+    other::test();
 }
