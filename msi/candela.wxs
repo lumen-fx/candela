@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer for Candela.
+
+  It installs per user, under %LOCALAPPDATA%\Programs\Candela, so it never asks
+  for administrator rights and an upgrade can replace files while the user is
+  logged in. Everything it ships comes from the staged payload directory passed
+  in as StageDir; the file list is not written out here.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!--
+    UpgradeCode: generated once for Candela, never change it, and never reuse it
+    for another product. Two products sharing an UpgradeCode uninstall each
+    other. A per-user and a per-machine package with the same UpgradeCode cannot
+    upgrade each other either, so changing Scope later is a migration, not an
+    edit.
+  -->
+  <Package
+      Name="Candela"
+      Manufacturer="Lumen FX"
+      Version="$(var.Version)"
+      UpgradeCode="{557C3B2E-F7EF-49EE-945F-590DBB81D990}"
+      Scope="perUser"
+      Compressed="yes"
+      Language="1033">
+
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Candela is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- What "Installed apps" shows next to the entry. -->
+    <Property Id="ARPURLINFOABOUT" Value="https://candela.lumenfx.dev" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/lumen-fx/candela" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="Programs" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Candela" />
+      </Directory>
+    </StandardDirectory>
+
+    <!--
+      The payload is harvested from the staged tree, so candela.exe,
+      candela-vm.exe, the receipt, the libs/ tree and the license files land
+      beside one another exactly as they were staged. The compiler resolves the
+      standard library from a libs/ directory next to its own executable, which
+      is why the tree has to stay intact.
+    -->
+    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StageDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Path" Directory="INSTALLFOLDER">
+      <!--
+        Component GUID: generated once for this component, never change it.
+      -->
+      <Component Id="PathEntry" Guid="{82C05F57-17D1-482B-9233-EFE50B39E630}">
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\Lumen FX\Candela"
+            Name="InstallPath"
+            Type="string"
+            Value="[INSTALLFOLDER]"
+            KeyPath="yes" />
+        <!--
+          Both executables sit at the install root, so one PATH entry covers
+          candela and candela-vm, the same pair the unix installer symlinks.
+        -->
+        <Environment
+            Id="PATH"
+            Name="PATH"
+            Value="[INSTALLFOLDER]"
+            Action="set"
+            Part="last"
+            System="no"
+            Permanent="no" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Candela" Level="1">
+      <ComponentGroupRef Id="Payload" />
+      <ComponentGroupRef Id="Path" />
+    </Feature>
+  </Package>
+</Wix>

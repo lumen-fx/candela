@@ -97,8 +97,8 @@ case "$OS" in
         esac
         ;;
     *)
-        # Windows will eventually be supported by an installer
-        printf "[ERROR] Unsupported OS: %s. On Windows, download the .zip from https://github.com/lumen-fx/candela/releases/latest\n" "$OS"
+        # Windows installs from its own package instead of this script.
+        printf "[ERROR] Unsupported OS: %s. On Windows, run https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi\n" "$OS"
         ;;
 esac
 

@@ -68,8 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | 
 ```
 
 The first command installs the latest release; the second installs a chosen one
-and pins the install to it. On Windows, download the archive from the
-[latest release](https://github.com/lumen-fx/candela/releases/latest).
+and pins the install to it.
+
+On Windows, run the
+[installer](https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi).
+It installs for you alone and needs no administrator rights. The archive on the
+[latest release](https://github.com/lumen-fx/candela/releases/latest) is there if
+you would rather unpack it yourself.
 
 An installed `candela` tells you when a newer release is out. The
 [installation docs](docs/docs/index.md) cover that check and how to turn it off.
