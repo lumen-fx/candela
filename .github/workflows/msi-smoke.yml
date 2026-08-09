@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "msi/**"
+      - "src/update.rs"
       - ".github/workflows/msi-smoke.yml"
       - ".github/workflows/release.yml"
 
