@@ -15,6 +15,8 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
+use crate::compiler::functions::compile_call_args;
+use crate::compiler::functions::store_call_args;
 use crate::data::NULL;
 use crate::instr::Instr;
 use rustc_hash::FxHashSet;
@@ -98,14 +100,10 @@ pub fn handle_user_function(
                 )
             }
         }
-        for arg in args {
-            let arg_id = arg
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            output.push(Instr::StoreFuncArg(arg_id));
-            state.free_reg(arg_id, v);
-            *state.allocated_arg_count += 1;
-        }
+        // The `StoreFuncArg` run goes directly before the call; see
+        // `store_call_args`.
+        let arg_ids = compile_call_args(args, v, ctx, state, output);
+        store_call_args(&arg_ids, v, state, output);
 
         let register_id = if returns_null {
             0

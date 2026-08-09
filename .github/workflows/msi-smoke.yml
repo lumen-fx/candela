@@ -1,0 +1,210 @@
+name: MSI smoke
+
+# Installs, upgrades and uninstalls the Windows package on a clean runner, so a
+# broken package is caught before a tag turns it into a release. The MSI
+# structure is what is under test here, so the binaries are plain dev builds
+# rather than the PGO ones the release builds.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "msi/**"
+      - "src/update.rs"
+      - ".github/workflows/msi-smoke.yml"
+      - ".github/workflows/release.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: Install, upgrade, uninstall
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Build the binaries
+        run: |
+          cargo build --bin candela
+          cargo build -p candela-vm --bin candela-vm
+
+      - name: Build stdlib dylibs
+        run: |
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/math/math.dll libs/std_src/math/math.c
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/time/time.dll libs/std_src/time/time.c
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/random/random.dll libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 6.0.1
+
+      - name: Stage the payload and build both MSIs
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          Copy-Item "target/debug/candela.exe" "dist/"
+          Copy-Item "target/debug/candela-vm.exe" "dist/"
+          Copy-Item -Path "libs" -Destination "dist/" -Recurse
+          Copy-Item "LICENSE" "dist/"
+          Copy-Item "THIRD-PARTY-LICENSE" "dist/"
+          Compress-Archive -Path "dist/*" -DestinationPath "candela-x86_64-windows.zip"
+
+          Copy-Item -Path "dist" -Destination "msi-stage" -Recurse
+
+          foreach ($version in @("9.9.9", "9.9.10")) {
+            $receipt = "version $version`ninstaller msi`n"
+            [IO.File]::WriteAllText("$PWD\msi-stage\receipt", $receipt, [Text.Encoding]::ASCII)
+            ./msi/build-msi.ps1 -Version $version -StageDir "msi-stage" -OutFile "candela-$version.msi"
+          }
+
+      - name: Install
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\candela-9.9.9.msi", '/qn', '/l*v', "$PWD\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$PWD\install.log"
+            throw "msiexec /i exited with $($p.ExitCode)."
+          }
+
+      - name: Check the installed layout
+        run: |
+          $root = "$env:LOCALAPPDATA\Programs\Candela"
+          $expected = @(
+            "candela.exe",
+            "candela-vm.exe",
+            "receipt",
+            "libs\std\list.cdl",
+            "libs\std_src\math\math.dll",
+            "LICENSE"
+          )
+          foreach ($item in $expected) {
+            $path = Join-Path $root $item
+            if (-not (Test-Path -LiteralPath $path)) {
+              Get-ChildItem -Recurse $root | Select-Object -ExpandProperty FullName
+              throw "Missing $path."
+            }
+          }
+
+      - name: Check the receipt
+        run: |
+          $receipt = [IO.File]::ReadAllText("$env:LOCALAPPDATA\Programs\Candela\receipt")
+          $expected = "version 9.9.9`ninstaller msi`n"
+          if ($receipt -ne $expected) {
+            throw "Receipt is '$receipt', expected '$expected'."
+          }
+
+      # An MSI install is never pinned: it is the channel the update check
+      # updates through, so a `pinned` line here would switch that off.
+      - name: Check the receipt is not pinned
+        run: |
+          $receipt = [IO.File]::ReadAllText("$env:LOCALAPPDATA\Programs\Candela\receipt")
+          if ($receipt -match '(?m)^pinned\b') {
+            throw "Receipt carries a pinned line."
+          }
+
+      - name: Check the user PATH
+        run: |
+          $root = "$env:LOCALAPPDATA\Programs\Candela"
+          $path = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
+          if ($path -notlike "*$root*") {
+            throw "User PATH is '$path', which does not contain '$root'."
+          }
+
+      # From an unrelated directory and with nothing pointing at the checkout,
+      # so the compiler has to find libs/ next to its own executable.
+      - name: Run the installed binary
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Candela\candela.exe"
+          $work = Join-Path $env:TEMP "candela-smoke"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Set-Location $work
+
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "candela --version exited with $LASTEXITCODE." }
+
+          $program = @(
+            'import "std/list" as list;',
+            '',
+            'fn main() {',
+            '    print(list::sum([1, 2, 3, 4]));',
+            '}'
+          ) -join "`n"
+          [IO.File]::WriteAllText("$work\smoke.cdl", $program, [Text.Encoding]::ASCII)
+
+          $out = & $exe "$work\smoke.cdl"
+          if ($LASTEXITCODE -ne 0) { throw "Running smoke.cdl exited with $LASTEXITCODE." }
+          if (($out | Out-String).Trim() -ne "10") {
+            throw "smoke.cdl printed '$out', expected '10'."
+          }
+
+      - name: Upgrade
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\candela-9.9.10.msi", '/qn', '/l*v', "$PWD\upgrade.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$PWD\upgrade.log"
+            throw "msiexec upgrade exited with $($p.ExitCode)."
+          }
+
+      # A major upgrade replaces the entry it upgrades. Two entries would mean
+      # the old install stayed behind, which is what a changed UpgradeCode or a
+      # changed install scope looks like.
+      # Windows Installer registers per-user products under the machine hive's
+      # per-SID UserData, not under HKCU's Uninstall key.
+      - name: Check the upgrade left one entry
+        run: |
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
+          $entries = @(Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'Candela' })
+          if ($entries.Count -ne 1) {
+            $entries | Format-List DisplayName, DisplayVersion
+            throw "Found $($entries.Count) Candela entries, expected 1."
+          }
+          if ($entries[0].DisplayVersion -ne '9.9.10') {
+            throw "DisplayVersion is '$($entries[0].DisplayVersion)', expected '9.9.10'."
+          }
+
+      - name: Uninstall
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/x', "$PWD\candela-9.9.10.msi", '/qn', '/l*v', "$PWD\uninstall.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$PWD\uninstall.log"
+            throw "msiexec /x exited with $($p.ExitCode)."
+          }
+
+      - name: Check the uninstall cleaned up
+        run: |
+          $root = "$env:LOCALAPPDATA\Programs\Candela"
+          if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -Recurse $root | Select-Object -ExpandProperty FullName
+            throw "$root still exists."
+          }
+          $path = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
+          if ($path -like "*$root*") {
+            throw "User PATH still contains '$root'."
+          }
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
+          $left = @(Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'Candela' })
+          if ($left.Count -ne 0) {
+            throw "Candela is still registered after the uninstall."
+          }
+
+      # The receipt turns the update check on, and the portable zip is not an
+      # install, so it must not carry one.
+      - name: Check the zip carries no receipt
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("$PWD\candela-x86_64-windows.zip")
+          try {
+            $names = $zip.Entries | ForEach-Object { $_.FullName }
+          } finally {
+            $zip.Dispose()
+          }
+          if ($names -contains 'receipt') {
+            throw "The zip contains a receipt."
+          }

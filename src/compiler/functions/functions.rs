@@ -30,6 +30,54 @@ mod fs_lib_functions;
 #[cfg(target_arch = "wasm32")]
 use crate::errors::wasm_error;
 
+/// Compiles each argument expression and returns the register holding each
+/// result, in argument order.
+///
+/// The registers stay allocated: freeing one before the rest are compiled lets
+/// the allocator hand the same register to a later argument, which overwrites
+/// the earlier value. [`store_call_args`] frees them once the operands are
+/// stored.
+//
+// `pub(crate)` (not private) so the sibling `methods` module lowers its
+// argument runs the same way. clippy's `redundant_pub_crate` does not account
+// for that cross-module access.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn compile_call_args(
+    args: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Vec<u16> {
+    args.iter()
+        .map(|arg| {
+            arg.compile(v, ctx, state, output, None, false, true)
+                .unwrap_id()
+        })
+        .collect()
+}
+
+/// Emits the `StoreFuncArg` run for `arg_ids` and releases their registers.
+///
+/// The VM collects `StoreFuncArg` operands in one scratch list that the next
+/// call instruction consumes and clears, so the run has to sit directly before
+/// that instruction: any nested call emitted in between would take the operands
+/// stored so far as its own arguments. Compile every argument first, then call
+/// this.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn store_call_args(
+    arg_ids: &[u16],
+    v: &[Variable],
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    for &arg_id in arg_ids {
+        output.push(Instr::StoreFuncArg(arg_id));
+        state.free_reg(arg_id, v);
+        *state.allocated_arg_count += 1;
+    }
+}
+
 pub fn check_arg_type(
     fn_name: &str,
     v: &mut Vec<Variable>,
@@ -162,15 +210,14 @@ pub fn handle_functions(
             }
         }
 
-        for arg in args {
-            let arg_id = arg
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            output.push(Instr::StoreFuncArg(arg_id));
-            // This may break stuff
-            state.free_reg(arg_id, v);
-            *state.allocated_arg_count += 1;
-        }
+        // Compile every argument first, then emit the whole `StoreFuncArg` run
+        // immediately before the call. The VM accumulates those operands in a
+        // single scratch list that each call consumes and clears, so a nested
+        // call must not run between the outer call's first stored operand and
+        // the call itself. Registers stay allocated until the run is emitted so
+        // one argument cannot reuse the register of an earlier one.
+        let arg_ids = compile_call_args(args, v, ctx, state, output);
+        store_call_args(&arg_ids, v, state, output);
 
         let register_id = if returns_null {
             0

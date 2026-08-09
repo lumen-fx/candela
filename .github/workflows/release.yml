@@ -63,6 +63,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # Every artifact is named and versioned after the tag, so a tag that
+      # disagrees with the manifest ships a package claiming a version the
+      # binary does not report.
+      - name: Check the tag matches Cargo.toml
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(sed -n '3s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          if [ "$tag" != "$manifest" ]; then
+            echo "Tag $GITHUB_REF_NAME is version '$tag', but Cargo.toml line 3 says '$manifest'."
+            echo "Bump the version in Cargo.toml, or retag, so the two agree."
+            exit 1
+          fi
+
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -153,6 +168,28 @@ jobs:
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact }}.zip"
 
+      # Staging happens after the zip is sealed. The receipt is what turns the
+      # update check on, and it belongs only to installed copies: inside the
+      # portable zip it would make a hand-extracted copy offer an update that
+      # then installs a second Candela somewhere else.
+      - name: Stage the MSI payload (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          Copy-Item -Path "dist" -Destination "msi-stage" -Recurse
+          $receipt = "version $version`ninstaller msi`n"
+          [IO.File]::WriteAllText("$PWD\msi-stage\receipt", $receipt, [Text.Encoding]::ASCII)
+
+      - name: Install WiX (Windows)
+        if: runner.os == 'Windows'
+        run: dotnet tool install --global wix --version 6.0.1
+
+      - name: Build the MSI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          ./msi/build-msi.ps1 -Version $version -StageDir "msi-stage" -OutFile "${{ matrix.artifact }}.msi"
+
       - name: Build final binary (LIB)
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
@@ -182,6 +219,7 @@ jobs:
           path: |
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.msi
             ${{ matrix.embed_artifact }}.tar.gz
             ${{ matrix.embed_artifact }}.zip
 
@@ -202,4 +240,5 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/*.msi
           generate_release_notes: true

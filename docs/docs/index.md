@@ -39,7 +39,15 @@ Write the release tag with or without its leading `v`. This also pins the instal
 
 ### On Windows
 
-Candela doesn't provide a Windows installer yet. You must manually download it from [the latest release on GitHub](https://github.com/lumen-fx/candela/releases/latest).
+Download and run [the Candela installer](https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi).
+
+It installs for you alone, under `%LOCALAPPDATA%\Programs\Candela`, so there is no administrator prompt, and it puts that folder on your user `PATH`. Open a new terminal afterwards to pick the change up.
+
+The installer is unsigned, so SmartScreen may step in with "Windows protected your PC". Choose **More info**, then **Run anyway**.
+
+The `.zip` on [the latest release](https://github.com/lumen-fx/candela/releases/latest) holds the same files if you would rather install nothing. Extract it where you like and put that folder on your `PATH` yourself, keeping `libs/` next to `candela.exe`: that is where the compiler looks for the standard library.
+
+To uninstall, go to **Settings > Apps > Installed apps**, or run `msiexec /x candela-x86_64-windows.msi`.
 
 ## Usage
 
@@ -55,7 +63,9 @@ Once installed, you can use the `candela` command like any other:
 
 ## Staying up to date
 
-When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and the command to install it. Nothing is downloaded or replaced for you.
+When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and how to install it: the install command on macOS and Linux, the `.msi` download on Windows.
+
+On Windows, `candela --help` then asks whether to install it. Answer yes and Candela downloads the `.msi` and hands it to the installer once the command exits; open a new terminal when it finishes. The REPL prints the notice and stops there, and so does every other command. Answer anything but yes, or run with stdin or stderr redirected, and nothing is downloaded.
 
 Running a program never triggers the check, so a script's output and exit status stay its own.
 
@@ -66,7 +76,9 @@ The check is skipped when:
 - `CANDELA_NO_UPDATE_CHECK` is set to any non-empty value
 - `CI` is set, or stderr is not a terminal
 
-To update, run the install command again.
+Installs made by the `.msi` are never pinned, since that is the channel the offer updates through.
+
+To update by hand, install again the way you did the first time.
 
 ## Benchmarks
 ![Candela benchmarks](images/candela-benchmarks.png){ loading=lazy }
