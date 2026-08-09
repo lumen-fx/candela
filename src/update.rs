@@ -9,6 +9,11 @@
 //! did not place (a `cargo build` never reaches the network) and for installs
 //! pinned to a release with `install.sh --version`. Every step here fails
 //! silently: a broken update check must never get in the way of the session.
+//!
+//! On Windows, `candela --help` goes one step further and offers to install the
+//! new release, since there is an installer to hand it to. The REPL never
+//! offers: it is holding its own line reader, and a second one competing for
+//! stdin would eat the keystrokes meant for the prompt.
 
 use std::fmt::Write as _;
 use std::io::IsTerminal as _;
@@ -23,8 +28,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const LATEST_URL: &str = "https://github.com/lumen-fx/candela/releases/latest";
 
 /// The command the docs tell you to run to install Candela.
+#[cfg(not(windows))]
 const INSTALL_CMD: &str =
     "curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh";
+
+/// Windows installs from a package rather than a shell script, so the notice
+/// names the download instead of a command. The same URL is what the offer
+/// below fetches.
+#[cfg(windows)]
+const INSTALL_CMD: &str =
+    "https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi";
 
 /// One network check a day.
 const CHECK_INTERVAL: u64 = 24 * 60 * 60;
@@ -93,21 +106,130 @@ pub fn poll(check: Check) -> Option<Check> {
 
 /// Waits for the answer and prints the notice. For one-shot commands that are
 /// about to exit; the REPL uses [`poll`] instead.
+///
+/// This is also the only place that offers to install the update, because the
+/// process is on its way out: the installer runs against files nothing is
+/// holding open.
 pub fn finish(check: Option<Check>) {
-    match check {
-        Some(Check::Known(latest)) => notice(&latest),
-        Some(Check::Running(rx)) => {
-            if let Ok(latest) = rx.recv_timeout(WAIT_FOR_RESULT) {
-                notice(&latest);
-            }
-        }
-        None => {}
+    let latest = match check {
+        Some(Check::Known(latest)) => Some(latest),
+        Some(Check::Running(rx)) => rx.recv_timeout(WAIT_FOR_RESULT).ok(),
+        None => None,
+    };
+    if let Some(latest) = latest {
+        notice(&latest);
+        offer_update(&latest);
     }
 }
 
 fn notice(latest: &str) {
     let current = current();
     eprintln!("candela {latest} is available (you have {current}). Update: {INSTALL_CMD}");
+}
+
+/// Reads one line and decides whether it is a yes. Anything else, an empty line
+/// included, is a no.
+#[cfg(any(windows, test))]
+fn said_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Unix updates through the install script the notice already named.
+#[cfg(not(windows))]
+fn offer_update(_latest: &str) {}
+
+/// Asks whether to install the new release, and sets it up if the answer is
+/// yes. The install itself happens after this process exits: `msiexec` cannot
+/// replace `candela.exe` while it is the running image, and a package that
+/// finds its own files in use fails instead of asking.
+#[cfg(windows)]
+fn offer_update(latest: &str) {
+    use std::io::Write as _;
+
+    // Both ends have to be a terminal: stderr because that is where the
+    // question goes, stdin because that is where the answer comes from. A
+    // piped stdin would answer for a person who never saw the question.
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return;
+    }
+
+    eprint!("Update now? [y/N] ");
+    let _ = std::io::stderr().flush();
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() || !said_yes(&answer) {
+        return;
+    }
+
+    let Some(installer) = download_installer() else {
+        eprintln!("Could not download the installer. Get it from {INSTALL_CMD}");
+        return;
+    };
+
+    if spawn_installer(&installer).is_err() {
+        eprintln!(
+            "Could not start the installer. Run it yourself: {}",
+            installer.display()
+        );
+        return;
+    }
+
+    eprintln!(
+        "Candela {latest} installs once this command exits. Open a new terminal when it is done."
+    );
+}
+
+/// Downloads the package to the temp directory and returns where it landed.
+///
+/// `curl.exe` ships with Windows and what it writes carries no
+/// Mark-of-the-Web, so this path never meets SmartScreen. PowerShell covers the
+/// machines that have no `curl.exe`.
+#[cfg(windows)]
+fn download_installer() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os("TEMP")?).join("candela-update.msi");
+    let dest = path.to_str()?;
+
+    let downloaded = match Command::new("curl.exe")
+        .args(["-fL", "--max-time", "300", "-o", dest, INSTALL_CMD])
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(_) => Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("Invoke-WebRequest -Uri '{INSTALL_CMD}' -OutFile '{dest}'"),
+            ])
+            .status()
+            .is_ok_and(|status| status.success()),
+    };
+
+    downloaded.then_some(path)
+}
+
+/// Starts a detached helper that waits for this process to go away, runs the
+/// installer, and removes the download. Detaching is the point: it outlives the
+/// command that spawned it, and it is not waited on here.
+#[cfg(windows)]
+fn spawn_installer(installer: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt as _;
+
+    const DETACHED_PROCESS: u32 = 0x8;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x200;
+
+    let package = installer.display();
+    let pid = std::process::id();
+    let script = format!(
+        "Wait-Process -Id {pid} -Timeout 120 -ErrorAction SilentlyContinue; \
+         Start-Process msiexec -ArgumentList '/i','{package}','/passive','/norestart' -Wait; \
+         Remove-Item '{package}' -ErrorAction SilentlyContinue"
+    );
+
+    Command::new("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .map(|_| ())
 }
 
 const fn current() -> &'static str {
@@ -293,7 +415,25 @@ fn write_cache(now: u64, latest: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_newer, parse_latest_tag};
+    use super::{is_newer, parse_latest_tag, said_yes};
+
+    #[test]
+    fn only_a_plain_yes_is_a_yes() {
+        assert!(said_yes("y\n"));
+        assert!(said_yes("Y\r\n"));
+        assert!(said_yes("  yes  "));
+        assert!(said_yes("YES"));
+    }
+
+    #[test]
+    fn everything_else_is_a_no() {
+        assert!(!said_yes(""));
+        assert!(!said_yes("\n"));
+        assert!(!said_yes("n"));
+        assert!(!said_yes("no"));
+        assert!(!said_yes("yeah"));
+        assert!(!said_yes("y e s"));
+    }
 
     #[test]
     fn newer_versions_win() {

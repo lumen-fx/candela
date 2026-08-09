@@ -63,7 +63,9 @@ Once installed, you can use the `candela` command like any other:
 
 ## Staying up to date
 
-When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and the command to install it. Nothing is downloaded or replaced for you.
+When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and how to install it: the install command on macOS and Linux, the `.msi` download on Windows.
+
+On Windows, `candela --help` then asks whether to install it. Answer yes and Candela downloads the `.msi` and hands it to the installer once the command exits; open a new terminal when it finishes. The REPL prints the notice and stops there, and so does every other command. Answer anything but yes, or run with stdin or stderr redirected, and nothing is downloaded.
 
 Running a program never triggers the check, so a script's output and exit status stay its own.
 
@@ -74,7 +76,9 @@ The check is skipped when:
 - `CANDELA_NO_UPDATE_CHECK` is set to any non-empty value
 - `CI` is set, or stderr is not a terminal
 
-To update, install again the way you did the first time.
+Installs made by the `.msi` are never pinned, since that is the channel the offer updates through.
+
+To update by hand, install again the way you did the first time.
 
 ## Benchmarks
 ![Candela benchmarks](images/candela-benchmarks.png){ loading=lazy }
