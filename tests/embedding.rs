@@ -513,3 +513,99 @@ fn main() {}
         .unwrap();
     assert_eq!(out, Value::Int(42));
 }
+
+// ---------------------------------------------------------------------------
+// NESTED HOST CALLS
+// ---------------------------------------------------------------------------
+
+/// A host call nested inside another call expression binds its own arguments.
+/// The VM collects `StoreFuncArg` operands in one scratch list that a call
+/// consumes and clears, so the operands of an outer call have to be stored in
+/// one run directly before it. Each argument also needs its own register:
+/// `both_args_nested` subtracts rather than adds, so it catches a later
+/// argument reusing the register of an earlier one.
+#[test]
+fn nested_host_call_binds_its_own_args() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("m", "add", |a: i64, b: i64| a + b);
+    engine.register_host_fn("m", "sub", |a: i64, b: i64| a - b);
+    engine.register_host_fn("m", "one", || 1i64);
+    engine.register_host_fn("m", "three", || 3i64);
+    engine.register_host_fn("m", "double", |x: i64| x * 2);
+
+    let src = r#"
+host "m" {
+    int add(int, int);
+    int sub(int, int);
+    int one();
+    int three();
+    int double(int);
+}
+
+fn last_arg_nested(x) { return m::add(x, m::one()); }
+fn first_arg_nested(x) { return m::add(m::one(), x); }
+fn both_args_nested() { return m::sub(m::three(), m::one()); }
+fn deep(x) { return m::add(m::double(m::add(x, m::one())), x); }
+fn split(x) {
+    let n = m::one();
+    return m::add(x, n);
+}
+fn main() {}
+"#;
+
+    let mut program = engine.compile(src, "nested.cdl").expect("compiles");
+    assert_eq!(
+        program.call("split", &[10i64.into()]).unwrap(),
+        Value::Int(11)
+    );
+    assert_eq!(
+        program.call("last_arg_nested", &[10i64.into()]).unwrap(),
+        Value::Int(11)
+    );
+    assert_eq!(
+        program.call("first_arg_nested", &[10i64.into()]).unwrap(),
+        Value::Int(11)
+    );
+    assert_eq!(
+        program.call("both_args_nested", &[]).unwrap(),
+        Value::Int(2)
+    );
+    assert_eq!(
+        program.call("deep", &[10i64.into()]).unwrap(),
+        Value::Int(32)
+    );
+}
+
+/// The same rule covers the builtin methods, whose arguments the VM pops off
+/// that scratch list: a host call nested in a method argument must not consume
+/// the operands the method already stored.
+#[test]
+fn nested_host_call_in_method_arg() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("m", "pick", |s: String| s);
+
+    let src = r#"
+host "m" {
+    string pick(string);
+}
+
+fn swap(s) { return s.replace(m::pick("a"), "b"); }
+fn find_in(xs) { return xs.contains(m::pick("y")); }
+fn main() {}
+"#;
+
+    let mut program = engine.compile(src, "method.cdl").expect("compiles");
+    assert_eq!(
+        program.call("swap", &["cat".into()]).unwrap(),
+        Value::String("cbt".to_owned())
+    );
+    assert_eq!(
+        program
+            .call(
+                "find_in",
+                &[Value::Array(vec!["x".into(), "y".into(), "z".into()])]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+}

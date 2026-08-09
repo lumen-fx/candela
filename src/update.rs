@@ -136,7 +136,7 @@ fn said_yes(answer: &str) -> bool {
 
 /// Unix updates through the install script the notice already named.
 #[cfg(not(windows))]
-fn offer_update(_latest: &str) {}
+const fn offer_update(_latest: &str) {}
 
 /// Asks whether to install the new release, and sets it up if the answer is
 /// yes. The install itself happens after this process exits: `msiexec` cannot

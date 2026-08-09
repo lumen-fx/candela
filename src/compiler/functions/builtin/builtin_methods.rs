@@ -11,6 +11,7 @@ use crate::compiler::compiler_errors::check_args_range;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_unknown_function;
 use crate::compiler::functions::check_arg_type;
+use crate::compiler::functions::store_call_args;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
@@ -30,16 +31,20 @@ pub fn builtin_methods(
     fn_span: Span,
     args_indexes: &[Span],
 ) -> Option<u16> {
+    // Arguments are stored back to front because the lib functions pop them,
+    // which hands the first pop the first argument. Every argument is compiled
+    // before the run is emitted; see `store_call_args`.
     macro_rules! add_args {
         () => {
-            for arg in args.iter().rev() {
-                let arg_id = arg
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
-                output.push(Instr::StoreFuncArg(arg_id));
-                *state.allocated_arg_count += 1;
-                state.free_reg(arg_id, v);
-            }
+            let arg_ids: Vec<u16> = args
+                .iter()
+                .rev()
+                .map(|arg| {
+                    arg.compile(v, ctx, state, output, None, false, true)
+                        .unwrap_id()
+                })
+                .collect();
+            store_call_args(&arg_ids, v, state, output);
         };
     }
 
