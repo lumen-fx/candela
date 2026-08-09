@@ -32,6 +32,11 @@ Candela provides a macOS / Linux installer, which you can use to download and in
 
 This will install the latest Candela version in `Library/Candela` on macOS, and in `/usr/local/lib/candela/` on Linux.
 
+To install a specific release instead of the latest one, pass `--version`:<br/>
+`#!bash curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh -s -- --version 0.0.1`
+
+Write the release tag with or without its leading `v`. This also pins the install: Candela stays on that release, and the update check below stays quiet, until you install again without `--version`.
+
 ### On Windows
 
 Candela doesn't provide a Windows installer yet. You must manually download it from [the latest release on GitHub](https://github.com/lumen-fx/candela/releases/latest).
@@ -47,6 +52,21 @@ Once installed, you can use the `candela` command like any other:
 
 [^extension]: Candela files have the `.cdl` file extension.
 *[REPL]: Read-Eval-Print-Loop
+
+## Staying up to date
+
+When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and the command to install it. Nothing is downloaded or replaced for you.
+
+Running a program never triggers the check, so a script's output and exit status stay its own.
+
+The check is skipped when:
+
+- You pinned the install with `install.sh --version`
+- You built Candela from source instead of installing it
+- `CANDELA_NO_UPDATE_CHECK` is set to any non-empty value
+- `CI` is set, or stderr is not a terminal
+
+To update, run the install command again.
 
 ## Benchmarks
 ![Candela benchmarks](images/candela-benchmarks.png){ loading=lazy }

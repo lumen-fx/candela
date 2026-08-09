@@ -4,6 +4,46 @@
 
 set -e
 
+usage() {
+    printf "Usage: install.sh [--version TAG]\n"
+    printf "  --version TAG   Install a specific release, e.g. 0.3.0 or v0.3.0.\n"
+    printf "                  Without it, the latest release is installed.\n"
+}
+
+missing_tag() {
+    printf "[ERROR] --version needs a release tag\n" >&2
+    usage >&2
+    exit 1
+}
+
+# The release tag to install. Empty means "whatever is latest right now".
+PIN=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version)
+            shift
+            [ $# -gt 0 ] || missing_tag
+            PIN="$1"
+            [ -n "$PIN" ] || missing_tag
+            ;;
+        --version=*)
+            PIN="${1#--version=}"
+            [ -n "$PIN" ] || missing_tag
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            printf "[ERROR] Unknown option: %s\n" "$1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 # Supported OS's: "Darwin" on macOS, "Linux" on Linux
 OS=$(uname -s)
 
@@ -15,9 +55,9 @@ esac
 if mkdir -p "$INSTALL_DIR" 2>/dev/null; then
     :
 elif command -v sudo >/dev/null 2>&1; then
-    sudo mkdir $INSTALL_DIR
+    sudo mkdir "$INSTALL_DIR"
 else
-    printf "[ERROR] Cannot write to $INSTALL_DIR and sudo is not available. Re-run as root or install sudo.\n"
+    printf "[ERROR] Cannot write to %s and sudo is not available. Re-run as root or install sudo.\n" "$INSTALL_DIR"
 fi
 
 if command -v curl >/dev/null 2>&1; then
@@ -38,7 +78,7 @@ case "$OS" in
         case "$ARCH" in
             x86_64)  ARTIFACT="candela-x86_64-apple-darwin" ;;
             arm64)   ARTIFACT="candela-aarch64-apple-darwin" ;;
-            *)       printf "[ERROR] Unsupported macOS architecture: $ARCH\n" ;;
+            *)       printf "[ERROR] Unsupported macOS architecture: %s\n" "$ARCH" ;;
         esac
         ;;
     Linux)
@@ -53,24 +93,52 @@ case "$OS" in
                 fi
                 ;;
             aarch64) ARTIFACT="candela-aarch64-linux" ;;
-            *)       printf "[ERROR] Unsupported Linux architecture: $ARCH\n" ;;
+            *)       printf "[ERROR] Unsupported Linux architecture: %s\n" "$ARCH" ;;
         esac
         ;;
     *)
         # Windows will eventually be supported by an installer
-        printf "[ERROR] Unsupported OS: $OS. On Windows, download the .zip from https://github.com/lumen-fx/candela/releases/latest\n"
+        printf "[ERROR] Unsupported OS: %s. On Windows, download the .zip from https://github.com/lumen-fx/candela/releases/latest\n" "$OS"
         ;;
 esac
 
 printf "[Candela] Ground Control to Major Tom...\n"
-printf "[Candela] Downloading $ARTIFACT for $OS/$ARCH\n"
+printf "[Candela] Downloading %s for %s/%s\n" "$ARTIFACT" "$OS" "$ARCH"
 
 TMP=$(mktemp -d)
 
 # Clean up the temp directory once the script exits, for ANY reason
 trap 'rm -rf "$TMP"' EXIT
 
-$DOWNLOAD_CMD "https://github.com/lumen-fx/candela/releases/latest/download/$ARTIFACT.tar.gz" | tar -xz -C "$TMP"
+RELEASES="https://github.com/lumen-fx/candela/releases"
+
+# A failed attempt can leave a half-extracted archive behind, so start each one
+# from an empty directory. The path stays the same, so the trap above still
+# cleans it up. Success is judged by what came out of the archive rather than by
+# the exit status of the pipeline, which reports tar and not the download.
+fetch() {
+    rm -rf "$TMP"
+    mkdir -p "$TMP"
+    $DOWNLOAD_CMD "$1" | tar -xz -C "$TMP" || true
+    [ -f "$TMP/candela" ]
+}
+
+PIN_VERSION="${PIN#v}"
+
+if [ -z "$PIN" ]; then
+    if ! fetch "$RELEASES/latest/download/$ARTIFACT.tar.gz"; then
+        printf "[ERROR] Could not download %s. See %s\n" "$ARTIFACT" "$RELEASES" >&2
+        exit 1
+    fi
+elif fetch "$RELEASES/download/$PIN/$ARTIFACT.tar.gz"; then
+    :
+elif [ "$PIN" != "v$PIN_VERSION" ] && fetch "$RELEASES/download/v$PIN_VERSION/$ARTIFACT.tar.gz"; then
+    # Release tags carry a leading "v", so a bare 0.3.0 works too.
+    :
+else
+    printf "[ERROR] No release %s with a %s archive. See %s\n" "$PIN" "$ARTIFACT" "$RELEASES" >&2
+    exit 1
+fi
 
 if [ ! -f "$TMP/candela" ]; then
     # The github workflow packs the binary straight into an archive so something went very wrong here
@@ -98,11 +166,11 @@ if cp -R "$TMP/." "$INSTALL_DIR" 2>/dev/null; then
 elif command -v sudo >/dev/null 2>&1; then
     sudo cp -R "$TMP/." "$INSTALL_DIR"
 else
-    printf "[ERROR] Cannot write to $INSTALL_DIR and sudo is not available. Re-run as root or install sudo.\n"
+    printf "[ERROR] Cannot write to %s and sudo is not available. Re-run as root or install sudo.\n" "$INSTALL_DIR"
 fi
 
 if [ ! -d "$INSTALL_DIR/libs/std" ]; then
-    printf "[ERROR] Standard library not installed at $INSTALL_DIR/libs/std. 'import std::x' will not resolve. Please re-run the installer.\n"
+    printf "[ERROR] Standard library not installed at %s/libs/std. 'import std::x' will not resolve. Please re-run the installer.\n" "$INSTALL_DIR"
 fi
 
 if chmod 755 "$INSTALL_DIR/candela" 2>/dev/null; then
@@ -133,6 +201,24 @@ else
     printf "[ERROR] Cannot write to /usr/local/bin and sudo is not available. Re-run as root or install sudo.\n"
 fi
 
-printf "[Candela] Installed $("$INSTALL_DIR/candela" --version) in $INSTALL_DIR/candela\n"
-printf "[Candela] Installed candela-vm in $INSTALL_DIR/candela-vm\n"
+VERSION=$("$INSTALL_DIR/candela" --version | cut -d' ' -f2)
+
+# The receipt records what this installer put in place. `candela` reads it to
+# decide whether to check for a newer release: no receipt means the binary was
+# built from source and is left alone, and a `pinned` line means you chose this
+# release and do not want to hear about newer ones. Installing without
+# --version rewrites the receipt without that line, which lifts the pin.
+printf "version %s\n" "$VERSION" > "$TMP/receipt"
+if [ -n "$PIN" ]; then
+    printf "pinned %s\n" "$PIN_VERSION" >> "$TMP/receipt"
+fi
+
+if cp "$TMP/receipt" "$INSTALL_DIR/receipt" 2>/dev/null; then
+    :
+elif command -v sudo >/dev/null 2>&1; then
+    sudo cp "$TMP/receipt" "$INSTALL_DIR/receipt"
+fi
+
+printf "[Candela] Installed Candela %s in %s/candela\n" "$VERSION" "$INSTALL_DIR"
+printf "[Candela] Installed candela-vm in %s/candela-vm\n" "$INSTALL_DIR"
 printf "[Candela] Run 'candela' to get started.\n"

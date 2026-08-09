@@ -58,6 +58,22 @@ fn main() {
 }
 ```
 
+## Install
+
+On macOS and Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh -s -- --version 0.0.1
+```
+
+The first command installs the latest release; the second installs a chosen one
+and pins the install to it. On Windows, download the archive from the
+[latest release](https://github.com/lumen-fx/candela/releases/latest).
+
+An installed `candela` tells you when a newer release is out. The
+[installation docs](docs/docs/index.md) cover that check and how to turn it off.
+
 ## Build from source
 
 Make sure [Rust](https://rustup.rs/) is installed.
