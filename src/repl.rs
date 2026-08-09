@@ -6,9 +6,14 @@ use std::io::{Write, stdin, stdout};
 #[inline(never)]
 pub fn repl() {
     println!(
-        "{BLUE}CANDELA {} -- REPL (read-eval-print-loop){RESET}",
+        "{BLUE}CANDELA {} REPL (read-eval-print-loop){RESET}",
         env!("CARGO_PKG_VERSION")
     );
+
+    // Asking GitHub for the latest release runs on its own thread and the
+    // answer is picked up between prompts, so nothing here holds the prompt
+    // back.
+    let mut update = crate::update::start();
 
     let exe = std::env::current_exe().expect("{RED}[ERROR]{RESET} Cannot find candela binary path");
     let tmp = std::env::temp_dir().join("candela_repl_tmp.cdl");
@@ -18,6 +23,8 @@ pub fn repl() {
     let mut contents = String::with_capacity(20);
 
     loop {
+        update = update.and_then(crate::update::poll);
+
         let mut s = String::new();
         print!("> ");
         let _ = stdout().flush();

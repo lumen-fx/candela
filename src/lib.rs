@@ -64,6 +64,10 @@ mod repl;
 #[path = "./tests.rs"]
 #[cfg(all(test, feature = "compiler"))]
 mod tests;
+// Tells a person at a terminal when a newer release is out. It is only reached
+// from the REPL and `--help`, never while a program is running.
+#[cfg(feature = "compiler")]
+mod update;
 #[path = "./util/util.rs"]
 mod util;
 
@@ -247,10 +251,12 @@ pub fn main() {
 
     if next_arg == "--help" || next_arg == "-h" {
         cold_path();
+        let update = update::start();
         println!(
             "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]   (compile to bytecode; run with candela-vm)\n  candela [-v | --version]",
             util::CANDELA_LOGO
         );
+        update::finish(update);
         return;
     }
 
