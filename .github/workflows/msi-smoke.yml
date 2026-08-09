@@ -151,9 +151,12 @@ jobs:
       # A major upgrade replaces the entry it upgrades. Two entries would mean
       # the old install stayed behind, which is what a changed UpgradeCode or a
       # changed install scope looks like.
+      # Windows Installer registers per-user products under the machine hive's
+      # per-SID UserData, not under HKCU's Uninstall key.
       - name: Check the upgrade left one entry
         run: |
-          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
           $entries = @(Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
             Where-Object { $_.DisplayName -eq 'Candela' })
           if ($entries.Count -ne 1) {
@@ -182,6 +185,13 @@ jobs:
           $path = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
           if ($path -like "*$root*") {
             throw "User PATH still contains '$root'."
+          }
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
+          $left = @(Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'Candela' })
+          if ($left.Count -ne 0) {
+            throw "Candela is still registered after the uninstall."
           }
 
       # The receipt turns the update check on, and the portable zip is not an
