@@ -1,146 +1,85 @@
-<p align="center">
-  <img src="assets/colored-logo.png" alt="Candela" width="220">
-</p>
+# candela
 
-# Candela
+A small statically typed scripting language with Rust-like syntax.
 
-> [!WARNING]
-> Candela is under active development and the API is unstable.
+## Why candela
 
-**Candela** is a fast, statically-typed interpreted language that combines Rust-like syntax with Python's ease of use. It aims to be a faster alternative to Python that sits closer to low-level languages while staying approachable.
+candela is the scripting language of the Lumen UI framework, and it works on
+its own as well. Programs are type-checked before they run, so a mistake shows
+up as a compile error instead of surfacing halfway through a run, and the
+syntax stays close enough to Rust to read without a tour.
 
-Candela is the embedded scripting language for the Lumen UI framework. A Rust host drives it through the `Engine`/`Program` API (see `src/engine.rs`): register typed host functions, compile a script once, and call script functions by name.
+Reach for it when you want to script an application without embedding a large
+runtime, or when you want a small language for programs that start quickly and
+behave the same every time.
 
-## Origin and attribution
+## Quick start
 
-Candela is a fork of [keel](https://github.com/horacehoff/keel) by Horace Hoff.
-The original work is licensed under the Apache License, Version 2.0; that license
-and Horace Hoff's authorship are retained in full (see `LICENSE` and `NOTICE`).
-Candela renames the language and crate and extends it with a host embedding API
-(variadic host functions, array/map marshalling, structured diagnostics) for use
-inside Lumen. All credit for the original language design and implementation goes
-to Horace Hoff.
+Install on Linux or macOS:
 
-Upstream project: https://github.com/horacehoff/keel
+```sh
+curl -fsSL https://candela.lumenfx.dev/install.sh | sh
+```
 
-## Why Candela?
+On Windows, run the per-user installer from
+<https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi>.
 
-- **Fast**: aggressive compile-time optimizations ([benchmarks](BENCHMARKS.md))
-- **Familiar syntax**: Rust-like, with Python's ease of use
-- **Statically typed, zero annotations**: full type inference, static type checking, polymorphism
-- **FFI support**: call C and dynamic libraries directly from Candela
-- **Embeddable**: register typed host functions and drive scripts from a Rust host
-- **Built-in REPL**
-
-[Browse examples](examples/)
-
-## Quick showcase
+Write `hello.cdl`:
 
 ```rust
-struct Point { x: int, y: int }
-
-fn add(a, b) {
-    return a + b;
-}
-
 fn main() {
-    let p = Point { x: 3, y: 4 };
-    print(add(p.x, p.y)); // 7
-    print(add("Hello, ", "world!")); // Hello, world!
-
-    let nums = [4, 2, 6, 1, 7];
-    if nums[0] == 4 {
-        nums.sort();
-        print(if nums[0] == 1 { nums[0..3] } else { -1 }); // [1,2,4]
-    } else {
-        throw("Error!");
-    }
+    print("Hello, world!");
 }
 ```
 
-## Install
-
-On macOS and Linux:
+Run it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh
-curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh -s -- --version 0.0.1
+candela hello.cdl
 ```
 
-The first command installs the latest release; the second installs a chosen one
-and pins the install to it.
+Run `candela` with no arguments for a REPL.
 
-On Windows, run the
-[installer](https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi).
-It installs for you alone and needs no administrator rights. The archive on the
-[latest release](https://github.com/lumen-fx/candela/releases/latest) is there if
-you would rather unpack it yourself.
+## What you get
 
-An installed `candela` tells you when a newer release is out. The
-[installation docs](docs/docs/index.md) cover that check and how to turn it off.
+- **Types without ceremony.** Annotations are optional on locals and function
+  parameters; the compiler infers the rest and reports mismatches before the
+  program starts.
+- **Structs, enums and match.** Enum variants carry payloads, and `match`
+  binds them by pattern.
+- **Methods.** An `impl` block attaches methods to a struct or an enum, called
+  as `value.method()`.
+- **Functions as values.** Pass a named function or an anonymous `fn(x) { ... }`
+  to another function.
+- **Collections.** List and map literals, a set built on maps, and JSON parsing
+  and serialisation in the standard library.
+- **One import form.** `import "std/list" as list;` for a namespace, or
+  `import "std/option";` to bring the module's symbols into scope.
+- **A standard library written in candela.** The `.cdl` sources ship beside the
+  toolchain, so you can read any of it.
+- **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
+  bytecode artifact, and `candela-vm` runs it. The runtime binary links no
+  parser, compiler or REPL.
+- **Editor support.** A language server and a VS Code extension live in this
+  repository and build from source.
+- **Embedding.** A Rust `Engine`/`Program` API lets a host compile a program,
+  register host functions, and exchange values with it.
 
-## Build from source
+## Limitations
 
-Make sure [Rust](https://rustup.rs/) is installed.
+candela is pre-1.0 and the language is not stable; expect breaking changes
+between releases. Anonymous functions do not capture their surrounding
+scope, so pass what they need as arguments. The REPL re-runs the whole session
+on every line, which repeats any side effects earlier lines had.
 
-```sh
-cargo build --release
-./target/release/candela myfile.cdl
-```
+## Documentation
 
-## Usage
+Full documentation is at <https://candela.lumenfx.dev>, and mirrored under
+<https://docs.lumenfx.dev/candela>. To work on candela itself, read
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-```sh
-candela program.cdl               # Run a file
-candela build program.cdl         # Compile to program.cdlb bytecode
-candela build program.cdl -o a.cdlb   # ... to a chosen path
-candela                           # Start the REPL
-candela -v/--version              # Print version
-candela -h/--help                 # Print help
-```
+## Licence
 
-Candela source files use the `.cdl` extension.
-
-## Ahead-of-time bytecode and the lean `candela-vm`
-
-Candela ships as two binaries:
-
-- **`candela`** is the full toolchain: parser, compiler, VM, REPL, and the
-  `Engine`/`Program` embedding API.
-- **`candela-vm`** is a small standalone runtime that loads and runs
-  pre-compiled bytecode. It carries no parser, compiler, or REPL. The goal is to
-  keep it under 1 MiB.
-
-Compile a `.cdl` source to a self-contained `.cdlb` bytecode artifact, then run
-it:
-
-```sh
-candela build program.cdl         # emits program.cdlb
-candela-vm program.cdlb           # loads and runs the bytecode
-```
-
-A program behaves the same whether you run its source through `candela` or its
-`.cdlb` through `candela-vm`; output and error diagnostics match, since the
-source is embedded in the artifact.
-
-A `.cdlb` captures the whole program: every imported `.cdl` module is linked
-into the single artifact, so `candela-vm app.cdlb` runs with no source tree
-present. Dynamic-library imports are captured by reference rather than by value:
-the artifact records the logical library name and each symbol's signature, and
-`candela-vm` re-opens the library through the OS loader at load time. A library
-named by a bare logical name resolves to the right file for the host OS, so the
-same source runs across platforms as long as the library is installed. See the
-[dynamic libraries guide](docs/docs/language-tour/dynamic-libraries.md) for the
-resolution rules.
-
-A `host`-using program needs an embedding runtime to supply its host functions,
-so running one through the standalone `candela-vm` fails to load with an error
-naming the missing host function. Run those programs through the `Engine`/`Program`
-embedding API instead.
-
-## Editor support
-
-The [VS Code extension](editors/vscode/) provides syntax highlighting plus a
-language server (live diagnostics, hover, completion, outline,
-go-to-definition) via [`candela-lsp`](lsp/), a separate crate in this
-workspace built on candela's own lexer, parser, and type checker.
+Apache-2.0. See [LICENSE](LICENSE). candela is a fork of
+[keel](https://github.com/horacehoff/keel) by Horace Hoff; see
+[NOTICE](NOTICE).

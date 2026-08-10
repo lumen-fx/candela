@@ -1,86 +1,106 @@
----
-icon: lucide/rocket
----
+# candela
 
-# Get started
+candela is a small statically typed scripting language with Rust-like syntax.
+It is the scripting language of the Lumen UI framework, and it works just as
+well on its own.
 
-## What is Candela, and why?
+## Who it is for
 
-!!! warning
+candela is for people who want a scripting language that catches mistakes
+before the program starts. Types are checked at compile time, but you rarely
+write one down: annotations are optional on variables and function parameters,
+and the compiler works out the rest. What you get is a language that reads like
+a script and fails like a compiler.
 
-    Candela is experimental and under active development (this documentation too). Little is set in stone.
+It suits two jobs in particular. The first is scripting an application: a host
+program written in Rust can compile candela source, hand it functions to call,
+and exchange values with it. The second is standalone programs that need a
+short, predictable start, because you can compile ahead of time and ship a
+runtime that carries no compiler.
 
-Candela is a fast, statically-typed interpreted language that combines Rust-like syntax with Python's ease of use.
+## A taste
 
-It aims to be a much faster alternative to Python that sits closer to low-level languages while staying approachable. You should like Candela whether you are a seasoned Rust developer or you have barely touched Python and are new to programming.
+```rust
+enum Shape {
+    Square(int),
+    Rect(int, int),
+}
 
-Candela's main selling points are:
+impl Shape {
+    fn area(self) {
+        match self {
+            Square(s) => { return s * s; }
+            Rect(w, h) => { return w * h; }
+        }
+    }
+}
 
-- About 10x faster than Python and competitive with LuaJIT (-joff) in our benchmarks
-- Statically typed, with full type inference and zero annotations
-- FFI support: call C and dynamic libraries directly from Candela with a native, easy syntax
-- Embeddable in other programs through a C ABI and a Rust host API
+fn main() {
+    let shapes = [Square(3), Rect(2, 5)];
+    let total = 0;
+    for shape in shapes {
+        total += shape.area();
+    }
+    print("total area: " + str(total));
+}
+```
 
-The goal of this documentation / tutorial is to show Candela's syntax and how it works by example more than by theory.
+```
+total area: 19
+```
 
-## Installation
+Enum variants carry payloads and `match` binds them. An `impl` block gives a
+type methods you call with a dot. Lists are literals and `for` walks them. Not
+one type annotation appears, yet every one of those types is known before the
+program starts.
 
-### On macOS / Linux
+## The toolchain
 
-Candela provides a macOS / Linux installer, which you can use to download and install Candela by running the following command in your terminal:<br/>
-`#!bash curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh`
+Two programs install together. `candela` is the compiler: it runs source files,
+hosts the REPL, and compiles a `.cdl` source file into a `.cdlb` bytecode
+artifact. `candela-vm` is the runtime alone, which runs an artifact and links
+no parser, compiler or REPL.
 
-This will install the latest Candela version in `Library/Candela` on macOS, and in `/usr/local/lib/candela/` on Linux.
+The standard library ships beside them as candela source, so every function in
+it is readable, and a language server and VS Code extension are available from
+the repository.
 
-To install a specific release instead of the latest one, pass `--version`:<br/>
-`#!bash curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh -s -- --version 0.0.1`
+## Where to go next
 
-Write the release tag with or without its leading `v`. This also pins the install: Candela stays on that release, and the update check below stays quiet, until you install again without `--version`.
+**Getting started** takes you from nothing to a running program.
 
-The installer checks the archive it downloads against the `sha256sums.txt` published with the release, and installs nothing if the two disagree. It needs `curl` or `wget`, and `sha256sum` or `shasum`.
+- [Install](getting-started/install.md): the install script, the Windows
+  package, updates and pinning.
+- [Hello, world](getting-started/hello-world.md): your first program, line by
+  line.
+- [Running programs](getting-started/running.md): source, the REPL, artifacts
+  and the command line.
 
-### On Windows
+**Language** is the tour, meant to be read in order.
 
-Download and run [the Candela installer](https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi).
+- [Variables](language/variables.md) and [Types](language/types.md).
+- [Control flow](language/control-flow.md) and
+  [Functions](language/functions.md).
+- [Methods](language/methods.md), [Enums](language/enums.md) and
+  [Collections](language/collections.md).
+- [Error handling](language/error-handling.md) and
+  [Modules](language/modules.md).
 
-It installs for you alone, under `%LOCALAPPDATA%\Programs\Candela`, so there is no administrator prompt, and it puts that folder on your user `PATH`. Open a new terminal afterwards to pick the change up.
+**Standard library** is the lookup reference: an
+[overview](standard-library/overview.md) of how the library ships and how to
+import it, the [built-in functions](standard-library/builtins.md) that need no
+import, and a page for each module.
 
-The installer is unsigned, so SmartScreen may step in with "Windows protected your PC". Choose **More info**, then **Run anyway**.
+**Reference** covers the [operators](reference/operators.md), the
+[error catalogue](reference/errors.md), the [CLI](reference/cli.md), and the
+[`.cdlb` artifact format](reference/artifacts.md).
 
-The `.zip` on [the latest release](https://github.com/lumen-fx/candela/releases/latest) holds the same files if you would rather install nothing. Extract it where you like and put that folder on your `PATH` yourself, keeping `libs/` next to `candela.exe`: that is where the compiler looks for the standard library.
+**Integration** is for host applications:
+[embedding candela in Rust](integration/embedding.md) and
+[calling dynamic C libraries](integration/c-libraries.md) from candela.
 
-To uninstall, go to **Settings > Apps > Installed apps**, or run `msiexec /x candela-x86_64-windows.msi`.
+**Contributing** explains how to
+[build the toolchain](contributing/building.md) yourself.
 
-## Usage
-
-Once installed, you can use the `candela` command like any other:
-
-- To run the REPL, run: `#!bash candela`
-- To run a `.cdl` file [^extension], run: `#!bash candela file.cdl`
-- To display Candela's current version, run: `#!bash candela -v` or `#!bash candela --version`
-- To display the available commands, run: `#!bash candela -h` or `#!bash candela --help`
-
-[^extension]: Candela files have the `.cdl` file extension.
-*[REPL]: Read-Eval-Print-Loop
-
-## Staying up to date
-
-When you start the REPL or ask for `candela --help`, Candela asks GitHub for the newest release, at most once a day. If a newer one is out, you get a single line on stderr naming it and how to install it: the install command on macOS and Linux, the `.msi` download on Windows.
-
-On Windows, `candela --help` then asks whether to install it. Answer yes and Candela downloads the `.msi` and hands it to the installer once the command exits; open a new terminal when it finishes. The REPL prints the notice and stops there, and so does every other command. Answer anything but yes, or run with stdin or stderr redirected, and nothing is downloaded.
-
-Running a program never triggers the check, so a script's output and exit status stay its own.
-
-The check is skipped when:
-
-- You pinned the install with `install.sh --version`
-- You built Candela from source instead of installing it
-- `CANDELA_NO_UPDATE_CHECK` is set to any non-empty value
-- `CI` is set, or stderr is not a terminal
-
-Installs made by the `.msi` are never pinned, since that is the channel the offer updates through.
-
-To update by hand, install again the way you did the first time.
-
-## Benchmarks
-![Candela benchmarks](images/candela-benchmarks.png){ loading=lazy }
+Using candela inside a Lumen application is covered by the Lumen documentation
+rather than this site; follow the Lumen bindings link in the navigation.
