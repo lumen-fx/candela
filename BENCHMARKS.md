@@ -1,106 +1,127 @@
 # Candela benchmarks
-> Candela is still experimental, and more optimizations are still to come.
 
-All times are measured with [hyperfine](https://github.com/sharkdp/hyperfine) (`--runs 150 --warmup 10`). All benchmarks are run on a 2021 M1 Pro Macbook Pro with 16GBs of ram.
+These are the programs used to compare Candela against Python 3 and LuaJIT with
+the JIT disabled (`-joff`). Each benchmark is the same workload written three
+times, once per language, so the three runs are directly comparable.
 
-Candela release binaries are built with PGO, and the instrumented binary is trained on representative Candela programs, including smaller-input versions of some benchmarks shown here.
-The PGO workflow is visible [here](.github/workflows/release.yml).
+Candela is still experimental, so treat any figure you measure as a snapshot of
+the commit you measured.
 
+## Running them
+
+Benchmark a release build; a debug build is one optimisation level down and
+tells you nothing useful.
+
+```sh
+cargo build --release
+```
+
+Run one workload in each language:
+
+```sh
+./target/release/candela examples/fib/fib.cdl
+python3 examples/fib/fib.py
+luajit -joff examples/fib/fib.lua
+```
+
+To get comparable timings, run the three under
+[hyperfine](https://github.com/sharkdp/hyperfine):
+
+```sh
+hyperfine --runs 150 --warmup 10 \
+  './target/release/candela examples/fib/fib.cdl' \
+  'python3 examples/fib/fib.py' \
+  'luajit -joff examples/fib/fib.lua'
+```
+
+Swap the paths for any other benchmark below. Several benchmarks are listed
+inline rather than as files; save each program to a file and run it the same
+way.
+
+Release binaries are built with profile-guided optimisation, so a locally built
+`--release` binary is slower than a published one. The instrumented binary is
+trained on the programs in `pgo/`, which include smaller-input versions of the
+FizzBuzz and standard-library benchmarks below. The workflow is
+[release.yml](.github/workflows/release.yml).
 
 ## Iterative fib(46) x 200000
 
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- |
 | [iter_fib.cdl](/examples/iter_fib/iter_fib.cdl) | [iter_fib.py](/examples/iter_fib/iter_fib.py) | [iter_fib.lua](/examples/iter_fib/iter_fib.lua) |
-| 73.4ms | 740ms | 72.5ms |
-
 
 ## Recursive fib(10,15,20,25,30,33)
 
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- |
 | [fib.cdl](/examples/fib/fib.cdl) | [fib.py](/examples/fib/fib.py) | [fib.lua](/examples/fib/fib.lua) |
-| 189.1ms | 507.4ms | 183.4ms |
-
 
 ## N-body (N=500000)
-Based on [this benchmark from The Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/nbody.html#nbody).\
-`nbody_lua` is based on [the fastest Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-lua-2.html).\
+
+Based on [this benchmark from The Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/nbody.html#nbody).
+`nbody_lua` is based on [the fastest Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-lua-2.html).
 `nbody_py` is based on [the fastest Python implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-python3-1.html).
 
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- |
 | [nbody_lua.cdl](/examples/nbody/nbody_lua.cdl) | [nbody_lua.py](/examples/nbody/nbody_lua.py) | [nbody_lua.lua](/examples/nbody/nbody_lua.lua) |
-| 451.5ms | 2649ms | 458.5ms |
-
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
-| --- | --- | --- |
 | [nbody_py.cdl](/examples/nbody/nbody_py.cdl) | [nbody_py.py](/examples/nbody/nbody_py.py) | [nbody_py.lua](/examples/nbody/nbody_py.lua) |
-| 565.4ms | 2726ms | 581.2ms |
 
 ## Binary trees (N=16)
-Based on [this benchmark from The Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html#binarytrees).\
-Based on [this Python implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-python3-2.html) and [this Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-lua-2.html).
 
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
+Based on [this benchmark from The Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html#binarytrees), [this Python implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-python3-2.html) and [this Lua implementation](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/binarytrees-lua-2.html).
+
+| Candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- |
 | [binary-trees.cdl](/examples/binary-trees/binary-trees.cdl) | [binary-trees.py](/examples/binary-trees/binary-trees.py) | [binary-trees.lua](/examples/binary-trees/binary-trees.lua) |
-| 540.7ms | 1264ms | 541.8ms |
-
 
 ## Quicksort (N=10000)
 
-| Candela | Python 3.14.5 | LuaJIT (-joff) |
+| Candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- |
 | [quicksort.cdl](/examples/quicksort/quicksort.cdl) | [quicksort.py](/examples/quicksort/quicksort.py) | [quicksort.lua](/examples/quicksort/quicksort.lua) |
-| 348.4ms | 730.9ms | 1755ms |
 
 ## Sqrt (N=0 to 9999999)
 
-<table>
-<tr>
-  <th>Candela</th>
-  <th>Python 3</th>
-  <th>LuaJIT (-joff)</th>
-</tr>
-<tr>
-<td><pre><code class="language-rust">fn main() {
+Candela:
+
+```rust
+fn main() {
     let x = 0.0;
     for i in 0..10000000 {
         x += float(i).sqrt();
     }
     print(x);
-}</code></pre></td>
-<td><pre><code class="language-python">from math import sqrt
+}
+```
+
+Python 3:
+
+```python
+from math import sqrt
 
 x = 0.0
 for i in range(10000000):
     x += sqrt(i)
-print(x)</code></pre></td>
-<td><pre><code class="language-lua">local x = 0.0
+print(x)
+```
+
+LuaJIT:
+
+```lua
+local x = 0.0
 for i = 0, 9999999 do
     x = x + math.sqrt(i)
 end
-print(x)</code></pre></td>
-</tr>
-<tr>
-  <td><b>76.5ms</b></td>
-  <td>1164ms</td>
-  <td>167ms</td>
-</tr>
-</table>
+print(x)
+```
 
+## String.split(), Array.contains() x 50000
 
-## String.split(), Array.contains() * 50 000
+Candela:
 
-<table>
-<tr>
-  <th>Candela</th>
-  <th>Python 3</th>
-  <th>LuaJIT (-joff)</th>
-</tr>
-<tr>
-<td><pre><code class="language-rust">fn main() {
+```rust
+fn main() {
     let s = "the quick brown fox";
     let count = 0;
     for _ in 0..50000 {
@@ -110,41 +131,40 @@ print(x)</code></pre></td>
         }
     }
     print(count);
-}</code></pre></td>
-<td><pre><code class="language-python">s = "the quick brown fox"
+}
+```
+
+Python 3:
+
+```python
+s = "the quick brown fox"
 count = 0
 for _ in range(50000):
     parts = s.split(" ")
     if "fox" in parts:
         count += 1
-print(count)</code></pre></td>
-<td><pre><code class="language-lua">local s = "the quick brown fox"
+print(count)
+```
+
+LuaJIT:
+
+```lua
+local s = "the quick brown fox"
 local count = 0
 for _ = 1, 50000 do
     if s:find("fox") then
         count = count + 1
     end
 end
-print(count)</code></pre></td>
-</tr>
-<tr>
-  <td><b>5.8ms</b></td>
-  <td>28.2ms</td>
-  <td>27.6ms</td>
-</tr>
-</table>
+print(count)
+```
 
+## FizzBuzz, 1000000 iterations
 
-## FizzBuzz - 1 000 000 iterations
+Candela:
 
-<table>
-<tr>
-  <th>Candela</th>
-  <th>Python 3</th>
-  <th>LuaJIT (-joff)</th>
-</tr>
-<tr>
-<td><pre><code class="language-rust">fn main() {
+```rust
+fn main() {
     let last = "";
     for i in 1..1000001 {
         if i % 15 == 0 {
@@ -158,8 +178,13 @@ print(count)</code></pre></td>
         }
     }
     print(last);
-}</code></pre></td>
-<td><pre><code class="language-python">last = ""
+}
+```
+
+Python 3:
+
+```python
+last = ""
 for i in range(1, 1000001):
     if i % 15 == 0:
         last = "FizzBuzz"
@@ -169,8 +194,13 @@ for i in range(1, 1000001):
         last = "Buzz"
     else:
         last = str(i)
-print(last)</code></pre></td>
-<td><pre><code class="language-lua">local last = ""
+print(last)
+```
+
+LuaJIT:
+
+```lua
+local last = ""
 for i = 1, 1000000 do
     if i % 15 == 0 then
         last = "FizzBuzz"
@@ -182,28 +212,18 @@ for i = 1, 1000000 do
         last = tostring(i)
     end
 end
-print(last)</code></pre></td>
-</tr>
-<tr>
-  <td><b>21.6ms</b></td>
-  <td>149.2ms</td>
-  <td>84.2ms</td>
-</tr>
-</table>
+print(last)
+```
 
+## Standard library operations x 100000
 
-## Standard library operations * 100 000
+This covers most of the standard library. File system functions are left out so
+that IO does not interfere with the measurement.
 
-Almost all the functions from the standard library are tested, except file system functions to avoid IO interference.
+Candela:
 
-<table>
-<tr>
-  <th>Candela</th>
-  <th>Python 3</th>
-  <th>LuaJIT (-joff)</th>
-</tr>
-<tr>
-<td><pre><code class="language-rust">fn main() {
+```rust
+fn main() {
     let count = 0;
     for _ in 0..100000 {
         let s = "  Hello, World!  ";
@@ -244,8 +264,13 @@ Almost all the functions from the standard library are tested, except file syste
         count += length;
     }
     print(count);
-}</code></pre></td>
-<td><pre><code class="language-python">import math
+}
+```
+
+Python 3:
+
+```python
+import math
 count = 0
 for _ in range(100000):
     s = "  Hello, World!  "
@@ -284,8 +309,13 @@ for _ in range(100000):
     arr.sort()
     arr.reverse()
     count += length
-print(count)</code></pre></td>
-<td><pre><code class="language-lua">local count = 0
+print(count)
+```
+
+LuaJIT:
+
+```lua
+local count = 0
 for _ = 1, 100000 do
     local s = "  Hello, World!  "
     local t = s:match("^%s*(.-)%s*$")
@@ -334,35 +364,31 @@ for _ = 1, 100000 do
     end
     count = count + length
 end
-print(count)</code></pre></td>
-</tr>
-<tr>
-  <td><b>46.6ms</b></td>
-  <td>191.9ms</td>
-  <td>253.3ms</td>
-</tr>
-</table>
+print(count)
+```
 
+## C FFI call overhead x 10000000
 
-## C FFI call overhead * 10 000 000
+Each program calls the same shared C library function in a loop. The C function
+is trivial, so what you measure is the cost of crossing the language-to-C
+boundary rather than the work on the other side of it.
 
-All programs call the same shared C library function in a huge loop. The C function is intentionally trivial so the measured time reflects the cost of crossing the language-C boundary, not the C computation itself.
+`bench_ffi.c`, compiled with `-O2`:
 
-**`bench_ffi.c`** (compiled with `-O2`):
 ```c
 int increment(int x) {
     return x + 1;
 }
 ```
 
-<table>
-<tr>
-  <th>Candela</th>
-  <th>Python 3</th>
-  <th>LuaJIT (-joff)</th>
-</tr>
-<tr>
-<td><pre><code class="language-rust">dylib "./bench_ffi.dylib" {
+Build it as a shared library named `bench_ffi`, with whatever extension your
+platform uses. Candela resolves the extension itself when you leave it off the
+`dylib` path.
+
+Candela:
+
+```rust
+dylib "./bench_ffi" {
     int increment(int);
 }
 
@@ -372,18 +398,28 @@ fn main() {
         x = bench_ffi::increment(x);
     }
     print(x);
-}</code></pre></td>
-<td><pre><code class="language-python">import ctypes
+}
+```
 
-lib = ctypes.CDLL("./bench_ffi.dylib")
+Python 3:
+
+```python
+import ctypes
+
+lib = ctypes.CDLL("./bench_ffi.so")
 lib.increment.restype = ctypes.c_int
 lib.increment.argtypes = [ctypes.c_int]
 
 x = 0
 for _ in range(10_000_000):
     x = lib.increment(x)
-print(x)</code></pre></td>
-<td><pre><code class="language-lua">local ffi = require("ffi")
+print(x)
+```
+
+LuaJIT:
+
+```lua
+local ffi = require("ffi")
 ffi.cdef[[
     int increment(int x);
 ]]
@@ -393,11 +429,5 @@ local x = 0
 for _ = 1, 10000000 do
     x = lib.increment(x)
 end
-print(x)</code></pre></td>
-</tr>
-<tr>
-  <td><b>185.2ms</b></td>
-  <td>2907ms</td>
-  <td>535.8ms</td>
-</tr>
-</table>
+print(x)
+```

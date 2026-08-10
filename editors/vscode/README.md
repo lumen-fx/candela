@@ -26,8 +26,9 @@ attribution details.
     function definitions and calls, method calls, and `namespace::` access.
 - Language configuration: line comments (`//`), bracket matching, auto-closing
   and surrounding pairs, and `{}` indentation rules.
-- Snippets for `fn`, `main`, `struct`, `let`, `if` / `else`, `for`, `while`,
-  `loop`, `match`, `host`, `dylib`, `import`, and `print`.
+- Snippets, by prefix: `main`, `fn`, `struct`, `let`, `if`, `ifelse`, `for`,
+  `forin`, `while`, `loop`, `match`, `host`, `dylib`, `import`, `importlib`,
+  and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
   diagnostics, hover, completion, document symbols (outline), and
   go-to-definition. See `../../lsp/README.md` for the exact scope of each.

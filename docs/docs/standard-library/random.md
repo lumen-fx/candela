@@ -1,32 +1,74 @@
----
-icon: lucide/dice-5
----
-# Random library
+# random
 
-!!! warning
+A seedable pseudo-random generator for ints and floats.
 
-    This is highly subject to change.
+```rust
+import "std/random" as random;
+```
 
-Import this library with `import "std/random";` at the top-level.
+The generator is a PCG32 instance shared by the whole program. On the first call
+that draws a number it seeds itself from the clock, so a run without an explicit
+`seed` differs each time. Call `seed` to make a run repeatable.
 
-*[at the top-level]: Outside of any function.
+The sequence is not suitable for cryptography.
 
-## Random
-`random() -> float`<br/>
-Returns a random float within \[0;1\[.
+The module binds a small dynamic library, so it is one of the three std modules
+that need that library present at run time. A `.cdlb` built from a program that
+imports `std/random` records the binding by name and re-opens it when the
+artifact runs; see [artifacts](../reference/artifacts.md).
 
-## RandomRange
-`random_range(min: float, max: float) -> float`<br/>
-Returns a random float within the given extrema.
+## seed
 
-## RandomInt
-`random_int() -> int`<br/>
-Returns a random int.
+```rust
+random::seed(s)
+```
 
-## RandomIntRange
-`random_int_range(min: int, max: int) -> int`<br/>
-Returns a random int within the given extrema.
+- `s`: an int.
+- Returns: nothing.
 
-## Seed
-`seed(seed: int)`<br/>
-Seeds the RNG with `seed`.
+Restarts the generator from `s`. Two runs seeded with the same value draw the
+same sequence.
+
+## random_int
+
+```rust
+random::random_int()
+```
+
+- Returns: an int drawn from the generator's full 32-bit range, so the result can
+  be negative.
+
+## random_int_range
+
+```rust
+random::random_int_range(min, max)
+```
+
+- `min`, `max`: ints.
+- Returns: an int between `min` and `max`, with both ends included.
+
+```rust
+import "std/random" as random;
+
+fn main() {
+    random::seed(42);
+    print(random::random_int_range(1, 6));
+}
+```
+
+## random
+
+```rust
+random::random()
+```
+
+- Returns: a float in the half-open range from 0 up to 1.
+
+## random_range
+
+```rust
+random::random_range(min, max)
+```
+
+- `min`, `max`: floats.
+- Returns: a float between `min` and `max`, including `min` and excluding `max`.
