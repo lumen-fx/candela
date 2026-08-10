@@ -67,16 +67,20 @@ jobs:
       # Every artifact is named and versioned after the tag, so a tag that
       # disagrees with the manifest ships a package claiming a version the
       # binary does not report.
+      # Both binaries ship in the same archive and report their own version,
+      # so vm/Cargo.toml is checked alongside the root manifest.
       - name: Check the tag matches Cargo.toml
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          manifest=$(sed -n '3s/^version = "\(.*\)"$/\1/p' Cargo.toml)
-          if [ "$tag" != "$manifest" ]; then
-            echo "Tag $GITHUB_REF_NAME is version '$tag', but Cargo.toml line 3 says '$manifest'."
-            echo "Bump the version in Cargo.toml, or retag, so the two agree."
-            exit 1
-          fi
+          for manifest_path in Cargo.toml vm/Cargo.toml; do
+            manifest=$(sed -n '3s/^version = "\(.*\)"$/\1/p' "$manifest_path")
+            if [ "$tag" != "$manifest" ]; then
+              echo "Tag $GITHUB_REF_NAME is version '$tag', but $manifest_path line 3 says '$manifest'."
+              echo "Bump the version in $manifest_path, or retag, so the two agree."
+              exit 1
+            fi
+          done
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

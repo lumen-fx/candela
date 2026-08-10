@@ -28,9 +28,16 @@ pub fn repl() {
         let mut s = String::new();
         print!("> ");
         let _ = stdout().flush();
-        stdin()
+        let read = stdin()
             .read_line(&mut s)
             .expect("{RED}[ERROR]{RESET} Incorrect input string");
+        // End of input: a terminal sent the end-of-file keystroke, or a piped
+        // script ran out of lines. There is no next line to prompt for, so
+        // leave rather than loop on an empty read.
+        if read == 0 {
+            println!();
+            return;
+        }
         if s.ends_with('\n') {
             s.pop();
         }
@@ -44,7 +51,9 @@ pub fn repl() {
             s.push(';');
         }
         if s.contains("exit()") && !s.contains('"') {
-            println!("{BLUE}[CANDELA TIP]{RESET} To exit, press Ctrl+C");
+            println!(
+                "{BLUE}[CANDELA TIP]{RESET} To exit, press Ctrl+D (Ctrl+Z then enter on Windows) or Ctrl+C"
+            );
         }
 
         all_lines.push(s);

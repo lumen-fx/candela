@@ -19,9 +19,9 @@ jobs:
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          # The action defaults RUSTFLAGS to "-D warnings", which would
-          # fail the build on pre-existing warnings. Keep warnings as
-          # warnings; this check only guards against compile errors.
+          # The action defaults RUSTFLAGS to "-D warnings". Warnings are
+          # denied by the clippy job below instead, which reports them with
+          # the lint name attached.
           rustflags: ""
 
       - name: Check
@@ -29,3 +29,36 @@ jobs:
 
       - name: Check (embed)
         run: cargo check --features embed
+
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          rustflags: ""
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          rustflags: ""
+
+      # --workspace reaches candela-vm and candela-lsp, which default-members
+      # keeps out of a plain cargo command at the repo root.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (embed)
+        run: cargo clippy --features embed --all-targets -- -D warnings

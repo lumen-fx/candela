@@ -20,6 +20,18 @@ jobs:
       - run: rustup update stable && rustup default stable
       - run: cargo build --verbose ${{ matrix.features }}
       - run: cargo test --verbose ${{ matrix.features }}
+  build_and_test_crates:
+    # A plain cargo command at the repo root builds and tests the `candela`
+    # package alone, because default-members says so. The other two workspace
+    # members are named here so their tests run as well.
+    name: Workspace crates - candela-vm, candela-lsp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup update stable && rustup default stable
+      - run: cargo build --verbose -p candela-vm -p candela-lsp
+      - run: cargo test --verbose -p candela-vm
+      - run: cargo test --verbose -p candela-lsp
   build_and_test_wasm:
     name: (WASM) Rust project - latest
     runs-on: ubuntu-latest
