@@ -1,6 +1,6 @@
 name: feature request
 description: propose a language, standard library, or tooling change
-labels: [enhancement]
+labels: [C-Feature, S-Needs-Triage]
 body:
   - type: textarea
     id: problem
