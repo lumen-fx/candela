@@ -37,6 +37,8 @@ To install a specific release instead of the latest one, pass `--version`:<br/>
 
 Write the release tag with or without its leading `v`. This also pins the install: Candela stays on that release, and the update check below stays quiet, until you install again without `--version`.
 
+The installer checks the archive it downloads against the `sha256sums.txt` published with the release, and installs nothing if the two disagree. It needs `curl` or `wget`, and `sha256sum` or `shasum`.
+
 ### On Windows
 
 Download and run [the Candela installer](https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi).
