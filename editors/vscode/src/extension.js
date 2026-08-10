@@ -16,9 +16,9 @@ let client;
  *
  * Defaults to `candela-lsp` on PATH (installed the same way the `candela`
  * CLI itself is), but honors the `candela.languageServerPath` setting so a
- * locally-built server (e.g. from `candela-lsp/`, built with `cargo build
- * -p candela-lsp` -- see that crate's README for why NOT `--release`) can
- * be pointed at during development.
+ * locally-built server (e.g. from `lsp/`, built with `cargo build -p
+ * candela-lsp`; see that crate's README for why not `--release`) can be
+ * pointed at during development.
  */
 function resolveServerCommand() {
   const configured = workspace.getConfiguration('candela').get('languageServerPath');

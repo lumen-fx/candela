@@ -24,7 +24,8 @@ session and the whole session is re-run, so earlier definitions and output stay
 in place; only new output is printed. A line that does not already end in `;` or
 `}` gets a semicolon added, `import` lines are hoisted above everything else,
 and a line that fails to compile is dropped so the session stays usable. Leave
-with Ctrl+C.
+with Ctrl+D, Ctrl+Z then enter on Windows, or Ctrl+C. The REPL also exits when
+its input ends, so a file of statements can be piped in.
 
 ### candela build &lt;file.cdl&gt; [-o out.cdlb]
 
@@ -40,6 +41,10 @@ Without `-o` (or its long form `--output`), the output name is the input with
 `.cdl` replaced by `.cdlb`. A path that does not end in `.cdl` gets `.cdlb`
 appended.
 
+`-o` is the only way to name the output. Any other argument after the source
+file is an error, so `candela build game.cdl dist/game.cdlb` says what it wants
+instead of writing `dist/game.cdlb`.
+
 The program is compiled exactly as it is for a normal run, so every compile
 error listed in [errors](errors.md) can come out of this command. See
 [artifacts](artifacts.md) for what the file contains and how to run it.
@@ -52,6 +57,9 @@ reported, if one is due. `-h` is the same.
 ### candela --version
 
 Prints the version. `-v` is the same.
+
+Neither flag takes anything else. An argument after either one is an error
+rather than an argument the command quietly drops.
 
 ### Development flags
 
@@ -71,12 +79,18 @@ program can choose its own status with `exit()`.
 `candela-vm` runs a `.cdlb` artifact. It contains no parser, compiler or REPL,
 and it never checks for updates.
 
-### candela-vm &lt;file.cdlb&gt;
+Its own options come before the artifact path, because everything from the path
+onwards belongs to the program. An option it does not know is an error.
 
-Loads the artifact and runs it.
+### candela-vm &lt;file.cdlb&gt; [arguments]
+
+Loads the artifact and runs it. Arguments after the artifact are passed to the
+program, which reads them with `argv()`, the same as arguments after the file
+name of a source run.
 
 ```sh
 candela-vm game.cdlb
+candela-vm greet.cdlb Ada
 ```
 
 ### candela-vm --help
@@ -85,15 +99,16 @@ Prints the usage summary. `-h` is the same.
 
 ### candela-vm --version
 
-Prints the version. `-v` is the same. The runtime carries its own version
-number, separate from the `candela` toolchain's.
+Prints the version. `-v` is the same. The runtime ships with the toolchain and
+carries the same version number as `candela`.
 
 ### Exit status
 
-Zero when the program finishes. Two when you give no arguments. One when the
-file cannot be read or the artifact cannot be loaded; the load failures are
-listed in [errors](errors.md). An uncaught runtime error inside the program ends
-the process the same way it does under `candela`.
+Zero when the program finishes. Two when the command line is wrong: no
+arguments, or an option the runtime does not recognise. One when the file cannot
+be read or the artifact cannot be loaded; the load failures are listed in
+[errors](errors.md). An uncaught runtime error inside the program ends the
+process the same way it does under `candela`.
 
 ## Environment variables
 

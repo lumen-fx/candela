@@ -12,7 +12,7 @@ set -e
 
 usage() {
     printf "Usage: install.sh [--version TAG]\n"
-    printf "  --version TAG   Install a specific release, e.g. 0.3.0 or v0.3.0.\n"
+    printf "  --version TAG   Install a specific release, e.g. 0.0.3 or v0.0.3.\n"
     printf "                  Without it, the latest release is installed.\n"
 }
 
@@ -168,7 +168,7 @@ PIN_VERSION="${PIN#v}"
 # The checksum file settles which release this is: it names every asset the
 # release publishes and what each one hashes to, and a tag without one is a tag
 # this script cannot install from. Release tags carry a leading "v", so a bare
-# 0.3.0 is tried as given and then with the prefix.
+# 0.0.3 is tried as given and then with the prefix.
 if [ -z "$PIN" ]; then
     LABEL="latest"
     BASE="$RELEASES/latest/download"
@@ -239,15 +239,17 @@ if [ ! -f "$UNPACK/candela-vm" ]; then
 fi
 
 if [ ! -d "$UNPACK/libs/std" ]; then
-    # The archive ships the standard library in libs/ next to the binary. `import
-    # std::x` resolves relative to the installed binary, so this must be present.
+    # The archive ships the standard library in libs/ next to the binary. A
+    # library import such as `import "std/string"` resolves relative to the
+    # installed binary, so this must be present.
     printf "[ERROR] Archive downloaded but the standard library (libs/std) is missing. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
-# Copy the whole unpacked tree, so the binary AND the libs/ tree (holding the std
-# library) land together in INSTALL_DIR. The binary resolves `import std::x`
-# relative to its own location, so libs/ must sit beside it: INSTALL_DIR/candela
-# and INSTALL_DIR/libs/std are the single source of truth for that lookup.
+# Copy the whole unpacked tree, so the binary and the libs/ tree (holding the std
+# library) land together in INSTALL_DIR. The binary resolves a library import
+# such as `import "std/string"` relative to its own location, so libs/ must sit
+# beside it: INSTALL_DIR/candela and INSTALL_DIR/libs/std are the single source
+# of truth for that lookup.
 if cp -R "$UNPACK/." "$INSTALL_DIR" 2>/dev/null; then
     :
 elif command -v sudo >/dev/null 2>&1; then
@@ -257,7 +259,7 @@ else
 fi
 
 if [ ! -d "$INSTALL_DIR/libs/std" ]; then
-    printf "[ERROR] Standard library not installed at %s/libs/std. 'import std::x' will not resolve. Please re-run the installer.\n" "$INSTALL_DIR"
+    printf "[ERROR] Standard library not installed at %s/libs/std. Library imports such as import \"std/string\" will not resolve. Please re-run the installer.\n" "$INSTALL_DIR"
 fi
 
 if chmod 755 "$INSTALL_DIR/candela" 2>/dev/null; then

@@ -185,12 +185,25 @@ fn build_subcommand(args: &mut impl Iterator<Item = String>) {
         std::process::exit(1);
     };
 
+    // The output path is only ever named by `-o`/`--output`. A second bare
+    // path is rejected instead of taken as the output, so a mistyped
+    // `candela build a.cdl b.cdlb` says so rather than quietly writing
+    // `b.cdlb`.
     let mut output: Option<String> = None;
     while let Some(a) = args.next() {
         if a == "-o" || a == "--output" {
-            output = args.next();
+            let Some(path) = args.next() else {
+                eprintln!(
+                    "{RED}CANDELA ERROR{RESET}\n{a} needs an output path\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
+                );
+                std::process::exit(1);
+            };
+            output = Some(path);
         } else {
-            output = Some(a);
+            eprintln!(
+                "{RED}CANDELA ERROR{RESET}\nUnexpected argument {RED}{BOLD}{a}{RESET}\nName the output file with -o or --output\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
+            );
+            std::process::exit(1);
         }
     }
     // A `-o`/`--output` argument is honored verbatim. Otherwise the default
@@ -226,6 +239,22 @@ fn build_subcommand(args: &mut impl Iterator<Item = String>) {
     println!("Wrote {} ({} bytes)", output, bytes.len());
 }
 
+/// Rejects anything trailing `--help` or `--version`.
+///
+/// Both flags answer a question that takes no further input, so a trailing
+/// argument is a mistake; saying so beats printing the answer to a question
+/// nobody asked.
+#[cfg(feature = "compiler")]
+fn reject_extra_args(args: &mut impl Iterator<Item = String>, flag: &str) {
+    if let Some(extra) = args.next() {
+        cold_path();
+        eprintln!(
+            "{RED}CANDELA ERROR{RESET}\n{flag} takes no other arguments, got {RED}{BOLD}{extra}{RESET}\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]\n  candela [-h | --help]\n  candela [-v | --version]"
+        );
+        std::process::exit(1);
+    }
+}
+
 #[cfg(feature = "compiler")]
 pub fn main() {
     #[cfg(not(debug_assertions))]
@@ -251,6 +280,7 @@ pub fn main() {
 
     if next_arg == "--help" || next_arg == "-h" {
         cold_path();
+        reject_extra_args(&mut args, &next_arg);
         let update = update::start();
         println!(
             "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]   (compile to bytecode; run with candela-vm)\n  candela [-v | --version]",
@@ -262,12 +292,7 @@ pub fn main() {
 
     if next_arg == "--version" || next_arg == "-v" {
         cold_path();
-        if args.len() > 1 {
-            eprintln!(
-                "{RED}CANDELA ERROR{RESET}\nInvalid arguments\nUsage:\n  candela myfile.cdl\n  candela [-v | --version]"
-            );
-            return;
-        }
+        reject_extra_args(&mut args, &next_arg);
         println!("Candela {}", env!("CARGO_PKG_VERSION"));
         return;
     }

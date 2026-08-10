@@ -66,7 +66,9 @@ file or reads input runs again on every subsequent line. And a line that fails
 to compile prints its error and is dropped, so the session is always left in a
 state that still works.
 
-Press Ctrl+C to leave.
+Press Ctrl+D to leave, or Ctrl+Z then enter on Windows. Ctrl+C also works. The
+REPL stops as soon as its input runs out, so a file of statements piped into
+`candela` runs to the end and exits.
 
 ## Build an artifact
 
@@ -85,6 +87,9 @@ the `.cdl` extension with `.cdlb`; choose a different path with `-o` or
 candela build hello.cdl -o dist/hello.cdlb
 ```
 
+That is the only way to name the output. A second path with no `-o` in front of
+it is rejected rather than taken as the destination.
+
 A `.cdlb` holds the whole program, its imports included, so the artifact
 travels on its own. See [Artifacts](../reference/artifacts.md) for what else it
 records.
@@ -100,6 +105,12 @@ candela-vm hello.cdlb
 `candela-vm` is the runtime on its own. It links no lexer, parser, compiler or
 REPL, and it never checks for updates. A program behaves the same whether you
 run it from source or from an artifact, because both use this same runtime.
+Arguments after the artifact reach the program through `argv()`, just as they do
+after the file name of a source run:
+
+```sh
+candela-vm greet.cdlb Ada
+```
 
 ## Which to use
 
@@ -121,7 +132,7 @@ run it from source or from an artifact, because both use this same runtime.
 
 `candela-vm`:
 
-- `candela-vm <file.cdlb>` runs an artifact.
+- `candela-vm <file.cdlb> [args...]` runs an artifact.
 - `candela-vm --help` or `-h` prints usage.
 - `candela-vm --version` or `-v` prints the version.
 

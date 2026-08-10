@@ -3,26 +3,44 @@
 //! Loads a pre-compiled `.cdlb` bytecode artifact (produced by
 //! `candela build <file.cdl>`) and runs it. It links no parser, compiler, or
 //! REPL, only the candela runtime core.
+//!
+//! Arguments after the artifact path are the program's, reachable from
+//! `argv()`, the same as arguments after the file name of a source run.
 
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
+const USAGE: &str = "Usage:\n  candela-vm <file.cdlb> [arguments...]";
 
-    let Some(path) = args.next() else {
-        eprintln!("Usage: candela-vm <file.cdlb>");
+fn main() -> ExitCode {
+    // The artifact path comes first, and everything after it belongs to the
+    // program, which reads it with `argv()`. So an option is only ever an
+    // option in the first position; past that the program is being addressed,
+    // and a program takes the same arguments whether it runs from source or
+    // from an artifact.
+    let Some(path) = std::env::args().nth(1) else {
+        eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
 
-    if path == "--help" || path == "-h" {
-        println!(
-            "candela-vm -- runs pre-compiled candela bytecode (.cdlb)\n\nUsage:\n  candela-vm <file.cdlb>\n\nProduce a .cdlb with the candela compiler:\n  candela build <file.cdl> [-o out.cdlb]"
-        );
-        return ExitCode::SUCCESS;
-    }
-    if path == "--version" || path == "-v" {
-        println!("candela-vm {}", env!("CARGO_PKG_VERSION"));
-        return ExitCode::SUCCESS;
+    match path.as_str() {
+        "--help" | "-h" => {
+            println!(
+                "candela-vm runs pre-compiled candela bytecode (.cdlb)\n\n{USAGE}\n\nArguments after the artifact reach the program through argv().\n\nProduce a .cdlb with the candela compiler:\n  candela build <file.cdl> [-o out.cdlb]"
+            );
+            return ExitCode::SUCCESS;
+        }
+        "--version" | "-v" => {
+            println!("candela-vm {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        // An unknown option is a mistake worth naming. Reading it as a path
+        // reports it as a file that is not there, which sends you looking for
+        // the wrong thing.
+        other if other.starts_with('-') => {
+            eprintln!("candela-vm: unknown option {other}\n{USAGE}");
+            return ExitCode::from(2);
+        }
+        _ => {}
     }
 
     let bytes = match std::fs::read(&path) {

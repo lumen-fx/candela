@@ -29,8 +29,7 @@ const LATEST_URL: &str = "https://github.com/lumen-fx/candela/releases/latest";
 
 /// The command the docs tell you to run to install Candela.
 #[cfg(not(windows))]
-const INSTALL_CMD: &str =
-    "curl -fsSL https://raw.githubusercontent.com/lumen-fx/candela/main/install.sh | sh";
+const INSTALL_CMD: &str = "curl -fsSL https://candela.lumenfx.dev/install.sh | sh";
 
 /// Windows installs from a package rather than a shell script, so the notice
 /// names the download instead of a command. The same URL is what the offer
