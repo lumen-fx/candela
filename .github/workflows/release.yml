@@ -234,6 +234,18 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # One checksum file per release, in sha256sum's own format, covering every
+      # asset the release publishes. install.sh downloads it first and refuses
+      # to install an archive whose hash is not the one recorded here.
+      - name: Generate sha256sums.txt
+        working-directory: artifacts
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(*.tar.gz *.zip *.msi)
+          sha256sum "${files[@]}" > sha256sums.txt
+          cat sha256sums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -241,4 +253,5 @@ jobs:
             artifacts/*.tar.gz
             artifacts/*.zip
             artifacts/*.msi
+            artifacts/sha256sums.txt
           generate_release_notes: true

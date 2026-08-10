@@ -1,6 +1,12 @@
 #!/bin/sh
 
 # CANDELA INSTALLER
+#
+# Every request is a plain file download from the release itself, at
+# https://github.com/lumen-fx/candela/releases. Each release publishes
+# sha256sums.txt, one "<hex>  <filename>" line per asset. This script downloads
+# that file first, reads the line for the archive it wants, and installs
+# nothing whose download does not match.
 
 set -e
 
@@ -61,14 +67,49 @@ else
 fi
 
 if command -v curl >/dev/null 2>&1; then
-    # Fail silently on HTTP errors & show errors even when silent & follow redirects & show progress bar
-    DOWNLOAD_CMD="curl -fSL --progress-bar"
+    DOWNLOADER=curl
 elif command -v wget >/dev/null 2>&1; then
-    # Write output to stdout & show progress bar
-    DOWNLOAD_CMD="wget -O- --show-progress"
+    DOWNLOADER=wget
 else
-    printf "[ERROR] curl or wget is required\n"
+    printf "[ERROR] curl or wget is required\n" >&2
+    exit 1
 fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    HASHER=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+    HASHER=shasum
+else
+    printf "[ERROR] sha256sum or shasum is required to verify the download\n" >&2
+    exit 1
+fi
+
+# Write to a file rather than stdout: the archive is verified before it is
+# unpacked, so it has to land somewhere first.
+download() {
+    # download URL DEST
+    case "$DOWNLOADER" in
+        # Fail on HTTP errors, show errors even when silent, follow redirects,
+        # show a progress bar.
+        curl) curl -fSL --progress-bar -o "$2" "$1" ;;
+        wget) wget -O "$2" "$1" ;;
+    esac
+}
+
+download_quiet() {
+    # download_quiet URL DEST
+    case "$DOWNLOADER" in
+        curl) curl -fsSL -o "$2" "$1" ;;
+        wget) wget -q -O "$2" "$1" ;;
+    esac
+}
+
+sha256_of() {
+    case "$HASHER" in
+        sha256sum) sha256sum "$1" | cut -d' ' -f1 ;;
+        shasum) shasum -a 256 "$1" | cut -d' ' -f1 ;;
+    esac
+}
 
 # Supported archs: x86_64, arm64, aarch64
 ARCH=$(uname -m)
@@ -78,7 +119,7 @@ case "$OS" in
         case "$ARCH" in
             x86_64)  ARTIFACT="candela-x86_64-apple-darwin" ;;
             arm64)   ARTIFACT="candela-aarch64-apple-darwin" ;;
-            *)       printf "[ERROR] Unsupported macOS architecture: %s\n" "$ARCH" ;;
+            *)       printf "[ERROR] Unsupported macOS architecture: %s\n" "$ARCH" >&2; exit 1 ;;
         esac
         ;;
     Linux)
@@ -93,12 +134,13 @@ case "$OS" in
                 fi
                 ;;
             aarch64) ARTIFACT="candela-aarch64-linux" ;;
-            *)       printf "[ERROR] Unsupported Linux architecture: %s\n" "$ARCH" ;;
+            *)       printf "[ERROR] Unsupported Linux architecture: %s\n" "$ARCH" >&2; exit 1 ;;
         esac
         ;;
     *)
         # Windows installs from its own package instead of this script.
-        printf "[ERROR] Unsupported OS: %s. On Windows, run https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi\n" "$OS"
+        printf "[ERROR] Unsupported OS: %s. On Windows, run https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi\n" "$OS" >&2
+        exit 1
         ;;
 esac
 
@@ -112,59 +154,104 @@ trap 'rm -rf "$TMP"' EXIT
 
 RELEASES="https://github.com/lumen-fx/candela/releases"
 
-# A failed attempt can leave a half-extracted archive behind, so start each one
-# from an empty directory. The path stays the same, so the trap above still
-# cleans it up. Success is judged by what came out of the archive rather than by
-# the exit status of the pipeline, which reports tar and not the download.
-fetch() {
-    rm -rf "$TMP"
-    mkdir -p "$TMP"
-    $DOWNLOAD_CMD "$1" | tar -xz -C "$TMP" || true
-    [ -f "$TMP/candela" ]
+SUMS="$TMP/sha256sums.txt"
+ARCHIVE="$TMP/$ARTIFACT.tar.gz"
+UNPACK="$TMP/unpack"
+
+sums_missing() {
+    printf "[ERROR] Release %s has no sha256sums.txt, so the download cannot be verified. Either that release does not exist, or it predates checksum publishing. See %s\n" "$1" "$RELEASES" >&2
+    exit 1
 }
 
 PIN_VERSION="${PIN#v}"
 
+# The checksum file settles which release this is: it names every asset the
+# release publishes and what each one hashes to, and a tag without one is a tag
+# this script cannot install from. Release tags carry a leading "v", so a bare
+# 0.3.0 is tried as given and then with the prefix.
 if [ -z "$PIN" ]; then
-    if ! fetch "$RELEASES/latest/download/$ARTIFACT.tar.gz"; then
-        printf "[ERROR] Could not download %s. See %s\n" "$ARTIFACT" "$RELEASES" >&2
-        exit 1
-    fi
-elif fetch "$RELEASES/download/$PIN/$ARTIFACT.tar.gz"; then
-    :
-elif [ "$PIN" != "v$PIN_VERSION" ] && fetch "$RELEASES/download/v$PIN_VERSION/$ARTIFACT.tar.gz"; then
-    # Release tags carry a leading "v", so a bare 0.3.0 works too.
-    :
+    LABEL="latest"
+    BASE="$RELEASES/latest/download"
+    download_quiet "$BASE/sha256sums.txt" "$SUMS" || sums_missing "$LABEL"
 else
-    printf "[ERROR] No release %s with a %s archive. See %s\n" "$PIN" "$ARTIFACT" "$RELEASES" >&2
+    LABEL="$PIN"
+    BASE="$RELEASES/download/$PIN"
+    if download_quiet "$BASE/sha256sums.txt" "$SUMS" 2>/dev/null; then
+        :
+    elif [ "$PIN" != "v$PIN_VERSION" ]; then
+        BASE="$RELEASES/download/v$PIN_VERSION"
+        download_quiet "$BASE/sha256sums.txt" "$SUMS" ||
+            sums_missing "$PIN (tried tags $PIN and v$PIN_VERSION)"
+    else
+        sums_missing "$PIN"
+    fi
+fi
+
+[ -s "$SUMS" ] || sums_missing "$LABEL"
+
+# One "<hex>  <filename>" line per asset, where the name may carry a leading "*"
+# from sha256sum's binary mode.
+EXPECTED=$(awk -v want="$ARTIFACT.tar.gz" '
+    NF >= 2 {
+        name = $2
+        sub(/^\*/, "", name)
+        if (name == want) { print $1; exit }
+    }' "$SUMS")
+
+if [ -z "$EXPECTED" ]; then
+    printf "[ERROR] No %s archive in that release. See %s\n" "$ARTIFACT" "$RELEASES" >&2
     exit 1
 fi
 
-if [ ! -f "$TMP/candela" ]; then
+if ! download "$BASE/$ARTIFACT.tar.gz" "$ARCHIVE"; then
+    printf "[ERROR] Could not download %s. See %s\n" "$ARTIFACT" "$RELEASES" >&2
+    exit 1
+fi
+
+GOT=$(sha256_of "$ARCHIVE")
+
+if [ "$GOT" != "$EXPECTED" ]; then
+    printf "[ERROR] Checksum mismatch for %s\n" "$ARTIFACT" >&2
+    printf "        expected %s\n" "$EXPECTED" >&2
+    printf "        got      %s\n" "$GOT" >&2
+    printf "        Nothing was installed. The download was corrupted, or the archive does not match the checksum published with the release.\n" >&2
+    exit 1
+fi
+
+printf "[Candela] Checksum verified\n"
+
+mkdir -p "$UNPACK"
+
+if ! tar -xzf "$ARCHIVE" -C "$UNPACK"; then
+    printf "[ERROR] Could not unpack the %s archive. See %s\n" "$ARTIFACT" "$RELEASES" >&2
+    exit 1
+fi
+
+if [ ! -f "$UNPACK/candela" ]; then
     # The github workflow packs the binary straight into an archive so something went very wrong here
     printf "[ERROR] Archive downloaded but binary not found inside. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
-if [ ! -f "$TMP/candela-vm" ]; then
+if [ ! -f "$UNPACK/candela-vm" ]; then
     # The release archive ships the VM-only runtime (candela-vm) alongside the
     # full compiler (candela) so a `.cdlb` can run without the compiler.
     printf "[ERROR] Archive downloaded but candela-vm not found inside. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
-if [ ! -d "$TMP/libs/std" ]; then
+if [ ! -d "$UNPACK/libs/std" ]; then
     # The archive ships the standard library in libs/ next to the binary. `import
     # std::x` resolves relative to the installed binary, so this must be present.
     printf "[ERROR] Archive downloaded but the standard library (libs/std) is missing. Please file a bug report at https://github.com/lumen-fx/candela/issues\n"
 fi
 
-# Copy the whole archive, so the binary AND the libs/ tree (which holds the std
+# Copy the whole unpacked tree, so the binary AND the libs/ tree (holding the std
 # library) land together in INSTALL_DIR. The binary resolves `import std::x`
 # relative to its own location, so libs/ must sit beside it: INSTALL_DIR/candela
 # and INSTALL_DIR/libs/std are the single source of truth for that lookup.
-if cp -R "$TMP/." "$INSTALL_DIR" 2>/dev/null; then
+if cp -R "$UNPACK/." "$INSTALL_DIR" 2>/dev/null; then
     :
 elif command -v sudo >/dev/null 2>&1; then
-    sudo cp -R "$TMP/." "$INSTALL_DIR"
+    sudo cp -R "$UNPACK/." "$INSTALL_DIR"
 else
     printf "[ERROR] Cannot write to %s and sudo is not available. Re-run as root or install sudo.\n" "$INSTALL_DIR"
 fi
