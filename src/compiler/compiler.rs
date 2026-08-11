@@ -1,3 +1,4 @@
+use crate::cold_path;
 use crate::compiler::compiler_data::InstrSrc;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_errors::error_cannot_find_dynlib_symbol;
@@ -190,8 +191,14 @@ fn compile_short_circuit_condition(
     match expr {
         Expr::BoolOr(left, right, _, _) => {
             // left side of || always uses true jump mode
-            let (mut true_jumps, _) =
+            let (mut true_jumps, left_false) =
                 compile_short_circuit_condition(left, v, ctx, state, output, true);
+            // A false left operand does not settle `||`, so it continues into
+            // the right operand rather than out of the whole expression.
+            let right_start = output.len();
+            for j in left_false {
+                set_jmp_size(&mut output[j], (right_start - j) as u16);
+            }
             let (right_true, right_false) =
                 compile_short_circuit_condition(right, v, ctx, state, output, bool_or_mode);
             true_jumps.extend(right_true);
@@ -199,28 +206,35 @@ fn compile_short_circuit_condition(
         }
         Expr::BoolAnd(left, right, _, _) => {
             if bool_or_mode {
-                // && inside left side of ||
-                let id_l = left
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
-                let id_r = right
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
-                state.free_reg(id_l, v);
-                state.free_reg(id_r, v);
-                let id = state.alloc_reg();
-                output.push(Instr::BoolAnd(id_l, id_r, id));
-                add_cmp_true(id, output);
-                state.free_reg(id, v);
-                (vec![output.len() - 1], Vec::new())
+                // `&&` on the left of `||`, where the caller wants jumps taken
+                // when this conjunction is true. A false left operand settles
+                // the conjunction, so its false jumps skip the right operand
+                // and land on whatever is emitted next, which is exactly where
+                // the enclosing `||` continues.
+                let (_, left_false) =
+                    compile_short_circuit_condition(left, v, ctx, state, output, false);
+                let (right_true, _) =
+                    compile_short_circuit_condition(right, v, ctx, state, output, true);
+                let fallthrough = output.len();
+                for j in left_false {
+                    set_jmp_size(&mut output[j], (fallthrough - j) as u16);
+                }
+                (right_true, Vec::new())
             } else {
                 // normal && -> if either side is false, jump past the body
-                let (_, mut false_jumps) =
+                let (left_true, mut false_jumps) =
                     compile_short_circuit_condition(left, v, ctx, state, output, false);
-                let (_, right_false) =
+                // A true left operand does not settle `&&`, so it continues
+                // into the right operand. Only the right operand's true jumps
+                // settle the conjunction, and the caller aims those at the body.
+                let right_start = output.len();
+                for j in left_true {
+                    set_jmp_size(&mut output[j], (right_start - j) as u16);
+                }
+                let (right_true, right_false) =
                     compile_short_circuit_condition(right, v, ctx, state, output, false);
                 false_jumps.extend(right_false);
-                (Vec::new(), false_jumps)
+                (right_true, false_jumps)
             }
         }
         expr => {
@@ -1231,46 +1245,6 @@ fn compile_array_slice(
     dest_reg_id
 }
 
-fn uniform_op(
-    instr: fn(u16, u16, u16) -> Instr,
-    symbol: &'static str,
-    l: &Expr,
-    r: &Expr,
-    span_l: Span,
-    span_r: Span,
-    t: &DataType,
-    tgt_id: Option<u16>,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-) -> u16 {
-    let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
-    if &t_l != t || &t_r != t {
-        compiler_errors::error_op(
-            &t_l,
-            &t_r,
-            symbol,
-            span_l,
-            span_r,
-            ctx.file_idx,
-            state.sources,
-        );
-    }
-
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    state.free_reg(id_l, v);
-    state.free_reg(id_r, v);
-    let id = state.alloc_reg_tgt(tgt_id);
-    output.push(instr(id_l, id_r, id));
-    id
-}
-
 #[inline]
 fn uniform_op2(
     instr: fn(u16, u16, u16) -> Instr,
@@ -1328,8 +1302,12 @@ fn compile_div_op(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
+    // A float left operand next to an `int` zero is a type error, and naming it
+    // division by zero would report the wrong mistake. Every other left operand
+    // makes this integer division, which does not divide by zero.
     if let Expr::Int(n) = r
         && *n == 0
+        && l.infer_type(v, ctx, state) != DataType::Float
     {
         error_division_by_zero(false, span_l.extend(span_r), ctx.file_idx, state.sources);
     }
@@ -1480,8 +1458,11 @@ fn compile_mod_op(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
+    // As in `compile_div_op`: a float left operand makes this a type error
+    // rather than a remainder by zero.
     if let Expr::Int(n) = r
         && *n == 0
+        && l.infer_type(v, ctx, state) != DataType::Float
     {
         error_division_by_zero(true, span_l.extend(span_r), ctx.file_idx, state.sources);
     }
@@ -1504,6 +1485,70 @@ fn compile_mod_op(
     if matches!(output.last(), Some(Instr::ModInt(..))) {
         state.add_to_src(ctx, output, span_l.extend(span_r));
     }
+    id
+}
+
+/// Compiles `&&` or `||` where a value is wanted rather than a branch.
+///
+/// The left operand is evaluated into the result register and, when it already
+/// settles the answer, the jump skips the right operand entirely, so an
+/// expression short-circuits wherever it appears and not only as the condition
+/// of an `if` or a `while`.
+///
+/// The right operand is evaluated into its own register and moved, which keeps
+/// the last instruction a `Mov`. An enclosing condition fuses the instruction it
+/// finds at the end of a compiled condition into a jump, and fusing the right
+/// operand's comparison would strand the short-circuit jump past it.
+fn compile_short_circuit_value(
+    l: &Expr,
+    r: &Expr,
+    span_l: Span,
+    span_r: Span,
+    symbol: &'static str,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
+    if t_l != DataType::Bool || t_r != DataType::Bool {
+        cold_path();
+        compiler_errors::error_op(
+            &t_l,
+            &t_r,
+            symbol,
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+
+    let id = state.alloc_reg_tgt(tgt_id);
+    let left_id = l
+        .compile(v, ctx, state, output, Some(id), false, true)
+        .unwrap_id();
+    if left_id != id {
+        output.push(Instr::Mov(left_id, id));
+    }
+
+    let skip_idx = output.len();
+    // `&&` is settled by a false left operand, `||` by a true one. Either way
+    // the left operand's value is already in the result register.
+    output.push(if symbol == "&&" {
+        Instr::IsFalseJmp(id, 0)
+    } else {
+        Instr::IsTrueJmp(id, 0)
+    });
+
+    let right_id = r
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(right_id, v);
+    output.push(Instr::Mov(right_id, id));
+    let skip_size = (output.len() - skip_idx) as u16;
+    set_jmp_size(&mut output[skip_idx], skip_size);
     id
 }
 
@@ -1637,7 +1682,7 @@ fn compile_bool_neg_op(
         compiler_errors::error_op(
             &DataType::Null,
             &operand_type,
-            "-",
+            "!",
             span_l,
             span_r,
             ctx.file_idx,
@@ -2272,7 +2317,12 @@ fn compile_try_catch_block(
 ) {
     output.push(Instr::StartErrorCatch(0, 0)); // patched later on
     let err_catch_instr = output.len() - 1;
-    let main_code = compile_expr(e, v, ctx, state);
+    // A function body is compiled inline at its first call site and records its
+    // absolute entry address as `ctx.offset + output.len()`, so both blocks are
+    // compiled at the offset they occupy. Compiling them at the
+    // enclosing offset makes every call inside a `try` jump short by the length
+    // of the code already emitted before it.
+    let main_code = compile_expr(e, v, ctx.advance_offset(output.len() as u16), state);
     output.extend(main_code);
     output.push(Instr::StopErrorCatch);
     output.push(Instr::Jmp(0)); // jumps over the catch handler if no error arises
@@ -2287,7 +2337,12 @@ fn compile_try_catch_block(
     });
     output[err_catch_instr] =
         Instr::StartErrorCatch((output.len() - err_catch_instr) as u16, err_reg_id);
-    let catch_code = compile_expr(catch_code, v, ctx, state);
+    let catch_code = compile_expr(
+        catch_code,
+        v,
+        ctx.advance_offset(output.len() as u16),
+        state,
+    );
     v.truncate(v_len);
     output.extend(catch_code);
     output[jmp_catch_instr] = Instr::Jmp((output.len() - jmp_catch_instr) as u16);
@@ -2414,7 +2469,9 @@ fn compile_var_assignment(
         .compile(v, ctx, state, output, Some(id), false, true)
         .unwrap_id();
     if output.len() != output_len {
-        move_to_id(output, id);
+        if !move_to_id(output, id) {
+            output.push(Instr::Mov(obj_id, id));
+        }
     } else if state.const_registers.values().any(|&v| v == obj_id) {
         move_reg_to_reg(output, obj_id, id, state.registers[obj_id as usize]);
     } else {
@@ -2467,6 +2524,7 @@ fn compile_function_definition(
     fn_args: &[(SmolStr, Option<TypeExpr>)],
     fn_code: &Rc<[Expr]>,
     span: Span,
+    declared_return_type: Option<&(TypeExpr, Span)>,
     _v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2499,6 +2557,12 @@ fn compile_function_definition(
         return_type_cache: Vec::new(),
         direct_calls: callees.into_boxed_slice(),
         name_span: span,
+        return_type: declared_return_type.map(|(t_e, t_span)| {
+            (
+                t_e.to_datatype(ctx.file_idx, state.namespace, state.sources),
+                *t_span,
+            )
+        }),
     });
     state.fn_registers.push(Vec::new());
 }
@@ -2921,36 +2985,14 @@ impl Expr {
             }
             Self::BoolAnd(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op(
-                    Instr::BoolAnd,
-                    "&&",
-                    l,
-                    r,
-                    *span1,
-                    *span2,
-                    &DataType::Bool,
-                    tgt_id,
-                    v,
-                    ctx,
-                    state,
-                    output,
+                Some(compile_short_circuit_value(
+                    l, r, *span1, *span2, "&&", tgt_id, v, ctx, state, output,
                 ))
             }
             Self::BoolOr(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op(
-                    Instr::BoolOr,
-                    "||",
-                    l,
-                    r,
-                    *span1,
-                    *span2,
-                    &DataType::Bool,
-                    tgt_id,
-                    v,
-                    ctx,
-                    state,
-                    output,
+                Some(compile_short_circuit_value(
+                    l, r, *span1, *span2, "||", tgt_id, v, ctx, state, output,
                 ))
             }
             Self::Neg(l, span1, span2) => {
@@ -3213,10 +3255,18 @@ impl Expr {
                     }),
                 )
             }
-            Self::FunctionDecl(fn_name, fn_args, fn_code, span) => {
+            Self::FunctionDecl(fn_name, fn_args, fn_code, span, return_type) => {
                 debug_assert!(!uses_id);
                 compile_function_definition(
-                    fn_name, fn_args, fn_code, *span, v, ctx, state, output,
+                    fn_name,
+                    fn_args,
+                    fn_code,
+                    *span,
+                    return_type.as_ref(),
+                    v,
+                    ctx,
+                    state,
+                    output,
                 );
                 None
             }
@@ -3396,7 +3446,7 @@ impl Namespace {
 /// higher-order helpers work as array methods (`arr.map(f)`) with no explicit
 /// import. Resolution mirrors the library-import path (`CANDELA_LIB_PATH` or
 /// `libs/` beside the executable); a missing library directory is not an error,
-/// the prelude is simply absent.
+/// the prelude is absent.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_auto_prelude(
     fns: &mut Vec<Function>,
@@ -3410,7 +3460,12 @@ fn load_auto_prelude(
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
-    pending_fns: &mut Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
+    pending_fns: &mut Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Option<TypeExpr>)]>,
+        Option<(TypeExpr, Span)>,
+    )>,
     pending_dylibs: &mut Vec<(
         u16,
         u16,
@@ -3556,7 +3611,12 @@ fn parse_toplevel(
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
-    pending_fns: &mut Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
+    pending_fns: &mut Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Option<TypeExpr>)]>,
+        Option<(TypeExpr, Span)>,
+    )>,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: &mut Vec<(
         u16,
         u16,
@@ -3578,7 +3638,7 @@ fn parse_toplevel(
     let mut imports = Vec::new();
     for expr in code {
         match expr {
-            Expr::FunctionDecl(fn_name, fn_args, fn_code, span) => {
+            Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type) => {
                 if let Some((_, SymbolKind::Fn(func_id))) =
                     namespace.symbols.iter().rfind(|(f, _)| f == &fn_name)
                 {
@@ -3607,8 +3667,11 @@ fn parse_toplevel(
                     return_type_cache: Vec::new(),
                     direct_calls: callees.into_boxed_slice(),
                     name_span: span,
+                    // Resolved with the argument types once every file's
+                    // namespace is known; see the `pending_fns` drain.
+                    return_type: None,
                 });
-                pending_fns.push((fn_id, src_file_idx, fn_args));
+                pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
             Expr::StructDeclare(name, fields, span) => {
@@ -3652,7 +3715,7 @@ fn parse_toplevel(
     // friends) callable as methods on arrays without an explicit import. This is
     // best-effort: if the shipped library directory is not present (for
     // example an embedding host with no `libs/` tree), the prelude is skipped and
-    // array methods simply resolve as they did before.
+    // array methods resolve as they did before.
     #[cfg(not(target_arch = "wasm32"))]
     if src_file_idx == 0 {
         load_auto_prelude(
@@ -3914,7 +3977,12 @@ fn resolve_types(
     fns: &mut [Function],
     pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: PendingEnums,
-    pending_fns: Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)>,
+    pending_fns: Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Option<TypeExpr>)]>,
+        Option<(TypeExpr, Span)>,
+    )>,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: Vec<(
         u16,
         u16,
@@ -3965,7 +4033,7 @@ fn resolve_types(
             .collect();
         enums[enum_id as usize].variants = resolved_variants;
     }
-    for (fn_id, src_file_idx, args) in pending_fns {
+    for (fn_id, src_file_idx, args, return_type) in pending_fns {
         let resolved_args = args
             .iter()
             .map(|(arg_name, arg_type)| {
@@ -3978,6 +4046,12 @@ fn resolve_types(
             })
             .collect();
         fns[fn_id as usize].args = resolved_args;
+        fns[fn_id as usize].return_type = return_type.map(|(t_e, t_span)| {
+            (
+                t_e.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources),
+                t_span,
+            )
+        });
     }
     #[cfg(not(target_arch = "wasm32"))]
     for (src_file_idx, dynlib_id, fn_signatures, lib, library_spec, span) in pending_dylibs {
@@ -4160,8 +4234,12 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     let mut file_namespaces: FxHashMap<u16, Namespace> = FxHashMap::default();
     let mut pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)> = Vec::new();
     let mut pending_enums: PendingEnums = Vec::new();
-    let mut pending_fns: Vec<(u16, u16, Box<[(SmolStr, Option<TypeExpr>)]>)> =
-        Vec::with_capacity(2);
+    let mut pending_fns: Vec<(
+        u16,
+        u16,
+        Box<[(SmolStr, Option<TypeExpr>)]>,
+        Option<(TypeExpr, Span)>,
+    )> = Vec::with_capacity(2);
     #[cfg(not(target_arch = "wasm32"))]
     let mut pending_dylibs: Vec<(
         u16,

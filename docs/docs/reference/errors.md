@@ -33,7 +33,8 @@ Raised while the file is read, before any type is known.
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
-| Constant arithmetic | Division or remainder by a literal zero, or an integer raised to a negative literal exponent |
+| Constant arithmetic | Integer division or remainder by a literal zero, or an integer raised to a negative literal exponent |
+| Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 
 ## Compile errors
 
@@ -48,16 +49,20 @@ a struct literal that supplies an unknown field or omits a required one, and
 assigning a value of the wrong type to a field.
 
 **Arity and argument errors.** Calling a function with too few or too many
-arguments, or with an argument whose type the parameter does not accept. The
-report labels the declaration as well as the call.
+arguments, or with an argument whose type the parameter does not accept, whether
+that type was declared with `name: type` or taken from another call. The report
+labels the declaration as well as the call. A function that declares `-> Type`
+and returns something else is reported against the annotation.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,
-`||` or `!`. See [operators](operators.md).
+`||` or `!`. The report names the operator it is complaining about. `==` and
+`!=` take any pair and are never an error. See [operators](operators.md).
 
-**Type errors.** The general mismatch: a condition that is not a `bool`, an
-index that is not an `int`, indexing or iterating a type that supports neither,
-a field access on something that is not a struct.
+**Type errors.** The general mismatch: an index that is not an `int`, indexing
+or iterating a type that supports neither, a field access on something that is
+not a struct. A condition that is not a `bool` is not one of these; see
+[control flow](../language/control-flow.md).
 
 **Collection literal errors.** Arrays and maps are homogeneous, so an element or
 value of a different type is rejected, as is a duplicate map key or a map key
@@ -91,7 +96,7 @@ clause matches and the string bound to the catch variable. See
 | Kind | Raised by |
 | --- | --- |
 | `index_out_of_bounds` | An array or string index outside the value |
-| `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end |
+| `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end. A slice starting where the value ends is in range and produces an empty one |
 | `unknown_map_key` | Reading a map key that is not present |
 
 ### Arithmetic
@@ -100,8 +105,12 @@ clause matches and the string bound to the catch variable. See
 | --- | --- |
 | `division_by_zero` | Integer division by zero |
 | `modulo_by_zero` | Integer remainder by zero |
+| `negative_exponent` | An `int` raised to a negative `int` power, which has no `int` result |
 
-Float division and remainder do not raise; they produce an infinity or `NaN`.
+Float division and remainder do not raise; they produce an infinity or `NaN`,
+and both print as such. A float raised to a negative power does not raise
+either. The parser rejects the all-literal forms of these before the program
+runs; the kinds above cover the cases where a value is only known at run time.
 
 ### Conversion
 
@@ -111,7 +120,7 @@ Float division and remainder do not raise; they produce an infinity or `NaN`.
 | `invalid_float` | `float()` on a string that is not a number |
 | `invalid_bool` | `bool()` on a string that is neither `true` nor `false` |
 | `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type |
-| `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason |
+| `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason. Objects and arrays nest to a fixed depth, and text past it is rejected the same way |
 
 ### Files
 
@@ -139,10 +148,10 @@ intend to catch.
 ## Catching
 
 A `try` block runs under the innermost `catch`. The errors listed above are
-caught where the block itself raises them, in an operator, a built-in function,
-or a `throw`. When no `catch` matches, the error is re-raised to the next
-enclosing `try`, and an error that reaches the top of the program is printed and
-ends it.
+caught wherever the block raises them: in an operator, a built-in function, a
+`throw`, or inside a function the block calls, at any depth. When no `catch`
+matches, the error is re-raised to the next enclosing `try`, and an error that
+reaches the top of the program is printed and ends it.
 
 ```rust
 try {
@@ -157,9 +166,10 @@ try {
 
 The catch variable holds the kind as a string.
 
-A call to a function written in candela does not return when it sits inside a
-`try` block, which covers your own functions and the standard library modules
-written in candela. Raise and catch within the block itself.
+An error raised several frames below the `try` abandons the calls in between and
+resumes at the `catch`, so a failure deep in a helper is handled where the work
+was started. This covers your own functions and the standard library modules
+written in candela.
 
 Two things end a program without being catchable: `exit()` with a non-zero
 status, and a type that cannot cross the C boundary in a `dylib` signature.

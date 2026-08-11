@@ -109,7 +109,7 @@ cause. Each page below states what its functions raise.
 A raised error carries a short code as well as a message. The code is what a
 `catch` binds and what `catch "code"` filters on; the message is what an uncaught
 error prints. A `throw` is its own code, so `throw("no such user")` is caught as
-`no such user`. The imported modules are written in candela, and a call to one
-does not return when it sits inside a `try` block. See
+`no such user`. A `try` catches what a library function raises just as it
+catches a `throw` written in the block. See
 [error handling](../language/error-handling.md) for the mechanism and
 [the error catalogue](../reference/errors.md) for the codes.

@@ -609,3 +609,66 @@ fn main() {}
         Value::Bool(true)
     );
 }
+
+/// A parameter carrying a `: Type` annotation is the natural shape for a
+/// function a host calls: there is no in-script call site to infer from. The
+/// annotation is checked against the marshalled argument rather than rejected.
+#[test]
+fn annotated_params_accept_matching_host_arguments() {
+    let engine = Engine::new();
+
+    let src = r"
+fn banner(label: string, pad: int) -> int {
+    return label.len() + pad;
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let result = program
+        .call("banner", &["title".into(), 2.into()])
+        .expect("call ok");
+    assert_eq!(result, Value::Int(7));
+}
+
+/// The same annotation rejects an argument of the wrong type, and the host sees
+/// it as a `Diagnostic` rather than a corrupted run.
+#[test]
+fn annotated_params_reject_mismatched_host_arguments() {
+    let engine = Engine::new();
+
+    let src = r"
+fn banner(label: string) -> int {
+    return label.len();
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call("banner", &[7.into()])
+        .expect_err("argument type is checked");
+    assert_eq!(err.code, "argument_type_mismatch");
+    assert!(err.message.contains("string"));
+}
+
+/// Leaving a host-called function's parameters un-annotated still works: the
+/// checker takes the types from the marshalled arguments.
+#[test]
+fn unannotated_params_still_take_host_argument_types() {
+    let engine = Engine::new();
+
+    let src = r"
+fn width(label) {
+    return label.len();
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let result = program.call("width", &["abcd".into()]).expect("call ok");
+    assert_eq!(result, Value::Int(4));
+}

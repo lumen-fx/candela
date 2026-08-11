@@ -69,11 +69,32 @@ fn main() {
 }
 ```
 
-What a `try` catches is what the block itself raises: a `throw`, and the
-failures of operators and built-in functions. A call to a function written in
-candela does not return when it sits inside a `try` block, and that includes the
-standard library modules written in candela. Put the risky expression in the
-block and call your own functions outside it.
+A `try` covers everything the block runs, not only the expressions written in
+it. An error raised inside a function the block calls unwinds to the enclosing
+`catch` however many frames down it started, and the calls in between are
+abandoned. That applies to your own functions and to the standard library
+modules written in candela.
+
+```rust
+fn withdraw(balance, amount) {
+    if amount > balance {
+        throw("insufficient_funds");
+    }
+    return balance - amount;
+}
+
+fn checkout(balance) {
+    return withdraw(balance, 50);
+}
+
+fn main() {
+    try {
+        print(checkout(10));
+    } catch "insufficient_funds" {
+        print("declined");
+    }
+}
+```
 
 Recovering usually means producing a fallback value, which reads best as a small
 function.
@@ -159,4 +180,18 @@ fn main() {
 }
 ```
 
-A failed assertion stops the program with a message naming the two values.
+A failed assertion raises the message it prints, so it stops the program on its
+own and a `try` around the check catches it like any other error. That is how a
+test harness reports which check failed instead of ending the run.
+
+```rust
+import "std/assert" as assert;
+
+fn main() {
+    try {
+        assert::assert_eq(2, 3);
+    } catch e {
+        print("check failed: " + e);
+    }
+}
+```

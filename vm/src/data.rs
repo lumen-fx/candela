@@ -19,11 +19,22 @@ const NAN_INT: u64 = NAN_BASE | (6 << 48);
 const NAN_STRUCT: u64 = NAN_BASE | (7 << 48);
 const NAN_MAP: u64 = NAN_BASE | (7 << 48) | (1 << 47);
 /// Enum values claim the free all-zero type field on the quiet-NaN base
-/// (`NAN_ENUM == NAN_BASE`), which is distinct from every existing tag above
-/// and from computed float NaNs (whose sign bit is clear). The 48-bit payload
-/// packs the enum type id (bits 32-47) and an object-pool index (low 32),
-/// exactly like the struct encoding.
+/// (`NAN_ENUM == NAN_BASE`). The 48-bit payload packs the enum type id
+/// (bits 32-47) and an object-pool index (low 32), exactly like the struct
+/// encoding.
+///
+/// Hardware produces a quiet NaN with the sign bit set for an invalid operation
+/// such as `sqrt` of a negative number, and its bit pattern is exactly
+/// `NAN_BASE`: an enum of type id 0 at pool index 0. [`Data::float`] therefore
+/// rewrites any negative quiet NaN to [`CANONICAL_NAN`], which keeps every
+/// float outside the tag space.
 const NAN_ENUM: u64 = NAN_BASE;
+/// The positive quiet NaN every NaN float is stored as. Its sign bit is clear,
+/// so it reads back as a float rather than as an enum. NaN carries no value a
+/// candela program can inspect, so collapsing sign and payload changes nothing
+/// observable.
+const CANONICAL_NAN: u64 =
+    0b0111_1111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
 pub const NULL: Data = Data(NAN_NULL);
 pub const FALSE: Data = Data(NAN_BOOL);
 pub const TRUE: Data = Data(NAN_BOOL | 1);
@@ -132,7 +143,15 @@ impl Data {
     }
     #[inline(always)]
     pub const fn float(n: f64) -> Self {
-        Self(n.to_bits())
+        let bits = n.to_bits();
+        // Every float except a negative quiet NaN leaves at least one bit of
+        // NAN_BASE clear and so cannot be mistaken for a tagged value. A
+        // negative quiet NaN is stored as the positive one instead.
+        if (bits & NAN_BASE) == NAN_BASE {
+            Self(CANONICAL_NAN)
+        } else {
+            Self(bits)
+        }
     }
     #[inline(always)]
     pub const fn as_float(self) -> f64 {
@@ -500,5 +519,66 @@ impl From<Data> for bool {
     #[inline(always)]
     fn from(value: Data) -> Self {
         value.as_bool()
+    }
+}
+
+#[cfg(test)]
+mod float_boxing_tests {
+    use super::Data;
+
+    /// Hardware answers an invalid operation with a quiet NaN whose sign bit is
+    /// set, and that bit pattern is the enum tag. Boxing has to keep it a float,
+    /// or reading it back walks the enum table with a type id of 0 and a pool
+    /// index of 0.
+    #[test]
+    fn negative_quiet_nan_stays_a_float() {
+        let hardware_nan = f64::from_bits(0xFFF8_0000_0000_0000);
+        assert!(hardware_nan.is_nan());
+
+        let boxed = Data::float(hardware_nan);
+        assert!(boxed.is_float());
+        assert!(!boxed.is_enum());
+        assert!(!boxed.is_struct());
+        assert!(!boxed.is_map());
+        assert!(boxed.as_float().is_nan());
+    }
+
+    #[test]
+    fn every_nan_boxes_to_one_pattern() {
+        let signed = Data::float(f64::from_bits(0xFFF8_0000_0000_0000));
+        let unsigned = Data::float(f64::NAN);
+        let with_payload = Data::float(f64::from_bits(0xFFF8_0000_DEAD_BEEF));
+        assert_eq!(signed, unsigned);
+        assert_eq!(signed, with_payload);
+    }
+
+    #[test]
+    fn infinities_and_ordinary_floats_round_trip() {
+        for value in [
+            0.0,
+            -0.0,
+            1.5,
+            -1.5,
+            f64::MIN,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let boxed = Data::float(value);
+            assert!(boxed.is_float(), "{value} must box as a float");
+            assert_eq!(boxed.as_float().to_bits(), value.to_bits());
+        }
+    }
+
+    /// The tagged types have to stay distinguishable from every float, which is
+    /// what makes the NaN check above necessary in the first place.
+    #[test]
+    fn tagged_values_are_not_floats() {
+        assert!(!Data::int(7).is_float());
+        assert!(!Data::bool(true).is_float());
+        assert!(!Data::array(0).is_float());
+        assert!(!Data::map(0).is_float());
+        assert!(!Data::enum_instance(0, 0).is_float());
+        assert!(!super::NULL.is_float());
     }
 }

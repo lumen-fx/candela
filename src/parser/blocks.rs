@@ -204,8 +204,33 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
             parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
         }
     }
+    let return_type = parse_return_annotation(parser);
     let fn_code = parse_block(parser);
-    Expr::FunctionDecl(fn_name, Box::from(args), std::rc::Rc::from(fn_code), span)
+    Expr::FunctionDecl(
+        fn_name,
+        Box::from(args),
+        std::rc::Rc::from(fn_code),
+        span,
+        return_type,
+    )
+}
+
+/// Parses the optional `-> Type` return annotation that may follow a function's
+/// parameter list, returning it with the span of the annotated type.
+///
+/// The annotation is checked against what the body returns; see
+/// `compile_function`. Leaving it off keeps the return type inferred.
+fn parse_return_annotation(parser: &mut Parser<'_>) -> Option<(TypeExpr, Span)> {
+    if parser.peek_token() != Token::Arrow {
+        return None;
+    }
+    parser.next_token();
+    let type_start = parser.peek_token_span().start;
+    let return_type = parse_type(parser);
+    Some((
+        return_type,
+        (type_start, parser.last_token_end as u32).into(),
+    ))
 }
 
 pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
@@ -260,20 +285,21 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
     let mut output_code: Vec<Expr> = Vec::with_capacity(2);
     let mut main_condition = Expr::Null;
 
+    let catch_span: Span = (start, end).into();
     let mut first = true;
     for (e, c) in catch_blocks {
         if first {
             first = false;
             main_condition = Expr::Eq(
                 Box::new(Expr::String(e)),
-                Box::new(Expr::Var(catch_all_var.clone(), (start, end).into())),
+                Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
             );
             output_code.extend(c);
         } else {
             output_code.push(Expr::ElseIfBlock(
                 Box::new(Expr::Eq(
                     Box::new(Expr::String(e)),
-                    Box::new(Expr::Var(catch_all_var.clone(), (start, end).into())),
+                    Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
                 )),
                 Box::from(c),
             ));
@@ -286,7 +312,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
         Box::from([Expr::Condition(
             Box::from(main_condition),
             Box::from(output_code),
-            (start, end).into(),
+            catch_span,
         )]),
     )
 }
@@ -423,16 +449,20 @@ fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
         }
         let (arg, span) = parser.next_token();
         if let Token::Identifier(arg) = arg {
-            // Parameter types (including the receiver's) are inferred per call
-            // site: candela specialises each function on the actual argument
-            // types, so `self` takes the receiver's concrete struct type
-            // automatically. A `: Type` annotation is accepted for surface-
-            // syntax parity but not recorded (matching free-function params).
-            if parser.peek_token() == Token::Colon {
-                parser.next_token();
-                let _ = parse_type(parser);
-            }
-            args.push((SmolStr::new(arg), None));
+            // A parameter left un-annotated (including the receiver) is inferred
+            // per call site: candela specialises each method on the actual
+            // argument types, so `self` takes the receiver's concrete struct
+            // type automatically. An annotation pins the parameter instead,
+            // exactly as it does on a free function.
+            args.push((
+                SmolStr::new(arg),
+                if parser.peek_token() == Token::Colon {
+                    parser.next_token();
+                    Some(parse_type(parser))
+                } else {
+                    None
+                },
+            ));
         } else {
             cold_path();
             parser.error(
@@ -448,14 +478,15 @@ fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
             parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
         }
     }
-    // Optional `-> Type` return annotation: accepted for Rust-style surface
-    // syntax but discarded, since the return type is inferred.
-    if parser.peek_token() == Token::Arrow {
-        parser.next_token();
-        let _ = parse_type(parser);
-    }
+    let return_type = parse_return_annotation(parser);
     let code = parse_block(parser);
-    Expr::FunctionDecl(mangled, Box::from(args), Rc::from(code), name_span)
+    Expr::FunctionDecl(
+        mangled,
+        Box::from(args),
+        Rc::from(code),
+        name_span,
+        return_type,
+    )
 }
 
 pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {

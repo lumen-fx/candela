@@ -18,13 +18,17 @@ fn main() {
 ```
 
 `let` takes no type annotation; the value decides the type. Write `let n = 0;`,
-not `let n: int = 0;`. See [Types](types.md) for the types a value can have.
+not `let n: int = 0;`. Function parameters are the other way round and may carry
+one, because a parameter has no initialising value to take a type from; see
+[Functions](functions.md). See [Types](types.md) for the types a value can have.
 
 ## Variables live inside functions
 
 The top level of a file holds declarations only: functions, structs, enums,
 `impl` blocks, and imports. There are no global variables, so every `let`
-belongs to a function body or a block inside one.
+belongs to a function body or a block inside one. A function declaration is the
+reverse: it belongs at the top level, and writing one inside a block is a
+compile error.
 
 ```rust
 fn total() {

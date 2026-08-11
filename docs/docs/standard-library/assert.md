@@ -9,9 +9,21 @@ import "std/assert" as assert;
 Each assertion raises an error when its check fails, so a test file runs its
 checks in sequence and the first failure stops the run and prints the message.
 A thrown message doubles as the error's code, so a harness reading the run's
-output can match on it. An assertion is written in candela, so calling one
-inside a `try` block does not return; a failed check ends the run rather than
-reaching a `catch`. See [error handling](../language/error-handling.md).
+output can match on it. Wrapping a check in `try` catches the failure instead of
+ending the run, which is how a harness reports the failing check and carries on.
+See [error handling](../language/error-handling.md).
+
+```rust
+import "std/assert" as assert;
+
+fn main() {
+    try {
+        assert::assert_eq(2, 3);
+    } catch e {
+        print("check failed: " + e);
+    }
+}
+```
 
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.

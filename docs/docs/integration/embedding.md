@@ -34,7 +34,7 @@ fn main() -> Result<(), candela::Diagnostic> {
             int width(string);
         }
 
-        fn banner(label) {
+        fn banner(label: string) -> int {
             return app::width(label) + 2;
         }
 
@@ -133,15 +133,20 @@ function that returns nothing. Arguments are `Value`s; `.into()` covers the
 scalars.
 
 The call is type-checked against the function's signature, so a wrong argument
-type comes back as a `Diagnostic` rather than corrupting the run. Declare script
-functions that a host calls with plain parameters and no type annotations, and
-let the checker infer them from the call:
+type comes back as a `Diagnostic` rather than corrupting the run. Annotate the
+parameters of a function a host calls. A function called only from the script
+takes its parameter types from the call site, but a host-called function has no
+such call site, and the annotation is what the arguments are checked against:
 
 ```rust
-fn banner(label) {
+fn banner(label: string) -> int {
     return app::width(label) + 2;
 }
 ```
+
+Leaving the parameters bare still works, and the types are then taken from the
+first host call. Annotate when you want a mismatch reported against the
+declaration rather than accepted as a new specialisation.
 
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.

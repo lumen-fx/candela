@@ -130,8 +130,7 @@ arr.take(n)
 
 - `n`: an int.
 - Returns: a new list of the first `n` elements, or a copy of the whole list when
-  `n` exceeds the length.
-- Raises: `slice_out_of_bounds` on an empty list, whatever `n` is.
+  `n` exceeds the length. An empty list gives an empty list.
 
 ### drop
 
@@ -141,9 +140,8 @@ arr.drop(n)
 ```
 
 - `n`: an int.
-- Returns: a new list of every element after the first `n`.
-- Raises: `slice_out_of_bounds` when `n` reaches or exceeds the length, and on an
-  empty list. Guard with `n < arr.len()` before calling.
+- Returns: a new list of every element after the first `n`, and an empty list
+  when `n` reaches or exceeds the length.
 
 ### chunk
 

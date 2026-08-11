@@ -1,37 +1,70 @@
 use crate::data::Data;
 use crate::instr::Instr;
-use std::hint::unreachable_unchecked;
 
-pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
+/// Redirects the value produced by the trailing instructions of `x` into
+/// `tgt_id`.
+///
+/// Returns whether the value now lands in `tgt_id`. `false` means the emitted
+/// instructions do not write the value into any register the rewrite can
+/// retarget, which is what happens when a literal is built directly into the
+/// constant pool: the value sits in a register nothing wrote, and the caller
+/// moves it across itself.
+pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
     if x.is_empty()
         || matches!(
             x.last().unwrap(),
-            Instr::ObjElemMov(_, _, _) | Instr::IncInt(_) | Instr::DecInt(_)
+            // A pooled array fill, and the in-place integer steps, leave the
+            // value where it already is rather than writing it somewhere new.
+            Instr::ObjElemMov(_, _, _)
+                | Instr::MapInsert(_, _, _)
+                | Instr::IncInt(_)
+                | Instr::DecInt(_)
         )
     {
-        return;
+        return false;
     }
     let matching_elem_index = x
         .iter()
         .rposition(|w| w.get_tgt_id().is_some())
         .unwrap_or(x.len() - 1);
-    // A struct/enum construction (a `Clone*` followed by `SetFieldStruct` writes
-    // into its dest register) cannot be retargeted by rewriting the `Clone`
-    // alone; the trailing field writes reference the original dest. Retarget
-    // the whole group to `tgt_id`.
-    if let Instr::CloneStruct(_, old) | Instr::CloneEnum(_, old) = x[matching_elem_index] {
+    // A struct, enum, map or array construction is a group: one instruction
+    // that allocates the value into a destination register, then writes that
+    // fill it in and name that same register. Rewriting the allocation alone
+    // would leave those writes pointing at the old register, so the whole group
+    // moves to `tgt_id` together.
+    let constructed_dest = match x[matching_elem_index] {
+        Instr::CloneStruct(_, dest)
+        | Instr::CloneEnum(_, dest)
+        | Instr::CloneMap(_, dest)
+        | Instr::CloneArray(_, dest, _)
+        | Instr::EmptyArray(dest) => Some(dest),
+        _ => None,
+    };
+    if let Some(old) = constructed_dest {
         match x.get_mut(matching_elem_index).unwrap() {
-            Instr::CloneStruct(_, y) | Instr::CloneEnum(_, y) => *y = tgt_id,
+            Instr::CloneStruct(_, y)
+            | Instr::CloneEnum(_, y)
+            | Instr::CloneMap(_, y)
+            | Instr::CloneArray(_, y, _)
+            | Instr::EmptyArray(y) => *y = tgt_id,
             _ => {}
         }
         for instr in &mut x[matching_elem_index + 1..] {
-            if let Instr::SetFieldStruct(struct_reg, _, _) = instr
-                && *struct_reg == old
-            {
-                *struct_reg = tgt_id;
+            // `MapInsert` and `ObjElemMov` address the constant pool rather
+            // than a register, so they are left alone.
+            match instr {
+                Instr::SetFieldStruct(reg, _, _)
+                | Instr::MapInsertReg(reg, _, _)
+                | Instr::Push(reg, _)
+                | Instr::SetElementObj(reg, _, _)
+                    if *reg == old =>
+                {
+                    *reg = tgt_id;
+                }
+                _ => {}
             }
         }
-        return;
+        return true;
     }
     let matching_elem = x.get_mut(matching_elem_index).unwrap();
     match matching_elem {
@@ -70,7 +103,6 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
         | Instr::BoolAnd(_, _, y)
         | Instr::BoolOr(_, _, y)
         | Instr::NegBool(_, y)
-        | Instr::EmptyArray(y)
         | Instr::NegFloat(_, y)
         | Instr::NegInt(_, y)
         | Instr::CallLibFunc(_, _, y)
@@ -94,8 +126,11 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) {
                 }
             }
         }
-        _ => unsafe { unreachable_unchecked() },
+        // Any other instruction writes somewhere this rewrite cannot follow.
+        // The caller moves the value across instead.
+        _ => return false,
     }
+    true
 }
 
 /// Returns the IDs of all the registers which are modified by the given instructions

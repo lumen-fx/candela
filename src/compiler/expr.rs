@@ -93,12 +93,17 @@ pub enum Expr {
         Span,
         Box<[Span]>,
     ),
-    /// FunctionDecl(name, args, code, span)
+    /// FunctionDecl(name, args, code, name_span, return_type)
+    ///
+    /// `return_type` carries the optional `-> Type` annotation together with the
+    /// span of the annotation itself, which is what a mismatch between the
+    /// declared and the returned type is reported against.
     FunctionDecl(
         SmolStr,
         Box<[(SmolStr, Option<TypeExpr>)]>,
         Rc<[Self]>,
         Span,
+        Option<(TypeExpr, Span)>,
     ),
 
     ReturnVal(Box<Option<Self>>),

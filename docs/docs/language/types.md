@@ -1,6 +1,6 @@
 # Types
 
-Candela is statically typed with inference. You rarely write a type, but every
+Candela is statically typed with inference. Most types go unwritten, but every
 expression has one, and the compiler rejects a program whose types do not line
 up before it runs.
 
@@ -67,10 +67,10 @@ A conversion that cannot succeed raises at runtime; see
 
 ## Truthiness
 
-There is none. A condition is a `bool` expression, and the way to test a value
-is to write the comparison out. A non-bool condition is not rejected by the
-compiler, and it takes the true branch whatever its value, `0` and `null`
-included, so write the comparison rather than relying on the value.
+There is none, and none is added for you. A condition of another type still
+compiles, but it is not interpreted: only the boolean `false` fails a test, so
+every other value takes the true branch, `0`, `""` and `null` included. Write
+the comparison out rather than leaning on that.
 
 ```rust
 fn main() {
@@ -93,9 +93,9 @@ design, prefer the `Option` enum from the standard library over `null`.
 
 ## Where you write a type
 
-Type annotations appear in the places where the compiler cannot infer a type:
-struct fields, enum variant payloads, and the signature blocks that declare
-foreign functions. The type grammar is the same in all of them.
+Type annotations appear on struct fields, enum variant payloads, the signature
+blocks that declare foreign functions, and, where you want them, function
+parameters and return types. The type grammar is the same in all of them.
 
 - `int`, `float`, `bool`, `string`, `null`: the built-in types.
 - `T[]`: a list of `T`, for example `string[]` or `int[][]`.

@@ -72,6 +72,14 @@ fn assert_module() {
     assert!(run_std_test("test_assert").contains("assert ok"));
 }
 
+/// Raising and catching across the library: a call inside a `try` returns, a
+/// throw below the block reaches the `catch`, and the slicing helpers hold at
+/// their boundaries.
+#[test]
+fn errors_across_modules() {
+    assert!(run_std_test("test_errors").contains("errors ok"));
+}
+
 #[test]
 fn option_module() {
     assert!(run_std_test("test_option").contains("option ok"));

@@ -1,0 +1,128 @@
+/// Checks for raising and catching across the standard library. Run with
+/// `candela run`, or build to a `.cdlb` and run under `candela-vm`. Prints
+/// "errors ok" on success; a failed check aborts the run with a message.
+import "std/assert" as assert;
+import "std/json" as json;
+import "std/list" as list;
+import "std/map" as map;
+
+fn doubled(x) {
+    return x * 2;
+}
+
+fn outer(x) {
+    return doubled(x) + 1;
+}
+
+fn refuse(amount) {
+    if amount > 10 {
+        throw("too_much");
+    }
+    return amount;
+}
+
+fn spend(amount) {
+    return refuse(amount);
+}
+
+fn countdown(n) {
+    if n == 0 {
+        throw("from_the_bottom");
+    }
+    return countdown(n - 1);
+}
+
+fn main() {
+    // A call inside `try` returns its value like any other expression.
+    let value = 0;
+    try {
+        value = doubled(21);
+    } catch e {
+        assert::assert_msg(false, "plain call raised " + e);
+    }
+    assert::assert_eq(value, 42);
+
+    // Nested calls return through both frames.
+    try {
+        value = outer(4);
+    } catch e {
+        assert::assert_msg(false, "nested call raised " + e);
+    }
+    assert::assert_eq(value, 9);
+
+    // A throw two frames below the block reaches the catch.
+    let caught = "";
+    try {
+        value = spend(50);
+        caught = "not raised";
+    } catch e {
+        caught = e;
+    }
+    assert::assert_eq(caught, "too_much");
+
+    // The same holds through a recursive function.
+    caught = "";
+    try {
+        value = countdown(5);
+        caught = "not raised";
+    } catch e {
+        caught = e;
+    }
+    assert::assert_eq(caught, "from_the_bottom");
+
+    // Execution carries on normally after a catch.
+    assert::assert_eq(doubled(3), 6);
+
+    // A failed assertion is catchable, which is what the module promises.
+    caught = "";
+    try {
+        assert::assert_eq(1, 2);
+        caught = "not raised";
+    } catch e {
+        caught = e;
+    }
+    assert::assert_eq(caught, "assert_eq failed: 1 != 2");
+
+    // Library calls raise into the enclosing catch.
+    caught = "";
+    try {
+        value = as_int(json::parse("nope"));
+        caught = "not raised";
+    } catch "json_parse_error" {
+        caught = "json_parse_error";
+    }
+    assert::assert_eq(caught, "json_parse_error");
+
+    // Every shape of malformed input raises rather than running away.
+    let malformed = ["nope", "[1,", "{oops", "", "[1] extra"];
+    for text in malformed {
+        caught = "not raised";
+        try {
+            value = as_int(json::parse(text));
+        } catch "json_parse_error" {
+            caught = "json_parse_error";
+        }
+        assert::assert_eq(caught, "json_parse_error");
+    }
+
+    // A parsed object is looked up by keys of any length.
+    let obj = as_map(json::parse("{\"n\": 7, \"long_key_name\": 42}"));
+    assert::assert_eq(as_int(map::get(obj, "n")), 7);
+    assert::assert_eq(as_int(map::get(obj, "long_key_name")), 42);
+
+    // take and drop hold at the boundaries their descriptions promise.
+    assert::assert_eq(list::take([], 0), []);
+    assert::assert_eq(list::take([], 3), []);
+    assert::assert_eq(list::take([1, 2, 3], 2), [1, 2]);
+    assert::assert_eq(list::take([1, 2, 3], 9), [1, 2, 3]);
+    assert::assert_eq(list::drop([1, 2, 3], 3), []);
+    assert::assert_eq(list::drop([1, 2, 3], 9), []);
+    assert::assert_eq(list::drop([1, 2, 3], 1), [2, 3]);
+
+    // A slice starting where the value ends is empty, not an error.
+    let xs = [1, 2, 3];
+    assert::assert_eq(xs[3..3], []);
+    assert::assert_eq("abc"[3..3], "");
+
+    print("errors ok");
+}

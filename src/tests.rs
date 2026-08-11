@@ -2197,9 +2197,13 @@ pub fn nested_loop_inner_break() {
     );
 }
 
+// A `fn` inside a block is rejected outright. It used to parse and register
+// itself only once the declaration statement was reached, so it worked when it
+// came before its first call and was invisible to every other function.
 #[test]
+#[should_panic(expected = "explicit panic")]
 pub fn nested_fn() {
-    run_and_check_registers!(
+    run!(
         "
         fn main() {
             fn add(a, b) {
@@ -2207,14 +2211,14 @@ pub fn nested_fn() {
             }
             print(add(3, 4));
         }
-        ",
-        7.into()
+        "
     );
 }
 
 #[test]
+#[should_panic(expected = "explicit panic")]
 pub fn nested_fn_in_loop() {
-    run_and_check_registers!(
+    run!(
         "
         fn main() {
             fn square(n) {
@@ -2226,8 +2230,7 @@ pub fn nested_fn_in_loop() {
             }
             print(sum);
         }
-        ",
-        30.into()
+        "
     );
 }
 
@@ -4575,5 +4578,946 @@ pub fn map_iteration_over_keys() {
         }
         ",
         30.into()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TYPED PARAMETERS AND RETURN ANNOTATIONS
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn annotated_params_accept_matching_int() {
+    run_and_check_registers!(
+        "
+        fn add(a: int, b: int) {
+            return a + b;
+        }
+        fn main() {
+            print(add(1, 2));
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn annotated_params_accept_matching_float() {
+    run_and_check_registers!(
+        "
+        fn scale(x: float, factor: float) {
+            return x * factor;
+        }
+        fn main() {
+            print(scale(1.5, 2.0));
+        }
+        ",
+        3.0.into()
+    );
+}
+
+#[test]
+pub fn annotated_params_accept_matching_string() {
+    run_and_check_registers!(
+        "
+        fn join(a: string, b: string) {
+            return a + b;
+        }
+        fn main() {
+            print(join(\"ab\", \"cd\").len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn annotated_params_accept_matching_bool() {
+    run_and_check_registers!(
+        "
+        fn both(a: bool, b: bool) {
+            return a && b;
+        }
+        fn main() {
+            print(both(true, true));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn annotated_array_param_accepts_matching_array() {
+    run_and_check_registers!(
+        "
+        fn total(xs: int[]) {
+            let s = 0;
+            for x in xs { s += x; }
+            return s;
+        }
+        fn main() {
+            print(total([1, 2, 3]));
+        }
+        ",
+        6.into()
+    );
+}
+
+#[test]
+pub fn annotated_param_any_stays_dynamic() {
+    run_and_check_registers!(
+        "
+        fn pick(x: any) {
+            return x;
+        }
+        fn main() {
+            print(pick(4));
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn unannotated_params_still_specialise_per_call() {
+    run_and_check_registers!(
+        "
+        fn same(x) {
+            return x;
+        }
+        fn main() {
+            print(same(\"a\").len() + same(2));
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn annotated_param_rejects_mismatch() {
+    let src = "fn add(a: int, b: int) { return a + b; }
+fn main() { print(add(1, \"two\")); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert_eq!(
+        d.message,
+        "Function add expects this argument's type to be int, but this expression's type is string"
+    );
+}
+
+#[test]
+pub fn annotated_param_rejects_float_for_int() {
+    let src = "fn twice(n: int) { return n * 2; }
+fn main() { print(twice(1.5)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert!(d.message.contains("this expression's type is float"));
+}
+
+#[test]
+pub fn annotated_method_param_rejects_mismatch() {
+    let src = "struct Rect { w: int, h: int }
+impl Rect {
+    fn grow(self, by: int) { return self.w + by; }
+}
+fn main() { let r = Rect { w: 1, h: 2 }; print(r.grow(\"x\")); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "argument_type_mismatch");
+}
+
+#[test]
+pub fn method_param_annotation_accepts_match() {
+    run_and_check_registers!(
+        "
+        struct Rect { w: int, h: int }
+        impl Rect {
+            fn grow(self, by: int) { return self.w + by; }
+        }
+        fn main() {
+            let r = Rect { w: 1, h: 2 };
+            print(r.grow(4));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn return_annotation_accepts_matching_type() {
+    run_and_check_registers!(
+        "
+        fn add(a: int, b: int) -> int {
+            return a + b;
+        }
+        fn main() {
+            print(add(2, 3));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn return_annotation_rejects_mismatch() {
+    let src = "fn label(n: int) -> int { return \"x\"; }
+fn main() { print(label(1)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_type");
+    assert!(d.message.contains("expected int"));
+    assert!(d.message.contains("type is string"));
+}
+
+// `null` is a keyword, not an identifier, so the type grammar has no way to
+// spell it; a function that returns nothing leaves the annotation off.
+#[test]
+pub fn unannotated_return_still_infers() {
+    run_and_check_registers!(
+        "
+        fn shout(n: int) {
+            print(n);
+        }
+        fn main() {
+            shout(9);
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn return_annotation_rejects_missing_return() {
+    let src = "fn broken(n: int) -> int { print(n); }
+fn main() { broken(1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "invalid_type");
+}
+
+#[test]
+pub fn method_return_annotation_is_checked() {
+    let src = "struct Rect { w: int, h: int }
+impl Rect {
+    fn area(self) -> string { return self.w * self.h; }
+}
+fn main() { let r = Rect { w: 2, h: 3 }; print(r.area()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "invalid_type");
+}
+
+#[test]
+pub fn method_return_annotation_accepts_match() {
+    run_and_check_registers!(
+        "
+        struct Rect { w: int, h: int }
+        impl Rect {
+            fn area(self) -> int { return self.w * self.h; }
+        }
+        fn main() {
+            let r = Rect { w: 2, h: 3 };
+            print(r.area());
+        }
+        ",
+        6.into()
+    );
+}
+
+#[test]
+pub fn nested_fn_reports_a_parse_error() {
+    let src = "fn main() { fn helper() { return 1; } print(helper()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "nested_function_declaration");
+    assert!(d.message.contains("top level"));
+}
+
+// ---------------------------------------------------------------------------
+// NON-BOOL CONDITIONS
+//
+// candela is gradually typed: a condition of any type compiles. Only the
+// boolean `false` fails a test, so every other value takes the true branch.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn if_accepts_int_condition_and_takes_the_true_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if 0 { print(1); } else { print(2); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn if_accepts_null_condition_and_takes_the_true_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if null { print(1); } else { print(2); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn if_accepts_string_condition_and_takes_the_true_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if \"s\" { print(1); } else { print(2); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn else_if_accepts_non_bool_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if false { print(0); } else if 3 { print(1); } else { print(2); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn while_accepts_non_bool_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let n = 0;
+            while 1 {
+                n += 1;
+                break;
+            }
+            print(n);
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn inline_if_accepts_non_bool_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = if 1 { 7 } else { 8 };
+            print(x);
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn a_false_condition_still_takes_the_else_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if false { print(1); } else { print(2); }
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn bool_conditions_still_compile() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let n = 3;
+            if n > 2 { print(1); } else { print(0); }
+        }
+        ",
+        1.into()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// EQUALITY ACROSS TYPES
+//
+// Comparing a string with a value of another type compiles and is unequal. The
+// string-comparison instruction is chosen whenever either side is statically a
+// string, so the run-time guard is what keeps a mismatched pair meaningful.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn eq_string_against_int_is_false() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"a\" == 1);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn neq_int_against_string_is_true() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(1 != \"a\");
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn eq_string_against_bool_is_false() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"a\" == true);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn eq_string_against_null_is_false() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"a\" == null);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn digit_string_is_not_equal_to_the_number() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"5\" == 5);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn mixed_equality_as_a_condition_takes_the_else_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if \"a\" == 1 { print(1); } else { print(2); }
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn mixed_inequality_as_a_condition_takes_the_true_branch() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            if \"a\" != 1 { print(1); } else { print(2); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn mixed_equality_through_an_untyped_parameter() {
+    // `v` is whatever the call site passes, so the string comparison the
+    // compiler picks meets a non-string operand only at run time.
+    run_and_check_registers!(
+        "
+        fn same_as_text(v) { return v == \"5\"; }
+        fn main() { print(same_as_text(5)); }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn matching_strings_through_an_untyped_parameter() {
+    run_and_check_registers!(
+        "
+        fn same_as_text(v) { return v == \"5\"; }
+        fn main() { print(same_as_text(\"5\")); }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn eq_on_matching_strings_still_works() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"a\" == \"a\");
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn eq_on_matching_ints_still_works() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(2 != 3);
+        }
+        ",
+        true.into()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UNARY ! REPORTS ITS OWN SYMBOL
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn bool_neg_names_the_bang_operator() {
+    let src = "fn main() { let n = 1; print(!n); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation ! int");
+}
+
+// ---------------------------------------------------------------------------
+// CONSTANT FOLDING MATCHES THE TYPE CHECKER
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn folded_pow_rejects_mixed_operands() {
+    let src = "fn main() { print(2.0 ^ 3); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation float ^ int");
+}
+
+#[test]
+pub fn unfolded_pow_rejects_mixed_operands() {
+    let src = "fn main() { let f = 2.0; print(f ^ 3); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation float ^ int");
+}
+
+#[test]
+pub fn folded_pow_accepts_matching_floats() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(2.0 ^ 3.0);
+        }
+        ",
+        8.0.into()
+    );
+}
+
+#[test]
+pub fn division_by_literal_zero_is_a_parse_error() {
+    let src = "fn main() { let n = 4; print(n / 0); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "division_by_zero");
+}
+
+#[test]
+pub fn float_division_by_literal_zero_follows_ieee() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(1.0 / 0.0 > 0.0);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn float_remainder_by_literal_zero_follows_ieee() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(1.0 % 0.0 > 0.0);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn remainder_by_literal_int_zero_is_a_parse_error() {
+    let src = "fn main() { let n = 4; print(n % 0); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "modulo_by_zero");
+}
+
+#[test]
+pub fn float_literal_divided_by_int_zero_is_a_type_error() {
+    let src = "fn main() { print(2.0 / 0); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation float / int");
+}
+
+// ---------------------------------------------------------------------------
+// SHORT-CIRCUIT EVALUATION EVERYWHERE
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn and_short_circuits_in_a_let() {
+    // `bump` raises when it runs, so reaching it fails the test.
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return true;
+        }
+        fn main() {
+            let ok = false && boom();
+            print(ok);
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn or_short_circuits_in_a_let() {
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return false;
+        }
+        fn main() {
+            let ok = true || boom();
+            print(ok);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn and_short_circuits_in_a_call_argument() {
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return true;
+        }
+        fn id(b) { return b; }
+        fn main() {
+            print(id(false && boom()));
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn or_short_circuits_in_a_return_value() {
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return false;
+        }
+        fn check(b) {
+            return b || boom();
+        }
+        fn main() {
+            print(check(true));
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn short_circuit_value_still_evaluates_the_right_side() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = true && false;
+            let b = false || true;
+            print(a == false && b == true);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn and_still_short_circuits_as_a_condition() {
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return true;
+        }
+        fn main() {
+            if false && boom() { print(0); } else { print(1); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn or_of_and_still_short_circuits_as_a_condition() {
+    run_and_check_registers!(
+        "
+        fn boom() {
+            throw(\"reached\");
+            return true;
+        }
+        fn main() {
+            if true || boom() && boom() { print(1); } else { print(0); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn and_of_or_evaluates_correctly_as_a_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = false;
+            let b = true;
+            let c = true;
+            if (a || b) && c { print(1); } else { print(0); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn or_inside_and_takes_the_false_path() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = false;
+            let b = false;
+            let c = true;
+            if (a || b) && c { print(1); } else { print(0); }
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn and_of_or_on_the_right_evaluates_correctly() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = true;
+            let b = false;
+            let c = true;
+            if a && (b || c) { print(1); } else { print(0); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn short_circuit_in_a_while_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let i = 0;
+            let go = true;
+            while go && i < 3 {
+                i += 1;
+            }
+            print(i);
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn bool_ops_reject_non_bool_operands() {
+    let src = "fn main() { print(1 && true); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation int && bool");
+}
+
+// ---------------------------------------------------------------------------
+// COLLECTION LITERALS PASSED DIRECTLY AS ARGUMENTS
+//
+// A literal argument is built into a destination register by a group of
+// instructions, and the call has to redirect that group into the parameter
+// slot. A map literal holding a non-constant value used to abort the compiler
+// outright, and an array literal built the same way reached the callee empty.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn const_array_literal_argument() {
+    run_and_check_registers!(
+        "
+        fn head(a) { return a[0]; }
+        fn main() { print(head([5, 6])); }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn dynamic_array_literal_argument() {
+    run_and_check_registers!(
+        "
+        fn head(a) { return a[0]; }
+        fn main() {
+            let n = 5;
+            print(head([n, 6]));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn const_map_literal_argument() {
+    run_and_check_registers!(
+        "
+        fn lookup(m) { return m.get(\"k\"); }
+        fn main() { print(lookup({\"k\": 7})); }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn dynamic_map_literal_argument() {
+    run_and_check_registers!(
+        "
+        fn lookup(m) { return m.get(\"k\"); }
+        fn main() {
+            let n = 7;
+            print(lookup({\"k\": n}));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn dynamic_map_literal_argument_ignored_by_callee() {
+    run_and_check_registers!(
+        "
+        fn take(m) {}
+        fn main() {
+            let n = 7;
+            take({\"k\": n});
+            print(1);
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn array_literal_argument_to_method() {
+    run_and_check_registers!(
+        "
+        struct Box { n: int }
+        impl Box {
+            fn first(self, a) { return a[0] + self.n; }
+        }
+        fn main() {
+            let b = Box { n: 1 };
+            let x = 4;
+            print(b.first([x, 9]));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn map_literal_argument_to_method() {
+    run_and_check_registers!(
+        "
+        struct Box { n: int }
+        impl Box {
+            fn at(self, m) { return m.get(\"k\") + self.n; }
+        }
+        fn main() {
+            let b = Box { n: 1 };
+            let v = 6;
+            print(b.at({\"k\": v}));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn nested_dynamic_literals_as_arguments() {
+    run_and_check_registers!(
+        "
+        fn total(rows) { return rows[0][0] + rows[1][0]; }
+        fn main() {
+            let a = 2;
+            let b = 3;
+            print(total([[a, 0], [b, 0]]));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn dynamic_map_literal_in_a_loop_body() {
+    run_and_check_registers!(
+        "
+        fn lookup(m) { return m.get(\"k\"); }
+        fn main() {
+            let s = 0;
+            for i in 0..3 {
+                s += lookup({\"k\": i});
+            }
+            print(s);
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn dynamic_array_literal_in_a_loop_body() {
+    run_and_check_registers!(
+        "
+        fn head(a) { return a[0]; }
+        fn main() {
+            let s = 0;
+            for i in 0..3 {
+                s += head([i, 9]);
+            }
+            print(s);
+        }
+        ",
+        3.into()
     );
 }
