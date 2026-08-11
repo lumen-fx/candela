@@ -53,14 +53,15 @@ pub fn add_op(
     span_r: Span,
 ) -> Expr {
     match op {
+        // Only two `bool` literals fold. Folding `x && true` away to `x` would
+        // also drop the check that `x` is a `bool`, and folding `false && x`
+        // away would drop the check on `x` entirely.
         Token::OpOr => match (lhs, rhs) {
-            (Expr::Bool(false), c) | (c, Expr::Bool(false)) => c,
-            (Expr::Bool(true), _) | (_, Expr::Bool(true)) => Expr::Bool(true),
+            (Expr::Bool(x), Expr::Bool(y)) => Expr::Bool(x || y),
             (lhs, rhs) => Expr::BoolOr(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpAnd => match (lhs, rhs) {
-            (Expr::Bool(false), _) | (_, Expr::Bool(false)) => Expr::Bool(false),
-            (Expr::Bool(true), c) | (c, Expr::Bool(true)) => c,
+            (Expr::Bool(x), Expr::Bool(y)) => Expr::Bool(x && y),
             (lhs, rhs) => Expr::BoolAnd(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpEq => Expr::Eq(Box::new(lhs), Box::new(rhs)),
@@ -102,21 +103,23 @@ pub fn add_op(
             (lhs, rhs) => Expr::Mul(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpDiv => match (lhs, rhs) {
-            (_, Expr::Int(0)) => {
+            // Float division follows IEEE 754 and yields an infinity rather
+            // than raising, so a `0.0` divisor is folded like any other.
+            (Expr::Float(x), Expr::Float(y)) => Expr::Float(x / y),
+            (ref lhs, Expr::Int(0)) if int_zero_divisor_applies(lhs) => {
                 cold_path();
                 parser.error(span_l.extend(span_r), ParserErr::DivisionByZero);
             }
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x / y),
-            (Expr::Float(x), Expr::Float(y)) => Expr::Float(x / y),
             (lhs, rhs) => Expr::Div(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpMod => match (lhs, rhs) {
-            (_, Expr::Int(0) | Expr::Float(0.0)) => {
+            (Expr::Float(x), Expr::Float(y)) => Expr::Float(x % y),
+            (ref lhs, Expr::Int(0)) if int_zero_divisor_applies(lhs) => {
                 cold_path();
                 parser.error(span_l.extend(span_r), ParserErr::ModuloByZero);
             }
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x % y),
-            (Expr::Float(x), Expr::Float(y)) => Expr::Float(x % y),
             (lhs, rhs) => Expr::Mod(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpPow => match (lhs, rhs) {
@@ -129,11 +132,24 @@ pub fn add_op(
                 }
             }
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x.powf(y)),
-            (Expr::Float(x), Expr::Int(y)) => Expr::Float(x.powi(y)),
             (lhs, rhs) => Expr::Pow(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         _ => unsafe { unreachable_unchecked() },
     }
+}
+
+/// Whether a literal `0` on the right of `/` or `%` makes the expression an
+/// integer division or remainder, and so a compile error.
+///
+/// Operand types never mix, so an `int` zero on the right forces an `int` left
+/// operand however that operand is spelled. The exception is a left operand
+/// that is itself a literal of some other type: that is a type error, and
+/// reporting it as division by zero would name the wrong mistake.
+const fn int_zero_divisor_applies(lhs: &Expr) -> bool {
+    !matches!(
+        lhs,
+        Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Null
+    )
 }
 
 #[inline(always)]

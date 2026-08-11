@@ -15,10 +15,9 @@ fn main() {
 }
 ```
 
-Parameters are plain names. You do not annotate them and you do not annotate the
-return type: candela infers both, and it compiles a separate specialisation of
-the function for each combination of argument types a call site uses. One
-definition therefore serves every type it can work with.
+A parameter left as a plain name takes its type from the call. candela compiles
+a separate specialisation of the function for each combination of argument types
+a call site uses, so one definition serves every type it can work with.
 
 ```rust
 fn same(x) {
@@ -31,9 +30,36 @@ fn main() {
 }
 ```
 
+Writing `name: type` instead pins that parameter, and an argument of any other
+type is a compile error. Pin the ones you want fixed and leave the rest open;
+the two styles mix freely in one signature.
+
+```rust
+fn repeat(text: string, times) {
+    let out = "";
+    for _ in 0..times {
+        out = out + text;
+    }
+    return out;
+}
+
+fn main() {
+    print(repeat("ab", 3));
+}
+```
+
+An annotation is worth writing when a function is called from Rust rather than
+from the script, since there is no call site to take the types from; see
+[embedding](../integration/embedding.md). A parameter annotated `any` stays
+dynamic and accepts a value of any type.
+
 Declaration order does not matter, so a function may call one declared further
 down the file. Two functions cannot share a name: there is no overloading, and a
 repeated name is a compile error.
+
+`fn` belongs at the top level of a file. A declaration inside a block, including
+inside another function's body, is a compile error; move it out to the top
+level.
 
 ## main
 
@@ -58,6 +84,24 @@ fn main() {
     print(describe(3), describe(-1));
 }
 ```
+
+The return type is inferred from the body. `-> Type` after the parameter list
+declares it instead, and a body that hands back anything else is a compile
+error. Since each set of argument types is specialised separately, a declared
+return type has to hold for every call.
+
+```rust
+fn area(w: int, h: int) -> int {
+    return w * h;
+}
+
+fn main() {
+    print(area(3, 4));
+}
+```
+
+There is no way to write `null` as a type, so a function that returns nothing
+leaves the annotation off.
 
 Recursion works as you would expect.
 

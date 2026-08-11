@@ -24,6 +24,10 @@ json::parse(text)
   string`, `invalid number`, `invalid escape`, `trailing characters after value`,
   and the rest.
 
+Objects and arrays nest to a fixed depth, far beyond what a document written for
+a program to read reaches. Text that nests deeper is rejected as malformed with
+the reason `nesting too deep`, so a hostile document cannot exhaust the stack.
+
 The mapping from json to candela is:
 
 | json | candela |

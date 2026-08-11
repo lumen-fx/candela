@@ -68,6 +68,9 @@ enum ParserErr<'a> {
     TryBlockNoCatch,
     MatchBlockNoNonWildcardArm,
     MatchBlockZeroArms,
+    /// A `fn` declaration written inside a block rather than at the top level
+    /// of a file.
+    NestedFunctionDeclaration,
     /// The removed `import std::string;` form; carries the path segments
     /// joined with `/` so the error suggests the exact replacement.
     LegacyNamespacedImport(String),
@@ -93,6 +96,7 @@ impl ParserErr<'_> {
             ParserErr::TryBlockNoCatch => "try_block_no_catch",
             ParserErr::MatchBlockNoNonWildcardArm => "match_block_no_non_wildcard_arm",
             ParserErr::MatchBlockZeroArms => "match_block_zero_arms",
+            ParserErr::NestedFunctionDeclaration => "nested_function_declaration",
             ParserErr::LegacyNamespacedImport(_) => "legacy_namespaced_import",
             ParserErr::ImportPathBadExtension => "import_path_bad_extension",
         }
@@ -128,6 +132,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         }
         ParserErr::MatchBlockZeroArms => {
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one arm{RESET}"
+        }
+        ParserErr::NestedFunctionDeclaration => {
+            "Functions declare at the top level of a file, not inside a block. Move this declaration out of the enclosing block"
         }
         ParserErr::LegacyNamespacedImport(path) => &format!(
             "This import form was removed. Write {BLUE}{BOLD}import \"{path}\";{RESET} instead: a quoted path with no extension imports the library from the shipped library directory"
@@ -379,7 +386,13 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
         Token::For => Some(parse_for_loop(parser)),
         Token::Match => Some(parse_match(parser)),
         Token::LBrace => Some(parse_eval_block(parser)),
-        Token::Function => Some(parse_function(parser)),
+        // Only `parse_file` accepts a function declaration. Reaching one here
+        // means it was written inside a block, where it would otherwise parse
+        // and then be dropped without ever being registered.
+        Token::Function => {
+            cold_path();
+            parser.error(t_span, ParserErr::NestedFunctionDeclaration);
+        }
         Token::Loop => Some(parse_loop_block(parser)),
         Token::Try => Some(parse_try_catch_block(parser)),
         Token::Struct => Some(parse_struct_declare(parser)),

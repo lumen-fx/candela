@@ -11,10 +11,11 @@ return an int where the underlying operation is integral (`ldexp`, `ilogb`,
 `scalbn`).
 
 None of them raises. An argument outside a function's domain gives the platform's
-floating-point answer. An infinity behaves like any other float and prints as
-`inf` or `-inf`. A not-a-number result does not: it compares equal to itself, and
-passing it to `print` stops the process. Check the domain before you call, rather
-than testing the result afterwards.
+floating-point answer, so `math::sqrt(-1.0)` is not-a-number rather than an
+error. Infinities and not-a-number behave like any other float, and print as
+`inf`, `-inf` and `NaN`. Unlike the usual floating-point rule, not-a-number
+compares equal to itself, so test for it with `str(x) == "NaN"` rather than
+`x != x`.
 
 The module binds a small dynamic library that wraps the platform maths library,
 so it is one of the three std modules that need that library present at run time.

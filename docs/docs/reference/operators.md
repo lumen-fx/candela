@@ -69,7 +69,9 @@ runtime errors `division_by_zero` and `modulo_by_zero`, both catchable; see
 follow IEEE 754 and produce infinities or `NaN` instead of raising.
 
 `^` raises the left operand to the power of the right. With `int` operands the
-exponent must not be negative.
+exponent must not be negative: a negative literal is rejected before the program
+runs, and a negative value only known at run time raises the catchable
+`negative_exponent`. Use floats when you want a fractional result.
 
 Integer arithmetic wraps on overflow.
 
@@ -84,8 +86,11 @@ enums.
 
 ## Equality
 
-`==` and `!=` produce a `bool` and accept operands of any type. Compare values
-of the same type; a comparison between two different types is not meaningful.
+`==` and `!=` produce a `bool` and accept operands of any type. Two values of
+different types are never equal, so `"5" == 5` is false and `"5" != 5` is true.
+That holds whether the mismatch is visible at compile time or only shows up at
+run time through a parameter whose type comes from the call. Comparing values of
+the same type is the case worth writing.
 
 | Operand type | How it compares |
 | --- | --- |
@@ -113,9 +118,10 @@ if count > 0 && !done {
 }
 ```
 
-As the condition of an `if` or a `while`, `&&` and `||` short-circuit: the right
-operand is not evaluated when the left one settles the answer. Anywhere else,
-both operands are evaluated before the operator is applied.
+`&&` and `||` short-circuit wherever they appear: the right operand is not
+evaluated when the left one already settles the answer. That holds in a
+condition, in a `let`, in an argument, and in a returned expression alike, so a
+right operand with a side effect runs only when it is reached.
 
 ## Assignment
 
@@ -209,6 +215,12 @@ See [control flow](../language/control-flow.md).
 ## Constant expressions
 
 An expression built only from literals is folded while the file is parsed, so it
-costs nothing at run time. Folding also turns three mistakes into compile errors
-rather than runtime ones: dividing by a literal zero, taking the remainder by a
-literal zero, and raising an integer to a negative literal exponent.
+costs nothing at run time. Folding applies the same type rule as everything
+else: `2.0 ^ 3` is rejected for mixing a `float` with an `int`, exactly as it
+would be if the operands were variables.
+
+Folding also turns three mistakes into compile errors rather than runtime ones:
+dividing by a literal `0`, taking the remainder by a literal `0`, and raising an
+integer to a negative literal exponent. Those apply to integer arithmetic. A
+`float` divided or remaindered by `0.0` follows IEEE 754 and produces an
+infinity or `NaN`, so it is folded rather than rejected.

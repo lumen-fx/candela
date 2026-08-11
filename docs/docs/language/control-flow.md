@@ -20,8 +20,9 @@ fn main() {
 
 The condition is not parenthesised. It is a `bool` expression: candela has no
 truthiness, so compare explicitly rather than testing a number or a string. A
-condition that is not a `bool` is not rejected by the compiler, and it takes the
-true branch whatever its value.
+condition of another type compiles but is not interpreted, and takes the true
+branch for every value except the boolean `false`. The same holds for `else if`,
+for `while`, and for the expression form below.
 
 ### if as an expression
 
@@ -38,7 +39,9 @@ fn main() {
 
 ## while
 
-`while` repeats a block for as long as its condition holds.
+`while` repeats a block for as long as its condition holds. The condition is a
+`bool`, exactly as in an `if`, and a value of another type behaves the same way
+it does there.
 
 ```rust
 fn main() {
@@ -172,3 +175,7 @@ fn main() {
 
 Loop bodies, `if` branches, and `match` arms are blocks and scope the same way.
 See [Variables](variables.md) for the scoping rules.
+
+A block holds statements. A `fn` declaration written inside one is a compile
+error, since functions belong at the top level of the file. See
+[Functions](functions.md).

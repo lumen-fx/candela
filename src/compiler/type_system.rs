@@ -201,6 +201,20 @@ pub fn struct_field_type_matches(expected: &DataType, received: &DataType) -> bo
     received == &DataType::Null || expected == received
 }
 
+/// Whether an argument of type `received` satisfies a parameter declared as
+/// `expected`.
+///
+/// `Unknown` is the `any` slot and the type of a value the checker cannot pin
+/// down (a `json::parse` result, for instance). It stands in for every type on
+/// either side, so annotating a parameter `any` keeps the parameter dynamic and
+/// passing a dynamic value to a typed parameter is still allowed. Every other
+/// pair uses the ordinary type equality.
+#[inline(always)]
+#[must_use]
+pub fn param_type_matches(expected: &DataType, received: &DataType) -> bool {
+    *expected == DataType::Unknown || *received == DataType::Unknown || expected == received
+}
+
 /// Equality for monomorphization and return-type cache keys.
 ///
 /// Identical to the loose type `==` except that function-typed arguments compare
@@ -248,7 +262,7 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
                     expr_stack.push(code);
                 }
             }
-            Expr::FunctionDecl(_, _, x, _) => expr_stack.extend(x.iter()),
+            Expr::FunctionDecl(_, _, x, _, _) => expr_stack.extend(x.iter()),
             Expr::ArrayGetSlice(x, y, z, _) => {
                 expr_stack.push(x);
                 expr_stack.push(y);
@@ -683,8 +697,15 @@ fn infer_user_fn_return_type(
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
     let to_return = if fn_type.is_empty() {
-        // If function doesn't return anything, return nothing
-        DataType::Null
+        // No tracked type means either no value is returned at all, or every
+        // returned value was itself dynamic (return-type tracking records no
+        // type for `Unknown`). A function handing back an `any` payload is
+        // dynamic, not null.
+        if check_if_returns_void(&fn_code) {
+            DataType::Null
+        } else {
+            DataType::Unknown
+        }
     } else {
         // If function returns anything, check if it returns the same thing each time
         DataType::Union(Box::from(fn_type)).check_poly()
@@ -1219,6 +1240,8 @@ impl Expr {
                     return_type_cache: Vec::new(),
                     direct_calls: callees.into_boxed_slice(),
                     name_span: *span,
+                    // An anonymous function takes no return annotation.
+                    return_type: None,
                 });
                 state.fn_registers.push(Vec::new());
                 DataType::Fn(id)

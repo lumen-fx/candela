@@ -16,19 +16,27 @@ use crate::rt::Struct;
 use crate::vm::{MapPool, ObjectPool, StringPool};
 use std::collections::HashMap;
 
+/// Stores a parsed string in the pool and boxes it.
+///
+/// A string over six bytes lives in the pool and is boxed as its slot id, so two
+/// equal strings only compare and hash equal when they share a slot. Map keys go
+/// through here, and a map is keyed by the boxed value, so this interns rather
+/// than pushing blindly: without that, `get` on a parsed object misses every key
+/// longer than six bytes.
 fn store_string(s: &str, str_pool: &mut StringPool) -> Data {
-    if s.len() <= 6 {
-        Data::small_str(s)
-    } else {
-        let id = str_pool.len() as u64;
-        str_pool.push(s.to_owned());
-        Data::large_str_id(id)
-    }
+    Data::p_str(s, str_pool)
 }
+
+/// How deeply objects and arrays may nest. Values are read by recursive
+/// descent, so without a ceiling a long run of `[` exhausts the native stack
+/// and kills the process instead of raising. Real documents stay far below
+/// this.
+const MAX_NESTING_DEPTH: u32 = 128;
 
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: u32,
 }
 
 impl JsonParser<'_> {
@@ -53,8 +61,24 @@ impl JsonParser<'_> {
     ) -> Result<Data, &'static str> {
         self.skip_ws();
         match self.peek() {
-            Some(b'{') => self.parse_object(obj_pool, map_pool, str_pool),
-            Some(b'[') => self.parse_array(obj_pool, map_pool, str_pool),
+            Some(b'{') => {
+                self.depth += 1;
+                if self.depth > MAX_NESTING_DEPTH {
+                    return Err("nesting too deep");
+                }
+                let value = self.parse_object(obj_pool, map_pool, str_pool)?;
+                self.depth -= 1;
+                Ok(value)
+            }
+            Some(b'[') => {
+                self.depth += 1;
+                if self.depth > MAX_NESTING_DEPTH {
+                    return Err("nesting too deep");
+                }
+                let value = self.parse_array(obj_pool, map_pool, str_pool)?;
+                self.depth -= 1;
+                Ok(value)
+            }
             Some(b'"') => {
                 let s = self.parse_string()?;
                 Ok(store_string(&s, str_pool))
@@ -287,6 +311,7 @@ pub fn json_parse(
     let mut p = JsonParser {
         bytes: input.as_bytes(),
         pos: 0,
+        depth: 0,
     };
     let v = p.parse_value(obj_pool, map_pool, str_pool)?;
     p.skip_ws();
@@ -388,4 +413,97 @@ pub fn json_stringify(
     let mut out = String::new();
     write_json(d, &mut out, obj_pool, map_pool, str_pool, structs, enums);
     out
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::{MAX_NESTING_DEPTH, json_parse};
+    use crate::data::Data;
+    use crate::vm::{MapPool, ObjectPool, Pool, StringPool};
+
+    fn pools() -> (ObjectPool, MapPool, StringPool) {
+        (Pool(Vec::new()), Pool(Vec::new()), Pool(Vec::new()))
+    }
+
+    #[test]
+    fn malformed_input_is_rejected() {
+        for bad in [
+            "nope",
+            "[1,",
+            "{oops",
+            "",
+            "{\"a\":}",
+            "[1] extra",
+            "\"open",
+        ] {
+            let (mut obj, mut map, mut strings) = pools();
+            assert!(
+                json_parse(bad, &mut obj, &mut map, &mut strings).is_err(),
+                "{bad:?} must not parse"
+            );
+        }
+    }
+
+    /// Values are read by recursive descent, so a long run of openers used to
+    /// exhaust the native stack and kill the process instead of raising.
+    #[test]
+    fn nesting_past_the_limit_raises_instead_of_overflowing() {
+        let (mut obj, mut map, mut strings) = pools();
+        assert_eq!(
+            json_parse(&"[".repeat(200_000), &mut obj, &mut map, &mut strings),
+            Err("nesting too deep")
+        );
+
+        let (mut obj, mut map, mut strings) = pools();
+        assert_eq!(
+            json_parse(&"{\"a\":".repeat(200_000), &mut obj, &mut map, &mut strings),
+            Err("nesting too deep")
+        );
+    }
+
+    #[test]
+    fn nesting_up_to_the_limit_parses() {
+        let depth = MAX_NESTING_DEPTH as usize;
+        let doc = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        let (mut obj, mut map, mut strings) = pools();
+        assert!(json_parse(&doc, &mut obj, &mut map, &mut strings).is_ok());
+    }
+
+    /// A string over six bytes is boxed as its pool slot, so two equal strings
+    /// in different slots hash apart. A key stored without interning therefore
+    /// never matches the one a program writes, and `get` misses it.
+    #[test]
+    fn object_keys_are_interned_so_lookup_finds_them() {
+        let (mut obj, mut map, mut strings) = pools();
+        let parsed = json_parse(
+            "{\"n\": 7, \"long_key_name\": 42}",
+            &mut obj,
+            &mut map,
+            &mut strings,
+        )
+        .expect("valid object parses");
+        assert!(parsed.is_map());
+
+        let short = Data::p_str("n", &mut strings);
+        let long = Data::p_str("long_key_name", &mut strings);
+        let entries = &map[parsed.as_map()];
+        assert_eq!(entries.get(&short).copied().map(Data::as_int), Some(7));
+        assert_eq!(entries.get(&long).copied().map(Data::as_int), Some(42));
+    }
+
+    /// Equal strings anywhere in a document share one slot, so values compare
+    /// equal as well as keys.
+    #[test]
+    fn equal_strings_share_a_pool_slot() {
+        let (mut obj, mut map, mut strings) = pools();
+        let parsed = json_parse(
+            "[\"a_long_repeated_value\", \"a_long_repeated_value\"]",
+            &mut obj,
+            &mut map,
+            &mut strings,
+        )
+        .expect("valid array parses");
+        let items = &obj[parsed.as_array()];
+        assert_eq!(items[0], items[1]);
+    }
 }

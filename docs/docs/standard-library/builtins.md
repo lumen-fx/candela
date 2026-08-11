@@ -246,8 +246,8 @@ does not exist. Returns nothing.
 fs::append(path, contents)
 ```
 
-Appends `contents` to the end of the file at `path`. The file has to exist
-already; appending to a missing path raises `fs_not_found`. Returns nothing.
+Appends `contents` to the end of the file at `path`. Creates the file when it
+does not exist. Returns nothing.
 
 ### fs::delete
 

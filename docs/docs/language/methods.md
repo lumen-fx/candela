@@ -41,8 +41,10 @@ have several.
 method was called on, and its type is the type the `impl` block names. Any name
 works, but `self` is the convention and reads best.
 
-Methods after the first parameter behave exactly like function parameters: name
-them, pass them positionally, and let the compiler infer their types.
+Parameters after the first behave exactly like function parameters: name them,
+pass them positionally, and either leave the type to be inferred from the call
+or pin it with `name: type`. A method takes a `-> Type` return annotation on the
+same terms as a free function, and it is checked against what the body returns.
 
 A method call is compiled to a plain function call with the receiver passed as
 the first argument, so `r.area()` and a free function taking a `Rect` cost the

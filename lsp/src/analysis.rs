@@ -366,7 +366,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 });
             }
         }
-        Expr::FunctionDecl(_, _, body, _) => {
+        Expr::FunctionDecl(_, _, body, _, _) => {
             for b in body.iter() {
                 visit_expr(b, src_file, out);
             }

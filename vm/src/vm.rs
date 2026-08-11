@@ -43,6 +43,23 @@ pub type ObjectPool = Pool<Vec<Data>>;
 pub type MapPool = Pool<HashMap<Data, Data, BuildHasherDefault<DataHash>>>;
 pub type StringPool = Pool<String>;
 
+/// Compares two values with the string-comparison instructions.
+///
+/// The compiler emits these whenever either operand is statically a `string`,
+/// so the other operand can still turn out to be something else at run time:
+/// a parameter left un-annotated, or a value the checker only knows as `any`.
+/// Reading a non-string as a string is not meaningful, so a mismatched pair is
+/// unequal. Two values that are neither strings fall back to identity, which is
+/// how the plain equality instruction compares them.
+#[inline(always)]
+fn str_eq(x: Data, y: Data, string_pool: &StringPool) -> bool {
+    if x.is_string() && y.is_string() {
+        x.as_str(string_pool) == y.as_str(string_pool)
+    } else {
+        x == y
+    }
+}
+
 fn obj_eq(
     x: Data,
     y: Data,
@@ -712,7 +729,11 @@ pub fn execute(
                 r[dest] = (r[o1].as_float().powf(r[o2].as_float())).into();
             }
             Instr::PowInt(o1, o2, dest) => {
-                r[dest] = (r[o1].as_int().pow(r[o2].as_int() as u32)).into();
+                let exp = r[o2].as_int();
+                if exp < 0 {
+                    error_with_catch!(ErrType::NegativeExponent(exp));
+                }
+                r[dest] = (r[o1].as_int().pow(exp as u32)).into();
             }
             Instr::IncInt(reg) => r[reg].inc_int(),
             Instr::DecInt(reg) => r[reg].dec_int(),
@@ -743,7 +764,7 @@ pub fn execute(
                 }
             }
             Instr::StrNotEqJmp(o1, o2, jump_size) => {
-                if r[o1].as_str(str_pool) != r[o2].as_str(str_pool) {
+                if !str_eq(r[o1], r[o2], str_pool) {
                     i += jump_size as usize;
                     continue;
                 }
@@ -755,10 +776,10 @@ pub fn execute(
                 r[dest] = (!obj_eq(r[o1], r[o2], obj_pool, map_pool, str_pool)).into();
             }
             Instr::StrEq(o1, o2, dest) => {
-                r[dest] = (r[o1].as_str(str_pool) == r[o2].as_str(str_pool)).into();
+                r[dest] = str_eq(r[o1], r[o2], str_pool).into();
             }
             Instr::StrNotEq(o1, o2, dest) => {
-                r[dest] = (r[o1].as_str(str_pool) != r[o2].as_str(str_pool)).into();
+                r[dest] = (!str_eq(r[o1], r[o2], str_pool)).into();
             }
             Instr::EqJmp(o1, o2, jump_size) => {
                 if r[o1] == r[o2] {
@@ -773,7 +794,7 @@ pub fn execute(
                 }
             }
             Instr::StrEqJmp(o1, o2, jump_size) => {
-                if r[o1].as_str(str_pool) == r[o2].as_str(str_pool) {
+                if str_eq(r[o1], r[o2], str_pool) {
                     i += jump_size as usize;
                     continue;
                 }
@@ -1006,8 +1027,12 @@ pub fn execute(
                 let idx_end = r[args.pop_unchecked()].as_int();
                 let arr_id = r[array_reg_id].as_array();
                 let array = &obj_pool[arr_id];
+                // A slice runs from `start` to `end` with `0 <= start <= end <= len`,
+                // so a start sitting on the end of the list is in range and yields
+                // an empty list. A negative bound casts to a huge `usize` and is
+                // rejected by the same comparison.
                 if (idx_end as usize) > array.len()
-                    || (idx_start as usize) >= array.len()
+                    || (idx_start as usize) > array.len()
                     || idx_start > idx_end
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(array.len(), idx_start, idx_end));
@@ -1060,8 +1085,10 @@ pub fn execute(
                 let idx_start = r[idx_start].as_int();
                 let idx_end = r[args.pop_unchecked()].as_int();
                 let s = r[str_reg_id].as_str(str_pool).to_smolstr();
+                // Same rule as a list slice: a start on the end of the string is
+                // in range and yields "".
                 if (idx_end as usize) > s.len()
-                    || (idx_start as usize) >= s.len()
+                    || (idx_start as usize) > s.len()
                     || idx_start > idx_end
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(s.len(), idx_start, idx_end));
@@ -1662,6 +1689,7 @@ pub fn execute(
             Instr::CallLibFuncVoid(LibFuncVoid::FsAppend, path, contents) => {
                 match fs::OpenOptions::new()
                     .append(true)
+                    .create(true)
                     .open(r[path].as_str(str_pool))
                 {
                     Ok(mut f) => {

@@ -31,6 +31,12 @@ pub struct Function {
     pub return_type_cache: Vec<(Box<[DataType]>, DataType)>,
     pub direct_calls: Box<[SmolStr]>,
     pub name_span: Span,
+    /// The declared `-> Type` return annotation with the span it was written
+    /// at.
+    ///
+    /// `None` leaves the return type inferred from the body. When present, the
+    /// inferred return type of every specialisation is checked against it.
+    pub return_type: Option<(DataType, Span)>,
 }
 
 #[derive(Debug)]

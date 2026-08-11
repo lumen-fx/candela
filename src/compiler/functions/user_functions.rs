@@ -5,6 +5,8 @@ use super::super::registers::move_to_id;
 use super::super::type_system::DataType;
 use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
+use super::super::type_system::check_if_returns_void;
+use super::super::type_system::param_type_matches;
 use super::super::type_system::track_returns;
 use crate::compiler::SymbolKind;
 use crate::compiler::UnwrapId;
@@ -15,6 +17,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
+use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::functions::compile_call_args;
 use crate::compiler::functions::store_call_args;
 use crate::data::NULL;
@@ -121,11 +124,21 @@ pub fn handle_user_function(
         .map(|arg| arg.infer_type(v, ctx, state))
         .collect::<Vec<DataType>>();
 
-    for (i, (_, t)) in state.fns[fn_id].args.iter().enumerate() {
-        if let Some(t) = t {
+    // A parameter with a `: Type` annotation pins that parameter: the argument
+    // must match it. An un-annotated parameter takes whatever the call site
+    // passes and specialises on it.
+    let declared_arg_types = state.fns[fn_id]
+        .args
+        .iter()
+        .map(|(_, t)| t.clone())
+        .collect::<Vec<Option<DataType>>>();
+    for (i, declared) in declared_arg_types.iter().enumerate() {
+        if let Some(declared) = declared
+            && !param_type_matches(declared, &infered_arg_types[i])
+        {
             error_function_arg_invalid_type(
                 &infered_arg_types[i],
-                t,
+                declared,
                 args_indexes[i],
                 fn_name,
                 Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
@@ -199,10 +212,8 @@ pub fn handle_user_function(
         let arg_id = args[i]
             .compile(v, ctx, state, output, Some(tgt_id), false, true)
             .unwrap_id();
-        if output.len() == start_len {
+        if output.len() == start_len || !move_to_id(output, tgt_id) {
             output.push(Instr::Mov(arg_id, tgt_id));
-        } else {
-            move_to_id(output, tgt_id);
         }
     }
     if !is_recursive {
@@ -311,12 +322,38 @@ fn compile_function(
         });
     let fn_type = track_returns(fn_code, v, ctx, state, fn_name);
     let return_type = if fn_type.is_empty() {
-        // If function doesn't return anything, return nothing
-        DataType::Null
+        // No tracked type means either no value is returned at all, or every
+        // returned value was itself dynamic (return-type tracking records no
+        // type for `Unknown`). A function handing back an `any` payload is
+        // dynamic, not null.
+        if check_if_returns_void(fn_code) {
+            DataType::Null
+        } else {
+            DataType::Unknown
+        }
     } else {
         // If function returns anything, check if it returns the same thing each time
         DataType::Union(Box::from(fn_type)).check_poly()
     };
+
+    // A `-> Type` annotation pins what the body may hand back. Each
+    // specialisation is checked separately, so an un-annotated parameter that
+    // makes one call site return a different type is caught at that call site.
+    if let Some((declared, declared_span)) = state.fns[function_id].return_type.clone()
+        && !param_type_matches(&declared, &return_type)
+    {
+        error_invalid_type(
+            &declared,
+            &return_type,
+            declared_span,
+            None,
+            Some(format_args!(
+                "Function {fn_name} is declared to return {declared}"
+            )),
+            fn_file_idx,
+            state.sources,
+        );
+    }
 
     v.truncate(v_len_before_args);
 
