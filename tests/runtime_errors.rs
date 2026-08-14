@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const RUN_DEADLINE: Duration = Duration::from_mins(1);
+const RUN_DEADLINE: Duration = Duration::from_secs(30);
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
