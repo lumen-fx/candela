@@ -1,0 +1,24 @@
+{
+  "name": "candela",
+  "displayName": "Candela",
+  "version": "0.1.0",
+  "description": "TextMate grammar for the candela language.",
+  "license": "Apache-2.0",
+  "contributes": {
+    "languages": [
+      {
+        "id": "candela",
+        "aliases": ["Candela", "candela", "cdl"],
+        "extensions": [".cdl"],
+        "configuration": "./language-configuration/candela.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "candela",
+        "scopeName": "source.candela",
+        "path": "./syntaxes/candela.tmLanguage.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+<idea-plugin>
+    <id>dev.lumenfx.candela</id>
+    <name>Candela</name>
+    <vendor url="https://candela.lumenfx.dev">Lumen FX</vendor>
+
+    <description><![CDATA[
+        Editor support for the <a href="https://candela.lumenfx.dev">candela</a>
+        language: <code>.cdl</code> source files.
+        <p>
+        Syntax highlighting ships with the plugin. Diagnostics, hover, completion,
+        outline, and go to definition come from <code>candela-lsp</code>, the
+        language server built from the candela repository, so the editor and the
+        compiler agree on what is valid. Build the server with
+        <code>cargo build -p candela-lsp</code>, then put it on <code>PATH</code>
+        or set its path in Settings under Languages &amp; Frameworks | Candela.
+        ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+    <depends optional="true" config-file="candela-textmate.xml">org.jetbrains.plugins.textmate</depends>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="candela"
+                name="Candela"
+                factoryClass="dev.lumenfx.candela.CandelaServerFactory">
+            <description><![CDATA[
+                <a href="https://candela.lumenfx.dev">candela</a> language server
+                for <code>.cdl</code> source files.
+                ]]>
+            </description>
+        </server>
+
+        <fileNamePatternMapping patterns="*.cdl"
+                                serverId="candela"
+                                languageId="candela"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectConfigurable id="dev.lumenfx.candela.settings"
+                             parentId="language"
+                             displayName="Candela"
+                             instance="dev.lumenfx.candela.CandelaConfigurable"/>
+    </extensions>
+</idea-plugin>
