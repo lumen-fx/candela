@@ -10,7 +10,9 @@ readme = "README.md"
 repository = "https://github.com/lumen-fx/candela"
 homepage = "https://github.com/lumen-fx/candela"
 license = "Apache-2.0"
-description = "VM-only runtime for candela: the executor, bytecode/data types, value marshalling, and the .cdlb load/run API. Self-contained -- depends on nothing from the compiler crate."
+description = "VM-only runtime for candela: the executor, bytecode and data types, value marshalling, and the .cdlb load/run API. Self-contained; it depends on nothing from the compiler crate."
+keywords = ["candela", "vm", "bytecode", "interpreter", "runtime"]
+categories = ["development-tools"]
 
 # This is the SELF-CONTAINED runtime core. It links no parser, compiler, or
 # REPL and depends on NOTHING from the `candela` (compiler) crate; the
@@ -53,5 +55,7 @@ libloading = "0.9.0"
 libffi = "5.1.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "*"
+# Pinned to the locked version rather than `*`: crates.io rejects a wildcard
+# requirement, and this crate publishes.
+wasm-bindgen = "0.2.126"
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
