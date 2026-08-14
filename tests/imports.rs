@@ -10,6 +10,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 /// Creates a fresh scratch directory, writes the given files into it, runs
 /// `prog.cdl` through the `candela` binary, and cleans up.
 fn run_program(test_name: &str, files: &[(&str, &str)]) -> Output {
@@ -21,11 +23,11 @@ fn run_program(test_name: &str, files: &[(&str, &str)]) -> Output {
     for (name, contents) in files {
         std::fs::write(dir.join(name), contents).expect("write test file");
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_candela"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
         .arg(dir.join("prog.cdl"))
-        .env_remove("CANDELA_LIB_PATH")
-        .output()
-        .expect("candela binary runs");
+        .env_remove("CANDELA_LIB_PATH");
+    let output = common::output_with_deadline(&mut command, "import run");
     let _ = std::fs::remove_dir_all(&dir);
     output
 }
@@ -169,11 +171,11 @@ fn bare_library_import_merges_enum_and_methods() {
         "import \"std/option\";\nfn main() { print(unwrap(Some(7))); print(is_some(None)); print(Some(1).unwrap_or(9)); }\n",
     )
     .expect("write test file");
-    let output = Command::new(env!("CARGO_BIN_EXE_candela"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
         .arg(dir.join("prog.cdl"))
-        .env("CANDELA_LIB_PATH", repo().join("libs"))
-        .output()
-        .expect("candela binary runs");
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let output = common::output_with_deadline(&mut command, "std import run");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
         output.status.success(),

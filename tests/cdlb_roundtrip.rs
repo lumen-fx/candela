@@ -9,6 +9,8 @@
 //! and its ability to carry instructions, the constant pools, structs, and
 //! sources.
 
+mod common;
+
 use candela::load_program;
 use std::path::Path;
 use std::path::PathBuf;
@@ -301,30 +303,24 @@ fn cli_whole_program_output_matches_source_run() {
     .unwrap();
 
     // Reference output: run the source directly.
-    let src_out = std::process::Command::new(candela)
-        .arg(&app)
-        .output()
-        .expect("run source via candela");
+    let mut src_cmd = std::process::Command::new(candela);
+    src_cmd.arg(&app);
+    let src_out = common::output_with_deadline(&mut src_cmd, "source run");
     assert!(src_out.status.success(), "candela source run failed");
 
     // Build the artifact, then delete the whole source tree.
     let cdlb = dir.join("app.cdlb");
-    let build = std::process::Command::new(candela)
-        .arg("build")
-        .arg(&app)
-        .arg("-o")
-        .arg(&cdlb)
-        .output()
-        .expect("candela build");
+    let mut build_cmd = std::process::Command::new(candela);
+    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+    let build = common::output_with_deadline(&mut build_cmd, "candela build");
     assert!(build.status.success(), "candela build failed");
     std::fs::remove_file(&app).unwrap();
     std::fs::remove_file(&util).unwrap();
 
     // Run the artifact with the VM-only binary and require identical stdout.
-    let vm_out = std::process::Command::new(&candela_vm)
-        .arg(&cdlb)
-        .output()
-        .expect("run .cdlb via candela-vm");
+    let mut vm_cmd = std::process::Command::new(&candela_vm);
+    vm_cmd.arg(&cdlb);
+    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
     assert!(vm_out.status.success(), "candela-vm run failed");
     assert_eq!(
         vm_out.stdout, src_out.stdout,

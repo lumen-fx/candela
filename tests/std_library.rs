@@ -11,6 +11,8 @@
 //! the default exe-relative resolution needs no environment.
 
 use candela::{build_bytecode, load_program};
+
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,11 +24,11 @@ fn repo() -> PathBuf {
 /// path pointed at this checkout, and returns its stdout, asserting a clean exit.
 fn run_std_test(name: &str) -> String {
     let path = repo().join("libs/std/tests").join(format!("{name}.cdl"));
-    let output = Command::new(env!("CARGO_BIN_EXE_candela"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
         .arg(&path)
-        .env("CANDELA_LIB_PATH", repo().join("libs"))
-        .output()
-        .expect("candela binary runs");
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let output = common::output_with_deadline(&mut command, name);
     assert!(
         output.status.success(),
         "{name} exited with {:?}\nstdout: {}\nstderr: {}",
@@ -163,12 +165,12 @@ fn default_resolution_needs_no_env() {
     // ("text file busy"). The handle goes away with that child, so retry.
     let mut attempt = 0;
     let output = loop {
-        match Command::new(&installed_bin)
+        let mut command = Command::new(&installed_bin);
+        command
             .arg("prog.cdl")
             .current_dir(&work)
-            .env_remove("CANDELA_LIB_PATH")
-            .output()
-        {
+            .env_remove("CANDELA_LIB_PATH");
+        match common::try_output_with_deadline(&mut command, "zero-config run") {
             Ok(output) => break output,
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 => {
                 attempt += 1;
