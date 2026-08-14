@@ -67,7 +67,7 @@ it is readable.
 Editor support comes from `candela-lsp`, the language server, which runs the
 same compiler your build does and reports what it finds as you type. Two
 clients ship in the repository: a VS Code extension in `editors/vscode`, and a
-plugin for the IntelliJ-based IDEs in `tools/jetbrains-candela`. Both add
+plugin for the IntelliJ-based IDEs in `editors/jetbrains`. Both add
 syntax highlighting from the same grammar and get diagnostics, hover,
 completion, an outline, and go to definition from the server. Build them from
 the repository; neither is published to a marketplace yet.
