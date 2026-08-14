@@ -11,7 +11,7 @@ use std::io::Read;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const RUN_DEADLINE: Duration = Duration::from_mins(2);
+const RUN_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Spawns the command and collects its output like `Command::output`, but
 /// kills the child and panics past the deadline.
