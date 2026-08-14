@@ -1,0 +1,160 @@
+name: Publish
+
+# Publishes the candela crates to crates.io. This is a different channel from
+# release.yml, which builds the toolchain archives people install with
+# install.sh; both run off the same release.
+#
+# Two crates go out, in this order:
+#
+#   candela-vm    the runtime core
+#   candela-lang  the compiler front-end, embedding API, and `candela` binary
+#
+# The order is forced: candela depends on candela-vm, and crates.io takes no
+# crate whose dependencies are absent from the registry. candela-vm is not a
+# crate anyone is meant to depend on directly; it publishes because that
+# dependency edge exists.
+#
+# `candela-lang`, not `candela`, because crates.io/crates/candela belongs to an
+# unrelated project from 2020. The library is still `candela` and the binary is
+# still `candela`, so nothing an embedder writes changes beyond the one
+# `package = "candela-lang"` key in their manifest.
+#
+# Owner setup, checked at run time so this workflow is safe to have on main
+# before any of it exists:
+#
+#   CRATES_IO_TOKEN   repository secret. A crates.io API token with
+#                     publish-new and publish-update scope. Without it this
+#                     workflow verifies the packages and uploads nothing.
+#
+# The run is re-runnable: a version already on crates.io is skipped, so a
+# release that failed halfway is fixed by running the workflow again.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Package and verify everything, upload nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  crates-io:
+    name: crates on crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Read the crate version
+        id: version
+        run: |
+          version="$(awk -F'"' '
+            /^\[package\]/ { in_section = 1; next }
+            /^\[/          { in_section = 0 }
+            in_section && /^version[[:space:]]*=/ { print $2; exit }
+          ' Cargo.toml)"
+          if [ -z "$version" ]; then
+            echo "publish.yml: no [package] version in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing version $version"
+
+      # A release publishes the tag it was cut from, so the tag and the crate
+      # version have to agree.
+      - name: Compare the tag with the crate version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="${TAG#v}"
+          if [ "$tag" != "$VERSION" ]; then
+            echo "publish.yml: release $TAG says $tag, Cargo.toml says $VERSION." >&2
+            exit 1
+          fi
+          echo "release $TAG matches the crate version"
+
+      # Secrets cannot be read in a step-level `if`, so the decision is made
+      # here and the steps below read it back.
+      - name: Decide whether this run may upload
+        id: mode
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          upload=true
+          if [ "$DRY_RUN_INPUT" = "true" ]; then
+            upload=false
+            echo "::notice::dry run requested, nothing will be uploaded"
+          fi
+          if [ -z "$CRATES_IO_TOKEN" ]; then
+            upload=false
+            echo "::notice::CRATES_IO_TOKEN is not set, so this run verifies only"
+          fi
+          echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
+      # Which of the two crates still need this version. Both already out is
+      # the normal state of a re-run, and ends the job rather than failing it.
+      # A name that turns out to belong to somebody else needs no check here:
+      # cargo says so when it tries to upload.
+      - name: Ask crates.io what is already published
+        id: plan
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -u
+          todo=""
+          for name in candela-vm candela-lang; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A "candela-release (https://github.com/lumen-fx/candela)" \
+              "https://crates.io/api/v1/crates/$name/$VERSION")"
+            case "$code" in
+              200)
+                echo "  $name $VERSION is already on crates.io"
+                ;;
+              404)
+                echo "  $name $VERSION needs publishing"
+                todo="$todo -p $name"
+                ;;
+              *)
+                echo "publish.yml: crates.io answered $code for $name $VERSION" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "todo=$todo" >> "$GITHUB_OUTPUT"
+          if [ -z "$todo" ]; then
+            echo "nothing to do: both crates are on crates.io at $VERSION"
+          fi
+
+      # One cargo invocation covering both crates. Cargo orders them and
+      # verifies candela-lang against the local candela-vm, which is the only
+      # way to check it before candela-vm exists on the registry.
+      - name: Verify the packages
+        if: steps.plan.outputs.todo != '' && steps.mode.outputs.upload != 'true'
+        run: cargo publish --dry-run --locked ${{ steps.plan.outputs.todo }}
+
+      - name: Publish
+        if: steps.plan.outputs.todo != '' && steps.mode.outputs.upload == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish --locked ${{ steps.plan.outputs.todo }}

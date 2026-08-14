@@ -8,8 +8,12 @@ Add the crate as a dependency and enable the `embed` feature:
 
 ```toml
 [dependencies]
-candela = { version = "0.0.3", features = ["embed"] }
+candela = { package = "candela-lang", version = "0.0.4", features = ["embed"] }
 ```
+
+The crate publishes as `candela-lang`, because the name `candela` on crates.io
+belongs to an unrelated project. The `package` key renames it back, so your code
+keeps writing `use candela::...` as everything below does.
 
 The feature changes what a fatal error does: instead of ending the process, it
 unwinds so the host survives and receives the error as a value. It needs a

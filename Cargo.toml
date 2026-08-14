@@ -1,28 +1,54 @@
 [package]
-name = "candela"
+# The crates.io name is `candela-lang`, because `candela` on crates.io is an
+# unrelated crate from 2020. Everything a user sees stays `candela`: the library
+# is `[lib] name = "candela"` so `use candela::...` compiles unchanged, and the
+# command-line tool is `[[bin]] name = "candela"`. Inside this workspace the
+# dependency is written `candela = { package = "candela-lang", ... }`.
+name = "candela-lang"
 version = "0.0.4"
 edition = "2024"
 authors = [
     "Horace Hoff <horace.hoff@gmail.com>",
     "FizzWizzleDazzle <arturmisiurev@gmail.com>",
 ]
+description = "The candela scripting language: compiler front-end, embedding API, and the candela command-line tool. Statically typed, compiles to bytecode for the candela-vm runtime."
 readme = "README.md"
 repository = "https://github.com/lumen-fx/candela"
 homepage = "https://github.com/lumen-fx/candela"
 license = "Apache-2.0"
-documentation = "https://github.com/lumen-fx/candela"
+documentation = "https://docs.rs/candela-lang"
+keywords = ["candela", "scripting", "language", "interpreter", "embedded"]
+categories = ["compilers", "development-tools"]
+# The repository root carries things a published crate has no use for: the
+# artwork, the VS Code extension, the docs site sources, the installer, the MSI
+# and PGO inputs. Source, tests, the standard library, and the licenses ship.
+exclude = [
+    "assets/",
+    "docs/",
+    "editors/",
+    "msi/",
+    "pgo/",
+    "scripts/",
+    "about.hbs",
+    "about.toml",
+    "install.sh",
+    "BENCHMARKS.md",
+]
 
-# This manifest is both the `candela` package (compiler front-end + CLI) and the
-# workspace root. Two extra members:
+# This manifest is both the `candela-lang` package (compiler front-end + CLI)
+# and the workspace root. Two extra members:
 #   * `vm` (crate `candela-vm`): the self-contained runtime core. `candela`
 #     DEPENDS ON it (strictly candela -> candela-vm), and its `candela-vm`
 #     binary and this crate's `candela` binary share that one VM implementation.
+#     That direction is why candela-vm publishes too: crates.io takes no crate
+#     whose dependencies are absent from the registry.
 #   * `lsp` (crate `candela-lsp`): the language server. It depends on this crate
 #     as a plain library (one-way, lsp -> candela, never the reverse) to reuse
 #     the lexer/parser/type-checker; its tooling deps (tower-lsp, tokio, ...)
-#     never touch this crate's dependency graph or the `candela` binary.
+#     never touch this crate's dependency graph or the `candela` binary. It is
+#     `publish = false`; nothing published depends on it.
 # `default-members` keeps plain `cargo build` at the repo root building only the
-# `candela` package (build `-p candela-vm` / `-p candela-lsp` explicitly).
+# `candela-lang` package (build `-p candela-vm` / `-p candela-lsp` explicitly).
 [workspace]
 members = ["lsp", "vm"]
 default-members = ["."]
@@ -71,7 +97,7 @@ embed = ["candela-vm/embed"]
 # The self-contained runtime core. Strict dependency direction: candela ->
 # candela-vm (never the reverse). The full `candela` binary compiles this one VM
 # into itself via this dep, so the VM is never duplicated.
-candela-vm = { path = "vm" }
+candela-vm = { path = "vm", version = "0.0.4" }
 smol_strc = "0.3.6"
 ariadne = "0.6.0"
 memchr = "2.8.3"
@@ -85,7 +111,9 @@ libffi = "5.1.1"
 mimalloc = { version = "0.1.52", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "*"
+# Pinned to the locked version rather than `*`: crates.io rejects a wildcard
+# requirement, and this crate publishes.
+wasm-bindgen = "0.2.126"
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
 # Integration tests probe dyn-lib availability through the same OS loader the
@@ -97,9 +125,16 @@ libloading = "0.9.0"
 wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 
 [lib]
+# `candela`, not the package name: this is the import path every embedder and
+# every crate in this workspace writes as `use candela::...`.
 name = "candela"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
+
+# Named explicitly so the tool stays `candela` regardless of the package name.
+[[bin]]
+name = "candela"
+path = "src/main.rs"
 
 [profile.dev]
 opt-level = 1
