@@ -1,0 +1,89 @@
+name: coverage
+
+# Line coverage for the workspace, measured with cargo-llvm-cov and reported to
+# Codecov. This is a report, not a gate: ci.yml decides whether the suite
+# passes.
+#
+# The scope is `--workspace`, which is what the two test jobs in ci.yml reach
+# between them. A plain cargo command at the repo root builds and tests the
+# `candela` package alone, because default-members says so, so candela-vm and
+# candela-lsp only get measured when the workspace is named.
+#
+# Default features only. The `embed` leg ci.yml also runs changes how a fatal
+# error leaves the VM, not which lines the tests execute, so a second
+# instrumented run would report the same code twice.
+#
+# Doctests are not measured: collecting coverage from them needs nightly, and
+# this builds on stable. ci.yml still runs them.
+#
+# Nothing is excluded from instrumentation. The suites that drive a built
+# binary (imports, the standard library, the .cdlb comparison, the language
+# server smoke test) still count, because cargo-llvm-cov instruments those
+# binaries too and collects the profiles the child processes write.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: llvm-cov
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Read here so the upload step can test for it. The secrets context is not
+      # available in an `if`, the env context is.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: llvm-tools-preview
+          rustflags: ""
+          # An instrumented build shares no artifacts with the check and test
+          # jobs, so it gets its own cache.
+          cache-key: coverage
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Collect coverage
+        run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+
+      # Forks, and a repo whose Codecov app is not set up yet, still get the
+      # measurement in the log; only the upload needs the token.
+      - name: Report a missing token
+        if: env.CODECOV_TOKEN == ''
+        run: |
+          echo "::notice::CODECOV_TOKEN is not set; skipping the Codecov upload." \
+               "Coverage was measured and lcov.info is attached to this run."
+
+      - name: Upload lcov.info as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error
