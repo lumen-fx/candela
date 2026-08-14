@@ -1,5 +1,7 @@
 # candela
 
+[![coverage](https://codecov.io/gh/lumen-fx/candela/branch/main/graph/badge.svg)](https://codecov.io/gh/lumen-fx/candela)
+
 A small statically typed scripting language with Rust-like syntax.
 
 ## Why candela

@@ -136,6 +136,12 @@ suites set it to this checkout's `libs`, because a test binary is not laid out
 like an install, and deliberately clear it in the tests that prove resolution
 works with no configuration.
 
+Coverage comes from the same suites, measured with `cargo llvm-cov --workspace`
+on every push to `main` and every pull request and reported to Codecov. It is a
+report rather than a gate: what decides a pull request is the suite itself.
+Doctests are outside the measurement, since collecting coverage from them needs
+a nightly toolchain.
+
 There is no fuzzing setup. Benchmarking is manual; `BENCHMARKS.md` describes it.
 
 ## Before you open a pull request
