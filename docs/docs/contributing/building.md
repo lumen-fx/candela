@@ -155,7 +155,7 @@ There is no fuzzing setup. Benchmarking is manual; `BENCHMARKS.md` describes it.
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets
-cargo test
+cargo test --workspace
 cargo test --features embed
 cargo build --target wasm32-unknown-unknown
 ```
@@ -164,8 +164,8 @@ Clippy's pedantic and nursery groups are on as warnings for the `candela`
 package. Do not add new ones. If a lint is wrong for your case, allow it at the
 narrowest scope with a comment saying why.
 
-Continuous integration builds and tests on Linux with and without the `embed`
-feature, builds for WebAssembly, type-checks both feature combinations, and
+Continuous integration builds and tests the whole workspace on Linux, macOS and
+Windows, adds a Linux run with the `embed` feature and a WebAssembly build, and
 gates on `cargo fmt --all --check` and on clippy with warnings denied. A
 separate job exercises the Windows installer end to end when the installer or
 the update logic changes.

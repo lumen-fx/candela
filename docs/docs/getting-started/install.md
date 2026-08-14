@@ -16,10 +16,13 @@ It works out your operating system and processor, downloads the matching
 release archive, and checks it against the `sha256sums.txt` file published
 with the release before unpacking; on a mismatch, or for a release without
 that file, it installs nothing. It needs `sha256sum` or `shasum` alongside
-`curl` or `wget`. The verified archive unpacks into `/usr/local/lib/candela`
-on Linux or `/Library/Candela` on macOS. It then links `candela` and `candela-vm` into
-`/usr/local/bin` so both are on your path. Where it cannot write to those
-locations directly it uses `sudo`.
+`curl` or `wget`.
+
+Everything lands under `~/.candela`, so the install needs no administrator
+rights and never runs `sudo`. Once the archive is unpacked the script offers to
+add that directory to your `PATH` by appending a line to your shell's rc file,
+and leaves your shell configuration alone unless you say yes. Open a new shell
+afterwards, or run the line it prints.
 
 The standard library ships as `.cdl` sources in a `libs` directory beside the
 binary, and `import "std/..."` resolves relative to the binary's own location.
@@ -29,6 +32,24 @@ Check the install:
 
 ```sh
 candela --version
+```
+
+### Options
+
+| Option | What it does |
+| --- | --- |
+| `--prefix DIR` | Install root. Default `~/.candela`, also read from `CANDELA_PREFIX`. |
+| `--version VERSION` | Install a pinned release instead of the current one. |
+| `--no-confirm` | Run without prompting. |
+| `--no-modify-path` | Never write a `PATH` line to a shell rc file. |
+| `--force` | Reinstall even when that release is already installed. |
+| `--uninstall` | Remove every file the installer put under the prefix. |
+| `-h`, `--help` | Show the options. |
+
+Options go after `--` when the script is piped into a shell:
+
+```sh
+curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --prefix ~/tools/candela
 ```
 
 ### Installing a specific release
@@ -41,17 +62,28 @@ curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --version 0.0.3
 curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --version=v0.0.3
 ```
 
-Run the script with `--help` to see its options.
-
 Releases published before `sha256sums.txt` existed cannot be verified, so
-pinning to one fails with a message pointing at the releases page.
+pinning to one fails with a message pointing at the releases page. Release
+assets are named `candela-<os>-<arch>.tar.gz`; releases published before that
+naming keep the names they went out with, and pinning to one fails with the
+list of names that release does carry.
+
+### Uninstalling
+
+```sh
+curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --uninstall
+```
+
+It removes the files recorded in the receipt and leaves anything else under the
+prefix alone. A `PATH` line the installer added stays in your shell rc file for
+you to delete.
 
 ### The receipt
 
 The installer writes a file called `receipt` next to the binary, recording the
-version it installed and, when you asked for a specific release, that the
-install is pinned. `candela` reads the receipt to decide whether to look for
-newer releases:
+version it installed, every file it wrote, and, when you asked for a specific
+release, that the install is pinned. `candela` reads the receipt to decide
+whether to look for newer releases:
 
 - No receipt means nothing installed this binary, so it was built from source
   and is left alone.
@@ -63,14 +95,14 @@ newer releases:
 ## Windows
 
 Windows installs from a package rather than the script. Download and run
-<https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi>.
+<https://github.com/lumen-fx/candela/releases/latest/download/candela-windows-x86_64.msi>.
 
 The package installs per user, under `%LOCALAPPDATA%\Programs\Candela`, so it
 never asks for administrator rights. It adds that directory to your `PATH` and
 ships `candela.exe`, `candela-vm.exe` and the standard library. Open a new
 terminal afterwards so the updated `PATH` takes effect.
 
-A portable `candela-x86_64-windows.zip` is published alongside the package for
+A portable `candela-windows-x86_64.zip` is published alongside the package for
 anyone who would rather unpack the toolchain by hand. Extract it somewhere and
 keep the `libs` directory beside the executables.
 

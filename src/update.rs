@@ -36,7 +36,7 @@ const INSTALL_CMD: &str = "curl -fsSL https://candela.lumenfx.dev/install.sh | s
 /// below fetches.
 #[cfg(windows)]
 const INSTALL_CMD: &str =
-    "https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi";
+    "https://github.com/lumen-fx/candela/releases/latest/download/candela-windows-x86_64.msi";
 
 /// One network check a day.
 const CHECK_INTERVAL: u64 = 24 * 60 * 60;
@@ -342,8 +342,8 @@ fn version_parts(version: &str) -> [u64; 3] {
 
 /// True when the installer put this binary here and left the release open.
 ///
-/// The receipt sits next to the binary itself, so resolve the `/usr/local/bin`
-/// symlink first.
+/// The receipt sits at the top of the install prefix, next to the binary, so
+/// resolve any symlink pointing here before looking for it.
 fn installed_unpinned() -> bool {
     let Ok(exe) = std::env::current_exe().and_then(|p| p.canonicalize()) else {
         return false;

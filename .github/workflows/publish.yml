@@ -1,4 +1,4 @@
-name: Publish
+name: publish
 
 # Publishes the candela crates to crates.io. This is a different channel from
 # release.yml, which builds the toolchain archives people install with
