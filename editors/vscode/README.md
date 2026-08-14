@@ -14,16 +14,18 @@ attribution details.
 
 - Syntax highlighting for:
   - Keywords: `if`, `else`, `match`, `while`, `for`, `in`, `loop`, `return`,
-    `break`, `continue`, `try`, `catch`, `let`, `fn`, `struct`, `import`, `as`,
-    `host`, `dylib`.
-  - Built-in types: `int`, `float`, `bool`, `string`, plus user-defined structs.
+    `break`, `continue`, `try`, `catch`, `let`, `fn`, `struct`, `enum`, `impl`,
+    `import`, `as`, `host`, `dylib`.
+  - Built-in types: `int`, `float`, `bool`, `string`, plus user-defined structs
+    and enums.
   - Constants: `true`, `false`, `null`.
   - Strings with escape sequences (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`).
   - Integer and float literals.
   - Operators, including the `...` variadic marker in `host` blocks and the
     `..` range operator.
   - `import`, `host`, and `dylib` constructs, struct declarations and literals,
-    function definitions and calls, method calls, and `namespace::` access.
+    `enum` and `impl` declarations, function definitions and calls, method
+    calls, and `namespace::` access.
 - Language configuration: line comments (`//`), bracket matching, auto-closing
   and surrounding pairs, and `{}` indentation rules.
 - Snippets, by prefix: `main`, `fn`, `struct`, `let`, `if`, `ifelse`, `for`,
