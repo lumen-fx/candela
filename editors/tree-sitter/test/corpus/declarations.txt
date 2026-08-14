@@ -1,0 +1,314 @@
+================================================================================
+Imports (libs/std/tests/test_convert.cdl, libs/std/tests/test_list.cdl)
+================================================================================
+
+import "std/convert";
+import "pgo_import_test.cdl";
+import "std/list" as list;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (string_literal))
+  (import_declaration
+    (string_literal))
+  (import_declaration
+    (string_literal)
+    (identifier)))
+
+================================================================================
+Function declaration (libs/std/convert.cdl)
+================================================================================
+
+/// Parses a string or truncates a float to an `int`.
+fn to_int(x) {
+    return int(x);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))))))
+
+================================================================================
+Typed parameters and return annotation (docs/docs/integration/embedding.md)
+================================================================================
+
+fn banner(label: string) -> int {
+    return app::width(label) + 2;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (type_identifier))
+    (block
+      (return_statement
+        (binary_expression
+          (call_expression
+            (qualified_identifier
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)))
+          (integer_literal))))))
+
+================================================================================
+Struct declaration (examples/nbody/nbody_lua.cdl)
+================================================================================
+
+struct Body {
+    x: float,
+    y: float,
+    z: float,
+    mass: float
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (type_identifier))
+      (field_declaration
+        (identifier)
+        (type_identifier))
+      (field_declaration
+        (identifier)
+        (type_identifier))
+      (field_declaration
+        (identifier)
+        (type_identifier)))))
+
+================================================================================
+Array, map, and union field types (docs/docs/language/types.md)
+================================================================================
+
+struct Index {
+    names: string[],
+    grid: int[][],
+    counts: {string: int},
+    either: int|string,
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (array_type
+          (type_identifier)))
+      (field_declaration
+        (identifier)
+        (array_type
+          (array_type
+            (type_identifier))))
+      (field_declaration
+        (identifier)
+        (map_type
+          (type_identifier)
+          (type_identifier)))
+      (field_declaration
+        (identifier)
+        (union_type
+          (type_identifier)
+          (type_identifier))))))
+
+================================================================================
+Enum with payloads (libs/std/option.cdl)
+================================================================================
+
+enum Option {
+    Some(any),
+    None,
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (identifier)
+    (enum_variant_list
+      (enum_variant
+        (identifier)
+        (payload_type_list
+          (type_identifier)))
+      (enum_variant
+        (identifier)))))
+
+================================================================================
+Impl block (libs/std/option.cdl)
+================================================================================
+
+impl Option {
+    fn is_some(self) {
+        match self {
+            Some(_) => { return true; }
+            None => { return false; }
+        }
+    }
+    fn unwrap_or(self, default) {
+        return default;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (impl_block
+    (type_identifier)
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (block
+        (match_statement
+          (identifier)
+          (match_arm_list
+            (match_arm
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier)))
+              (block
+                (return_statement
+                  (boolean_literal))))
+            (match_arm
+              (identifier)
+              (block
+                (return_statement
+                  (boolean_literal))))))))
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)))
+      (block
+        (return_statement
+          (identifier))))))
+
+================================================================================
+Dynamic library block (pgo/pgo-dynlib.cdl)
+================================================================================
+
+dylib "pgo_dynlib" {
+    int pgo_add_int(int,int);
+    float pgo_add_float(float,float);
+    int pgo_all_types(int,float,string,int[],float[],string[][],int[][],int);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (dylib_block
+    (string_literal)
+    (signature_list
+      (function_signature
+        (type_identifier)
+        (identifier)
+        (type_identifier)
+        (type_identifier))
+      (function_signature
+        (type_identifier)
+        (identifier)
+        (type_identifier)
+        (type_identifier))
+      (function_signature
+        (type_identifier)
+        (identifier)
+        (type_identifier)
+        (type_identifier)
+        (type_identifier)
+        (array_type
+          (type_identifier))
+        (array_type
+          (type_identifier))
+        (array_type
+          (array_type
+            (type_identifier)))
+        (array_type
+          (array_type
+            (type_identifier)))
+        (type_identifier)))))
+
+================================================================================
+Host block with a variadic signature (docs/docs/integration/embedding.md)
+================================================================================
+
+host "app" {
+    int width(string);
+    log(...);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (host_block
+    (string_literal)
+    (signature_list
+      (function_signature
+        (type_identifier)
+        (identifier)
+        (type_identifier))
+      (function_signature
+        (identifier)
+        (variadic_parameter)))))
+
+================================================================================
+Comments (libs/std/string.cdl, libs/std/tests/test_errors.cdl)
+================================================================================
+
+/// The character at index `i`, returned as a one-character string.
+fn char_at(s, i) {
+    // A call inside `try` returns its value like any other expression.
+    return s[i..i + 1];
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (comment)
+      (return_statement
+        (slice_expression
+          (identifier)
+          (identifier)
+          (binary_expression
+            (identifier)
+            (integer_literal)))))))

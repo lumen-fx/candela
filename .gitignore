@@ -10,3 +10,4 @@ docs/benchmarks.py
 /.cargo
 *.so
 *.dll
+node_modules
