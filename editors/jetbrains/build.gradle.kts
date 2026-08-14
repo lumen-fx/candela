@@ -52,7 +52,7 @@ intellijPlatform {
 // The TextMate grammar and the editor configuration come from the VS Code
 // extension, so both editors highlight candela the same way and there is one
 // place to fix the grammar.
-val vscodeExtension = layout.projectDirectory.dir("../../editors/vscode")
+val vscodeExtension = layout.projectDirectory.dir("../vscode")
 
 tasks.processResources {
     from(vscodeExtension.dir("syntaxes")) {
