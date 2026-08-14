@@ -11,7 +11,7 @@
         dotnet tool install --global wix --version 6.0.1
 
 .EXAMPLE
-    ./build-msi.ps1 -Version 0.0.2 -StageDir ../msi-stage -OutFile ../candela-x86_64-windows.msi
+    ./build-msi.ps1 -Version 0.0.2 -StageDir ../msi-stage -OutFile ../candela-windows-x86_64.msi
 #>
 [CmdletBinding()]
 param(

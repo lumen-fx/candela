@@ -1,4 +1,4 @@
-name: MSI smoke
+name: msi-smoke
 
 # Installs, upgrades and uninstalls the Windows package on a clean runner, so a
 # broken package is caught before a tag turns it into a release. The MSI
@@ -51,7 +51,7 @@ jobs:
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
-          Compress-Archive -Path "dist/*" -DestinationPath "candela-x86_64-windows.zip"
+          Compress-Archive -Path "dist/*" -DestinationPath "candela-windows-x86_64.zip"
 
           Copy-Item -Path "dist" -Destination "msi-stage" -Recurse
 
@@ -199,7 +199,7 @@ jobs:
       - name: Check the zip carries no receipt
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [IO.Compression.ZipFile]::OpenRead("$PWD\candela-x86_64-windows.zip")
+          $zip = [IO.Compression.ZipFile]::OpenRead("$PWD\candela-windows-x86_64.zip")
           try {
             $names = $zip.Entries | ForEach-Object { $_.FullName }
           } finally {

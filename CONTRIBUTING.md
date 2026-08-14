@@ -38,14 +38,13 @@ Run what CI runs:
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets
-cargo test
+cargo test --workspace
 cargo test --features embed
 cargo build --target wasm32-unknown-unknown
 ```
 
-If you touched `vm/` or `lsp/`, add `cargo test -p candela-vm` and
-`cargo test -p candela-lsp`; a plain `cargo test` at the root does not reach
-them.
+`--workspace` is what reaches `candela-vm` and `candela-lsp`; a plain
+`cargo test` at the root tests `candela-lang` alone.
 
 The workspace enables clippy's `pedantic` and `nursery` groups as warnings. Do
 not add new ones; if a lint is wrong for your case, allow it locally with a

@@ -24,7 +24,7 @@ curl -fsSL https://candela.lumenfx.dev/install.sh | sh
 ```
 
 On Windows, run the per-user installer from
-<https://github.com/lumen-fx/candela/releases/latest/download/candela-x86_64-windows.msi>.
+<https://github.com/lumen-fx/candela/releases/latest/download/candela-windows-x86_64.msi>.
 
 Write `hello.cdl`:
 

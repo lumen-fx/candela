@@ -1,41 +1,106 @@
-name: Cargo Build & Test
+name: ci
+
+# Builds and tests the workspace on Linux, macOS, and Windows, and runs the two
+# extra legs candela needs: the `embed` feature, and a wasm32 build.
+#
+# fmt and clippy run on Linux only. Neither is platform dependent.
 
 on:
   push:
+    branches: [main]
   pull_request:
+  # The merge queue runs these jobs against the queued merge commit, and they
+  # are required checks on main. Without this trigger the workflow never
+  # reports a result there and queued pull requests wait forever.
   merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  build_and_test:
-    name: Rust project - latest
+  fmt:
+    name: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          # The action defaults RUSTFLAGS to "-D warnings". Warnings are denied
+          # by the clippy job instead, which reports them with the lint name
+          # attached.
+          rustflags: ""
+          cache-key: fmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          rustflags: ""
+          cache-key: clippy
+      # --workspace reaches candela-vm and candela-lsp, which default-members
+      # keeps out of a plain cargo command at the repo root.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --features embed --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
-        features: ["", "--features embed"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - run: rustup update stable && rustup default stable
-      - run: cargo build --verbose ${{ matrix.features }}
-      - run: cargo test --verbose ${{ matrix.features }}
-  build_and_test_crates:
-    # A plain cargo command at the repo root builds and tests the `candela`
-    # package alone, because default-members says so. The other two workspace
-    # members are named here so their tests run as well.
-    name: Workspace crates - candela-vm, candela-lsp
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-key: test
+      - run: cargo build --workspace --verbose
+      - run: cargo test --workspace --verbose --no-fail-fast
+
+  test-embed:
+    name: test embed
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - run: rustup update stable && rustup default stable
-      - run: cargo build --verbose -p candela-vm -p candela-lsp
-      - run: cargo test --verbose -p candela-vm
-      - run: cargo test --verbose -p candela-lsp
-  build_and_test_wasm:
-    name: (WASM) Rust project - latest
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-key: test-embed
+      - run: cargo build --features embed --verbose
+      - run: cargo test --features embed --verbose
+
+  wasm:
+    name: wasm
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - run: rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
-      - run: cargo build --verbose --target wasm32-unknown-unknown
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          rustflags: ""
+          cache-key: wasm
+      - run: cargo build --target wasm32-unknown-unknown --verbose

@@ -1,6 +1,21 @@
-name: Release
+name: release
 
-# Triger on any tag named v.xxx
+# Publishes the candela toolchain to a GitHub release on any vX.Y.Z tag.
+#
+# Assets are named candela-<os>-<arch>.<ext>, the same scheme lumen-fx/lumen
+# uses, and install.sh looks each one up by that exact name. The Windows
+# package is candela-windows-x86_64.msi and the portable archive beside it is
+# candela-windows-x86_64.zip. The embedding library ships as
+# libcandela-<os>-<arch>.<ext>.
+#
+# linux-x86_64 has two builds. The unsuffixed asset is the baseline every
+# x86-64 machine can run; candela-linux-x86_64-v3 is the extra for CPUs with
+# AVX2, which install.sh takes when it finds one. A suffix marks an extra, so
+# the baseline never carries one.
+#
+# Releases published before this naming carry the older arch-first names and
+# are not renamed.
+
 on:
   push:
     tags:
@@ -14,49 +29,56 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.artifact }}
+    name: build (${{ matrix.artifact }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: candela-linux-x86_64
+            embed_artifact: libcandela-linux-x86_64
+            rustflags: "-C target-cpu=x86-64"
+            bin: candela
+            lib: libcandela.so
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: candela-linux-x86_64-v3
+            embed_artifact: libcandela-linux-x86_64-v3
+            rustflags: "-C target-cpu=x86-64-v3"
+            bin: candela
+            lib: libcandela.so
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: candela-linux-aarch64
+            embed_artifact: libcandela-linux-aarch64
+            rustflags: ""
+            bin: candela
+            lib: libcandela.so
+
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: candela-aarch64-apple-darwin
-            embed_artifact: libcandela-aarch64-apple-darwin
+            artifact: candela-macos-aarch64
+            embed_artifact: libcandela-macos-aarch64
             rustflags: ""
             bin: candela
             lib: libcandela.dylib
 
           - os: macos-26-intel
             target: x86_64-apple-darwin
-            artifact: candela-x86_64-apple-darwin
-            embed_artifact: libcandela-x86_64-apple-darwin
+            artifact: candela-macos-x86_64
+            embed_artifact: libcandela-macos-x86_64
             rustflags: "-C target-cpu=x86-64-v3"
             bin: candela
             lib: libcandela.dylib
 
-          # Two tiers: v3 and baseline v1
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: candela-x86_64-linux-v3
-            embed_artifact: libcandela-x86_64-linux-v3
-            rustflags: "-C target-cpu=x86-64-v3"
-            bin: candela
-            lib: libcandela.so
-
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: candela-x86_64-linux-v1
-            embed_artifact: libcandela-x86_64-linux-v1
-            rustflags: "-C target-cpu=x86-64"
-            bin: candela
-            lib: libcandela.so
-
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: candela-x86_64-windows
-            embed_artifact: libcandela-x86_64-windows
+            artifact: candela-windows-x86_64
+            embed_artifact: libcandela-windows-x86_64
             rustflags: "-C target-cpu=x86-64-v3"
             bin: candela.exe
             lib: candela.dll
@@ -163,6 +185,7 @@ jobs:
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           New-Item -ItemType "Directory" -Force -Path "dist"
           Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
@@ -178,6 +201,7 @@ jobs:
       # then installs a second Candela somewhere else.
       - name: Stage the MSI payload (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
           Copy-Item -Path "dist" -Destination "msi-stage" -Recurse
@@ -190,6 +214,7 @@ jobs:
 
       - name: Build the MSI (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
           ./msi/build-msi.ps1 -Version $version -StageDir "msi-stage" -OutFile "${{ matrix.artifact }}.msi"
@@ -209,6 +234,7 @@ jobs:
 
       - name: Package (Windows) (LIB)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           New-Item -ItemType "Directory" -Force -Path "dist-lib"
           Copy-Item "target/${{ matrix.target }}/embed/${{ matrix.lib }}" "dist-lib/"
@@ -228,7 +254,7 @@ jobs:
             ${{ matrix.embed_artifact }}.zip
 
   release:
-    name: Create Release
+    name: publish release
     needs: build
     runs-on: ubuntu-latest
     steps:
