@@ -62,8 +62,15 @@ artifact. `candela-vm` is the runtime alone, which runs an artifact and links
 no parser, compiler or REPL.
 
 The standard library ships beside them as candela source, so every function in
-it is readable, and a language server and VS Code extension are available from
-the repository.
+it is readable.
+
+Editor support comes from `candela-lsp`, the language server, which runs the
+same compiler your build does and reports what it finds as you type. Two
+clients ship in the repository: a VS Code extension in `editors/vscode`, and a
+plugin for the IntelliJ-based IDEs in `tools/jetbrains-candela`. Both add
+syntax highlighting from the same grammar and get diagnostics, hover,
+completion, an outline, and go to definition from the server. Build them from
+the repository; neither is published to a marketplace yet.
 
 ## Where to go next
 

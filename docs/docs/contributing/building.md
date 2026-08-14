@@ -50,6 +50,9 @@ The rest of the tree:
   installer.
 - `editors/vscode/` holds the VS Code extension: the language server client,
   the grammar, and snippets.
+- `tools/jetbrains-candela/` holds the plugin for the IntelliJ-based IDEs. It is
+  a Gradle build rather than a Cargo one, and it reads its grammar out of
+  `editors/vscode/` so there is one grammar to fix.
 - `docs/` holds this documentation site.
 
 ## Building
