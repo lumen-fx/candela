@@ -7,6 +7,8 @@
     { "include": "#import" },
     { "include": "#host-dylib" },
     { "include": "#struct-declaration" },
+    { "include": "#enum-declaration" },
+    { "include": "#impl-declaration" },
     { "include": "#function-declaration" },
     { "include": "#keywords" },
     { "include": "#constants" },
@@ -66,6 +68,28 @@
         }
       ]
     },
+    "enum-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.enum.candela" },
+            "2": { "name": "entity.name.type.enum.candela" }
+          }
+        }
+      ]
+    },
+    "impl-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.impl.candela" },
+            "2": { "name": "entity.name.type.candela" }
+          }
+        }
+      ]
+    },
     "function-declaration": {
       "patterns": [
         {
@@ -89,7 +113,7 @@
         },
         {
           "name": "storage.type.candela",
-          "match": "\\b(fn|let|struct)\\b"
+          "match": "\\b(fn|let|struct|enum|impl)\\b"
         }
       ]
     },
