@@ -159,10 +159,21 @@ package. Do not add new ones. If a lint is wrong for your case, allow it at the
 narrowest scope with a comment saying why.
 
 Continuous integration builds and tests on Linux with and without the `embed`
-feature, builds for WebAssembly, and type-checks both feature combinations. It
-does not gate on formatting or lints, so those two are on you. A separate job
-exercises the Windows installer end to end when the installer or the update
-logic changes.
+feature, builds for WebAssembly, type-checks both feature combinations, and
+gates on `cargo fmt --all --check` and on clippy with warnings denied. A
+separate job exercises the Windows installer end to end when the installer or
+the update logic changes.
+
+The crate documentation is built from the sources with
+
+```sh
+cargo doc --workspace --no-deps
+```
+
+and the same build is published on every push to `main`, serving the API
+documentation for the current tree at
+[api.candela.lumenfx.dev](https://api.candela.lumenfx.dev). That is the Rust
+API, separate from this site.
 
 Two policies from `CONTRIBUTING.md` are worth repeating. A change to the
 language, the standard library or the command line updates the matching
