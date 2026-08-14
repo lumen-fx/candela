@@ -1,0 +1,388 @@
+================================================================================
+Operator precedence (docs/docs/reference/operators.md)
+================================================================================
+
+fn main() {
+    print(2 ^ 3 ^ 2);
+    print(1 + 2 * 3 < 4 && !done || ok == 1);
+    print(-a ^ 2);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (integer_literal)
+              (binary_expression
+                (integer_literal)
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (binary_expression
+                (binary_expression
+                  (binary_expression
+                    (integer_literal)
+                    (binary_expression
+                      (integer_literal)
+                      (integer_literal)))
+                  (integer_literal))
+                (unary_expression
+                  (identifier)))
+              (binary_expression
+                (identifier)
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (unary_expression
+                (identifier))
+              (integer_literal))))))))
+
+================================================================================
+Calls, method chains, and namespaced calls (libs/std/tests/test_string.cdl, pgo/pgo-dynlib.cdl)
+================================================================================
+
+fn main() {
+    assert::assert_eq(string::substring("hello world", 6, 5), "world");
+    print(pgo_dynlib::pgo_add_int(1,1));
+    print("-Hello-".trim_sequence("-").len());
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (arguments
+            (call_expression
+              (qualified_identifier
+                (identifier)
+                (identifier))
+              (arguments
+                (string_literal)
+                (integer_literal)
+                (integer_literal)))
+            (string_literal))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (qualified_identifier
+                (identifier)
+                (identifier))
+              (arguments
+                (integer_literal)
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (method_call_expression
+              (method_call_expression
+                (string_literal)
+                (identifier)
+                (arguments
+                  (string_literal)))
+              (identifier)
+              (arguments))))))))
+
+================================================================================
+Anonymous functions (libs/std/tests/test_list_hof.cdl)
+================================================================================
+
+fn main() {
+    assert::assert_eq(list::map(xs, double), [2, 4, 6, 8]);
+    assert::assert_eq(list::filter(xs, fn(x) { return x > 2; }), [3, 4]);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (arguments
+            (call_expression
+              (qualified_identifier
+                (identifier)
+                (identifier))
+              (arguments
+                (identifier)
+                (identifier)))
+            (array_literal
+              (integer_literal)
+              (integer_literal)
+              (integer_literal)
+              (integer_literal)))))
+      (expression_statement
+        (call_expression
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (arguments
+            (call_expression
+              (qualified_identifier
+                (identifier)
+                (identifier))
+              (arguments
+                (identifier)
+                (closure_expression
+                  (parameter_list
+                    (parameter
+                      (identifier)))
+                  (block
+                    (return_statement
+                      (binary_expression
+                        (identifier)
+                        (integer_literal)))))))
+            (array_literal
+              (integer_literal)
+              (integer_literal))))))))
+
+================================================================================
+Indexing and slicing (pgo/pgo-std-library.cdl, libs/std/string.cdl)
+================================================================================
+
+fn main() {
+    let s1 = s[0..2];
+    let s2 = s[0];
+    let s3 = s[start..start + count];
+    let s4 = s[..2];
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (slice_expression
+          (identifier)
+          (integer_literal)
+          (integer_literal)))
+      (let_declaration
+        (identifier)
+        (index_expression
+          (identifier)
+          (integer_literal)))
+      (let_declaration
+        (identifier)
+        (slice_expression
+          (identifier)
+          (identifier)
+          (binary_expression
+            (identifier)
+            (identifier))))
+      (let_declaration
+        (identifier)
+        (slice_expression
+          (identifier)
+          (integer_literal))))))
+
+================================================================================
+Literals (examples/nbody/nbody_lua.cdl, docs/docs/language/collections.md)
+================================================================================
+
+fn main() {
+    let n = 42;
+    let f = 4.84143144246472090;
+    let s = "stretch tree of depth \t check:";
+    let flag = true;
+    let nothing = null;
+    let xs = [1, 2, 3];
+    let ages = {"ada": 36, "alan": 41};
+    let empty = {};
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (integer_literal))
+      (let_declaration
+        (identifier)
+        (float_literal))
+      (let_declaration
+        (identifier)
+        (string_literal
+          (escape_sequence)))
+      (let_declaration
+        (identifier)
+        (boolean_literal))
+      (let_declaration
+        (identifier)
+        (null_literal))
+      (let_declaration
+        (identifier)
+        (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (let_declaration
+        (identifier)
+        (map_literal
+          (map_entry
+            (string_literal)
+            (integer_literal))
+          (map_entry
+            (string_literal)
+            (integer_literal))))
+      (let_declaration
+        (identifier)
+        (map_literal)))))
+
+================================================================================
+Struct literal (examples/nbody/nbody_lua.cdl, examples/binary-trees/binary-trees.cdl)
+================================================================================
+
+fn main() {
+    let sun = Body {
+        x: 0.0,
+        y: 0.0,
+        mass: SOLAR_MASS
+    };
+    let t = Tree {left:make_tree(depth),right:make_tree(depth)};
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (float_literal))
+            (field_initializer
+              (identifier)
+              (float_literal))
+            (field_initializer
+              (identifier)
+              (identifier)))))
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))
+            (field_initializer
+              (identifier)
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
+Enum construction (docs/docs/language/enums.md)
+================================================================================
+
+fn main() {
+    let e = Event::Click(3, 4);
+    let q = Event::Quit;
+    let k = Key("escape");
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (call_expression
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (arguments
+            (integer_literal)
+            (integer_literal))))
+      (let_declaration
+        (identifier)
+        (qualified_identifier
+          (identifier)
+          (identifier)))
+      (let_declaration
+        (identifier)
+        (call_expression
+          (identifier)
+          (arguments
+            (string_literal)))))))
+
+================================================================================
+If as an expression (examples/binary-trees/binary-trees.cdl)
+================================================================================
+
+fn main() {
+    let max_depth = if min_depth + 2 >= arg {min_depth + 2} else {arg};
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (if_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (integer_literal))
+            (identifier))
+          (block
+            (binary_expression
+              (identifier)
+              (integer_literal)))
+          (else_clause
+            (block
+              (identifier))))))))

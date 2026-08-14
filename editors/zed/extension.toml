@@ -1,0 +1,18 @@
+id = "candela"
+name = "Candela"
+description = "The candela language (.cdl): syntax highlighting and the candela-lsp language server."
+version = "0.1.0"
+schema_version = 1
+authors = ["candela contributors"]
+repository = "https://github.com/lumen-fx/candela"
+
+# `rev` tracks the default branch. Set it to a commit to pin the parser, and
+# bump it after a grammar change, otherwise Zed keeps building the old parser.
+[grammars.candela]
+repository = "https://github.com/lumen-fx/candela"
+rev = "main"
+path = "editors/tree-sitter"
+
+[language_servers.candela-lsp]
+name = "candela"
+languages = ["Candela"]
