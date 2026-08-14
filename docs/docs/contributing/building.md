@@ -18,8 +18,11 @@ profile-guided release build, and WiX for the Windows installer.
 
 The repository is a Cargo workspace of three crates:
 
-- The root package, `candela`. The lexer, parser, type checker, code generator,
-  REPL, the `Engine`/`Program` embedding API, and the `candela` binary.
+- The root package, `candela-lang`. The lexer, parser, type checker, code
+  generator, REPL, the `Engine`/`Program` embedding API, and the `candela`
+  binary. The package name carries the `-lang` suffix only because crates.io
+  gave `candela` to an unrelated project years ago; the library it builds is
+  `candela`, so every `use candela::...` reads the same as it always did.
 - `vm/`, the `candela-vm` crate. The self-contained runtime: the executor, the
   bytecode and value representation, the garbage collector, host and C value
   marshalling, and the `.cdlb` artifact format. It builds both a library and the
@@ -57,7 +60,7 @@ The rest of the tree:
 
 ## Building
 
-`cargo build` at the root builds the `candela` package only. That is deliberate;
+`cargo build` at the root builds the `candela-lang` package only. That is deliberate;
 the workspace sets its default member to the root so the common case stays
 quick. Name the others explicitly:
 

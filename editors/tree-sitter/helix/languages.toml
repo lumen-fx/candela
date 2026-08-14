@@ -1,0 +1,32 @@
+# candela for Helix. Append these sections to ~/.config/helix/languages.toml,
+# then fetch and build the grammar:
+#
+#     hx --grammar fetch
+#     hx --grammar build
+#
+# See README.md in this directory for the query files, which Helix loads from
+# its runtime directory rather than from the grammar repository.
+
+[[language]]
+name = "candela"
+scope = "source.candela"
+injection-regex = "candela|cdl"
+file-types = ["cdl"]
+comment-token = "//"
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["candela-lsp"]
+
+[language-server.candela-lsp]
+command = "candela-lsp"
+
+# `rev` tracks the default branch, so `hx --grammar fetch` picks up grammar
+# changes. Set it to a commit to pin the parser instead.
+[[grammar]]
+name = "candela"
+source = { git = "https://github.com/lumen-fx/candela", rev = "main", subpath = "editors/tree-sitter" }
+
+# Building the grammar from a local checkout instead:
+#
+# [[grammar]]
+# name = "candela"
+# source = { path = "/path/to/candela/editors/tree-sitter" }

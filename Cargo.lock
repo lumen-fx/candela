@@ -78,7 +78,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "candela"
+name = "candela-lang"
 version = "0.0.4"
 dependencies = [
  "ariadne",
@@ -99,7 +99,7 @@ dependencies = [
 name = "candela-lsp"
 version = "0.1.0"
 dependencies = [
- "candela",
+ "candela-lang",
  "dashmap 6.2.1",
  "serde_json",
  "tokio",

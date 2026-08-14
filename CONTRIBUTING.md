@@ -14,8 +14,10 @@ the codebase you are changing.
 
 ## Where things live
 
-- `src/` is the `candela` package: lexer, parser, type checker, code generator,
-  REPL, the `Engine`/`Program` embedding API, and the CLI.
+- `src/` is the `candela-lang` package: lexer, parser, type checker, code
+  generator, REPL, the `Engine`/`Program` embedding API, and the CLI. The
+  library it builds is `candela` and so is the binary; only the package name,
+  the one crates.io sees, is `candela-lang`.
 - `vm/` is the `candela-vm` crate: the runtime core, plus the standalone
   `candela-vm` binary that runs a compiled `.cdlb` and links no compiler.
   `candela` depends on `candela-vm`, never the reverse.
@@ -26,7 +28,7 @@ the codebase you are changing.
   `libs/std_src` holds the native sources behind it.
 - `editors/vscode` is the VS Code extension and its language client.
 
-The workspace root builds only the `candela` package, so build and test the
+The workspace root builds only the `candela-lang` package, so build and test the
 other crates by name: `cargo build -p candela-vm`, `cargo test -p candela-lsp`.
 
 ## Before opening a pull request

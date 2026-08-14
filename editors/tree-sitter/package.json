@@ -1,0 +1,30 @@
+{
+  "name": "tree-sitter-candela",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the candela language (.cdl)",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/lumen-fx/candela",
+  "keywords": [
+    "parser",
+    "lexer",
+    "candela",
+    "tree-sitter"
+  ],
+  "files": [
+    "grammar.js",
+    "queries/*",
+    "src/**"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.candela",
+      "file-types": [
+        "cdl"
+      ],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.0"
+  }
+}

@@ -1,0 +1,415 @@
+================================================================================
+Let declarations and compound assignment (examples/nbody/nbody_lua.cdl)
+================================================================================
+
+fn offsetMomentum(b, nbody, solar_mass) {
+    let px = 0.0;
+    let bi = b[0];
+    let bim = bi.mass;
+    px += bi.vx * bim;
+    b[0].vx = -px / solar_mass;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier))
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (float_literal))
+      (let_declaration
+        (identifier)
+        (index_expression
+          (identifier)
+          (integer_literal)))
+      (let_declaration
+        (identifier)
+        (field_expression
+          (identifier)
+          (identifier)))
+      (assignment_statement
+        (identifier)
+        (binary_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (assignment_statement
+        (field_expression
+          (index_expression
+            (identifier)
+            (integer_literal))
+          (identifier))
+        (binary_expression
+          (unary_expression
+            (identifier))
+          (identifier))))))
+
+================================================================================
+If and else (examples/binary-trees/binary-trees.cdl)
+================================================================================
+
+fn check_tree(node) {
+    if node == null { return 1; }
+    return 1 + check_tree(node.left) + check_tree(node.right);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (expression_statement
+        (if_expression
+          (binary_expression
+            (identifier)
+            (null_literal))
+          (block
+            (return_statement
+              (integer_literal)))))
+      (return_statement
+        (binary_expression
+          (binary_expression
+            (integer_literal)
+            (call_expression
+              (identifier)
+              (arguments
+                (field_expression
+                  (identifier)
+                  (identifier)))))
+          (call_expression
+            (identifier)
+            (arguments
+              (field_expression
+                (identifier)
+                (identifier)))))))))
+
+================================================================================
+While loop (libs/std/string.cdl)
+================================================================================
+
+fn pad_left(s, width, fill) {
+    let out = s;
+    while out.len() < width {
+        out = fill + out;
+    }
+    return out;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier))
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (identifier))
+      (while_statement
+        (binary_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments))
+          (identifier))
+        (block
+          (assignment_statement
+            (identifier)
+            (binary_expression
+              (identifier)
+              (identifier)))))
+      (return_statement
+        (identifier)))))
+
+================================================================================
+For loops over ranges and collections (examples/nbody/nbody_lua.cdl)
+================================================================================
+
+fn advance(bodies, nbody, dt) {
+    for i in ..nbody {
+        for j in i+1..nbody {
+            let bj = bodies[j];
+        }
+    }
+    for body in bodies {
+        print(body.mass);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier))
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)))
+    (block
+      (for_statement
+        (identifier)
+        (range_expression
+          (identifier))
+        (block
+          (for_statement
+            (identifier)
+            (range_expression
+              (binary_expression
+                (identifier)
+                (integer_literal))
+              (identifier))
+            (block
+              (let_declaration
+                (identifier)
+                (index_expression
+                  (identifier)
+                  (identifier)))))))
+      (for_statement
+        (identifier)
+        (identifier)
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (field_expression
+                  (identifier)
+                  (identifier))))))))))
+
+================================================================================
+Loop with break and continue (docs/docs/language/control-flow.md)
+================================================================================
+
+fn scan(xs) {
+    loop {
+        if xs.len() == 0 {
+            break;
+        }
+        continue;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (loop_statement
+        (block
+          (expression_statement
+            (if_expression
+              (binary_expression
+                (method_call_expression
+                  (identifier)
+                  (identifier)
+                  (arguments))
+                (integer_literal))
+              (block
+                (break_statement))))
+          (continue_statement))))))
+
+================================================================================
+Match with payload binding and a wildcard (libs/std/option.cdl)
+================================================================================
+
+fn unwrap(o) {
+    let value = null;
+    match o {
+        Some(v) => { value = v; }
+        None => { throw("called unwrap on a None option"); }
+        _ => { value = null; }
+    }
+    return value;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (null_literal))
+      (match_statement
+        (identifier)
+        (match_arm_list
+          (match_arm
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (block
+              (assignment_statement
+                (identifier)
+                (identifier))))
+          (match_arm
+            (identifier)
+            (block
+              (expression_statement
+                (call_expression
+                  (identifier)
+                  (arguments
+                    (string_literal))))))
+          (match_arm
+            (identifier)
+            (block
+              (assignment_statement
+                (identifier)
+                (null_literal))))))
+      (return_statement
+        (identifier)))))
+
+================================================================================
+Try with a catch-all clause (libs/std/tests/test_errors.cdl)
+================================================================================
+
+fn main() {
+    let value = 0;
+    try {
+        value = doubled(21);
+    } catch e {
+        assert::assert_msg(false, "plain call raised " + e);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (integer_literal))
+      (try_statement
+        (block
+          (assignment_statement
+            (identifier)
+            (call_expression
+              (identifier)
+              (arguments
+                (integer_literal)))))
+        (catch_clause
+          (identifier)
+          (block
+            (expression_statement
+              (call_expression
+                (qualified_identifier
+                  (identifier)
+                  (identifier))
+                (arguments
+                  (boolean_literal)
+                  (binary_expression
+                    (string_literal)
+                    (identifier)))))))))))
+
+================================================================================
+Try with a kind clause (docs/docs/language/error-handling.md)
+================================================================================
+
+fn main() {
+    try {
+        print(xs[99]);
+    } catch "index_out_of_bounds" {
+        print("out of range");
+    } catch e {
+        print(e);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (try_statement
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (index_expression
+                  (identifier)
+                  (integer_literal))))))
+        (catch_clause
+          (string_literal)
+          (block
+            (expression_statement
+              (call_expression
+                (identifier)
+                (arguments
+                  (string_literal))))))
+        (catch_clause
+          (identifier)
+          (block
+            (expression_statement
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
+Bare block scope (docs/docs/language/variables.md)
+================================================================================
+
+fn main() {
+    let x = 1;
+    {
+        let x = 2;
+        print(x);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (integer_literal))
+      (block
+        (let_declaration
+          (identifier)
+          (integer_literal))
+        (expression_statement
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))

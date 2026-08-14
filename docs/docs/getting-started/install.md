@@ -93,6 +93,32 @@ everywhere else, set `CANDELA_NO_UPDATE_CHECK`:
 export CANDELA_NO_UPDATE_CHECK=1
 ```
 
+## Editor support
+
+The toolchain installs `candela-lsp`, a language server that runs candela's own
+parser and type checker, so an editor reports the same errors the compiler
+does. On top of diagnostics it gives hover, completion, go-to-definition, and a
+document outline. Every editor below finds it as `candela-lsp` on your path.
+
+Highlighting comes from one of two grammars. VS Code uses a TextMate grammar;
+Neovim, Helix, and Zed use the tree-sitter grammar, which also drives
+structural selection and bracket matching. Both live in the repository, under
+`editors/`.
+
+- **VS Code.** Install the extension from `editors/vscode`. Set
+  `candela.languageServerPath` to use a server that is not on your path.
+- **Neovim.** Copy `editors/tree-sitter/nvim/candela.lua` into your config,
+  call `require('candela').setup()`, and install the parser with
+  `:TSInstall candela`.
+- **Helix.** Append `editors/tree-sitter/helix/languages.toml` to your
+  `languages.toml`, copy the queries into the Helix runtime directory, then
+  run `hx --grammar fetch` and `hx --grammar build`.
+- **Zed.** Install `editors/zed` from the Extensions view with "Install Dev
+  Extension".
+
+Each directory has a README with the full setup, including how to point an
+editor at a server you built yourself.
+
 ## Building from source
 
 To build the toolchain yourself, see
