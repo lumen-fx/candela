@@ -144,9 +144,9 @@ works with no configuration.
 
 Coverage comes from the same suites, measured with `cargo llvm-cov --workspace`
 on every push to `main` and every pull request and reported to Codecov. It is a
-report rather than a gate: what decides a pull request is the suite itself, and
-the two Codecov checks are informational, so they report a change in coverage
-but never fail. Doctests are outside the measurement, since collecting coverage
+report on the whole tree and a gate on the change: the project-wide Codecov
+status is informational, while the patch status is a required check that fails
+when the diff drops meaningfully below the baseline coverage. Doctests are outside the measurement, since collecting coverage
 from them needs a nightly toolchain.
 
 There is no fuzzing setup. Benchmarking is manual; `BENCHMARKS.md` describes it.
