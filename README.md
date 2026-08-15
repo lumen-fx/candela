@@ -64,8 +64,9 @@ Run `candela` with no arguments for a REPL.
   parser, compiler or REPL.
 - **Editor support.** A language server, a VS Code extension, and a plugin for
   the IntelliJ-based IDEs live in this repository and build from source.
-- **Embedding.** A Rust `Engine`/`Program` API lets a host compile a program,
-  register host functions, and exchange values with it.
+- **Embedding.** A Rust host registers functions of its own, calls a script's
+  functions by name, and exchanges values with it, either compiling the source
+  in-process or loading a `.cdlb` with the compiler left out.
 
 ## Limitations
 

@@ -1,8 +1,21 @@
 # Embedding candela in Rust
 
 candela runs inside a Rust program as a library. You register Rust functions the
-script can call, compile a script once, and then call its functions repeatedly
+script can call, load a script once, and then call its functions repeatedly
 while the interpreter keeps its state between calls.
+
+There are two ways to do it, and they differ in one thing: whether the compiler
+is in your process.
+
+- Link `candela` and use `Engine`/`Program` to compile source at run time. Scripts
+  can be edited and reloaded while the program runs.
+- Link `candela-vm` alone and use `HostRegistry`/`RuntimeProgram` to load a
+  `.cdlb` artifact built beforehand. The compiler is absent, the binary is
+  smaller, and no source is shipped.
+
+Everything else is shared: the same host functions, the same `Value` type, the
+same call-by-name. Start with the first if you are unsure; jump to
+[running a precompiled artifact](#running-a-precompiled-artifact) for the second.
 
 Add the crate as a dependency and enable the `embed` feature:
 
@@ -155,6 +168,75 @@ declaration rather than accepted as a new specialisation.
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.
 
+## Running a precompiled artifact
+
+Build the script to a `.cdlb` first, with `candela build` or `build_bytecode`,
+then link only `candela-vm` in the program that runs it:
+
+```toml
+[dependencies]
+candela-vm = "0.0.4"
+```
+
+```rust
+use candela_vm::{HostRegistry, Value, load_program};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("app", "width", |name: &str| name.len() as i64);
+
+    let bytes = std::fs::read("banner.cdlb")?;
+    let mut program = load_program(&bytes, &hosts)?;
+    program.run();
+
+    let cells = program.call("banner", &["title".into()])?;
+    assert_eq!(cells, Value::Int(7));
+    Ok(())
+}
+```
+
+### HostRegistry
+
+The table of closures a script's `host` blocks bind to. `register_host_fn` and
+`register_host_fn_variadic` take the same arguments and derive the same
+signatures as their `Engine` counterparts above.
+
+Binding happens in `load_program`, and it checks what compiling a script checks:
+every declared function must be registered, and each closure's arity, argument
+types and return type must match the declaration. A `LoadError::HostBinding`
+comes back naming what is missing or what disagrees, before any instruction runs.
+`Engine` holds one of these registries internally, which is why the two paths
+accept the same closures.
+
+### run
+
+Runs `main`, the same way `candela-vm` does: a runtime error prints its report
+and ends the process. Call it once, before the first `call`, so top-level setup
+is done. To keep a failing script from taking the process with it, run it inside
+`collect_diagnostic`, which turns the error into a `Diagnostic` you can handle.
+
+### call
+
+```rust
+let value = program.call("banner", &["title".into()])?;
+```
+
+Invokes a function by name against the resident state, returning its value or
+`Value::Null` for a function that returns nothing. Arguments are checked against
+the declared parameter types first.
+
+Only functions the artifact exports are callable, and `program.exports()` lists
+them. A function is exported when it is defined in the file that was built, is
+reachable by its bare name, is not `main`, and annotates every parameter with a
+type a host value can be. See [artifacts](../reference/artifacts.md) for the full
+rule. This is the difference that matters when moving a script from `Engine` to
+an artifact: bare parameters take their types from the first host call there, but
+an artifact has no compiler to specialise them later, so annotate them.
+
+Errors come back as a `CallError`: the name is not exported, the argument count
+or an argument type disagrees with the declaration, or the call raised a runtime
+error, which arrives as the `Diagnostic` it produced.
+
 ## Values
 
 `Value` is the type that crosses the boundary in both directions:
@@ -183,7 +265,7 @@ arrives as a `Map` of its fields.
 
 ## Errors
 
-Every fallible call returns `Diagnostic`:
+Every fallible `Engine`/`Program` call returns `Diagnostic`:
 
 ```rust
 pub struct Diagnostic {
@@ -204,6 +286,10 @@ See [errors](../reference/errors.md).
 Only one diagnostic comes back per call, because compilation stops at the first
 error.
 
+On the artifact path the errors are `LoadError` and `CallError` instead, both of
+which print themselves. A runtime error inside a call still arrives as the
+`Diagnostic` above, wrapped in `CallError::Runtime`.
+
 ## Evaluating source at run time
 
 Compiling is opt-in and explicit: a host that wants to evaluate new source calls
@@ -214,9 +300,8 @@ start-up cannot be made to.
 This is also the difference between the two ways of shipping candela in a host.
 Linking the `candela` crate brings the compiler, so scripts can be compiled at
 run time and reloaded. Shipping precompiled `.cdlb` artifacts and linking only
-`candela-vm` leaves the compiler out of the process entirely; see
-[artifacts](../reference/artifacts.md). An artifact that declares a `host` block
-needs a host to bind it, so the standalone runtime refuses to load one.
+`candela-vm` leaves the compiler out of the process entirely, and with it any
+way to evaluate source at all; see [artifacts](../reference/artifacts.md).
 
 ## One-shot execution
 
