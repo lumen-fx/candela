@@ -3,7 +3,9 @@
 A macro is a piece of syntax that some other language fills in. It is written
 `name!( ... )`, and what goes between the parentheses is not candela: it is raw
 text handed to the program that embeds candela, which turns it into candela
-source and gives it back. That source is parsed where the macro stands.
+source and gives it back. That source is parsed where the macro stands, and may
+use a macro itself, up to 32 levels deep; a longer chain is a compile error
+instead of an expansion that never ends.
 
 ```rust
 fn view() -> string {

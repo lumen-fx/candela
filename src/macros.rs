@@ -21,8 +21,10 @@
 //! [`scan_regions`] exposes the same region scanner the lexer uses, so a build
 //! tool can find every invocation of one macro in a file without compiling it.
 
+use crate::cold_path;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -262,6 +264,43 @@ impl Drop for Active {
         ACTIVE.with(|stack| {
             stack.borrow_mut().pop();
         });
+    }
+}
+
+/// How far one macro may expand into another. An expansion is candela source
+/// like any other, so it may use a macro itself; a macro that expands to a use
+/// of itself would do that forever. Nesting this deep is past anything a host
+/// generates, and short of the stack the compiler runs on.
+pub(crate) const MAX_EXPANSION_DEPTH: u32 = 32;
+
+thread_local! {
+    /// How many expansions are being parsed right now.
+    static DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// One level of macro expansion, held while the source it produced is parsed.
+/// The level is given back when the guard drops, including when the compile
+/// unwinds.
+pub(crate) struct Depth;
+
+impl Depth {
+    /// Takes a level, or nothing when [`MAX_EXPANSION_DEPTH`] are already held.
+    pub(crate) fn enter() -> Option<Self> {
+        DEPTH.with(|depth| {
+            let held = depth.get();
+            if held >= MAX_EXPANSION_DEPTH {
+                cold_path();
+                return None;
+            }
+            depth.set(held + 1);
+            Some(Self)
+        })
+    }
+}
+
+impl Drop for Depth {
+    fn drop(&mut self) {
+        DEPTH.with(|depth| depth.set(depth.get() - 1));
     }
 }
 

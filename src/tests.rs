@@ -5860,3 +5860,78 @@ pub fn a_comment_in_a_region_ends_at_a_carriage_return() {
     assert_eq!(regions.len(), 1);
     assert_eq!(regions[0].body, "a // )\r b");
 }
+
+#[test]
+pub fn a_macro_that_expands_to_itself_stops_at_the_limit() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |_: &str| Ok(String::from("lmn!(again)")));
+    let src = "fn main() { print(lmn!(<div/>)); }";
+    let err = env
+        .scope(|| compile_diag(src, "macros.cdl"))
+        .expect_err("an expansion that uses itself does not compile");
+    assert_eq!(err.code, "macro_recursion_limit");
+    assert!(err.message.contains("lmn!"), "{}", err.message);
+    // The report is against the invocation in the file, not one of the
+    // expansions the reader never wrote.
+    assert_eq!(err.span.start, src.find("lmn!").unwrap());
+}
+
+#[test]
+pub fn a_chain_of_macros_within_the_limit_expands() {
+    // Thirty-two macros, each expanding to the next, is the deepest chain that
+    // still compiles.
+    let mut env = MacroEnv::new();
+    for step in 0..31 {
+        env.register(&format!("m{step}"), move |_: &str| {
+            Ok(format!("m{}!(x)", step + 1))
+        });
+    }
+    env.register("m31", |_: &str| Ok(String::from("9")));
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(m0!(x));
+            }
+            ",
+            9.into()
+        );
+    });
+}
+
+#[test]
+pub fn a_chain_of_macros_past_the_limit_is_an_error() {
+    let mut env = MacroEnv::new();
+    for step in 0..32 {
+        env.register(&format!("m{step}"), move |_: &str| {
+            Ok(format!("m{}!(x)", step + 1))
+        });
+    }
+    env.register("m32", |_: &str| Ok(String::from("9")));
+    let err = env
+        .scope(|| compile_diag("fn main() { print(m0!(x)); }", "macros.cdl"))
+        .expect_err("one macro too many");
+    assert_eq!(err.code, "macro_recursion_limit");
+    assert!(err.message.contains("m32!"), "{}", err.message);
+}
+
+#[test]
+pub fn the_expansion_limit_resets_between_macros() {
+    let mut env = MacroEnv::new();
+    for step in 0..31 {
+        env.register(&format!("m{step}"), move |_: &str| {
+            Ok(format!("m{}!(x)", step + 1))
+        });
+    }
+    env.register("m31", |_: &str| Ok(String::from("1")));
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(m0!(x) + m0!(x));
+            }
+            ",
+            2.into()
+        );
+    });
+}
