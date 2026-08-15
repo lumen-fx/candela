@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
 use std::io::Write;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// A structured compile/runtime error, produced instead of printing + exiting
 /// whenever a diagnostic sink is installed (see `collect_diagnostic`).
@@ -40,9 +41,16 @@ type BoxedHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'sta
 /// are currently active across all threads; `previous` holds the host's own
 /// panic hook, captured when the first collection begins and restored when the
 /// last one ends, so the host's hook is never permanently clobbered.
+///
+/// The panic runtime holds its own hook lock for as long as it runs the
+/// installed hook, and `set_hook`/`take_hook` wait for that same lock while
+/// this mutex is held. Nothing reachable from inside the hook may therefore
+/// take this mutex, or the two lock orders meet and the process wedges. That is
+/// why the hook forwards through its own handle on the host's hook instead of
+/// reading `previous` from here.
 struct HookState {
     depth: usize,
-    previous: Option<BoxedHook>,
+    previous: Option<Arc<BoxedHook>>,
 }
 
 static HOOK_STATE: std::sync::Mutex<HookState> = std::sync::Mutex::new(HookState {
@@ -50,8 +58,8 @@ static HOOK_STATE: std::sync::Mutex<HookState> = std::sync::Mutex::new(HookState
     previous: None,
 });
 
-/// Recover the guarded state even if a previous panic-hook invocation poisoned
-/// the mutex (a chained host hook is allowed to panic without wedging us).
+/// Recover the guarded state even if a panic while it was held poisoned the
+/// mutex; the depth and the saved hook stay usable either way.
 fn lock_hook_state() -> std::sync::MutexGuard<'static, HookState> {
     HOOK_STATE
         .lock()
@@ -67,16 +75,15 @@ fn lock_hook_state() -> std::sync::MutexGuard<'static, HookState> {
 fn enter_silencing_hook() {
     let mut state = lock_hook_state();
     if state.depth == 0 {
-        state.previous = Some(std::panic::take_hook());
-        std::panic::set_hook(Box::new(|info| {
+        let previous = Arc::new(std::panic::take_hook());
+        let forward = Arc::clone(&previous);
+        std::panic::set_hook(Box::new(move |info| {
             if SUPPRESS_PANIC_HOOK.with(Cell::get) && info.payload().is::<FatalError>() {
                 return;
             }
-            let state = lock_hook_state();
-            if let Some(previous) = state.previous.as_ref() {
-                previous(info);
-            }
+            forward(info);
         }));
+        state.previous = Some(previous);
     }
     state.depth += 1;
 }
@@ -90,7 +97,13 @@ fn leave_silencing_hook() {
     if state.depth == 0
         && let Some(previous) = state.previous.take()
     {
-        std::panic::set_hook(previous);
+        // Removing our hook drops the handle it forwards through, and
+        // `take_hook` waits for any hook call still running, so the host's own
+        // box is the only handle left and goes back unwrapped.
+        drop(std::panic::take_hook());
+        if let Some(previous) = Arc::into_inner(previous) {
+            std::panic::set_hook(previous);
+        }
     }
 }
 
