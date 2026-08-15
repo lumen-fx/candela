@@ -1,7 +1,7 @@
 ; candela highlighting.
 ;
 ; Capture names follow the Neovim / Helix vocabulary. Zed ships its own copy of
-; this file under tools/zed-candela, because Zed reads queries from the
+; this file under editors/zed, because Zed reads queries from the
 ; extension rather than from the grammar repository and its theme keys differ.
 ;
 ; Patterns that could match the same node are partitioned with predicates
@@ -103,6 +103,18 @@
   (#any-of? @function.builtin
     "print" "type" "float" "int" "str" "bool" "input" "range" "the_answer"
     "argv" "exit" "throw"))
+
+; Macros
+
+(macro_invocation
+  name: (identifier) @function.macro)
+
+(macro_invocation
+  "!(" @punctuation.special)
+
+; What stands between the parentheses is the host's syntax, so it is coloured
+; as raw text rather than run through candela's rules.
+(macro_body) @markup.raw
 
 ; Variables
 

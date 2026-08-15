@@ -76,6 +76,18 @@
     "print" "type" "float" "int" "str" "bool" "input" "range" "the_answer"
     "argv" "exit" "throw"))
 
+; Macros
+
+(macro_invocation
+  name: (identifier) @function.special.macro)
+
+(macro_invocation
+  "!(" @punctuation.special)
+
+; What stands between the parentheses is the host's syntax, so it is coloured
+; as an embedded region rather than run through candela's rules.
+(macro_body) @embedded
+
 ; Variables
 
 (parameter

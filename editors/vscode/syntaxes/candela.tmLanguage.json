@@ -4,6 +4,7 @@
   "scopeName": "source.candela",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#macro" },
     { "include": "#import" },
     { "include": "#host-dylib" },
     { "include": "#struct-declaration" },
@@ -30,6 +31,35 @@
           "beginCaptures": {
             "0": { "name": "punctuation.definition.comment.candela" }
           }
+        }
+      ]
+    },
+    "macro": {
+      "patterns": [
+        {
+          "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)(!)(\\()",
+          "end": "\\)",
+          "contentName": "meta.embedded.block.candela",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.macro.candela" },
+            "2": { "name": "keyword.operator.macro.candela" },
+            "3": { "name": "punctuation.section.macro.begin.candela" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.macro.end.candela" }
+          },
+          "patterns": [{ "include": "#macro-region" }]
+        }
+      ]
+    },
+    "macro-region": {
+      "patterns": [
+        { "match": "\"(?:[^\"\\\\]|\\\\.)*\"" },
+        { "match": "//[^\\n]*" },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [{ "include": "#macro-region" }]
         }
       ]
     },
