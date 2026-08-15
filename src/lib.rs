@@ -54,6 +54,11 @@ mod engine;
 // The `candela build` path: compile a `.cdl` source into a `.cdlb` artifact.
 #[cfg(feature = "compiler")]
 mod build;
+// Macro registration and the region scanner. `pub` because both sides of a
+// macro are the embedder's: it registers the expanders, and it can scan a file
+// for regions without compiling it.
+#[cfg(feature = "compiler")]
+pub mod macros;
 // `pub` for the same reason as `compiler`: exported so tooling can lex/parse
 // standalone without going through a full `compiler::compile`.
 #[cfg(feature = "compiler")]

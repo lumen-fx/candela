@@ -5525,3 +5525,331 @@ pub fn dynamic_array_literal_in_a_loop_body() {
         3.into()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Macros
+//
+// `name!( ... )` hands the raw region to the expander the embedder registered
+// and parses the candela source that comes back in its place. candela knows
+// where a region starts and ends and nothing else about it.
+// ---------------------------------------------------------------------------
+
+use crate::data::NULL;
+use crate::macros::MacroEnv;
+use crate::macros::MacroError;
+use crate::macros::scan_regions;
+
+/// An environment whose one macro, `lmn!`, expands to the number of bytes in
+/// its region plus two. Region-dependent, so a test can tell an expansion from
+/// a constant.
+fn stub_env() -> MacroEnv {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |body: &str| Ok(format!("{} + 2", body.trim().len())));
+    env
+}
+
+#[test]
+pub fn macro_expands_in_an_expression() {
+    stub_env().scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(<div/>) * 1);
+            }
+            ",
+            8.into()
+        );
+    });
+}
+
+#[test]
+pub fn macro_expands_in_a_variable_declaration() {
+    stub_env().scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                let markup = lmn!(abc);
+                print(markup);
+            }
+            ",
+            5.into()
+        );
+    });
+}
+
+#[test]
+pub fn macro_expands_as_a_call_argument() {
+    stub_env().scope(|| {
+        run_and_check_registers!(
+            "
+            fn twice(n) { return n * 2; }
+            fn main() {
+                print(twice(lmn!(ab)));
+            }
+            ",
+            8.into()
+        );
+    });
+}
+
+#[test]
+pub fn macro_region_keeps_parentheses_inside_strings() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |body: &str| Ok(format!("{}", body.len())));
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(\"a)b\"));
+            }
+            ",
+            5.into()
+        );
+    });
+}
+
+#[test]
+pub fn macro_region_balances_nested_parentheses() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |body: &str| Ok(format!("{}", body.len())));
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(f(g(1))));
+            }
+            ",
+            7.into()
+        );
+    });
+}
+
+#[test]
+pub fn an_identifier_spelled_like_a_macro_is_still_an_identifier() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let lmn = 4;
+            print(lmn);
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn a_bang_after_an_identifier_is_still_negation() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let lmn = false;
+            if !lmn { print(1); } else { print(0); }
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn unknown_macro_is_a_compile_error() {
+    let err = compile_diag(
+        "
+        fn main() {
+            print(lmn!(<div/>));
+        }
+        ",
+        "macros.cdl",
+    )
+    .expect_err("an unregistered macro does not compile");
+    assert_eq!(err.code, "unknown_macro");
+    assert!(err.message.contains("lmn!"), "{}", err.message);
+}
+
+#[test]
+pub fn an_unknown_macro_is_null_when_the_environment_allows_it() {
+    let mut env = MacroEnv::new();
+    env.allow_unknown(true);
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(<div/>));
+            }
+            ",
+            NULL
+        );
+    });
+}
+
+#[test]
+pub fn a_registered_macro_still_expands_when_unknown_ones_are_allowed() {
+    let mut env = stub_env();
+    env.allow_unknown(true);
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(abc));
+            }
+            ",
+            5.into()
+        );
+    });
+}
+
+#[test]
+pub fn an_unterminated_region_names_the_macro() {
+    let err = stub_env()
+        .scope(|| compile_diag("fn main() { let markup = lmn!(<div/>; }", "macros.cdl"))
+        .expect_err("an unclosed region does not compile");
+    assert_eq!(err.code, "unterminated_macro_region");
+    assert!(err.message.contains("lmn!"), "{}", err.message);
+}
+
+#[test]
+pub fn an_expander_error_points_into_the_region() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |body: &str| {
+        Err::<String, _>(MacroError::at(
+            "unclosed tag",
+            body.find("<span").unwrap_or(0),
+        ))
+    });
+    let src = "fn main() { print(lmn!(<div><span>)); }";
+    let err = env
+        .scope(|| compile_diag(src, "macros.cdl"))
+        .expect_err("a refused region does not compile");
+    assert_eq!(err.code, "macro_expansion_failed");
+    assert!(err.message.contains("unclosed tag"), "{}", err.message);
+    // The offset is a position in the region body; the diagnostic is a position
+    // in the file.
+    assert_eq!(err.span.start, src.find("<span").unwrap());
+}
+
+#[test]
+pub fn an_expander_error_without_an_offset_covers_the_invocation() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |_: &str| {
+        Err::<String, _>(MacroError::new("no markup here"))
+    });
+    let src = "fn main() { print(lmn!(<div/>)); }";
+    let err = env
+        .scope(|| compile_diag(src, "macros.cdl"))
+        .expect_err("a refused region does not compile");
+    assert_eq!(err.span.start, src.find("lmn!").unwrap());
+    assert_eq!(err.span.end, src.find("));").unwrap() + 1);
+}
+
+#[test]
+pub fn an_expansion_of_several_expressions_is_rejected() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |_: &str| Ok(String::from("1 2")));
+    let err = env
+        .scope(|| compile_diag("fn main() { print(lmn!(x)); }", "macros.cdl"))
+        .expect_err("an expansion is one expression");
+    assert_eq!(err.code, "macro_expansion_trailing_tokens");
+}
+
+#[test]
+pub fn an_error_inside_an_expansion_points_at_the_macro() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |_: &str| Ok(String::from("1 +")));
+    let src = "fn main() { print(lmn!(x)); }";
+    let err = env
+        .scope(|| compile_diag(src, "macros.cdl"))
+        .expect_err("broken expanded source does not compile");
+    assert_eq!(err.span.start, src.find("lmn!").unwrap());
+    assert!(err.span.end <= src.len());
+}
+
+#[test]
+pub fn macros_are_unknown_again_once_the_scope_ends() {
+    stub_env().scope(|| ());
+    let err = compile_diag("fn main() { print(lmn!(x)); }", "macros.cdl")
+        .expect_err("the environment is no longer installed");
+    assert_eq!(err.code, "unknown_macro");
+}
+
+#[test]
+pub fn scan_regions_finds_every_invocation() {
+    let src = "fn main() { let a = lmn!(one); let b = lmn!(t(w)o); }";
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0].body, "one");
+    assert_eq!(regions[1].body, "t(w)o");
+    for region in &regions {
+        assert_eq!(&src[region.span.clone()], &format!("lmn!({})", region.body));
+        assert_eq!(&src[region.body_start..], &src[region.body_start..]);
+        assert!(src[region.body_start..].starts_with(region.body));
+    }
+}
+
+#[test]
+pub fn scan_regions_skips_strings_and_comments() {
+    let src = "
+fn main() {
+    let quoted = \"lmn!(not a macro)\";
+    // lmn!(not a macro either)
+    let real = lmn!(<p>);
+}
+";
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "<p>");
+}
+
+#[test]
+pub fn scan_regions_counts_only_parentheses_outside_strings_and_comments() {
+    let src = "lmn!(a \")\" b // )
+c)";
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "a \")\" b // )\nc");
+}
+
+#[test]
+pub fn scan_regions_handles_an_escaped_quote_in_a_region() {
+    let src = r#"lmn!("a\")" b)"#;
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, r#""a\")" b"#);
+}
+
+#[test]
+pub fn scan_regions_stops_at_a_region_that_is_never_closed() {
+    let regions = scan_regions("lmn!(closed) lmn!(open", "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "closed");
+}
+
+#[test]
+pub fn scan_regions_matches_the_name_exactly() {
+    let regions = scan_regions("lmn!(a) lmnx!(b) xlmn!(c)", "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "a");
+}
+
+#[test]
+pub fn scan_regions_carries_multibyte_text_through() {
+    let src = "lmn!(caf\u{e9} (\u{e9}) end)";
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "caf\u{e9} (\u{e9}) end");
+    assert_eq!(&src[regions[0].span.clone()], src);
+}
+
+#[test]
+pub fn a_region_of_multibyte_text_reaches_the_expander() {
+    let mut env = MacroEnv::new();
+    env.register("lmn", |body: &str| Ok(body.chars().count().to_string()));
+    env.scope(|| {
+        run_and_check_registers!(
+            "
+            fn main() {
+                print(lmn!(caf\u{e9}));
+            }
+            ",
+            4.into()
+        );
+    });
+}

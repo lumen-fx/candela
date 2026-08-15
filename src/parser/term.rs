@@ -11,6 +11,7 @@ use crate::compiler::expr::Span;
 use crate::parser::Parser;
 use crate::parser::blocks::parse_block;
 use crate::parser::blocks::parse_block_expr;
+use crate::parser::expand_macro;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
 use smol_strc::SmolStr;
@@ -84,6 +85,8 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         Token::Int(i) => Expr::Int(i),
         Token::Float(f) => Expr::Float(f),
         Token::String(s) => Expr::String(parse_string(s)),
+        // MACRO: name!( raw region ), expanded by the embedder and parsed here
+        Token::Macro(region) => expand_macro(parser, region, t_span),
         Token::True => Expr::Bool(true),
         Token::False => Expr::Bool(false),
         Token::Null => Expr::Null,

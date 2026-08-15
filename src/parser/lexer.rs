@@ -1,4 +1,6 @@
 use crate::cold_path;
+use crate::macros::region_len;
+use logos::Lexer;
 use logos::Logos;
 use smol_strc::SmolStr;
 use std::hint::unreachable_unchecked;
@@ -6,6 +8,7 @@ use std::hint::unreachable_unchecked;
 impl std::fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Token::Macro(m) => write!(f, "the macro '{}!'", m.name),
             Token::Identifier(_) => write!(f, "an identifier"),
             Token::Int(_) => write!(f, "an integer"),
             Token::Float(_) => write!(f, "a float"),
@@ -159,6 +162,13 @@ pub enum Token<'a> {
     #[regex(r#"\"(?:[^\"\\]|\\.)*\""#, |lex| lex.slice())]
     String(&'a str),
 
+    /// A macro invocation, `name!( ... )`. The pattern matches the head; the
+    /// callback consumes the region, which no other token rule can describe
+    /// because its end is found by balancing parentheses rather than by a
+    /// regular expression.
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*!\(", lex_macro)]
+    Macro(MacroToken<'a>),
+
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice())]
     Identifier(&'a str),
 
@@ -180,6 +190,34 @@ pub enum Token<'a> {
         }
     })]
     Int(i32),
+}
+
+/// A macro invocation as the lexer sees it: the name, and the raw text of the
+/// region it opens. `body` is `None` for a region that the file ends before
+/// closing, which the parser reports against the invocation.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct MacroToken<'a> {
+    pub name: &'a str,
+    pub body: Option<&'a str>,
+}
+
+/// Consumes the region opened by a `name!(` head and yields it whole. The token
+/// the lexer emits therefore spans the entire invocation, so the parser can
+/// place both the region body and any error inside it in the file.
+fn lex_macro<'a>(lex: &mut Lexer<'a, Token<'a>>) -> MacroToken<'a> {
+    let head = lex.slice();
+    let name = &head[..head.len() - 2];
+    let rest = lex.remainder();
+    let Some(len) = region_len(rest) else {
+        cold_path();
+        lex.bump(rest.len());
+        return MacroToken { name, body: None };
+    };
+    lex.bump(len + 1);
+    MacroToken {
+        name,
+        body: Some(&rest[..len]),
+    }
 }
 
 /// Strips the surrounding quotes & processes escape sequences \n \t \r \\ \" \0
