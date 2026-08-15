@@ -7,6 +7,8 @@ use crate::compiler::type_system::TypeExpr;
 use crate::errors::BLUE;
 use crate::errors::blue;
 use crate::errors::crash;
+use crate::macros;
+use crate::macros::Expansion;
 use ariadne::Color;
 use ariadne::Label;
 use ariadne::Report;
@@ -22,6 +24,7 @@ use blocks::parse_match;
 use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
 use blocks::parse_while_block;
+use lexer::MacroToken;
 use lexer::parse_string;
 use logos::SpannedIter;
 use parser_expr::add_op;
@@ -49,6 +52,11 @@ struct Parser<'a> {
     input: TokenIter<'a>,
     ctx: ParserCtx<'a>,
     last_token_end: usize,
+    /// Set while parsing the source a macro expanded to. That source is not in
+    /// the file, so every span the sub-parse produces is the span of the macro
+    /// invocation instead: expressions spliced into the program point at the
+    /// macro site, and so does any error raised while parsing them.
+    span_override: Option<Span>,
 }
 
 #[derive(Clone)]
@@ -75,6 +83,14 @@ enum ParserErr<'a> {
     /// joined with `/` so the error suggests the exact replacement.
     LegacyNamespacedImport(String),
     ImportPathBadExtension,
+    /// `name!(` whose region the file ends before closing.
+    UnterminatedMacroRegion(&'a str),
+    /// `name!(...)` with no expander registered for `name`.
+    UnknownMacro(&'a str),
+    /// (macro name, what the expander said)
+    MacroExpansionFailed(&'a str, String),
+    /// The expander returned more than one expression.
+    MacroExpansionTrailingTokens(&'a str),
 }
 
 impl ParserErr<'_> {
@@ -99,6 +115,10 @@ impl ParserErr<'_> {
             ParserErr::NestedFunctionDeclaration => "nested_function_declaration",
             ParserErr::LegacyNamespacedImport(_) => "legacy_namespaced_import",
             ParserErr::ImportPathBadExtension => "import_path_bad_extension",
+            ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
+            ParserErr::UnknownMacro(_) => "unknown_macro",
+            ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
+            ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
         }
     }
 }
@@ -141,6 +161,18 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::ImportPathBadExtension => &format!(
             "An import path either ends in {BLUE}{BOLD}.cdl{RESET} (a file import) or has no extension (a library import from the shipped library directory)"
+        ),
+        ParserErr::UnterminatedMacroRegion(name) => &format!(
+            "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
+        ),
+        ParserErr::UnknownMacro(name) => &format!(
+            "No macro named {RED}{BOLD}{name}!{RESET} is registered. Macros come from the program embedding candela, which decides what each one means"
+        ),
+        ParserErr::MacroExpansionFailed(name, message) => {
+            &format!("The {BLUE}{BOLD}{name}!{RESET} macro rejected this region: {message}")
+        }
+        ParserErr::MacroExpansionTrailingTokens(name) => &format!(
+            "The {BLUE}{BOLD}{name}!{RESET} macro expanded to more than one expression. A macro stands where an expression stands, so it expands to exactly one"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -188,10 +220,19 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
 }
 
 impl<'a> Parser<'a> {
+    /// The span the file sees for a token this parser just read; see
+    /// [`Parser::span_override`].
+    #[inline(always)]
+    const fn placed(&self, span: Span) -> Span {
+        match self.span_override {
+            Some(macro_span) => macro_span,
+            None => span,
+        }
+    }
     #[inline(always)]
     fn eof_span(&self) -> Span {
         let end = self.ctx.src.contents.len();
-        (end, end).into()
+        self.placed((end, end).into())
     }
     #[cold]
     #[inline(never)]
@@ -206,13 +247,14 @@ impl<'a> Parser<'a> {
                 self.error(self.eof_span(), ParserErr::UnexpectedEOF);
             },
         );
-        self.last_token_end = t.1.end;
+        let span = self.placed((t.1.start, t.1.end).into());
+        self.last_token_end = span.end as usize;
         (
             t.0.unwrap_or_else(
                 #[cold]
-                |()| self.error((t.1.start, t.1.end).into(), ParserErr::UnknownToken),
+                |()| self.error(span, ParserErr::UnknownToken),
             ),
-            (t.1.start, t.1.end).into(),
+            span,
         )
     }
     #[inline(always)]
@@ -226,7 +268,7 @@ impl<'a> Parser<'a> {
         };
         t.unwrap_or_else(
             #[cold]
-            |()| self.error((start, end).into(), ParserErr::UnknownToken),
+            |()| self.error(self.placed((start, end).into()), ParserErr::UnknownToken),
         )
     }
     #[inline(always)]
@@ -238,10 +280,10 @@ impl<'a> Parser<'a> {
         else {
             self.error(self.eof_span(), ParserErr::UnexpectedEOF);
         };
-        Span {
+        self.placed(Span {
             start: start as u32,
             end: end as u32,
-        }
+        })
     }
     #[inline(always)]
     fn peek_token_opt(&mut self) -> Option<Token<'a>> {
@@ -251,14 +293,16 @@ impl<'a> Parser<'a> {
             .map(|(t, span)| (*t, span.start, span.end))?;
         Some(t.unwrap_or_else(
             #[cold]
-            |()| self.error((start, end).into(), ParserErr::UnknownToken),
+            |()| self.error(self.placed((start, end).into()), ParserErr::UnknownToken),
         ))
     }
     #[inline(always)]
     fn peek_token_opt_span(&mut self) -> Option<Span> {
-        self.input
+        let span = self
+            .input
             .peek()
-            .map(|x| (x.1.start as u32, x.1.end as u32).into())
+            .map(|x| (x.1.start as u32, x.1.end as u32).into())?;
+        Some(self.placed(span))
     }
     #[inline(always)]
     fn next_token_expect(&mut self, expected: Token, msg: &'static str) -> Span {
@@ -375,6 +419,61 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
             parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
         }
     }
+}
+
+/// Expands one `name!( ... )` invocation and parses what the expander returned
+/// in its place. `span` covers the whole invocation.
+fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr {
+    let Some(body) = region.body else {
+        cold_path();
+        parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
+    };
+    match macros::expand(region.name, body) {
+        Expansion::Text(expansion) => parse_expansion(parser, region.name, &expansion, span),
+        Expansion::Null => Expr::Null,
+        Expansion::Unknown => {
+            cold_path();
+            parser.error(span, ParserErr::UnknownMacro(region.name));
+        }
+        Expansion::Failed(error) => {
+            cold_path();
+            // `name!(` is the name plus two characters, all ASCII, so the body
+            // starts that many bytes into the invocation.
+            let body_start = span.start + region.name.len() as u32 + 2;
+            let error_span = match error.offset {
+                Some(offset) => {
+                    let start = body_start + (offset.min(body.len()) as u32);
+                    (start, (start + 1).min(body_start + body.len() as u32)).into()
+                }
+                None => span,
+            };
+            parser.error(
+                error_span,
+                ParserErr::MacroExpansionFailed(region.name, error.message),
+            );
+        }
+    }
+}
+
+/// Parses `expansion` as a single expression, placed at the macro invocation
+/// `span`. The expanded text is not in any file, so every span it produces is
+/// the invocation's own; a program compiled from it reports against the macro
+/// the reader wrote, not against text they cannot see.
+fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span: Span) -> Expr {
+    let mut sub = Parser {
+        input: Token::lexer(expansion).spanned().peekable(),
+        ctx: ParserCtx {
+            src: parser.ctx.src,
+        },
+        last_token_end: span.end as usize,
+        span_override: Some(span),
+    };
+    let expr = parse_expr(&mut sub);
+    if sub.peek_token_opt().is_some() {
+        cold_path();
+        sub.error(span, ParserErr::MacroExpansionTrailingTokens(macro_name));
+    }
+    expr
 }
 
 fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
@@ -933,5 +1032,6 @@ pub fn parse(input: &str, src: &Source) -> Vec<Expr> {
         input: Token::lexer(input).spanned().peekable(),
         ctx: ParserCtx { src },
         last_token_end: 0,
+        span_override: None,
     })
 }
