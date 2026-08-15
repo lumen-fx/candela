@@ -28,6 +28,7 @@ use candela::compiler::compile;
 use candela::compiler::compiler_data::{Function, Struct};
 use candela::compiler::expr::{Expr, Span};
 use candela::compiler::type_system::DataType;
+use candela::macros::MacroEnv;
 use candela::{Diagnostic, collect_diagnostic};
 
 /// A function or struct declaration, with enough information to render a
@@ -113,7 +114,14 @@ pub struct AnalysisOutcome {
 pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     let owned = text.to_owned();
     let path = path.to_owned();
-    match collect_diagnostic(move || compile(owned, &path, false)) {
+    // Macros belong to whatever program embeds candela, and the server is not
+    // that program: it has no expanders and cannot get them. An unregistered
+    // macro therefore compiles as `null` here instead of failing, so a buffer
+    // that uses its host's macros still type-checks and still reports its own
+    // errors.
+    let mut macros = MacroEnv::new();
+    macros.allow_unknown(true);
+    match macros.scope(move || collect_diagnostic(move || compile(owned, &path, false))) {
         Err(diagnostic) => AnalysisOutcome {
             diagnostic: Some(diagnostic),
             summary: None,
@@ -484,5 +492,34 @@ impl ProgramSummary {
     }
     pub fn structs_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a StructSymbol> {
         self.structs.iter().filter(move |s| s.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze;
+
+    /// A buffer using a macro of the host it is written for still analyzes:
+    /// the server has no expanders, so the macro compiles as `null` and the
+    /// rest of the file is checked as usual.
+    #[test]
+    fn an_unknown_macro_is_not_a_diagnostic() {
+        let source = "fn main() {\n    let markup = lmn!(<p>hi</p>);\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        assert!(summary.functions.iter().any(|f| f.name == "main"));
+    }
+
+    /// The macro is skipped, not the errors around it.
+    #[test]
+    fn a_real_error_beside_a_macro_is_still_reported() {
+        let source = "fn main() {\n    let markup = lmn!(<p/>);\n    let broken = 1 +\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(outcome.diagnostic.is_some());
     }
 }
