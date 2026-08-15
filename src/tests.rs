@@ -3920,6 +3920,38 @@ pub fn genuine_panic_propagates_through_collect() {
 }
 
 #[test]
+pub fn concurrent_collections_and_panics_do_not_wedge() {
+    // The silencing hook is process-global: collecting threads install and
+    // remove it while other threads run it by panicking. Neither side may wait
+    // on a lock the other holds, so this must finish rather than park forever.
+    // The no-op hook keeps the probe panics out of the test output.
+    const ROUNDS: usize = 2000;
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        threads.push(std::thread::spawn(|| {
+            for _ in 0..ROUNDS {
+                assert!(compile_diag("fn main() { let x = ", "wedge.cdl").is_err());
+            }
+        }));
+    }
+    for _ in 0..16 {
+        threads.push(std::thread::spawn(|| {
+            for _ in 0..ROUNDS {
+                let _ = std::panic::catch_unwind(|| panic!("hook probe"));
+            }
+        }));
+    }
+    for thread in threads {
+        thread.join().expect("thread finished");
+    }
+
+    std::panic::set_hook(previous);
+}
+
+#[test]
 pub fn stress_compiler_large_and_recursive() {
     use std::fmt::Write as _;
     // Large generated program (many statements + many functions).
