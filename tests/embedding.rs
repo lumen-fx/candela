@@ -5,6 +5,7 @@
 //! them, and invoke script functions by name with marshalled arguments, with
 //! state persisting between calls and errors surfaced as `Diagnostic` values.
 
+use candela::macros::{MacroError, scan_regions};
 use candela::{Engine, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -671,4 +672,136 @@ fn main() {}
     let mut program = engine.compile(src, "main.cdl").expect("compiles");
     let result = program.call("width", &["abcd".into()]).expect("call ok");
     assert_eq!(result, Value::Int(4));
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+//
+// `name!( ... )` is a raw region the embedder gives meaning to. The engine
+// registers an expander for a name; the region body reaches it untouched and
+// the candela source it returns is parsed at the macro.
+// ---------------------------------------------------------------------------
+
+/// A markup-flavoured stub standing in for what a UI host would register:
+/// the region is its own little language, and the expansion is candela.
+fn markup_engine() -> Engine {
+    let mut engine = Engine::new();
+    engine.register_macro("lmn", |body: &str| {
+        let tags = body.matches('<').count();
+        Ok::<String, MacroError>(format!("\"{}\" + \"{tags}\"", body.trim()))
+    });
+    engine
+}
+
+#[test]
+fn a_registered_macro_expands_where_an_expression_goes() {
+    let engine = markup_engine();
+
+    let src = r"
+fn markup() -> string {
+    return lmn!(<p>hello</p>);
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let value = program.call("markup", &[]).expect("call ok");
+    assert_eq!(value, Value::String(String::from("<p>hello</p>2")));
+}
+
+#[test]
+fn a_macro_expansion_is_an_argument_like_any_other() {
+    let mut engine = markup_engine();
+    engine.register_host_fn("app", "width", |markup: &str| markup.len() as i64);
+
+    let src = r#"
+host "app" {
+    int width(string);
+}
+
+fn measure() -> int {
+    return app::width(lmn!(<b/>));
+}
+
+fn main() {}
+"#;
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(
+        program.call("measure", &[]).expect("call ok"),
+        Value::Int(5)
+    );
+}
+
+#[test]
+fn an_unregistered_macro_fails_the_compile() {
+    let engine = Engine::new();
+    let err = engine
+        .compile("fn main() { let m = lmn!(<p/>); }", "main.cdl")
+        .err()
+        .expect("nothing gives lmn! a meaning");
+    assert_eq!(err.code, "unknown_macro");
+    assert!(err.message.contains("lmn!"), "{}", err.message);
+}
+
+#[test]
+fn unknown_macros_can_be_allowed_for_tooling() {
+    let mut engine = Engine::new();
+    engine.allow_unknown_macros(true);
+
+    let src = r"
+fn markup() {
+    return lmn!(<p/>);
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("markup", &[]).expect("call ok"), Value::Null);
+}
+
+#[test]
+fn an_expander_error_lands_on_the_offending_byte() {
+    let mut engine = Engine::new();
+    engine.register_macro("lmn", |body: &str| {
+        Err::<String, _>(MacroError::at("unclosed tag", body.find("<span").unwrap()))
+    });
+
+    let src = "fn main() { let m = lmn!(<div><span>); }";
+    let err = engine
+        .compile(src, "main.cdl")
+        .err()
+        .expect("the expander refused");
+    assert_eq!(err.code, "macro_expansion_failed");
+    assert!(err.message.contains("unclosed tag"), "{}", err.message);
+    assert_eq!(err.span.start, src.find("<span").unwrap());
+    assert_eq!(err.filename, "main.cdl");
+}
+
+#[test]
+fn scan_regions_finds_what_the_lexer_finds() {
+    let src = r#"
+fn main() {
+    let quoted = "lmn!(not a macro)";
+    // lmn!(not a macro either)
+    let one = lmn!(<p>(a)</p>);
+    let two = lmn!(<b/>);
+}
+"#;
+
+    let regions = scan_regions(src, "lmn");
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0].body, "<p>(a)</p>");
+    assert_eq!(regions[1].body, "<b/>");
+    assert_eq!(&src[regions[0].span.clone()], "lmn!(<p>(a)</p>)");
+    assert_eq!(&src[regions[1].body_start..regions[1].span.end - 1], "<b/>");
+
+    // What the scanner reports is what compiling the same source expands.
+    let mut engine = Engine::new();
+    engine.register_macro("lmn", |body: &str| {
+        Ok::<String, MacroError>(format!("\"{body}\""))
+    });
+    engine.compile(src, "main.cdl").expect("compiles");
 }
