@@ -163,11 +163,12 @@ fn skip_string(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-/// Byte index of the newline that ends the `//` comment at `start`, or the end
-/// of the input.
+/// Byte index of the line ending that ends the `//` comment at `start`, or the
+/// end of the input. Both `\n` and `\r` end a comment, as they do for the
+/// lexer.
 fn skip_line_comment(bytes: &[u8], start: usize) -> usize {
     let mut i = start + 2;
-    while i < bytes.len() && bytes[i] != b'\n' {
+    while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
         i += 1;
     }
     i
