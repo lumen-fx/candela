@@ -26,6 +26,9 @@ attribution details.
   - `import`, `host`, and `dylib` constructs, struct declarations and literals,
     `enum` and `impl` declarations, function definitions and calls, method
     calls, and `namespace::` access.
+  - Macro invocations, `name!( ... )`: the name colors as a macro rather than a
+    function, and the region between the parentheses stays raw, so markup
+    written inside one is not read as candela strings and operators.
 - Language configuration: line comments (`//`), bracket matching, auto-closing
   and surrounding pairs, and `{}` indentation rules.
 - Snippets, by prefix: `main`, `fn`, `struct`, `let`, `if`, `ifelse`, `for`,
@@ -51,6 +54,11 @@ attribution details.
 - Modules: `import "file.cdl";` for a file, `import "std/list";` for a shipped
   library. A bare import merges the module's symbols into the file's scope;
   `import "..." as alias;` keeps them behind `alias::`.
+- Macros: `name!( ... )` hands the raw region between the parentheses to the
+  program embedding candela, which returns candela source to parse in its
+  place. The region ends at the parenthesis that balances the one that opened
+  it, skipping parentheses inside a string or after `//`. candela defines no
+  macros of its own and never reads a region.
 
 ## Language server
 
