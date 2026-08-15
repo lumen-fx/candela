@@ -70,7 +70,7 @@ local function register_parser(opts)
         url = info.path or info.url,
         revision = info.revision,
         location = GRAMMAR_LOCATION,
-        files = { 'src/parser.c' },
+        files = { 'src/parser.c', 'src/scanner.c' },
       },
       filetype = 'candela',
     }

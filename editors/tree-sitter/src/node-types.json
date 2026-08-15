@@ -52,6 +52,10 @@
           "named": true
         },
         {
+          "type": "macro_invocation",
+          "named": true
+        },
+        {
           "type": "map_literal",
           "named": true
         },
@@ -140,6 +144,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "macro_invocation",
           "named": true
         },
         {
@@ -259,6 +267,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -382,6 +394,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -471,6 +487,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -622,6 +642,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -747,6 +771,10 @@
         },
         {
           "type": "loop_statement",
+          "named": true
+        },
+        {
+          "type": "macro_invocation",
           "named": true
         },
         {
@@ -1004,6 +1032,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -1173,6 +1205,10 @@
           "named": true
         },
         {
+          "type": "macro_invocation",
+          "named": true
+        },
+        {
           "type": "map_literal",
           "named": true
         },
@@ -1331,6 +1367,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -1430,6 +1470,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -1557,6 +1601,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -1800,6 +1848,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -1968,6 +2020,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2051,6 +2107,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -2156,6 +2216,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2212,6 +2276,32 @@
     }
   },
   {
+    "type": "macro_invocation",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "macro_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "map_entry",
     "named": true,
     "fields": {
@@ -2261,6 +2351,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -2347,6 +2441,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -2525,6 +2623,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2642,6 +2744,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2755,6 +2861,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -2904,6 +3014,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "macro_invocation",
           "named": true
         },
         {
@@ -3089,6 +3203,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3172,6 +3290,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -3264,6 +3386,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -3405,6 +3531,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3491,6 +3621,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3574,6 +3708,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "macro_invocation",
             "named": true
           },
           {
@@ -3806,6 +3944,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3949,6 +4091,10 @@
             "named": true
           },
           {
+            "type": "macro_invocation",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3990,6 +4136,10 @@
   },
   {
     "type": "!",
+    "named": false
+  },
+  {
+    "type": "!(",
     "named": false
   },
   {
@@ -4212,6 +4362,10 @@
   {
     "type": "loop",
     "named": false
+  },
+  {
+    "type": "macro_body",
+    "named": true
   },
   {
     "type": "match",

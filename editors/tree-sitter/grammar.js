@@ -49,6 +49,14 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  // The region between a macro's parentheses ends at the parenthesis that
+  // balances the one that opened it, which no token rule can describe. The
+  // scanner in src/scanner.c finds that end the way `region_len` in
+  // src/macros.rs does, and yields the region as one token. The sentinel after
+  // it belongs to no rule; it is how the scanner sees that the parser is
+  // recovering from an error, where every token is valid at once.
+  externals: ($) => [$.macro_body, $._error_sentinel],
+
   conflicts: ($) => [
     // `while x { ... }`: the parser cannot know whether `x` names a struct
     // being built or is the whole condition until it has read the brace body.
@@ -288,6 +296,7 @@ module.exports = grammar({
         $.parenthesized_expression,
         $.closure_expression,
         $.if_expression,
+        $.macro_invocation,
       ),
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
@@ -418,6 +427,20 @@ module.exports = grammar({
       seq('else', 'if', field('condition', $._expression), field('consequence', $.block)),
 
     else_clause: ($) => seq('else', field('body', $.block)),
+
+    // `name!( ... )`, an expression the host that embeds candela expands. The
+    // body is raw text in whatever language the host reads, so it is one
+    // opaque token and none of candela's own rules apply inside it. `!(`
+    // follows the name with nothing between, as it does in the lexer, so `!`
+    // after a name with a space before the parenthesis stays the negation
+    // operator.
+    macro_invocation: ($) =>
+      seq(
+        field('name', $.identifier),
+        token.immediate('!('),
+        optional(field('body', $.macro_body)),
+        ')',
+      ),
 
     qualified_identifier: ($) =>
       seq(
