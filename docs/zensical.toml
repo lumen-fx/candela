@@ -39,6 +39,7 @@ nav = [
      "language/collections.md",
      "language/error-handling.md",
      "language/modules.md",
+     "language/macros.md",
   ]},
   {"Standard library" = [
      "standard-library/overview.md",

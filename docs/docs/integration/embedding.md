@@ -119,6 +119,48 @@ No arity or type checking happens at the call site; the closure interprets what
 it is handed. A variadic declaration bound to a fixed closure, or the reverse,
 is a `Diagnostic` at compile time.
 
+### register_macro
+
+```rust
+use candela::macros::MacroError;
+
+engine.register_macro("lmn", |body: &str| {
+    Ok::<String, MacroError>(format!("\"{}\"", body.trim()))
+});
+```
+
+Gives `lmn!( ... )` a meaning in the scripts this engine compiles. The closure
+receives the raw text between the parentheses, which candela does not interpret,
+and returns candela source for one expression, which is parsed where the macro
+stands. This is how a host puts its own syntax into a script; see
+[macros](../language/macros.md) for what a script author sees.
+
+Returning `MacroError` instead fails the compile at the macro:
+
+```rust
+pub struct MacroError {
+    pub message: String,
+    pub offset: Option<usize>,
+}
+```
+
+`offset` is a byte offset into the region body. Set it (`MacroError::at`) and
+the diagnostic points at that position in the file the macro was written in;
+leave it out (`MacroError::new`) and it covers the whole invocation. The region
+ends at the parenthesis balancing the one that opened it, ignoring parentheses
+inside candela string literals and after `//`.
+
+### allow_unknown_macros
+
+```rust
+engine.allow_unknown_macros(true);
+```
+
+A macro with no registered expander fails the compile by default, naming it.
+Turning this on compiles it as `null` instead. It is for tools that read scripts
+written for a host they are not part of, and would otherwise report every one of
+that host's macros as an error; candela's own language server does this.
+
 ### compile
 
 ```rust
@@ -167,6 +209,35 @@ declaration rather than accepted as a new specialisation.
 
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.
+
+## Finding macro regions
+
+A build tool often needs to know where a macro is used before anything is
+compiled: to collect the markup in a project, to hash it, to generate assets
+from it. `scan_regions` runs the scanner the lexer runs, over plain source:
+
+```rust
+use candela::macros::scan_regions;
+
+for region in scan_regions(&source, "lmn") {
+    println!("{} at {:?}", region.body, region.span);
+}
+```
+
+```rust
+pub struct Region<'a> {
+    pub body: &'a str,
+    pub body_start: usize,
+    pub span: Range<usize>,
+}
+```
+
+`body` is the raw text between the parentheses, `body_start` its byte offset in
+the source, and `span` the byte range of the whole invocation. The results match
+what compiling the same source expands, including which `name!(` occurrences do
+not count: one written inside a string literal or after `//` is not an
+invocation. Scanning stops at a region the source never closes, so every region
+returned is complete.
 
 ## Running a precompiled artifact
 

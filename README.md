@@ -67,6 +67,9 @@ Run `candela` with no arguments for a REPL.
 - **Embedding.** A Rust host registers functions of its own, calls a script's
   functions by name, and exchanges values with it, either compiling the source
   in-process or loading a `.cdlb` with the compiler left out.
+- **Macros the host defines.** `name!( ... )` hands the raw region between the
+  parentheses to the embedding program, which returns candela source to parse in
+  its place. candela ships no macros of its own and never interprets a region.
 
 ## Limitations
 
