@@ -31,6 +31,8 @@ use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::macros::MacroEnv;
+use crate::macros::MacroError;
 use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
 use candela_vm::data::NULL;
@@ -67,6 +69,7 @@ use smol_strc::SmolStr;
 #[derive(Default)]
 pub struct Engine {
     registry: HostRegistry,
+    macros: MacroEnv,
 }
 
 impl Engine {
@@ -114,6 +117,39 @@ impl Engine {
         self.registry.register_host_fn_variadic(namespace, name, f);
     }
 
+    /// Registers the expander for `name!( ... )` invocations in the scripts this
+    /// engine compiles.
+    ///
+    /// The expander receives the raw text between the parentheses, which
+    /// candela does not interpret, and returns candela source for one
+    /// expression that is parsed in its place. A [`MacroError`] it returns
+    /// instead becomes a compile error at the macro, at the byte offset into
+    /// the region the error names.
+    ///
+    /// ```no_run
+    /// use candela::macros::MacroError;
+    ///
+    /// let mut engine = candela::Engine::new();
+    /// engine.register_macro("rows", |body: &str| {
+    ///     Ok::<String, MacroError>(body.lines().count().to_string())
+    /// });
+    /// ```
+    pub fn register_macro<F>(&mut self, name: &str, expander: F)
+    where
+        F: Fn(&str) -> Result<String, MacroError> + 'static,
+    {
+        self.macros.register(name, expander);
+    }
+
+    /// Sets what a macro with no registered expander does: fail the compile
+    /// naming it (the default), or, when `allow` is true, compile as `null`.
+    ///
+    /// Tooling that reads scripts written for a host it is not part of turns
+    /// this on, so the host's macros do not read as errors.
+    pub const fn allow_unknown_macros(&mut self, allow: bool) {
+        self.macros.allow_unknown(allow);
+    }
+
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
     /// it declares to the matching registered closure.
     ///
@@ -128,8 +164,9 @@ impl Engine {
     /// `main` raises a runtime error.
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
-        let out: CompileOutput =
-            collect_diagnostic(|| compile(src.to_owned(), &filename_owned, false))?;
+        let out: CompileOutput = self
+            .macros
+            .scope(|| collect_diagnostic(|| compile(src.to_owned(), &filename_owned, false)))?;
 
         // Bind each declared host function to a registered closure, validating
         // arity + types against the closure's derived signature.
