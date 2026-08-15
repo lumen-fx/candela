@@ -386,3 +386,120 @@ fn main() {
           (else_clause
             (block
               (identifier))))))))
+
+================================================================================
+Macro invocations (docs/docs/language/macros.md)
+================================================================================
+
+fn main() {
+    let markup = lmn!(<p>Hello</p>);
+    print(width(lmn!(<b/>)));
+    let joined = lmn!(<b/>) + tail;
+    let empty = lmn!();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (macro_invocation
+          (identifier)
+          (macro_body)))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (identifier)
+              (arguments
+                (macro_invocation
+                  (identifier)
+                  (macro_body)))))))
+      (let_declaration
+        (identifier)
+        (binary_expression
+          (macro_invocation
+            (identifier)
+            (macro_body))
+          (identifier)))
+      (let_declaration
+        (identifier)
+        (macro_invocation
+          (identifier))))))
+
+================================================================================
+A macro region ends at the balancing parenthesis (docs/docs/language/macros.md)
+================================================================================
+
+fn main() {
+    let a = lmn!(f(g(1)));
+    let b = lmn!(<a href="x)y">link</a>);
+    let c = lmn!(x // ) not the end
+);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (macro_invocation
+          (identifier)
+          (macro_body)))
+      (let_declaration
+        (identifier)
+        (macro_invocation
+          (identifier)
+          (macro_body)))
+      (let_declaration
+        (identifier)
+        (macro_invocation
+          (identifier)
+          (macro_body))))))
+
+================================================================================
+An identifier before `!` is not a macro (docs/docs/language/macros.md)
+================================================================================
+
+fn main() {
+    let lmn = 4;
+    if !ready { print(lmn); }
+    print(lmn != 4);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (integer_literal))
+      (expression_statement
+        (if_expression
+          (unary_expression
+            (identifier))
+          (block
+            (expression_statement
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier)))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (identifier)
+              (integer_literal))))))))

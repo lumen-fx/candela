@@ -64,6 +64,14 @@ their escapes, `true`, `false`, `null`, lists, maps, struct literals, and
 anonymous functions. The type syntax covers arrays, map types, unions, and
 namespaced names.
 
+A macro invocation, `name!( ... )`, parses as an expression whose body is one
+opaque region. The region ends at the parenthesis that balances the one that
+opened it, and a parenthesis inside a string literal or after `//` does not
+count, so the grammar finds the same end the compiler does. What the region
+holds belongs to the program that embeds candela, so the queries colour it as
+raw text and none of candela's own rules reach inside it. A name with a space
+before the `!` is not a macro; there the `!` is the negation operator.
+
 candela has one comment form, the line comment. A `///` comment is an ordinary
 comment; the standard library writes them ahead of a declaration to document
 it, and the queries colour them as documentation.
@@ -85,6 +93,10 @@ Commit the regenerated `src/` along with `grammar.js`. Corpus cases in
 documentation, so a construct that appears in real candela source has a test.
 Update the expectations with `npx tree-sitter test --update` and read the diff
 before committing it.
+
+`src/scanner.c` is written by hand and `generate` leaves it alone. It reads the
+raw region of a macro invocation, whose end balanced parentheses put out of
+reach of a token rule.
 
 Consumers name the revision they build the grammar from: the `[[grammar]]`
 section for Helix, `grammar_revision` for Neovim, and `[grammars.candela] rev`
