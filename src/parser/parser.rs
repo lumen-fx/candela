@@ -9,6 +9,7 @@ use crate::errors::blue;
 use crate::errors::crash;
 use crate::macros;
 use crate::macros::Expansion;
+use crate::macros::MAX_EXPANSION_DEPTH;
 use ariadne::Color;
 use ariadne::Label;
 use ariadne::Report;
@@ -91,6 +92,8 @@ enum ParserErr<'a> {
     MacroExpansionFailed(&'a str, String),
     /// The expander returned more than one expression.
     MacroExpansionTrailingTokens(&'a str),
+    /// Macros expanded into one another past [`MAX_EXPANSION_DEPTH`].
+    MacroRecursionLimit(&'a str),
 }
 
 impl ParserErr<'_> {
@@ -119,6 +122,7 @@ impl ParserErr<'_> {
             ParserErr::UnknownMacro(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
             ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
+            ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
         }
     }
 }
@@ -173,6 +177,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         }
         ParserErr::MacroExpansionTrailingTokens(name) => &format!(
             "The {BLUE}{BOLD}{name}!{RESET} macro expanded to more than one expression. A macro stands where an expression stands, so it expands to exactly one"
+        ),
+        ParserErr::MacroRecursionLimit(name) => &format!(
+            "Expanding this macro reached {RED}{BOLD}{name}!{RESET} more than {MAX_EXPANSION_DEPTH} macros deep. An expansion may use another macro, but the chain has to end"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -427,6 +434,12 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
     let Some(body) = region.body else {
         cold_path();
         parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
+    };
+    // Held until this expansion is parsed, so a macro reached through a chain
+    // of other macros counts the whole chain. At the cap `span` is already the
+    // outermost invocation, which is the one the reader wrote.
+    let Some(_level) = macros::Depth::enter() else {
+        parser.error(span, ParserErr::MacroRecursionLimit(region.name));
     };
     match macros::expand(region.name, body) {
         Expansion::Text(expansion) => parse_expansion(parser, region.name, &expansion, span),

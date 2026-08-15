@@ -133,7 +133,9 @@ Gives `lmn!( ... )` a meaning in the scripts this engine compiles. The closure
 receives the raw text between the parentheses, which candela does not interpret,
 and returns candela source for one expression, which is parsed where the macro
 stands. This is how a host puts its own syntax into a script; see
-[macros](../language/macros.md) for what a script author sees.
+[macros](../language/macros.md) for what a script author sees. An expansion may
+use a macro itself, up to 32 levels deep, so an expander that emits its own
+macro fails the compile instead of running out of stack.
 
 Returning `MacroError` instead fails the compile at the macro:
 
