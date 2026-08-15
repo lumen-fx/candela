@@ -35,6 +35,7 @@ Raised while the file is read, before any type is known.
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Constant arithmetic | Integer division or remainder by a literal zero, or an integer raised to a negative literal exponent |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
+| Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, or an expansion that is not a single expression. See [macros](../language/macros.md) |
 
 ## Compile errors
 
