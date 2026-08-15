@@ -11,6 +11,7 @@
 
 mod common;
 
+use candela::HostRegistry;
 use candela::load_program;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,7 +60,7 @@ fn bytecode_round_trips_through_load() {
 
     // The lean loader accepts the artifact and reconstructs a runnable program.
     assert!(
-        load_program(&bytes).is_ok(),
+        load_program(&bytes, &HostRegistry::new()).is_ok(),
         "freshly built artifact must load"
     );
 }
@@ -101,20 +102,24 @@ fn method_program_round_trips_and_runs() {
     // Load it with the lean loader and run it exactly as `candela-vm` does
     // (`candela-vm`'s whole job is `load_program(..).run()`). Methods are just
     // ordinary calls in the bytecode, so this executes to completion unchanged.
-    let mut program = load_program(&bytes).expect("method artifact must load on the VM-only path");
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("method artifact must load on the VM-only path");
     program.run();
 }
 
 #[test]
 fn empty_main_round_trips() {
     let bytes = candela::build_bytecode("fn main() {}".to_owned(), "empty.cdl").expect("compiles");
-    assert!(load_program(&bytes).is_ok(), "empty program must load");
+    assert!(
+        load_program(&bytes, &HostRegistry::new()).is_ok(),
+        "empty program must load"
+    );
 }
 
 #[test]
 fn bad_magic_is_rejected() {
     assert!(matches!(
-        load_program(b"NOPE\x01garbage"),
+        load_program(b"NOPE\x01garbage", &HostRegistry::new()),
         Err(candela::LoadError::BadMagic)
     ));
 }
@@ -122,7 +127,7 @@ fn bad_magic_is_rejected() {
 #[test]
 fn truncated_is_rejected() {
     assert!(matches!(
-        load_program(b"CD"),
+        load_program(b"CD", &HostRegistry::new()),
         Err(candela::LoadError::Truncated)
     ));
 }
@@ -131,23 +136,23 @@ fn truncated_is_rejected() {
 fn unknown_version_is_rejected() {
     // Correct magic, but a version byte this runtime does not understand.
     assert!(matches!(
-        load_program(b"CDLB\xff"),
+        load_program(b"CDLB\xff", &HostRegistry::new()),
         Err(candela::LoadError::UnsupportedVersion(0xff))
     ));
 }
 
 #[test]
-fn current_format_version_is_four_and_v2_is_rejected() {
-    // The version byte was bumped to 4 when the map/json/any library functions
-    // were added. A freshly built artifact must carry version 4.
+fn current_format_version_is_five_and_v2_is_rejected() {
+    // The version byte was bumped to 5 when the export table was added. A
+    // freshly built artifact must carry version 5.
     let bytes = candela::build_bytecode("fn main() {}".to_owned(), "v.cdl").expect("compiles");
-    assert_eq!(bytes[4], 4, "current .cdlb format version must be 4");
+    assert_eq!(bytes[4], 5, "current .cdlb format version must be 5");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
     // rejects before decoding the body.)
     assert!(matches!(
-        load_program(b"CDLB\x02anything"),
+        load_program(b"CDLB\x02anything", &HostRegistry::new()),
         Err(candela::LoadError::UnsupportedVersion(2))
     ));
 }
@@ -170,8 +175,9 @@ fn enum_values_roundtrip_through_cdlb() {
         }
     ";
     let bytes = candela::build_bytecode(src.to_owned(), "enums.cdl").expect("compiles");
-    assert_eq!(bytes[4], 4);
-    let mut program = load_program(&bytes).expect("enum artifact must load on the VM-only path");
+    assert_eq!(bytes[4], 5);
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("enum artifact must load on the VM-only path");
     program.run();
 }
 
@@ -202,8 +208,8 @@ fn multi_file_program_is_captured_whole() {
 
     // The artifact still loads and runs, proof the imported module was
     // captured, not merely referenced.
-    let mut program =
-        load_program(&bytes).expect("whole-program artifact must load with sources absent");
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("whole-program artifact must load with sources absent");
     program.run();
 
     std::fs::remove_dir_all(&dir).ok();
@@ -243,7 +249,8 @@ fn dyn_lib_program_round_trips_and_rebinds() {
 
         // Load re-opens libz through the OS loader and rebuilds the libffi CIF,
         // then runs to completion (prints the zlib version).
-        let mut program = load_program(&bytes).expect("dyn-lib artifact must re-resolve and load");
+        let mut program = load_program(&bytes, &HostRegistry::new())
+            .expect("dyn-lib artifact must re-resolve and load");
         program.run();
     }
 }
@@ -253,21 +260,21 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// A `host` block program builds to a `.cdlb` (the recipe is captured), but
-/// the standalone runtime has no embedder to bind the host fn to, so loading it
-/// must fail with a clear error that names the missing function.
+/// A `host` block program builds to a `.cdlb` (the recipe is captured), but an
+/// empty registry has no closure to bind the host fn to, so loading it must
+/// fail with a clear error that names the missing function.
 #[test]
 fn host_block_program_builds_but_load_names_missing_host_fn() {
     let src = "host \"app\" { int rows(string); }\n\nfn main() { print(\"start\"); }\n";
     let bytes = candela::build_bytecode(src.to_owned(), "h.cdl")
         .expect("host-block program must now build to a .cdlb artifact");
 
-    match load_program(&bytes) {
-        Err(candela::LoadError::MissingHostFn(name)) => {
-            assert_eq!(name, "app::rows", "the missing host fn must be named");
+    match load_program(&bytes, &HostRegistry::new()) {
+        Err(candela::LoadError::HostBinding(candela::HostBindError::Unregistered(names))) => {
+            assert_eq!(names, ["app::rows"], "the missing host fn must be named");
         }
-        Err(e) => panic!("expected MissingHostFn, got: {e}"),
-        Ok(_) => panic!("standalone load must not silently succeed for a host-block artifact"),
+        Err(e) => panic!("expected an unregistered host fn, got: {e}"),
+        Ok(_) => panic!("load must not silently succeed when a host fn is unbound"),
     }
 }
 

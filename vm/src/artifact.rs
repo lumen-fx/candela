@@ -6,6 +6,12 @@
 //! `candela-vm` binary loads it ([`load_program`]) and runs it
 //! ([`RuntimeProgram::run`]) WITHOUT the parser, compiler, or REPL.
 //!
+//! An embedding host gets the same two halves the `Engine`/`Program` pair
+//! gives it, minus the compiler: it supplies a [`HostRegistry`] at load so the
+//! artifact's `host` functions bind to Rust closures, and it invokes script
+//! functions by name through [`RuntimeProgram::call`], which runs a trampoline
+//! the compiler emitted at build time.
+//!
 //! The on-disk format is: a 4-byte magic (`CDLB`), a 1-byte format version, then
 //! a `postcard`-encoded [`ProgramImage`]. `postcard` was chosen over `bincode`
 //! because it is `no_std`/`alloc`-friendly and its varint encoding keeps the
@@ -18,12 +24,22 @@
 
 use crate::data::Data;
 use crate::data::DataHash;
+use crate::embed::HostBindError;
+use crate::embed::HostDispatch;
+use crate::embed::HostRegistry;
+use crate::embed::Value;
+use crate::embed::marshal_value;
+use crate::embed::unmarshal_value;
+use crate::embed::value_matches_type;
+use crate::errors::Diagnostic;
 use crate::errors::ErrorCtx;
+use crate::errors::collect_diagnostic;
 use crate::instr::Instr;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
 use crate::rt::EnumType;
 use crate::rt::EnumVariant;
+use crate::rt::HostFnSig;
 use crate::rt::InstrSrc;
 use crate::rt::Pools;
 use crate::rt::Source;
@@ -55,8 +71,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// host-function recipe tables (`dyn_lib_fns`/`host_fns`). Version 3 added the
 /// native-enum type table (`enums`) and the `CloneEnum` instruction. Version 4
 /// added the map/json/any library functions (`Keys`/`Values`/`JsonParse`/
-/// `JsonStringify` and the `is_*`/`as_*` value ops).
-const FORMAT_VERSION: u8 = 4;
+/// `JsonStringify` and the `is_*`/`as_*` value ops). Version 5 added the export
+/// table (`exports`), the call trampolines that back
+/// [`RuntimeProgram::call`].
+const FORMAT_VERSION: u8 = 5;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
@@ -85,10 +103,13 @@ pub struct ProgramImage {
     /// [`resolve_library_filename`]).
     pub dyn_lib_fns: Vec<DynLibFnImage>,
     /// Recipe for each `host` function declared by the program, in host-fn id
-    /// order. Standalone `candela-vm` has no embedder to bind these to, so a
-    /// non-empty list makes the artifact fail to load with a clear error naming
-    /// the host function; embedding runtimes carry their own binding path.
+    /// order. The [`HostRegistry`] handed to [`load_program`] supplies the
+    /// closure behind each one; an unregistered name is a load error.
     pub host_fns: Vec<HostFnImage>,
+    /// One entry per host-callable function, each with the call trampoline the
+    /// compiler emitted for it at build time. This is what lets the VM invoke a
+    /// script function by name with no compiler present.
+    pub exports: Vec<ExportImage>,
 }
 
 /// Serializable recipe for one dynamic-library binding: enough to re-open the
@@ -113,6 +134,41 @@ pub struct HostFnImage {
     /// `[ return_type, arg_types... ]`.
     pub types: Vec<DataType>,
     pub variadic: bool,
+}
+
+impl From<&HostFnImage> for HostFnSig {
+    fn from(image: &HostFnImage) -> Self {
+        Self {
+            types: image.types.clone().into_boxed_slice(),
+            namespace: SmolStr::from(image.namespace.as_str()),
+            name: SmolStr::from(image.name.as_str()),
+            variadic: image.variadic,
+        }
+    }
+}
+
+/// One host-callable function, with the call trampoline `candela build`
+/// compiled for it.
+///
+/// The compiler specialises the function for its declared parameter types and
+/// lays down a short instruction run that moves the parameter registers into
+/// place, calls the specialisation, and halts. Invoking it is then a matter of
+/// writing marshalled arguments into `arg_registers` and executing from
+/// `entry`; the result is left in `ret_register`.
+#[derive(Serialize, Deserialize)]
+pub struct ExportImage {
+    /// The name the function is called by, as written in the source.
+    pub name: String,
+    /// Instruction index the trampoline starts at.
+    pub entry: u64,
+    /// The register holding each parameter, in declaration order.
+    pub arg_registers: Vec<u16>,
+    /// The declared type of each parameter, checked against the host's
+    /// arguments before the call runs.
+    pub arg_types: Vec<DataType>,
+    /// The register the trampoline leaves the result in. Register 0 is the null
+    /// sink, which is what a function returning nothing lands on.
+    pub ret_register: u16,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -151,10 +207,22 @@ pub struct SourceImage {
     pub contents: String,
 }
 
+/// One host-callable function in a loaded program: where its trampoline starts,
+/// which registers its parameters live in, and what it leaves the result in.
+struct Export {
+    entry: usize,
+    arg_registers: Box<[u16]>,
+    arg_types: Box<[DataType]>,
+    ret_register: u16,
+}
+
 /// A loaded, ready-to-run program image with owned runtime state.
 ///
 /// Produced by [`load_program`] from `.cdlb` bytes. [`Self::run`] executes it
-/// exactly as the full `candela` binary runs a freshly compiled program.
+/// exactly as the full `candela` binary runs a freshly compiled program, and
+/// [`Self::call`] invokes an exported function by name. Registers and heap
+/// pools stay resident between calls, so state one call establishes is visible
+/// to the next.
 pub struct RuntimeProgram {
     instructions: Vec<Instr>,
     registers: Vec<Data>,
@@ -162,6 +230,9 @@ pub struct RuntimeProgram {
     instr_src: Vec<InstrSrc>,
     fn_registers: Vec<Vec<u16>>,
     dyn_lib_fns: Vec<DynamicLibFn>,
+    host_sigs: Vec<HostFnSig>,
+    host_dispatch: Vec<HostDispatch>,
+    exports: HashMap<String, Export>,
     structs: Vec<Struct>,
     enums: Vec<EnumType>,
     sources: Vec<Source>,
@@ -173,20 +244,11 @@ impl RuntimeProgram {
     /// Runs the program's `main` to completion.
     ///
     /// Runtime errors are printed and abort the process (via the VM's
-    /// `throw_error`), matching the full `candela <file.cdl>` path exactly.
+    /// `throw_error`), matching the full `candela <file.cdl>` path exactly. A
+    /// host that wants the error as a value instead runs this inside
+    /// [`collect_diagnostic`].
     pub fn run(&mut self) {
-        let err_ctx = ErrorCtx {
-            instr_src: self.instr_src.clone(),
-            sources: self
-                .sources
-                .iter()
-                .map(|s| Source {
-                    filename: s.filename.clone(),
-                    contents: s.contents.clone(),
-                })
-                .collect(),
-        };
-
+        let err_ctx = self.error_ctx();
         let mut register_file = RegisterFile(std::mem::take(&mut self.registers));
         vm::execute(
             &self.instructions,
@@ -199,28 +261,230 @@ impl RuntimeProgram {
             &self.enums,
             self.allocated_arg_count,
             self.allocated_call_depth,
-            &[],
-            &[],
+            &self.host_sigs,
+            &self.host_dispatch,
             0,
         );
         self.registers = std::mem::take(&mut register_file.0);
     }
+
+    /// Invokes the exported function `name` with `args`, returning its value
+    /// (or [`Value::Null`] for a function that returns nothing).
+    ///
+    /// The call runs the trampoline the compiler emitted for the function at
+    /// build time, against the resident register and heap state, so globals a
+    /// previous call or `main` established remain visible. Arguments are
+    /// checked against the declared parameter types before anything runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CallError`] if the artifact exports no such function, if the
+    /// arguments disagree with the declared signature, or if the call raises a
+    /// runtime error.
+    pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, CallError> {
+        let export = self
+            .exports
+            .get(name)
+            .ok_or_else(|| CallError::UnknownFunction(name.to_owned()))?;
+
+        if export.arg_registers.len() != args.len() {
+            return Err(CallError::ArgCount {
+                function: name.to_owned(),
+                expected: export.arg_registers.len(),
+                found: args.len(),
+            });
+        }
+        for (idx, (arg, declared)) in args.iter().zip(export.arg_types.iter()).enumerate() {
+            if !value_matches_type(arg, declared) {
+                return Err(CallError::ArgType {
+                    function: name.to_owned(),
+                    index: idx + 1,
+                    expected: declared.to_string(),
+                    found: describe_value(arg),
+                });
+            }
+        }
+
+        let entry = export.entry;
+        let ret_register = export.ret_register as usize;
+        // Copied out so the pools can be borrowed mutably for marshalling; an
+        // argument list is a handful of registers at most.
+        let arg_registers = export.arg_registers.clone();
+
+        for (register, arg) in arg_registers.iter().zip(args) {
+            let handle = marshal_value(
+                arg,
+                &mut self.pools.objs,
+                &mut self.pools.maps,
+                &mut self.pools.strings,
+            );
+            self.registers[*register as usize] = handle;
+        }
+
+        self.execute_from(entry)?;
+
+        Ok(unmarshal_value(
+            self.registers[ret_register],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+        ))
+    }
+
+    /// The names of every function this artifact exports, in no particular
+    /// order.
+    pub fn exports(&self) -> impl Iterator<Item = &str> {
+        self.exports.keys().map(String::as_str)
+    }
+
+    /// Runs the VM against the resident state starting at instruction `start`,
+    /// capturing any runtime error as a [`Diagnostic`].
+    fn execute_from(&mut self, start: usize) -> Result<(), Diagnostic> {
+        let err_ctx = self.error_ctx();
+
+        // Move the register file out so the VM can borrow it mutably, then
+        // reclaim it (register state must persist across calls).
+        let mut register_file = RegisterFile(std::mem::take(&mut self.registers));
+
+        let instructions = &self.instructions;
+        let pools = &mut self.pools;
+        let fn_registers = &self.fn_registers;
+        let dyn_lib_fns = &self.dyn_lib_fns;
+        let structs = &self.structs;
+        let enums = &self.enums;
+        let host_sigs = &self.host_sigs;
+        let host_dispatch = &self.host_dispatch;
+        let allocated_arg_count = self.allocated_arg_count;
+        let allocated_call_depth = self.allocated_call_depth;
+
+        let result = collect_diagnostic(|| {
+            vm::execute(
+                instructions,
+                &mut register_file,
+                pools,
+                &err_ctx,
+                fn_registers,
+                dyn_lib_fns,
+                structs,
+                enums,
+                allocated_arg_count,
+                allocated_call_depth,
+                host_sigs,
+                host_dispatch,
+                start,
+            );
+        });
+
+        self.registers = std::mem::take(&mut register_file.0);
+        result
+    }
+
+    /// The instruction/source mapping a runtime error report is built from.
+    fn error_ctx(&self) -> ErrorCtx {
+        ErrorCtx {
+            instr_src: self.instr_src.clone(),
+            sources: self
+                .sources
+                .iter()
+                .map(|s| Source {
+                    filename: s.filename.clone(),
+                    contents: s.contents.clone(),
+                })
+                .collect(),
+        }
+    }
 }
+
+/// Names the shape of a host [`Value`] for an argument-mismatch report.
+fn describe_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::from("null"),
+        Value::Int(_) => String::from("int"),
+        Value::Float(_) => String::from("float"),
+        Value::Bool(_) => String::from("bool"),
+        Value::String(_) => String::from("string"),
+        Value::Array(_) => String::from("array"),
+        Value::Map(_) => String::from("map"),
+    }
+}
+
+/// Why a [`RuntimeProgram::call`] did not produce a value.
+#[derive(Debug)]
+pub enum CallError {
+    /// The artifact exports no function under this name.
+    UnknownFunction(String),
+    /// The call passed a different number of arguments than the function
+    /// declares.
+    ArgCount {
+        function: String,
+        expected: usize,
+        found: usize,
+    },
+    /// An argument does not match the parameter type it was passed for.
+    /// `index` is 1-based.
+    ArgType {
+        function: String,
+        index: usize,
+        expected: String,
+        found: String,
+    },
+    /// The call ran and raised a runtime error.
+    Runtime(Diagnostic),
+}
+
+impl From<Diagnostic> for CallError {
+    fn from(diagnostic: Diagnostic) -> Self {
+        Self::Runtime(diagnostic)
+    }
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownFunction(name) => write!(
+                f,
+                "this artifact exports no function named '{name}'; only functions defined in the file it was built from, with every parameter annotated, are callable by name"
+            ),
+            Self::ArgCount {
+                function,
+                expected,
+                found,
+            } => write!(
+                f,
+                "'{function}' takes {expected} argument(s) but the call passed {found}"
+            ),
+            Self::ArgType {
+                function,
+                index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "argument {index} of '{function}' is declared '{expected}' but the call passed a {found}"
+            ),
+            Self::Runtime(diagnostic) => f.write_str(&diagnostic.message),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
 
 impl RuntimeProgram {
     /// Reconstructs a runnable program from a decoded [`ProgramImage`].
     ///
     /// This is where a `.cdlb`'s dynamic-library and host recipes are turned
     /// back into live bindings: each `dylib` symbol is re-resolved through the
-    /// OS loader by logical name (never from embedded bytes), and any `host`
-    /// function makes loading fail cleanly because the standalone runtime has no
-    /// embedder to bind it to.
+    /// OS loader by logical name (never from embedded bytes), and each `host`
+    /// function is bound to the closure `hosts` registered under the same name,
+    /// with its signature checked against the recorded declaration.
     ///
     /// # Errors
     ///
     /// Returns [`LoadError`] if a referenced library cannot be opened, a symbol
-    /// cannot be resolved, or the artifact declares `host` functions.
-    fn from_image(img: ProgramImage) -> Result<Self, LoadError> {
+    /// cannot be resolved, or a declared `host` function is unregistered or
+    /// bound to a closure of a different shape.
+    fn from_image(img: ProgramImage, hosts: &HostRegistry) -> Result<Self, LoadError> {
         let objs: ObjectPool = Pool(
             img.objs
                 .into_iter()
@@ -277,20 +541,29 @@ impl RuntimeProgram {
             })
             .collect();
 
-        // `host` functions need an embedder-supplied closure to dispatch to; the
-        // standalone runtime has none, so refuse to load rather than risk an
-        // unbound call at runtime. Name the offending function so the failure is
-        // actionable.
-        if let Some(h) = img.host_fns.first() {
-            let name = if h.namespace.is_empty() {
-                h.name.clone()
-            } else {
-                format!("{}::{}", h.namespace, h.name)
-            };
-            return Err(LoadError::MissingHostFn(name));
-        }
+        // `host` functions need a host-supplied closure to dispatch to. Bind
+        // them all before anything runs, so an unbound call is impossible once
+        // the program is loaded.
+        let host_sigs: Vec<HostFnSig> = img.host_fns.iter().map(HostFnSig::from).collect();
+        let host_dispatch = hosts.bind(&host_sigs)?;
 
         let dyn_lib_fns = resolve_dyn_lib_fns(&img.dyn_lib_fns, &structs)?;
+
+        let exports = img
+            .exports
+            .into_iter()
+            .map(|e| {
+                (
+                    e.name,
+                    Export {
+                        entry: e.entry as usize,
+                        arg_registers: e.arg_registers.into_boxed_slice(),
+                        arg_types: e.arg_types.into_boxed_slice(),
+                        ret_register: e.ret_register,
+                    },
+                )
+            })
+            .collect();
 
         Ok(Self {
             instructions: img.instructions,
@@ -311,6 +584,9 @@ impl RuntimeProgram {
                 .collect(),
             fn_registers: img.fn_registers,
             dyn_lib_fns,
+            host_sigs,
+            host_dispatch,
+            exports,
             structs,
             enums,
             sources: img
@@ -436,9 +712,15 @@ pub enum LoadError {
     },
     /// A symbol declared by a `dylib` block was not found in its library.
     SymbolNotFound { library: String, symbol: String },
-    /// The artifact declares a `host` function, which requires an embedding
-    /// runtime; the standalone VM cannot bind it.
-    MissingHostFn(String),
+    /// The artifact's `host` functions could not be bound to the registry the
+    /// load was given.
+    HostBinding(HostBindError),
+}
+
+impl From<HostBindError> for LoadError {
+    fn from(error: HostBindError) -> Self {
+        Self::HostBinding(error)
+    }
 }
 
 impl std::fmt::Display for LoadError {
@@ -463,10 +745,7 @@ impl std::fmt::Display for LoadError {
                 f,
                 "dynamic library '{library}' does not export the symbol '{symbol}' this artifact needs"
             ),
-            Self::MissingHostFn(name) => write!(
-                f,
-                "this artifact needs the host function '{name}', which requires an embedding runtime and cannot be provided by the standalone candela-vm"
-            ),
+            Self::HostBinding(error) => write!(f, "{error}"),
         }
     }
 }
@@ -475,11 +754,16 @@ impl std::error::Error for LoadError {}
 
 /// Loads a `.cdlb` bytecode artifact into a runnable [`RuntimeProgram`].
 ///
+/// `hosts` supplies the Rust closures the artifact's `host` blocks bind to.
+/// Pass an empty [`HostRegistry`] for a program that declares none; a program
+/// that declares one it does not cover fails to load, naming what is missing.
+///
 /// # Errors
 ///
-/// Returns a [`LoadError`] if the magic/version header is wrong or the body
-/// fails to decode.
-pub fn load_program(bytes: &[u8]) -> Result<RuntimeProgram, LoadError> {
+/// Returns a [`LoadError`] if the magic/version header is wrong, the body fails
+/// to decode, a dynamic library cannot be re-bound, or a `host` function cannot
+/// be bound to the registry.
+pub fn load_program(bytes: &[u8], hosts: &HostRegistry) -> Result<RuntimeProgram, LoadError> {
     if bytes.len() < 5 {
         return Err(LoadError::Truncated);
     }
@@ -491,7 +775,7 @@ pub fn load_program(bytes: &[u8]) -> Result<RuntimeProgram, LoadError> {
         return Err(LoadError::UnsupportedVersion(version));
     }
     let img: ProgramImage = postcard::from_bytes(&bytes[5..]).map_err(LoadError::Decode)?;
-    RuntimeProgram::from_image(img)
+    RuntimeProgram::from_image(img, hosts)
 }
 
 /// Serializes a [`ProgramImage`] to `.cdlb` bytes (magic + version + body).

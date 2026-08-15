@@ -3,7 +3,8 @@
 //! These types cross the boundary between a Rust host and a running candela
 //! script: [`Value`] is the dynamically-typed carrier, [`HostType`] describes
 //! the shapes that can cross, the `FromHostValue`/`IntoHostValue`/`IntoHostFn`
-//! traits adapt Rust closures into registered host functions, and
+//! traits adapt Rust closures into registered host functions,
+//! [`HostRegistry`] holds the closures a script's `host` blocks bind to, and
 //! [`marshal_value`]/[`unmarshal_value`] convert between [`Value`] and the VM's
 //! NaN-boxed [`Data`]. They carry no compiler state and the VM depends on them,
 //! so they live in the VM-only crate. The `Engine`/`Program` embedding surface
@@ -13,12 +14,14 @@ use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::NULL;
 use crate::rt::DataType;
+use crate::rt::HostFnSig;
 use crate::rt::Struct;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::StringPool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
@@ -234,8 +237,299 @@ impl HostType {
     }
 }
 
+/// Whether a declared parameter type can be filled from a host [`Value`].
+///
+/// This is the gate `candela build` applies when it decides which functions get
+/// a host-callable export, and it admits exactly the types
+/// [`value_matches_type`] can check an argument against. Struct, enum and
+/// function parameters are left out: a host has no way to build one.
+#[must_use]
+pub fn is_host_callable_type(ty: &DataType) -> bool {
+    match ty {
+        DataType::Int
+        | DataType::Float
+        | DataType::Bool
+        | DataType::String
+        | DataType::Null
+        | DataType::Unknown => true,
+        DataType::Array(element) => element.as_deref().is_none_or(is_host_callable_type),
+        DataType::Map(kv) => {
+            matches!(&kv.0, None | Some(DataType::String))
+                && kv.1.as_ref().is_none_or(is_host_callable_type)
+        }
+        DataType::Union(members) => members.iter().all(is_host_callable_type),
+        DataType::Fn(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+    }
+}
+
+/// Whether a host [`Value`] satisfies a declared parameter type.
+///
+/// `any` (candela's [`DataType::Unknown`]) accepts every value; a union accepts
+/// a value any member accepts; an unparameterised array or map accepts any
+/// array or map, because the element type was never pinned. Paired with
+/// [`is_host_callable_type`], which decides which parameter types reach here at
+/// all.
+#[must_use]
+pub fn value_matches_type(value: &Value, ty: &DataType) -> bool {
+    match ty {
+        DataType::Unknown => true,
+        DataType::Int => matches!(value, Value::Int(_)),
+        DataType::Float => matches!(value, Value::Float(_)),
+        DataType::Bool => matches!(value, Value::Bool(_)),
+        DataType::String => matches!(value, Value::String(_)),
+        DataType::Null => matches!(value, Value::Null),
+        DataType::Array(element) => match value {
+            Value::Array(items) => element
+                .as_deref()
+                .is_none_or(|el| items.iter().all(|item| value_matches_type(item, el))),
+            _ => false,
+        },
+        DataType::Map(kv) => match value {
+            Value::Map(entries) => {
+                kv.1.as_ref()
+                    .is_none_or(|v| entries.values().all(|entry| value_matches_type(entry, v)))
+            }
+            _ => false,
+        },
+        DataType::Union(members) => members
+            .iter()
+            .any(|member| value_matches_type(value, member)),
+        DataType::Fn(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+    }
+}
+
 /// The type-erased closure the VM dispatches a `host` call to.
 pub type HostDispatch = Rc<dyn Fn(&[Value]) -> Value>;
+
+/// A registered host function: its erased dispatcher plus the argument/return
+/// type signature derived from the closure, used to validate it against the
+/// `host` block that declares it.
+struct RegisteredFn {
+    func: HostDispatch,
+    arg_types: Vec<HostType>,
+    ret_type: HostType,
+    /// Registered through [`HostRegistry::register_host_fn_variadic`]: the
+    /// closure takes a `&[Value]` slice of any length, so `arg_types`/`ret_type`
+    /// are unused and signature validation is skipped (the block must declare
+    /// the function with `...`).
+    variadic: bool,
+}
+
+/// The table of Rust closures a script's `host` blocks bind to.
+///
+/// Both halves of the toolchain bind through this one table. The `candela`
+/// crate's `Engine` binds at compile time, against the `host` signatures a
+/// fresh compile produced; [`crate::artifact::load_program`] binds at load
+/// time, against the signatures a `.cdlb` recorded. The checks are the same in
+/// both cases, so an artifact that loads is bound as strictly as a script that
+/// compiles.
+#[derive(Default)]
+pub struct HostRegistry {
+    fns: HashMap<(String, String), RegisteredFn>,
+}
+
+impl HostRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a typed host function under `namespace::name`.
+    ///
+    /// The closure may take any combination of `i64`/`i32`, `f64`, `bool`,
+    /// `String` (or a single `&str`), `Vec<T>` and string-keyed map arguments,
+    /// and return one of those or `()`. The derived types are checked against
+    /// the `host` block when the script is bound; a mismatch is an error, never
+    /// a panic.
+    pub fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
+    where
+        F: IntoHostFn<Marker>,
+    {
+        let (func, arg_types, ret_type) = f.into_host_fn_parts();
+        self.fns.insert(
+            (namespace.to_owned(), name.to_owned()),
+            RegisteredFn {
+                func,
+                arg_types,
+                ret_type,
+                variadic: false,
+            },
+        );
+    }
+
+    /// Registers a variadic host function under `namespace::name`.
+    ///
+    /// The closure receives every argument as a `&[Value]` slice of any length
+    /// and returns one [`Value`], so arguments of mixed or dynamically-typed
+    /// shape cross the boundary without a fixed Rust signature. The `host`
+    /// block must declare the function with a `...` argument list, and no
+    /// arity or per-argument type checking happens at the call site.
+    pub fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
+    where
+        F: Fn(&[Value]) -> Value + 'static,
+    {
+        self.fns.insert(
+            (namespace.to_owned(), name.to_owned()),
+            RegisteredFn {
+                func: Rc::new(f),
+                arg_types: Vec::new(),
+                ret_type: HostType::Unit,
+                variadic: true,
+            },
+        );
+    }
+
+    /// Binds every declared `host` signature to its registered closure,
+    /// returning the dispatchers in host-function id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostBindError::Unregistered`] naming every declared function
+    /// with no closure behind it, or [`HostBindError::SignatureMismatch`] for
+    /// the first closure whose arity or types disagree with the declaration.
+    pub fn bind(&self, sigs: &[HostFnSig]) -> Result<Vec<HostDispatch>, HostBindError> {
+        let missing: Vec<String> = sigs
+            .iter()
+            .filter(|sig| !self.fns.contains_key(&key_of(sig)))
+            .map(|sig| qualified_name(&sig.namespace, &sig.name))
+            .collect();
+        if !missing.is_empty() {
+            return Err(HostBindError::Unregistered(missing));
+        }
+
+        let mut dispatch = Vec::with_capacity(sigs.len());
+        for sig in sigs {
+            let registered = &self.fns[&key_of(sig)];
+            validate_host_fn(sig, registered)?;
+            dispatch.push(Rc::clone(&registered.func));
+        }
+        Ok(dispatch)
+    }
+}
+
+/// The lookup key a `host` signature binds under.
+fn key_of(sig: &HostFnSig) -> (String, String) {
+    (sig.namespace.to_string(), sig.name.to_string())
+}
+
+/// Renders a host function the way a script writes the call.
+fn qualified_name(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{namespace}::{name}")
+    }
+}
+
+/// Checks that a registered closure's derived signature matches the `host`
+/// block declaration it is bound to.
+fn validate_host_fn(sig: &HostFnSig, registered: &RegisteredFn) -> Result<(), HostBindError> {
+    let function = qualified_name(&sig.namespace, &sig.name);
+    let err = HostBindError::SignatureMismatch;
+
+    // A variadic declaration must be bound to a variadic closure and vice
+    // versa; when both agree there is nothing to check, the closure accepts
+    // any argument slice.
+    if sig.variadic || registered.variadic {
+        if sig.variadic != registered.variadic {
+            let (decl, reg) = if sig.variadic {
+                ("variadic (`...`)", "a fixed signature")
+            } else {
+                ("a fixed signature", "variadic")
+            };
+            return Err(err(format!(
+                "host function `{function}` is declared with {decl} but the registered closure has {reg}",
+            )));
+        }
+        return Ok(());
+    }
+
+    if sig.arg_count() != registered.arg_types.len() {
+        return Err(err(format!(
+            "host function `{function}` is declared with {} argument(s) but the registered closure takes {}",
+            sig.arg_count(),
+            registered.arg_types.len(),
+        )));
+    }
+
+    for (idx, want) in registered.arg_types.iter().enumerate() {
+        let declared = HostType::from_datatype(sig.get_arg(idx)).ok_or_else(|| {
+            err(format!(
+                "host function `{function}` argument {} has a type that cannot cross the host boundary",
+                idx + 1,
+            ))
+        })?;
+        if declared != *want {
+            return Err(err(format!(
+                "host function `{function}` argument {} is declared `{}` but the registered closure expects `{}`",
+                idx + 1,
+                declared.describe(),
+                want.describe(),
+            )));
+        }
+    }
+
+    let declared_ret = HostType::from_datatype(sig.get_return_type()).ok_or_else(|| {
+        err(format!(
+            "host function `{function}` has a return type that cannot cross the host boundary",
+        ))
+    })?;
+    if declared_ret != registered.ret_type {
+        return Err(err(format!(
+            "host function `{function}` is declared to return `{}` but the registered closure returns `{}`",
+            declared_ret.describe(),
+            registered.ret_type.describe(),
+        )));
+    }
+
+    Ok(())
+}
+
+/// Why a script's `host` blocks could not be bound to a [`HostRegistry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostBindError {
+    /// Declared `host` functions with no registered closure, in declaration
+    /// order.
+    Unregistered(Vec<String>),
+    /// A registered closure disagrees with the declaration it is bound to. The
+    /// text names the function and what differs.
+    SignatureMismatch(String),
+}
+
+impl HostBindError {
+    /// The stable identifier a `Diagnostic` reports this under.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Unregistered(_) => "unregistered_host_fn",
+            Self::SignatureMismatch(_) => "host_fn_signature_mismatch",
+        }
+    }
+}
+
+impl fmt::Display for HostBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unregistered(names) => {
+                if let [name] = names.as_slice() {
+                    write!(
+                        f,
+                        "no host function registered for `{name}` (declared in a `host` block)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "no host functions registered for `{}` (declared in `host` blocks)",
+                        names.join("`, `")
+                    )
+                }
+            }
+            Self::SignatureMismatch(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for HostBindError {}
 
 /// Extracts a Rust argument from a [`Value`] for a registered host closure.
 pub trait FromHostValue: Sized {

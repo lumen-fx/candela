@@ -26,16 +26,16 @@
 use crate::compiler::CompileOutput;
 use crate::compiler::Namespace;
 use crate::compiler::compile;
-use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::Dynamiclib;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
 use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
-use candela_vm::embed::HostType;
+use candela_vm::embed::HostRegistry;
 use candela_vm::embed::IntoHostFn;
 use candela_vm::embed::Value;
 use candela_vm::embed::marshal_value;
@@ -57,22 +57,6 @@ use candela_vm::vm;
 use candela_vm::vm::RegisterFile;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
-use std::collections::HashMap;
-use std::rc::Rc;
-
-/// A registered host function: its erased dispatcher plus the argument/return
-/// type signature derived from the closure, used to validate it against the
-/// script's `host` block at compile time.
-struct RegisteredFn {
-    func: HostDispatch,
-    arg_types: Vec<HostType>,
-    ret_type: HostType,
-    /// Registered via [`Engine::register_host_fn_variadic`]: the closure takes
-    /// a `&[Value]` slice of any length, so `arg_types`/`ret_type` are unused
-    /// and signature validation against the `host` block is skipped (the block
-    /// must declare the fn with `...`).
-    variadic: bool,
-}
 
 /// The persistent embedding entry point. Holds the table of registered host
 /// functions and compiles scripts into reusable [`Program`]s.
@@ -82,18 +66,16 @@ struct RegisteredFn {
 /// so the host can call into the script repeatedly.
 #[derive(Default)]
 pub struct Engine {
-    registry: HashMap<(String, String), RegisteredFn>,
+    registry: HostRegistry,
 }
 
 impl Engine {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            registry: HashMap::new(),
-        }
+        Self::default()
     }
 
-    /// Registers a typed host function under `namespace.name`.
+    /// Registers a typed host function under `namespace::name`.
     ///
     /// The closure may take any combination of `i64`/`i32`, `f64`, `bool`,
     /// `String` (or a single `&str`) arguments and return one of those or `()`.
@@ -104,19 +86,10 @@ impl Engine {
     where
         F: IntoHostFn<Marker>,
     {
-        let (func, arg_types, ret_type) = f.into_host_fn_parts();
-        self.registry.insert(
-            (namespace.to_owned(), name.to_owned()),
-            RegisteredFn {
-                func,
-                arg_types,
-                ret_type,
-                variadic: false,
-            },
-        );
+        self.registry.register_host_fn(namespace, name, f);
     }
 
-    /// Registers a variadic host function under `namespace.name`.
+    /// Registers a variadic host function under `namespace::name`.
     ///
     /// Unlike [`Engine::register_host_fn`], the closure receives every argument
     /// as a `&[Value]` slice of any length and returns a single [`Value`], so
@@ -138,15 +111,7 @@ impl Engine {
     where
         F: Fn(&[Value]) -> Value + 'static,
     {
-        self.registry.insert(
-            (namespace.to_owned(), name.to_owned()),
-            RegisteredFn {
-                func: Rc::new(f),
-                arg_types: Vec::new(),
-                ret_type: HostType::Unit,
-                variadic: true,
-            },
-        );
+        self.registry.register_host_fn_variadic(namespace, name, f);
     }
 
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
@@ -168,21 +133,13 @@ impl Engine {
 
         // Bind each declared host function to a registered closure, validating
         // arity + types against the closure's derived signature.
-        let mut host_dispatch: Vec<HostDispatch> = Vec::with_capacity(out.host_fns.len());
-        for sig in &out.host_fns {
-            let key = (sig.namespace.to_string(), sig.name.to_string());
-            let registered = self.registry.get(&key).ok_or_else(|| Diagnostic {
+        let host_dispatch: Vec<HostDispatch> =
+            self.registry.bind(&out.host_fns).map_err(|e| Diagnostic {
                 filename: filename.to_owned(),
                 span: 0..0,
-                message: format!(
-                    "no host function registered for `{}.{}` (declared in a `host` block)",
-                    sig.namespace, sig.name
-                ),
-                code: String::from("unregistered_host_fn"),
+                message: e.to_string(),
+                code: e.code().to_owned(),
             })?;
-            validate_host_fn(sig, registered, filename)?;
-            host_dispatch.push(Rc::clone(&registered.func));
-        }
 
         // Register 0 is candela's void-return / null sink: a call whose result is
         // discarded writes `null` there. A normal program always has register 0
@@ -222,88 +179,6 @@ impl Engine {
         program.execute_from(0)?;
         Ok(program)
     }
-}
-
-/// Checks that a registered closure's derived signature matches the `host`
-/// block declaration it is bound to.
-fn validate_host_fn(
-    sig: &HostFnSig,
-    registered: &RegisteredFn,
-    filename: &str,
-) -> Result<(), Diagnostic> {
-    let err = |message: String| Diagnostic {
-        filename: filename.to_owned(),
-        span: 0..0,
-        message,
-        code: String::from("host_fn_signature_mismatch"),
-    };
-
-    // A variadic declaration must be bound to a variadic closure and vice
-    // versa; when both agree there is nothing to check, the closure accepts
-    // any argument slice.
-    if sig.variadic || registered.variadic {
-        if sig.variadic != registered.variadic {
-            let (decl, reg) = if sig.variadic {
-                ("variadic (`...`)", "a fixed signature")
-            } else {
-                ("a fixed signature", "variadic")
-            };
-            return Err(err(format!(
-                "host function `{}.{}` is declared with {decl} but the registered closure has {reg}",
-                sig.namespace, sig.name,
-            )));
-        }
-        return Ok(());
-    }
-
-    if sig.arg_count() != registered.arg_types.len() {
-        return Err(err(format!(
-            "host function `{}.{}` is declared with {} argument(s) but the registered closure takes {}",
-            sig.namespace,
-            sig.name,
-            sig.arg_count(),
-            registered.arg_types.len(),
-        )));
-    }
-
-    for (idx, want) in registered.arg_types.iter().enumerate() {
-        let declared = HostType::from_datatype(sig.get_arg(idx)).ok_or_else(|| {
-            err(format!(
-                "host function `{}.{}` argument {} has a type that cannot cross the host boundary",
-                sig.namespace,
-                sig.name,
-                idx + 1,
-            ))
-        })?;
-        if declared != *want {
-            return Err(err(format!(
-                "host function `{}.{}` argument {} is declared `{}` but the registered closure expects `{}`",
-                sig.namespace,
-                sig.name,
-                idx + 1,
-                declared.describe(),
-                want.describe(),
-            )));
-        }
-    }
-
-    let declared_ret = HostType::from_datatype(sig.get_return_type()).ok_or_else(|| {
-        err(format!(
-            "host function `{}.{}` has a return type that cannot cross the host boundary",
-            sig.namespace, sig.name,
-        ))
-    })?;
-    if declared_ret != registered.ret_type {
-        return Err(err(format!(
-            "host function `{}.{}` is declared to return `{}` but the registered closure returns `{}`",
-            sig.namespace,
-            sig.name,
-            declared_ret.describe(),
-            registered.ret_type.describe(),
-        )));
-    }
-
-    Ok(())
 }
 
 /// A compiled candela program with resident interpreter state.
@@ -388,8 +263,11 @@ impl Program {
         );
 
         // Compile the trampoline (type-checks the call) under a diagnostic sink.
-        let (mut output, ret_id) =
-            collect_diagnostic(|| self.build_trampoline(&call_expr, seed_vars))?;
+        let offset = self.instructions.len() as u16;
+        let (mut output, ret_id) = collect_diagnostic(|| {
+            let mut state = self.compiler_state();
+            compile_trampoline(&mut state, offset, &call_expr, seed_vars)
+        })?;
 
         let ret_id = ret_id.unwrap_or(0);
         output.push(Instr::Halt(0));
@@ -407,32 +285,9 @@ impl Program {
         ))
     }
 
-    /// Compiles a call trampoline for `call_expr`, appending any freshly
-    /// specialized function bodies to a local buffer whose instructions are
-    /// absolute (offset by the current instruction count). Returns the buffer
-    /// and the register holding the call's result.
-    fn build_trampoline(
-        &mut self,
-        call_expr: &Expr,
-        seed_vars: Vec<Variable>,
-    ) -> (Vec<Instr>, Option<u16>) {
-        // A prior call whose trampoline aborted mid-inference (error unwind) may
-        // have left stale entries in the return-type inference thread-local;
-        // clear it so this compile starts clean, exactly as `compile()` does.
-        crate::compiler::type_system::reset_inference_state();
-
-        let offset = self.instructions.len() as u16;
-        let ctx = Ctx {
-            block_id: 0,
-            is_compiling_recursive: false,
-            single_run: false,
-            file_idx: 0,
-            offset,
-        };
-        // Pre-seeded variables hold heap handles for non-scalar arguments.
-        let mut variables = seed_vars;
-        let mut output = Vec::new();
-        let mut state = State {
+    /// Borrows the resident compiler state a trampoline compile writes into.
+    fn compiler_state(&mut self) -> State<'_> {
+        State {
             registers: &mut self.registers,
             fns: &mut self.functions,
             structs: &mut self.structs,
@@ -448,17 +303,7 @@ impl Program {
             sources: &mut self.sources,
             reserved_registers: rustc_hash::FxHashSet::default(),
             namespace: &mut self.namespace,
-        };
-        let ret = call_expr.compile(
-            &mut variables,
-            ctx,
-            &mut state,
-            &mut output,
-            None,
-            false,
-            true,
-        );
-        (output, ret)
+        }
     }
 
     /// Runs the VM against the resident state starting at instruction `start`,
