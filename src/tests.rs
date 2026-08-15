@@ -5853,3 +5853,10 @@ pub fn a_region_of_multibyte_text_reaches_the_expander() {
         );
     });
 }
+
+#[test]
+pub fn a_comment_in_a_region_ends_at_a_carriage_return() {
+    let regions = scan_regions("lmn!(a // )\r b)\r", "lmn");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].body, "a // )\r b");
+}
