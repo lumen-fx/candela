@@ -64,6 +64,10 @@ mod repl;
 #[path = "./tests.rs"]
 #[cfg(all(test, feature = "compiler"))]
 mod tests;
+// Call trampolines, shared by the `Engine`/`Program` embedding API and the
+// export table `candela build` records in an artifact.
+#[cfg(feature = "compiler")]
+mod trampoline;
 // Tells a person at a terminal when a newer release is out. It is only reached
 // from the REPL and `--help`, never while a program is running.
 #[cfg(feature = "compiler")]
@@ -84,7 +88,10 @@ pub use engine::Engine;
 #[cfg(feature = "compiler")]
 pub use engine::Program;
 
-// The VM-only surface: load a pre-compiled `.cdlb` and run it.
+// The VM-only surface: load a pre-compiled `.cdlb`, run it, and call into it.
+pub use candela_vm::CallError;
+pub use candela_vm::HostBindError;
+pub use candela_vm::HostRegistry;
 pub use candela_vm::LoadError;
 pub use candela_vm::RuntimeProgram;
 pub use candela_vm::load_program;

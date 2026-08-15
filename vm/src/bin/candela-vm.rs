@@ -7,6 +7,9 @@
 //! Arguments after the artifact path are the program's, reachable from
 //! `argv()`, the same as arguments after the file name of a source run.
 
+use candela_vm::HostBindError;
+use candela_vm::HostRegistry;
+use candela_vm::LoadError;
 use std::process::ExitCode;
 
 const USAGE: &str = "Usage:\n  candela-vm <file.cdlb> [arguments...]";
@@ -51,8 +54,18 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut program = match candela_vm::load_program(&bytes) {
+    // The standalone runtime is nobody's embedder, so it registers no host
+    // functions: an artifact that declares a `host` block is one you run from
+    // the program that supplies it.
+    let hosts = HostRegistry::new();
+    let mut program = match candela_vm::load_program(&bytes, &hosts) {
         Ok(p) => p,
+        Err(LoadError::HostBinding(error @ HostBindError::Unregistered(_))) => {
+            eprintln!(
+                "candela-vm: {error}\nHost functions come from the program that embeds candela; run this artifact from there."
+            );
+            return ExitCode::from(1);
+        }
         Err(e) => {
             eprintln!("candela-vm: {e}");
             return ExitCode::from(1);

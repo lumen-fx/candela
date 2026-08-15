@@ -10,6 +10,7 @@
 //! beside it) and runs from an unrelated directory with nothing set, to confirm
 //! the default exe-relative resolution needs no environment.
 
+use candela::HostRegistry;
 use candela::{build_bytecode, load_program};
 
 mod common;
@@ -131,7 +132,8 @@ fn main() {
         .into_owned();
     let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB");
-    let mut program = load_program(&bytes).expect("artifact with inlined option/result must load");
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("artifact with inlined option/result must load");
     program.run();
 }
 
@@ -219,7 +221,8 @@ fn main() {
         .into_owned();
     let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB");
-    let mut program = load_program(&bytes).expect("artifact with inlined json/map/set must load");
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("artifact with inlined json/map/set must load");
     program.run();
 }
 
@@ -250,7 +253,7 @@ fn main() {
     let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
     assert!(
-        load_program(&bytes).is_ok(),
+        load_program(&bytes, &HostRegistry::new()).is_ok(),
         "artifact with inlined std must load"
     );
 }

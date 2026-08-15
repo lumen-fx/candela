@@ -43,6 +43,8 @@ pub use errors::ErrorCtx;
 pub use errors::collect_diagnostic;
 
 pub use embed::FromHostValue;
+pub use embed::HostBindError;
+pub use embed::HostRegistry;
 pub use embed::HostType;
 pub use embed::IntoHostFn;
 pub use embed::IntoHostValue;
@@ -50,6 +52,7 @@ pub use embed::Value;
 pub use embed::marshal_value;
 pub use embed::unmarshal_value;
 
+pub use artifact::CallError;
 pub use artifact::LoadError;
 pub use artifact::RuntimeProgram;
 pub use artifact::load_program;
