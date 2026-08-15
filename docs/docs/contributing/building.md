@@ -110,11 +110,14 @@ runs the root package's suites:
   `cargo test --lib`.
 - `tests/cdlb_roundtrip.rs`, covering the artifact format: the header, the
   instruction and constant tables, the type tables, the dynamic-library recipe
-  round trip, the host-block refusal, and a full comparison of `candela` output
-  against `candela-vm` running the artifact.
+  round trip, the unbound host function, and a full comparison of `candela`
+  output against `candela-vm` running the artifact.
 - `tests/embedding.rs`, covering the `Engine`/`Program` API: registering host
   functions, calling script functions, marshalling values both ways, state
   persistence, and the diagnostics returned on failure.
+- `tests/vm_embedding.rs`, covering the same ground with the compiler absent:
+  binding an artifact's host functions to a `HostRegistry` at load, and calling
+  its exports by name.
 - `tests/imports.rs`, covering module binding rules, by writing multi-file
   programs to a scratch directory and running the built binary against them.
 - `tests/std_library.rs`, which runs each `.cdl` program in `libs/std/tests/`

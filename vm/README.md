@@ -33,12 +33,24 @@ Two things are recorded as recipes rather than contents:
   through the OS loader when the artifact loads, so the shared library has to be
   present on the machine that runs it.
 - **Host functions.** A `host` block stores the namespace, name, signature, and
-  whether the function is variadic. Those are supplied by a program that embeds
-  the runtime, so standalone `candela-vm` refuses to load an artifact that
-  declares one.
+  whether the function is variadic. The Rust closures behind them come from the
+  program that embeds the runtime, which registers them before it loads the
+  artifact. The standalone `candela-vm` command registers none, so it refuses an
+  artifact that declares one.
+
+An artifact also carries an export table: a call trampoline per host-callable
+function, compiled at build time. That is what lets an embedding program invoke
+a script function by name with the compiler absent.
 
 The full contract for the format, including how versions are matched, is in the
 [artifacts reference](https://candela.lumenfx.dev/reference/artifacts/).
+
+## Embedding without the compiler
+
+Link this crate alone to run precompiled artifacts: register host functions on a
+`HostRegistry`, load the `.cdlb` against it, and call exported functions by name.
+The [embedding guide](https://candela.lumenfx.dev/integration/embedding/) covers
+both this and the compiler-resident path.
 
 ## Features
 
