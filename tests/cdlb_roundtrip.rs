@@ -107,6 +107,45 @@ fn method_program_round_trips_and_runs() {
     program.run();
 }
 
+/// A program built from generic declarations. Every instantiation is an
+/// ordinary struct by the time the artifact is written, so the format carries
+/// nothing new and the VM-only path runs it unchanged.
+const GENERIC_PROGRAM: &str = "
+struct Cell<T> { value: T }
+
+impl Cell<T> {
+    fn get(self) -> T { return self.value; }
+    fn tagged<U>(self, extra: U) -> U { return extra; }
+}
+
+enum Slot<T> { Filled(T), Empty }
+
+fn first<T>(items: T[]) -> T { return items[0]; }
+
+fn main() {
+    print(Cell<int>{ value: 3 }.get());
+    print(Cell<string>{ value: \"ab\" }.get());
+    print(first<int>([7, 8]));
+    print(Cell<int>{ value: 1 }.tagged<string>(\"z\"));
+    match Slot<int>::Filled(9) {
+        Filled(x) => { print(x); }
+        _ => { print(0); }
+    }
+}
+";
+
+#[test]
+fn generic_program_round_trips_and_runs() {
+    let bytes = candela::build_bytecode(GENERIC_PROGRAM.to_owned(), "generics.cdl")
+        .expect("a program using type parameters should compile to bytecode");
+
+    assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
+
+    let mut program = load_program(&bytes, &HostRegistry::new())
+        .expect("generic artifact must load on the VM-only path");
+    program.run();
+}
+
 #[test]
 fn empty_main_round_trips() {
     let bytes = candela::build_bytecode("fn main() {}".to_owned(), "empty.cdl").expect("compiles");

@@ -3,9 +3,12 @@ use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_data::{Ctx, State};
 use crate::compiler::compiler_errors::error_no_such_method;
+use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
 use crate::compiler::expr::mangle_method;
 use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
+use crate::compiler::type_system::TypeExpr;
+use crate::compiler::type_system::resolve_call_type_args;
 use crate::instr::Instr;
 use builtin_methods::builtin_methods;
 use smol_strc::SmolStr;
@@ -71,6 +74,7 @@ pub fn handle_method_calls(
     obj_span: Span,
     fn_span: Span,
     args_indexes: &[Span],
+    type_args: &[TypeExpr],
 ) -> Option<u16> {
     let name = namespace[namespace.len() - 1].as_str();
 
@@ -88,7 +92,15 @@ pub fn handle_method_calls(
         let mangled = mangle_method(&struct_name, name);
         if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
             // Prepend the receiver as argument 0, then reuse the ordinary
-            // user-function call path; the VM sees a normal function call.
+            // user-function call path; the VM sees a normal function call. Type
+            // arguments the call is written with bind the method's own type
+            // parameters, on top of the bindings its `impl` block already
+            // carries for the receiver's instantiation.
+            let call_type_args = if type_args.is_empty() {
+                Vec::new()
+            } else {
+                resolve_call_type_args(fn_id, name, type_args, fn_span, ctx, state)
+            };
             let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
             call_args.push(obj.clone());
             call_args.extend_from_slice(args);
@@ -106,6 +118,7 @@ pub fn handle_method_calls(
                 &call_args,
                 fn_span,
                 &call_arg_spans,
+                &call_type_args,
             );
         }
         // A struct value with no matching impl method: builtin methods only
@@ -120,6 +133,11 @@ pub fn handle_method_calls(
         let enum_name = state.enums[enum_id as usize].name.clone();
         let mangled = mangle_method(&enum_name, name);
         if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+            let call_type_args = if type_args.is_empty() {
+                Vec::new()
+            } else {
+                resolve_call_type_args(fn_id, name, type_args, fn_span, ctx, state)
+            };
             let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
             call_args.push(obj.clone());
             call_args.extend_from_slice(args);
@@ -137,6 +155,7 @@ pub fn handle_method_calls(
                 &call_args,
                 fn_span,
                 &call_arg_spans,
+                &call_type_args,
             );
         }
         error_no_such_method(name, &enum_name, fn_span, ctx.file_idx, state.sources);
@@ -144,8 +163,13 @@ pub fn handle_method_calls(
 
     // An array-receiver collection method (`arr.map(f)`, `arr.reduce(init, f)`,
     // ...) lowers to the `std/list` helper of the same name with the receiver
-    // as argument 0, reusing the ordinary user-function call path.
+    // as argument 0, reusing the ordinary user-function call path. The helper is
+    // not generic, so a call written with type arguments is reported the same as
+    // any other built-in method.
     if let Some(fn_id) = routed_list_method(name, &obj_type, args, v, ctx, state) {
+        if !type_args.is_empty() {
+            error_type_args_on_builtin_method(fn_span, ctx.file_idx, name, state.sources);
+        }
         let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
         call_args.push(obj.clone());
         call_args.extend_from_slice(args);
@@ -163,11 +187,16 @@ pub fn handle_method_calls(
             &call_args,
             fn_span,
             &call_arg_spans,
+            &[],
         );
     }
 
     // Not a struct receiver: fall back to the builtin methods (string/array/
     // map/number library calls). An unknown name there reports a clean error.
+    // None of them is generic, so type arguments written on one are an error.
+    if !type_args.is_empty() {
+        error_type_args_on_builtin_method(fn_span, ctx.file_idx, name, state.sources);
+    }
     let id = obj
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();

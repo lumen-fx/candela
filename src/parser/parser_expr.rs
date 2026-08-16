@@ -5,7 +5,10 @@ use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
 use crate::parser::Parser;
+use crate::parser::TypeArgFollow;
 use crate::parser::parse_args;
+use crate::parser::parse_type_args;
+use crate::parser::type_args_ahead;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hint::unreachable_unchecked;
@@ -225,6 +228,23 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                     );
                 };
                 let peek_token = parser.peek_token_opt();
+                // A method call takes explicit type arguments the same way a
+                // free call does: `b.tagged<string>("hi")` binds the method's
+                // own type parameters. The `<` is told from a comparison by the
+                // same look-ahead walk, restricted here to a list that closes
+                // right before the call parentheses.
+                let type_args = if peek_token == Some(Token::OpInf)
+                    && type_args_ahead(parser, TypeArgFollow::Call)
+                {
+                    parse_type_args(parser)
+                } else {
+                    Box::from([])
+                };
+                let peek_token = if type_args.is_empty() {
+                    peek_token
+                } else {
+                    parser.peek_token_opt()
+                };
                 if peek_token == Some(Token::LParen) {
                     // ObjFunctionCall
                     parser.next_token();
@@ -236,6 +256,7 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                         base_span,
                         (id_span.start, end).into(),
                         arg_markers,
+                        type_args,
                     );
                     base_span.end = end;
                     base = obj_function_call;
@@ -278,6 +299,7 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                         base_span,
                         (id_span.start, end).into(),
                         arg_markers,
+                        Box::from([]),
                     );
                     base_span.end = end;
                     base = obj_function_call;

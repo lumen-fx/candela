@@ -2,6 +2,11 @@ use super::expr::Expr;
 use super::expr::Span;
 use super::registers::get_tgt_ids;
 use super::type_system::DataType;
+use super::type_system::Generics;
+use super::type_system::ReturnAnnotation;
+use super::type_system::TypeCtx;
+use super::type_system::TypeExpr;
+use super::type_system::TypeParams;
 use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
@@ -37,6 +42,34 @@ pub struct Function {
     /// `None` leaves the return type inferred from the body. When present, the
     /// inferred return type of every specialisation is checked against it.
     pub return_type: Option<(DataType, Span)>,
+    /// Set for a function that has type parameters of its own (`fn first<T>`)
+    /// or that came from an `impl` block on a generic type. `None` for an
+    /// ordinary function.
+    pub generics: Option<Box<FnGenerics>>,
+}
+
+/// The generic side of a function: what its annotations mean once the type
+/// parameters are known.
+///
+/// `args` and `return_type` on the [`Function`] hold the resolution with no
+/// type arguments supplied, where an annotation naming a type parameter is left
+/// un-pinned. The unresolved forms are kept here and resolved again for a call
+/// site that names its type arguments.
+#[derive(Debug)]
+pub struct FnGenerics {
+    /// Type parameters the function declares.
+    pub params: TypeParams,
+    /// The parameter annotations as written.
+    pub arg_types: Box<[Option<TypeExpr>]>,
+    /// The `-> Type` annotation as written.
+    pub return_type: ReturnAnnotation,
+    /// Type parameters already bound because the enclosing type was
+    /// instantiated: `impl Cell<T>` lowered for `Cell<int>` binds `T` to `int`
+    /// in every one of its methods.
+    pub bindings: Box<[(SmolStr, DataType)]>,
+    /// File the declaration was written in, whose scope its annotations resolve
+    /// against.
+    pub file_idx: u16,
 }
 
 #[derive(Debug)]
@@ -44,6 +77,11 @@ pub struct FunctionImpl {
     pub loc: u16,
     pub args_loc: Box<[u16]>,
     pub arg_types: Box<[DataType]>,
+    /// The type arguments this specialisation was compiled for. A type
+    /// parameter that no argument mentions (`fn signal<T>(name: string)`) is
+    /// what makes two calls with the same argument types distinct
+    /// specialisations.
+    pub type_args: Box<[DataType]>,
 }
 
 #[derive(Debug)]
@@ -123,9 +161,25 @@ pub struct State<'a> {
     pub sources: &'a mut Vec<Source>,
     pub reserved_registers: FxHashSet<u16>,
     pub namespace: &'a mut Namespace,
+    pub generics: &'a mut Generics,
 }
 
 impl State<'_> {
+    /// The scope and registries a [`TypeExpr`] resolves against, borrowed from
+    /// this state. Resolving a generic type registers the instantiation, which
+    /// is why it needs more than the namespace.
+    pub fn type_ctx(&mut self, file_idx: u16) -> TypeCtx<'_> {
+        TypeCtx {
+            file_idx,
+            namespace: self.namespace,
+            sources: self.sources,
+            structs: self.structs,
+            enums: self.enums,
+            fns: self.fns,
+            fn_registers: self.fn_registers,
+            generics: self.generics,
+        }
+    }
     /// Marks a register as free, allowing it to later be reused by `alloc_reg`.
     /// The register is marked as free iff:
     /// - the register isn't tied to any variable

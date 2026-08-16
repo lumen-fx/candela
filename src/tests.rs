@@ -5967,3 +5967,553 @@ pub fn the_expansion_limit_resets_between_macros() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// GENERICS (type parameters)
+//
+// A generic declaration is a template: `Cell<int>` registers an ordinary struct
+// under that name and every later stage sees a plain concrete type. `<` is also
+// the comparison operator, so the shapes that must stay comparisons have a
+// group of their own below.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn generic_struct_and_impl() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> {
+            fn get(self) -> T { return self.value; }
+        }
+        fn main() {
+            let c = Cell<int>{ value: 3 };
+            print(c.get());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn generic_function_with_explicit_type_argument() {
+    run_and_check_registers!(
+        "
+        fn first<T>(items: T[]) -> T { return items[0]; }
+        fn main() {
+            let nums = [10, 20, 30];
+            print(first<int>(nums));
+        }
+        ",
+        10.into()
+    );
+}
+
+#[test]
+pub fn generic_function_without_type_arguments_still_infers() {
+    // Leaving the type arguments off is never an error: the parameter falls
+    // back to the inference every un-annotated parameter gets.
+    run_and_check_registers!(
+        "
+        fn first<T>(items: T[]) -> T { return items[0]; }
+        fn main() {
+            print(first([7, 8]));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn an_explicit_type_argument_pins_the_parameter() {
+    let err = compile_diag(
+        "fn first<T>(items: T[]) -> T { return items[0]; }
+         fn main() { print(first<int>([1.5, 2.5])); }",
+        "generics.cdl",
+    )
+    .expect_err("a float[] where int[] was named");
+    assert_eq!(err.code, "argument_type_mismatch");
+}
+
+#[test]
+pub fn generic_struct_literal_without_type_arguments() {
+    // The type argument comes from the value in the field declared with it.
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        fn main() {
+            let c = Cell{ value: 12 };
+            print(c.get());
+        }
+        ",
+        12.into()
+    );
+}
+
+#[test]
+pub fn generic_instantiations_are_distinct_types() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        fn main() {
+            let i = Cell<int>{ value: 2 };
+            let s = Cell<string>{ value: \"ab\" };
+            print(i.get() + s.get().len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn generic_instantiation_is_cached() {
+    // Two spellings of one instantiation are one struct, so a value built by
+    // one reaches a function annotated with the other.
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        fn take(c: Cell<int>) -> int { return c.value; }
+        fn main() {
+            print(take(Cell<int>{ value: 5 }));
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn nested_generic_instantiation() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        fn main() {
+            let inner = Cell<int>{ value: 4 };
+            let outer = Cell<Cell<int>>{ value: inner };
+            print(outer.get().get());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn unused_type_parameter_is_legal() {
+    // `Signal<T>` never stores a `T`; the parameter only picks the impl block.
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        fn signal<T>(name: string) { return Signal<T>{ name: name }; }
+        impl Signal<int> { fn get(self) -> int { return 7; } }
+        impl Signal<float> { fn get(self) -> float { return 1.5; } }
+        fn main() {
+            let count = signal<int>(\"count\");
+            print(count.get());
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn explicit_type_arguments_pick_the_specialisation() {
+    // Both calls pass one string, so the argument types alone cannot tell the
+    // two specialisations apart; the type argument does.
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        fn signal<T>(name: string) { return Signal<T>{ name: name }; }
+        impl Signal<int> { fn label(self) -> string { return \"int\"; } }
+        impl Signal<float> { fn label(self) -> string { return \"float\"; } }
+        fn main() {
+            let a = signal<int>(\"a\");
+            let b = signal<float>(\"b\");
+            print(a.label().len() + b.label().len());
+        }
+        ",
+        8.into()
+    );
+}
+
+#[test]
+pub fn generic_and_concrete_impl_on_one_type() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl Cell<int> { fn double(self) -> int { return self.value * 2; } }
+        fn main() {
+            let c = Cell<int>{ value: 5 };
+            print(c.get() + c.double());
+        }
+        ",
+        15.into()
+    );
+}
+
+#[test]
+pub fn a_method_takes_explicit_type_arguments() {
+    // `get` is bound by the impl header (T = int), `tagged` binds its own U.
+    run_and_check_registers!(
+        "
+        struct Box<T> { value: T }
+        impl Box<T> {
+            fn get(self) -> T { return self.value; }
+            fn tagged<U>(self, extra: U) -> U { return extra; }
+        }
+        fn main() {
+            let b = Box<int>{ value: 7 };
+            print(b.get() + b.tagged<string>(\"hi\").len());
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn a_method_type_argument_left_off_is_inferred() {
+    run_and_check_registers!(
+        "
+        struct Box<T> { value: T }
+        impl Box<T> {
+            fn tagged<U>(self, extra: U) -> U { return extra; }
+        }
+        fn main() {
+            let b = Box<int>{ value: 1 };
+            print(b.tagged(\"abc\").len() + b.tagged(4));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn a_method_type_argument_picks_the_specialisation() {
+    // `code_of` takes no arguments, so nothing at the call site pins `U` but
+    // the type argument, and each instantiation reaches a different impl.
+    run_and_check_registers!(
+        "
+        struct Kind<T> { n: int }
+        impl Kind<int> { fn code(self) -> int { return 1; } }
+        impl Kind<string> { fn code(self) -> int { return 2; } }
+        struct Maker<T> { seed: T }
+        impl Maker<T> {
+            fn code_of<U>(self) -> int { return Kind<U>{ n: 0 }.code(); }
+        }
+        fn main() {
+            let m = Maker<int>{ seed: 1 };
+            print(m.code_of<int>() * 10 + m.code_of<string>());
+        }
+        ",
+        12.into()
+    );
+}
+
+#[test]
+pub fn generic_enum_variant_construction() {
+    run_and_check_registers!(
+        "
+        enum Slot<T> { Filled(T), Empty }
+        fn unwrap(s: Slot<int>) -> int {
+            match s {
+                Filled(x) => { return x; }
+                _ => { return 0; }
+            }
+        }
+        fn main() {
+            print(unwrap(Slot<int>::Filled(9)) + unwrap(Slot<int>::Empty));
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn generic_type_in_a_struct_field() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        struct Pair { left: Cell<int>, right: Cell<string> }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        fn main() {
+            let p = Pair{ left: Cell<int>{ value: 6 }, right: Cell<string>{ value: \"hi\" } };
+            print(p.left.get() + p.right.get().len());
+        }
+        ",
+        8.into()
+    );
+}
+
+#[test]
+pub fn generic_declared_in_an_imported_module() {
+    let dir = std::env::temp_dir().join("candela_generic_import_test");
+    let _ = std::fs::create_dir_all(&dir);
+    let lib = dir.join("boxes.cdl");
+    std::fs::write(
+        &lib,
+        "struct Boxed<T> { item: T }\n\
+         impl Boxed<T> { fn item(self) -> T { return self.item; } }\n\
+         fn wrap<T>(x) { return Boxed<T>{ item: x }; }\n",
+    )
+    .unwrap();
+    let main = dir.join("main.cdl");
+    std::fs::write(
+        &main,
+        "import \"./boxes.cdl\";\nfn main() { print(wrap<int>(41).item() + 1); }\n",
+    )
+    .unwrap();
+    let src = std::fs::read_to_string(&main).unwrap();
+    let out = compile(src, main.to_str().unwrap(), false);
+    let mut arrays = out.pools;
+    let mut reg = RegisterFile(out.registers);
+    crate::vm::execute(
+        &out.instructions,
+        &mut reg,
+        &mut arrays,
+        &crate::errors::ErrorCtx {
+            instr_src: out.instr_src,
+            sources: out.sources,
+        },
+        &out.fn_registers,
+        &[],
+        &[],
+        &[],
+        out.allocated_arg_count,
+        out.allocated_call_depth,
+        &[],
+        &[],
+        0,
+    );
+    assert!(out.instructions.iter().any(|x| {
+        if let Instr::Print(tgt) = x {
+            reg[(*tgt) as usize] == 42.into()
+        } else {
+            false
+        }
+    }));
+}
+
+#[test]
+pub fn wrong_type_argument_count_on_a_type() {
+    let err = compile_diag(
+        "struct Cell<T> { value: T }
+         fn main() { let c = Cell<int, float>{ value: 1 }; }",
+        "generics.cdl",
+    )
+    .expect_err("two type arguments for one parameter");
+    assert_eq!(err.code, "type_argument_count");
+}
+
+#[test]
+pub fn wrong_type_argument_count_on_a_function() {
+    let err = compile_diag(
+        "fn id<T>(x) { return x; }
+         fn main() { print(id<int, float>(1)); }",
+        "generics.cdl",
+    )
+    .expect_err("two type arguments for one parameter");
+    assert_eq!(err.code, "type_argument_count");
+}
+
+#[test]
+pub fn type_arguments_on_a_plain_type() {
+    let err = compile_diag(
+        "struct Point { x: int }
+         fn main() { let p = Point<int>{ x: 1 }; }",
+        "generics.cdl",
+    )
+    .expect_err("Point has no type parameters");
+    assert_eq!(err.code, "type_args_on_plain_type");
+}
+
+#[test]
+pub fn type_arguments_on_a_plain_function() {
+    let err = compile_diag(
+        "fn id(x) { return x; }
+         fn main() { print(id<int>(1)); }",
+        "generics.cdl",
+    )
+    .expect_err("id has no type parameters");
+    assert_eq!(err.code, "type_args_on_plain_function");
+}
+
+#[test]
+pub fn type_arguments_on_a_method_that_takes_none() {
+    let err = compile_diag(
+        "struct Box<T> { value: T }
+         impl Box<T> { fn get(self) -> T { return self.value; } }
+         fn main() { let b = Box<int>{ value: 1 }; print(b.get<int>()); }",
+        "generics.cdl",
+    )
+    .expect_err("get has no type parameters of its own");
+    assert_eq!(err.code, "type_args_on_plain_function");
+}
+
+#[test]
+pub fn type_arguments_on_a_builtin_method() {
+    let err = compile_diag(
+        "fn main() { let s = \"ab\"; print(s.len<int>()); }",
+        "generics.cdl",
+    )
+    .expect_err("len is built in");
+    assert_eq!(err.code, "type_args_on_builtin_method");
+}
+
+#[test]
+pub fn unknown_type_parameter_in_a_declaration() {
+    let err = compile_diag(
+        "struct Cell<T> { value: U }
+         fn main() { let c = Cell<int>{ value: 1 }; }",
+        "generics.cdl",
+    )
+    .expect_err("U is not a declared type parameter");
+    assert_eq!(err.code, "unknown_type_parameter");
+}
+
+#[test]
+pub fn impl_on_a_generic_type_needs_its_arguments() {
+    let err = compile_diag(
+        "struct Cell<T> { value: T }
+         impl Cell { fn get(self) { return self.value; } }
+         fn main() { print(1); }",
+        "generics.cdl",
+    )
+    .expect_err("an impl block must name the type arguments");
+    assert_eq!(err.code, "type_argument_count");
+}
+
+#[test]
+pub fn one_method_defined_by_two_impl_blocks() {
+    let err = compile_diag(
+        "struct Cell<T> { value: T }
+         impl Cell<T> { fn get(self) -> T { return self.value; } }
+         impl Cell<int> { fn get(self) -> int { return 0; } }
+         fn main() { let c = Cell<int>{ value: 1 }; print(c.get()); }",
+        "generics.cdl",
+    )
+    .expect_err("both blocks define Cell<int>#get");
+    assert_eq!(err.code, "function_already_defined");
+}
+
+#[test]
+pub fn a_generic_type_nested_in_itself_without_end() {
+    let err = compile_diag(
+        "struct L<T> { next: L<L<T>> }
+         fn main() { let x = L<int>{ next: null }; }",
+        "generics.cdl",
+    )
+    .expect_err("no finite set of instantiations");
+    assert_eq!(err.code, "generic_instantiation_depth");
+}
+
+// ---------------------------------------------------------------------------
+// `<` STAYS A COMPARISON
+//
+// Type arguments have no turbofish, so every one of these has to keep parsing
+// as the comparison it has always been.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn less_than_is_still_a_comparison() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let b = 2;
+            print(a < b);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn comparisons_joined_by_and() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let b = 2;
+            let c = 4;
+            let d = 3;
+            print(a < b && c > d);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn a_parenthesised_comparison_chain() {
+    // `(a<b)>(c)` compares a bool with an int, which has always been a type
+    // error; what matters is that it is still read as two comparisons.
+    let err = compile_diag(
+        "fn main() { let a = 1; let b = 2; let c = 3; print((a<b)>(c)); }",
+        "generics.cdl",
+    )
+    .expect_err("bool > int");
+    assert_eq!(err.code, "invalid_operation");
+}
+
+#[test]
+pub fn a_comparison_of_method_results() {
+    // The `<` after a call's `)` is not a type-argument position, and the one
+    // after `.get` closes on `(` only when a list of types parses in between.
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        impl P { fn get(self) -> int { return self.x; } }
+        fn main() {
+            let p = P{ x: 2 };
+            print(p.get() < 5 && p.get() > 1);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn a_comparison_against_an_indexed_element() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let xs = [5, 6];
+            print(a < xs[0]);
+        }
+        ",
+        true.into()
+    );
+}
+
+#[test]
+pub fn a_comparison_in_a_condition_before_a_block() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let b = 2;
+            if a < b { print(9); }
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn comparisons_as_call_arguments() {
+    run_and_check_registers!(
+        "
+        fn both(p, q) { return p && q; }
+        fn main() {
+            let a = 1;
+            let b = 2;
+            let c = 4;
+            let d = 3;
+            print(both(a < b, c > d));
+        }
+        ",
+        true.into()
+    );
+}

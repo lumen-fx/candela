@@ -3,21 +3,32 @@ use super::expr::Span;
 use super::expr::mangle_method;
 use super::expr::symbol_of_expr;
 use crate::compiler::Namespace;
+use crate::compiler::SymbolKind;
 use crate::compiler::compiler_data::Ctx;
+use crate::compiler::compiler_data::EnumType;
+use crate::compiler::compiler_data::EnumVariant;
+use crate::compiler::compiler_data::FnGenerics;
 use crate::compiler::compiler_data::FnSignature;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_data::State;
+use crate::compiler::compiler_data::Struct;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_errors::error_instantiation_depth;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_op;
 use crate::compiler::compiler_errors::error_struct_unknown_field;
+use crate::compiler::compiler_errors::error_type_arg_count;
+use crate::compiler::compiler_errors::error_type_args_on_plain_function;
+use crate::compiler::compiler_errors::error_type_args_on_plain_type;
 use crate::compiler::compiler_errors::error_unknown_function;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::compiler::compiler_errors::error_unknown_struct;
 use crate::compiler::compiler_errors::error_unknown_type;
+use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
+use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -46,23 +57,59 @@ pub fn reset_inference_state() {
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().clear());
 }
 
+/// A declared `-> Type` return annotation with the span it was written at.
+///
+/// `None` leaves the return type inferred. Boxed because a declaration is
+/// carried inside [`Expr`], where the annotation is the rarest field.
+pub type ReturnAnnotation = Option<Box<(TypeExpr, Span)>>;
+
+/// The type parameters a declaration introduces (`struct Cell<T>`), in the
+/// order they were written. Empty for a declaration that takes none.
+pub type TypeParams = Box<[SmolStr]>;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TypeExpr {
     Identifier(SmolStr, Span),
     NamespacedIdentifier(Box<[SmolStr]>, Span),
+    /// A generic type applied to its arguments, `Cell<int>`.
+    Generic(Box<GenericType>),
     Array(Box<Self>),
     Map(Box<Self>, Box<Self>),
     Union(Box<[Self]>),
 }
 
+/// A generic type and the arguments it is applied to. Boxed inside
+/// [`TypeExpr`], which every declaration carries by value.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct GenericType {
+    pub name: SmolStr,
+    pub args: Box<[TypeExpr]>,
+    pub span: Span,
+}
+
 impl TypeExpr {
+    /// Whether this type mentions any of `params`.
+    ///
+    /// An annotation that does is left un-pinned when the call site supplies no
+    /// type arguments: candela infers such a parameter from the argument, the
+    /// same as an un-annotated one.
     #[must_use]
-    pub fn to_datatype(
-        &self,
-        file_idx: u16,
-        namespace: &Namespace,
-        sources: &[Source],
-    ) -> DataType {
+    pub fn mentions_any(&self, params: &[SmolStr]) -> bool {
+        match self {
+            Self::Identifier(name, _) => params.contains(name),
+            Self::NamespacedIdentifier(_, _) => false,
+            Self::Generic(generic) => {
+                params.contains(&generic.name)
+                    || generic.args.iter().any(|a| a.mentions_any(params))
+            }
+            Self::Array(inner) => inner.mentions_any(params),
+            Self::Map(k, val) => k.mentions_any(params) || val.mentions_any(params),
+            Self::Union(poly) => poly.iter().any(|t| t.mentions_any(params)),
+        }
+    }
+
+    #[must_use]
+    pub fn to_datatype(&self, ctx: &mut TypeCtx<'_>) -> DataType {
         match self {
             Self::Identifier(s, span) => match s.as_str() {
                 "int" => DataType::Int,
@@ -75,57 +122,802 @@ impl TypeExpr {
                 // enum payloads that hold a value of any type (option/result).
                 "any" => DataType::Unknown,
                 struct_name => {
-                    if let Some(struct_id) =
-                        namespace.find_struct(&[], struct_name, *span, file_idx, sources)
-                    {
+                    if let Some(bound) = ctx.generics.bound(struct_name) {
+                        bound
+                    } else if let Some(struct_id) = ctx.namespace.find_struct(
+                        &[],
+                        struct_name,
+                        *span,
+                        ctx.file_idx,
+                        ctx.sources,
+                    ) {
                         DataType::Struct(struct_id as u16)
-                    } else if let Some(enum_id) = namespace.find_enum(&[], struct_name) {
+                    } else if let Some(enum_id) = ctx.namespace.find_enum(&[], struct_name) {
                         DataType::Enum(enum_id as u16)
+                    } else if ctx.generics.is_template(struct_name) {
+                        // A generic type named without its arguments is the
+                        // dynamic slot: candela never makes a missing type
+                        // argument an error.
+                        DataType::Unknown
+                    } else if ctx.generics.in_generic_body() {
+                        error_unknown_type_param(
+                            *span,
+                            ctx.file_idx,
+                            struct_name,
+                            &ctx.generics.bound_names(),
+                            ctx.sources,
+                        );
                     } else {
-                        error_unknown_type(*span, file_idx, struct_name, sources, namespace);
+                        error_unknown_type(
+                            *span,
+                            ctx.file_idx,
+                            struct_name,
+                            ctx.sources,
+                            ctx.namespace,
+                        );
                     }
                 }
             },
             Self::NamespacedIdentifier(s, span) => {
-                if let Some(struct_id) = namespace.find_struct(
+                if let Some(struct_id) = ctx.namespace.find_struct(
                     &s[..s.len() - 1],
                     unsafe { s.last().unwrap_unchecked() },
                     *span,
-                    file_idx,
-                    sources,
+                    ctx.file_idx,
+                    ctx.sources,
                 ) {
                     DataType::Struct(struct_id as u16)
-                } else if let Some(enum_id) =
-                    namespace.find_enum(&s[..s.len() - 1], unsafe { s.last().unwrap_unchecked() })
+                } else if let Some(enum_id) = ctx
+                    .namespace
+                    .find_enum(&s[..s.len() - 1], unsafe { s.last().unwrap_unchecked() })
                 {
                     DataType::Enum(enum_id as u16)
                 } else {
                     cold_path();
                     error_unknown_type_with_namespace(
                         *span,
-                        file_idx,
+                        ctx.file_idx,
                         unsafe { s.last().unwrap_unchecked() },
-                        sources,
-                        namespace,
+                        ctx.sources,
+                        ctx.namespace,
                         &s[..s.len() - 1],
                     )
                 }
             }
-            Self::Array(inner_t) => DataType::Array(Some(Box::new(
-                inner_t.to_datatype(file_idx, namespace, sources),
-            ))),
+            Self::Generic(generic) => {
+                let args: Vec<DataType> = generic.args.iter().map(|a| a.to_datatype(ctx)).collect();
+                instantiate(&generic.name, &args, generic.span, ctx)
+            }
+            Self::Array(inner_t) => DataType::Array(Some(Box::new(inner_t.to_datatype(ctx)))),
             Self::Map(k_t, v_t) => DataType::Map(Box::from((
-                Some(k_t.to_datatype(file_idx, namespace, sources)),
-                Some(v_t.to_datatype(file_idx, namespace, sources)),
+                Some(k_t.to_datatype(ctx)),
+                Some(v_t.to_datatype(ctx)),
             ))),
-            Self::Union(poly) => DataType::Union(
-                poly.iter()
-                    .map(|t| t.to_datatype(file_idx, namespace, sources))
-                    .collect(),
-            )
-            .check_poly(),
+            Self::Union(poly) => {
+                DataType::Union(poly.iter().map(|t| t.to_datatype(ctx)).collect()).check_poly()
+            }
         }
     }
+}
+
+/// How deep one generic type may be instantiated inside another before the
+/// compiler stops. A type whose own fields name a deeper instantiation of
+/// itself (`struct L<T> { next: L<L<T>> }`) has no finite set of
+/// instantiations, and this is where that is reported instead of hanging.
+const MAX_INSTANTIATION_DEPTH: u32 = 32;
+
+/// What a declaration of a generic type keeps: its parameters and the field or
+/// variant types they appear in, unresolved. Substituting the parameters and
+/// resolving the result is what [`instantiate`] does.
+#[derive(Debug)]
+struct TypeTemplate {
+    name: SmolStr,
+    params: TypeParams,
+    /// File the declaration was written in; its field types resolve against
+    /// that file's namespace whatever file the instantiation is written in.
+    file_idx: u16,
+    body: TemplateBody,
+}
+
+#[derive(Debug, Clone)]
+enum TemplateBody {
+    Struct(Box<[(SmolStr, TypeExpr, Span)]>),
+    Enum(Box<[(SmolStr, Box<[TypeExpr]>, Span)]>),
+}
+
+/// An `impl` block written against a generic type, kept until the type is
+/// instantiated.
+///
+/// `args` is the header as written: `impl Cell<T>` applies to every
+/// instantiation and binds `T`, `impl Cell<int>` applies to that one.
+#[derive(Debug)]
+pub struct ImplTemplate {
+    pub type_name: SmolStr,
+    pub args: Box<[TypeExpr]>,
+    /// The methods, as [`Expr::FunctionDecl`] carrying the plain method name.
+    /// The name is mangled per instantiated type when the block is lowered.
+    pub methods: Box<[Expr]>,
+    pub file_idx: u16,
+    pub span: Span,
+}
+
+/// The generic declarations of a program, the instantiations made from them,
+/// and the type parameters bound while a body is being compiled.
+#[derive(Debug, Default)]
+pub struct Generics {
+    templates: Vec<TypeTemplate>,
+    impls: Vec<ImplTemplate>,
+    /// Instantiations by rendered name, so `Cell<int>` written twice is one
+    /// struct. `<` and `>` cannot occur in an identifier, so a rendered name
+    /// never collides with a user-written one.
+    instantiations: Vec<(SmolStr, DataType)>,
+    /// Type parameters bound for the body being compiled. Only the top frame is
+    /// in scope: the parameters of a function never reach the body of a
+    /// function it calls.
+    bindings: Vec<Box<[(SmolStr, DataType)]>>,
+    /// Each file's namespace, so a template resolves its own types where it was
+    /// declared.
+    file_namespaces: FxHashMap<u16, Namespace>,
+    depth: u32,
+}
+
+impl Generics {
+    /// The type this name is currently bound to, if it names a type parameter
+    /// of the body being compiled.
+    #[must_use]
+    pub fn bound(&self, name: &str) -> Option<DataType> {
+        self.bindings
+            .last()?
+            .iter()
+            .find(|(param, _)| param == name)
+            .map(|(_, t)| t.clone())
+    }
+
+    /// Whether any type parameter is in scope, which is what makes an unknown
+    /// type name worth reporting as a type parameter rather than a type.
+    #[must_use]
+    fn in_generic_body(&self) -> bool {
+        self.bindings.last().is_some_and(|frame| !frame.is_empty())
+    }
+
+    fn bound_names(&self) -> Vec<SmolStr> {
+        self.bindings
+            .last()
+            .map(|frame| frame.iter().map(|(p, _)| p.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn is_template(&self, name: &str) -> bool {
+        self.templates.iter().any(|t| t.name == name)
+    }
+
+    #[must_use]
+    pub fn params_of(&self, name: &str) -> Option<&[SmolStr]> {
+        self.templates
+            .iter()
+            .rfind(|t| t.name == name)
+            .map(|t| &*t.params)
+    }
+
+    /// For each type parameter of a struct template, the field declared with
+    /// that parameter as its type. A literal written without type arguments
+    /// takes each parameter from the value in that field.
+    #[must_use]
+    pub fn param_fields(&self, name: &str) -> Vec<Option<SmolStr>> {
+        let Some(template) = self.templates.iter().rfind(|t| t.name == name) else {
+            return Vec::new();
+        };
+        let TemplateBody::Struct(fields) = &template.body else {
+            return vec![None; template.params.len()];
+        };
+        template
+            .params
+            .iter()
+            .map(|param| {
+                fields
+                    .iter()
+                    .find(|(_, field_type, _)| {
+                        matches!(field_type, TypeExpr::Identifier(t, _) if t == param)
+                    })
+                    .map(|(field_name, _, _)| field_name.clone())
+            })
+            .collect()
+    }
+
+    pub fn add_struct_template(
+        &mut self,
+        name: SmolStr,
+        params: TypeParams,
+        file_idx: u16,
+        fields: Box<[(SmolStr, TypeExpr, Span)]>,
+    ) {
+        self.templates.push(TypeTemplate {
+            name,
+            params,
+            file_idx,
+            body: TemplateBody::Struct(fields),
+        });
+    }
+
+    pub fn add_enum_template(
+        &mut self,
+        name: SmolStr,
+        params: TypeParams,
+        file_idx: u16,
+        variants: Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
+    ) {
+        self.templates.push(TypeTemplate {
+            name,
+            params,
+            file_idx,
+            body: TemplateBody::Enum(variants),
+        });
+    }
+
+    /// Records the `impl` blocks a file declared against a generic type,
+    /// stamping each with the file it came from.
+    pub fn add_impls(&mut self, impls: Vec<ImplTemplate>, file_idx: u16) {
+        self.impls.extend(impls.into_iter().map(|mut block| {
+            block.file_idx = file_idx;
+            block
+        }));
+    }
+
+    pub fn set_file_namespaces(&mut self, file_namespaces: &FxHashMap<u16, Namespace>) {
+        self.file_namespaces.clone_from(file_namespaces);
+    }
+
+    /// The scope a file had once it was parsed, for resolving a type written in
+    /// that file from somewhere else.
+    #[must_use]
+    pub fn file_namespace(&self, file_idx: u16) -> Namespace {
+        self.file_namespaces
+            .get(&file_idx)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Binds `frame` for the body about to be compiled. Every body pushes a
+    /// frame, an empty one when it has no type parameters, so the caller's
+    /// parameters do not resolve inside it.
+    pub fn push_bindings(&mut self, frame: Box<[(SmolStr, DataType)]>) {
+        self.bindings.push(frame);
+    }
+
+    pub fn pop_bindings(&mut self) {
+        self.bindings.pop();
+    }
+}
+
+/// What resolving a [`TypeExpr`] needs: the scope the type is written in, and
+/// the registries an instantiation adds to.
+pub struct TypeCtx<'a> {
+    pub file_idx: u16,
+    pub namespace: &'a Namespace,
+    pub sources: &'a [Source],
+    pub structs: &'a mut Vec<Struct>,
+    pub enums: &'a mut Vec<EnumType>,
+    pub fns: &'a mut Vec<Function>,
+    pub fn_registers: &'a mut Vec<Vec<u16>>,
+    pub generics: &'a mut Generics,
+}
+
+impl TypeCtx<'_> {
+    /// The same registries, resolving names in another file's scope. A
+    /// declaration resolves its own types where it was written, whatever file
+    /// the use is written in.
+    pub const fn reborrow<'b>(
+        &'b mut self,
+        file_idx: u16,
+        namespace: &'b Namespace,
+    ) -> TypeCtx<'b> {
+        TypeCtx {
+            file_idx,
+            namespace,
+            sources: self.sources,
+            structs: self.structs,
+            enums: self.enums,
+            fns: self.fns,
+            fn_registers: self.fn_registers,
+            generics: self.generics,
+        }
+    }
+}
+
+/// Renders `t` as the name an instantiation is registered under.
+///
+/// The name comes from the resolved type, never from the source text, so two
+/// spellings of one type give one instantiation and two types can never give
+/// the same name.
+#[must_use]
+fn render_type(t: &DataType, structs: &[Struct], enums: &[EnumType]) -> SmolStr {
+    match t {
+        DataType::Int => SmolStr::new_static("int"),
+        DataType::Float => SmolStr::new_static("float"),
+        DataType::Bool => SmolStr::new_static("bool"),
+        DataType::String => SmolStr::new_static("string"),
+        DataType::Null => SmolStr::new_static("null"),
+        DataType::Unknown => SmolStr::new_static("any"),
+        DataType::Array(inner) => match inner {
+            Some(inner) => format_args!("{}[]", render_type(inner, structs, enums)).to_smolstr(),
+            None => SmolStr::new_static("any[]"),
+        },
+        DataType::Map(m) => format_args!(
+            "{{{}: {}}}",
+            m.0.as_ref().map_or_else(
+                || SmolStr::new_static("any"),
+                |k| render_type(k, structs, enums)
+            ),
+            m.1.as_ref().map_or_else(
+                || SmolStr::new_static("any"),
+                |val| render_type(val, structs, enums)
+            )
+        )
+        .to_smolstr(),
+        DataType::Union(poly) => poly
+            .iter()
+            .map(|t| render_type(t, structs, enums))
+            .collect::<Vec<SmolStr>>()
+            .join("|")
+            .into(),
+        DataType::Struct(id) => structs[*id as usize].name.clone(),
+        DataType::Enum(id) => enums[*id as usize].name.clone(),
+        DataType::Fn(id) => format_args!("fn:{id}").to_smolstr(),
+    }
+}
+
+/// The name a generic type is registered under once its arguments are known.
+#[must_use]
+fn render_instantiation(
+    base: &str,
+    args: &[DataType],
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> SmolStr {
+    let rendered = args
+        .iter()
+        .map(|a| render_type(a, structs, enums))
+        .collect::<Vec<SmolStr>>()
+        .join(", ");
+    format_args!("{base}<{rendered}>").to_smolstr()
+}
+
+/// Resolves `base<args>` to an ordinary struct or enum, registering it the
+/// first time it is asked for.
+///
+/// Past this point nothing generic is left: the instantiation is a concrete
+/// type with concrete field types, and every later stage (field access, method
+/// dispatch, the artifact codec, the VM) treats it like any other.
+pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<'_>) -> DataType {
+    let name = render_instantiation(base, args, ctx.structs, ctx.enums);
+    if let Some((_, t)) = ctx.generics.instantiations.iter().find(|(n, _)| n == &name) {
+        return t.clone();
+    }
+    let Some(template_idx) = ctx.generics.templates.iter().rposition(|t| t.name == base) else {
+        if ctx
+            .namespace
+            .find_struct(&[], base, span, ctx.file_idx, ctx.sources)
+            .is_some()
+            || ctx.namespace.find_enum(&[], base).is_some()
+        {
+            error_type_args_on_plain_type(span, ctx.file_idx, base, ctx.sources);
+        }
+        error_unknown_type(span, ctx.file_idx, base, ctx.sources, ctx.namespace);
+    };
+    if ctx.generics.templates[template_idx].params.len() != args.len() {
+        error_type_arg_count(
+            span,
+            ctx.file_idx,
+            base,
+            ctx.generics.templates[template_idx].params.len(),
+            args.len(),
+            ctx.sources,
+        );
+    }
+    if ctx.generics.depth >= MAX_INSTANTIATION_DEPTH {
+        error_instantiation_depth(span, ctx.file_idx, base, ctx.sources);
+    }
+
+    let template_file = ctx.generics.templates[template_idx].file_idx;
+    let template_namespace = ctx
+        .generics
+        .file_namespaces
+        .get(&template_file)
+        .cloned()
+        .unwrap_or_default();
+    let frame: Box<[(SmolStr, DataType)]> = ctx.generics.templates[template_idx]
+        .params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect();
+
+    // The instantiation is registered and cached before its own field types are
+    // resolved, so a type whose fields name it resolves to the type being built
+    // instead of instantiating it again.
+    let is_struct = matches!(
+        ctx.generics.templates[template_idx].body,
+        TemplateBody::Struct(_)
+    );
+    let instantiated = if is_struct {
+        let id = ctx.structs.len() as u16;
+        ctx.structs.push(Struct {
+            name: name.clone(),
+            fields: Box::from([]),
+            id,
+            name_span: span,
+        });
+        DataType::Struct(id)
+    } else {
+        let id = ctx.enums.len() as u16;
+        ctx.enums.push(EnumType {
+            name: name.clone(),
+            variants: Box::from([]),
+            id,
+            name_span: span,
+        });
+        DataType::Enum(id)
+    };
+    ctx.generics
+        .instantiations
+        .push((name.clone(), instantiated.clone()));
+
+    let body = ctx.generics.templates[template_idx].body.clone();
+    ctx.generics.depth += 1;
+    ctx.generics.push_bindings(frame.clone());
+    {
+        let mut inner = ctx.reborrow(template_file, &template_namespace);
+        match body {
+            TemplateBody::Struct(fields) => {
+                let resolved = fields
+                    .iter()
+                    .map(|(field_name, field_type, field_span)| {
+                        (
+                            field_name.clone(),
+                            field_type.to_datatype(&mut inner),
+                            *field_span,
+                        )
+                    })
+                    .collect();
+                if let DataType::Struct(id) = instantiated {
+                    inner.structs[id as usize].fields = resolved;
+                }
+            }
+            TemplateBody::Enum(variants) => {
+                let resolved = variants
+                    .iter()
+                    .map(|(variant_name, payload, name_span)| EnumVariant {
+                        name: variant_name.clone(),
+                        payload: payload.iter().map(|t| t.to_datatype(&mut inner)).collect(),
+                        name_span: *name_span,
+                    })
+                    .collect();
+                if let DataType::Enum(id) = instantiated {
+                    inner.enums[id as usize].variants = resolved;
+                }
+            }
+        }
+    }
+    ctx.generics.pop_bindings();
+
+    lower_impls(base, args, &name, &frame, ctx);
+    ctx.generics.depth -= 1;
+
+    instantiated
+}
+
+/// Lowers every `impl` block that applies to a freshly instantiated type.
+///
+/// A generic block (`impl Cell<T>`) binds its parameters from the
+/// instantiation's arguments; a concrete one (`impl Cell<int>`) applies only
+/// when the arguments match. Each method becomes an ordinary free function
+/// named `Cell<int>#get`, exactly as a method on a plain type does.
+fn lower_impls(
+    base: &str,
+    args: &[DataType],
+    type_name: &SmolStr,
+    type_frame: &[(SmolStr, DataType)],
+    ctx: &mut TypeCtx<'_>,
+) {
+    let applicable: Vec<usize> = ctx
+        .generics
+        .impls
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block.type_name == base && block.args.len() == args.len())
+        .map(|(i, _)| i)
+        .collect();
+    for idx in applicable {
+        let impl_file = ctx.generics.impls[idx].file_idx;
+        let impl_namespace = ctx
+            .generics
+            .file_namespaces
+            .get(&impl_file)
+            .cloned()
+            .unwrap_or_default();
+        let header = ctx.generics.impls[idx].args.clone();
+        let mut frame: Vec<(SmolStr, DataType)> = Vec::with_capacity(header.len());
+        let mut applies = true;
+        for (header_arg, arg) in header.iter().zip(args) {
+            match header_arg {
+                // A bare name that is not a type of its own is a parameter the
+                // header introduces, bound to whatever this instantiation
+                // passes. Anything else is a concrete type the header pins, and
+                // the block applies only when the argument is that type.
+                TypeExpr::Identifier(pname, _)
+                    if is_type_parameter(pname, &impl_namespace, ctx) =>
+                {
+                    frame.push((pname.clone(), arg.clone()));
+                }
+                other => {
+                    let mut inner = ctx.reborrow(impl_file, &impl_namespace);
+                    inner.generics.push_bindings(Box::from(type_frame));
+                    let pinned = other.to_datatype(&mut inner);
+                    ctx.generics.pop_bindings();
+                    if &pinned != arg {
+                        applies = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if !applies {
+            continue;
+        }
+        let methods = ctx.generics.impls[idx].methods.clone();
+        let bindings: Box<[(SmolStr, DataType)]> = Box::from(frame);
+        for method in methods {
+            lower_method(
+                &method,
+                type_name,
+                &bindings,
+                impl_file,
+                &impl_namespace,
+                ctx,
+            );
+        }
+    }
+}
+
+/// Whether a name written as a type argument in an `impl` header introduces a
+/// type parameter rather than naming a type.
+fn is_type_parameter(name: &SmolStr, namespace: &Namespace, ctx: &TypeCtx<'_>) -> bool {
+    if matches!(
+        name.as_str(),
+        "int" | "float" | "bool" | "string" | "null" | "any"
+    ) {
+        return false;
+    }
+    !ctx.generics.is_template(name)
+        && !namespace.symbols.iter().any(|(symbol, kind)| {
+            symbol == name && matches!(kind, SymbolKind::Struct(_) | SymbolKind::Enum(_))
+        })
+}
+
+/// Registers one method of an instantiated `impl` block as the mangled free
+/// function its call sites resolve to.
+fn lower_method(
+    method: &Expr,
+    type_name: &SmolStr,
+    bindings: &[(SmolStr, DataType)],
+    file_idx: u16,
+    namespace: &Namespace,
+    ctx: &mut TypeCtx<'_>,
+) {
+    let Expr::FunctionDecl(method_name, args, code, name_span, return_type, params) = method else {
+        return;
+    };
+    let mangled = mangle_method(type_name, method_name);
+    if let Some(existing) = ctx.fns.iter().find(|f| f.name == mangled) {
+        crate::compiler::compiler_errors::error_function_already_defined(
+            existing,
+            *name_span,
+            file_idx,
+            ctx.sources,
+        );
+    }
+    let mut inner = ctx.reborrow(file_idx, namespace);
+    inner.generics.push_bindings(Box::from(bindings));
+    let resolved_args: Box<[(SmolStr, Option<DataType>)]> = args
+        .iter()
+        .map(|(arg_name, arg_type)| {
+            (
+                arg_name.clone(),
+                arg_type
+                    .as_ref()
+                    .filter(|t| !t.mentions_any(params))
+                    .map(|t| t.to_datatype(&mut inner)),
+            )
+        })
+        .collect();
+    let resolved_return = return_type
+        .as_deref()
+        .filter(|(t, _)| !t.mentions_any(params))
+        .map(|(t, t_span)| (t.to_datatype(&mut inner), *t_span));
+    ctx.generics.pop_bindings();
+
+    let mut callees = Vec::new();
+    collect_direct_fn_calls(code, &mut callees);
+    ctx.fns.push(Function {
+        name: mangled,
+        args: resolved_args,
+        code: Rc::clone(code),
+        impls: Vec::new(),
+        is_recursive: None,
+        returns_null: check_if_returns_void(code),
+        src_file: file_idx,
+        return_type_cache: Vec::new(),
+        direct_calls: callees.into_boxed_slice(),
+        name_span: *name_span,
+        return_type: resolved_return,
+        generics: Some(Box::new(FnGenerics {
+            params: params.clone(),
+            arg_types: args.iter().map(|(_, t)| t.clone()).collect(),
+            return_type: return_type.clone(),
+            bindings: Box::from(bindings),
+            file_idx,
+        })),
+    });
+    ctx.fn_registers.push(Vec::new());
+}
+
+/// Resolves the struct a literal names, instantiating the generic type when the
+/// literal carries type arguments.
+///
+/// A literal of a generic type written without them takes each type parameter
+/// from the value in the field declared with that parameter as its type, so
+/// `Cell{ value: 3 }` is a `Cell<int>`. A parameter no field pins is `any`.
+pub fn struct_literal_id(
+    namespace: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    type_args: &[TypeExpr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> u16 {
+    let name = namespace[namespace.len() - 1].clone();
+    let path = &namespace[..namespace.len() - 1];
+    if !type_args.is_empty() {
+        let args = resolve_type_args(type_args, ctx, state);
+        return instantiated_struct_id(&name, &args, span, ctx, state);
+    }
+    if path.is_empty() && state.generics.is_template(&name) {
+        let param_fields = state.generics.param_fields(&name);
+        let mut args: Vec<DataType> = Vec::with_capacity(param_fields.len());
+        for field_name in param_fields {
+            args.push(
+                field_name
+                    .and_then(|f| fields.iter().find(|(n, _, _, _)| *n == f))
+                    .map_or(DataType::Unknown, |(_, value, _, _)| {
+                        value.infer_type(v, ctx, state)
+                    }),
+            );
+        }
+        return instantiated_struct_id(&name, &args, span, ctx, state);
+    }
+    state
+        .namespace
+        .find_struct(path, &name, span, ctx.file_idx, state.sources)
+        .unwrap_or_else(|| {
+            error_unknown_struct(&name, span, state.sources, ctx.file_idx);
+        }) as u16
+}
+
+fn instantiated_struct_id(
+    name: &SmolStr,
+    args: &[DataType],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> u16 {
+    match instantiate(name, args, span, &mut state.type_ctx(ctx.file_idx)) {
+        DataType::Struct(id) => id,
+        _ => error_unknown_struct(name, span, state.sources, ctx.file_idx),
+    }
+}
+
+/// Resolves each type argument of a call, struct literal or variant path in the
+/// scope it was written in.
+#[must_use]
+pub fn resolve_type_args(type_args: &[TypeExpr], ctx: Ctx, state: &mut State<'_>) -> Vec<DataType> {
+    type_args
+        .iter()
+        .map(|t| t.to_datatype(&mut state.type_ctx(ctx.file_idx)))
+        .collect()
+}
+
+/// Resolves a variant of a generic enum named with its arguments
+/// (`Slot<int>::Empty`) to the instantiated enum and the variant's index.
+pub fn resolve_generic_variant(
+    path: &[SmolStr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> (u16, u16) {
+    let variant = path[path.len() - 1].clone();
+    let base = path[path.len() - 2].clone();
+    let args = resolve_type_args(type_args, ctx, state);
+    let DataType::Enum(enum_id) =
+        instantiate(&base, &args, span, &mut state.type_ctx(ctx.file_idx))
+    else {
+        crate::compiler::compiler_errors::error_enum(
+            "Unknown enum",
+            &format!("{base} does not name an enum"),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let Some(variant_idx) = state.enums[enum_id as usize]
+        .variants
+        .iter()
+        .position(|vt| vt.name == variant)
+    else {
+        crate::compiler::compiler_errors::error_enum(
+            "Unknown enum variant",
+            &format!("{} does not name an enum variant", path.join("::")),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    (enum_id, variant_idx as u16)
+}
+
+/// Resolves a call written with type arguments (`first<int>(nums)`) to the
+/// function it names and the arguments bound to its type parameters.
+pub fn resolve_generic_call(
+    fn_name: &SmolStr,
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> (usize, Vec<DataType>) {
+    let Some(fn_id) =
+        state
+            .namespace
+            .find_function(&[], fn_name, span, ctx.file_idx, state.sources)
+    else {
+        error_unknown_function(fn_name, span, state.namespace, ctx.file_idx, state.sources);
+    };
+    let args = resolve_call_type_args(fn_id, fn_name, type_args, span, ctx, state);
+    (fn_id, args)
+}
+
+/// Checks the type arguments a call is written with against the parameters the
+/// function it resolves to declares, and resolves them to types.
+///
+/// `name` is the spelling to report against, which for a method is the method
+/// name rather than the mangled symbol the call reaches.
+pub fn resolve_call_type_args(
+    fn_id: usize,
+    name: &str,
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<DataType> {
+    let params_len = state.fns[fn_id]
+        .generics
+        .as_ref()
+        .map_or(0, |g| g.params.len());
+    if params_len == 0 {
+        error_type_args_on_plain_function(span, ctx.file_idx, name, state.sources);
+    }
+    if params_len != type_args.len() {
+        error_type_arg_count(
+            span,
+            ctx.file_idx,
+            name,
+            params_len,
+            type_args.len(),
+            state.sources,
+        );
+    }
+    resolve_type_args(type_args, ctx, state)
 }
 
 /// Renders a [`DataType`] with full struct/function detail for diagnostics.
@@ -242,7 +1034,7 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
     let mut expr_stack: Vec<&Expr> = content.iter().collect();
     while let Some(expression) = expr_stack.pop() {
         match expression {
-            Expr::FunctionCall(args, namespace, _, _) => {
+            Expr::FunctionCall(args, namespace, _, _, _) => {
                 calls.push(namespace.last().unwrap().clone());
                 expr_stack.extend(args.iter());
             }
@@ -250,7 +1042,7 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
             | Expr::InlineCondition(x, y, _)
             | Expr::ElseIfBlock(x, y)
             | Expr::WhileBlock(x, y)
-            | Expr::ObjFunctionCall(x, y, _, _, _, _) => {
+            | Expr::ObjFunctionCall(x, y, _, _, _, _, _) => {
                 expr_stack.push(x);
                 expr_stack.extend(y.iter());
             }
@@ -262,7 +1054,7 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
                     expr_stack.push(code);
                 }
             }
-            Expr::FunctionDecl(_, _, x, _, _) => expr_stack.extend(x.iter()),
+            Expr::FunctionDecl(_, _, x, _, _, _) => expr_stack.extend(x.iter()),
             Expr::ArrayGetSlice(x, y, z, _) => {
                 expr_stack.push(x);
                 expr_stack.push(y);
@@ -284,7 +1076,7 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
                 expr_stack.push(value);
             }
             Expr::Array(elems, _) => expr_stack.extend(elems.iter()),
-            Expr::Struct(_, fields, _) => {
+            Expr::Struct(_, fields, _, _) => {
                 expr_stack.extend(fields.iter().map(|(_, expr, _, _)| expr));
             }
             Expr::GetStructField(expr, _, _, _) => expr_stack.push(expr),
@@ -560,7 +1352,7 @@ fn track_return_flow(
                 extend_return_types!(&mut return_types, flow.types);
                 v.truncate(v_len);
             }
-            Expr::ObjFunctionCall(obj, args, namespace, _, _, _)
+            Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _)
                 if namespace.last().unwrap().as_str() == "push" =>
             {
                 if let Expr::Var(var_name, _) = obj.as_ref()
@@ -647,20 +1439,26 @@ fn track_return_flow(
 /// `impl` method calls (which resolve to a mangled free function with the
 /// receiver as argument 0). `function_name` is only used for diagnostics inside
 /// `track_returns`.
+///
+/// `type_args` are the arguments a generic call named. They are part of the
+/// specialisation key because a type parameter no argument mentions still
+/// changes what the body builds.
 fn infer_user_fn_return_type(
     fn_id: usize,
-    infered_arg_types: Vec<DataType>,
+    infered_arg_types: &[DataType],
+    type_args: &[DataType],
     function_name: &str,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> DataType {
+    let key = specialization_key(type_args, infered_arg_types);
     let func = &state.fns[fn_id];
     // Check the return type cache
     if let Some((_, ret)) = func
         .return_type_cache
         .iter()
-        .find(|(args, _)| arg_types_specialize_equal(args, &infered_arg_types))
+        .find(|(args, _)| arg_types_specialize_equal(args, &key))
     {
         return ret.clone();
     }
@@ -692,7 +1490,11 @@ fn infer_user_fn_return_type(
         file_idx: fn_src_file,
         ..ctx
     };
+    state
+        .generics
+        .push_bindings(fn_bindings(fn_id, type_args, state));
     let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
+    state.generics.pop_bindings();
 
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
@@ -716,9 +1518,37 @@ fn infer_user_fn_return_type(
     // Cache the result
     state.fns[fn_id]
         .return_type_cache
-        .push((Box::from(infered_arg_types), to_return.clone()));
+        .push((key, to_return.clone()));
 
     to_return
+}
+
+/// The key one specialisation of a function is found by: the type arguments the
+/// call named, then the argument types it passed.
+#[must_use]
+pub fn specialization_key(type_args: &[DataType], arg_types: &[DataType]) -> Box<[DataType]> {
+    let mut key: Vec<DataType> = Vec::with_capacity(type_args.len() + arg_types.len());
+    key.extend(type_args.iter().cloned());
+    key.extend(arg_types.iter().cloned());
+    key.into_boxed_slice()
+}
+
+/// The type parameters bound while a function's body is compiled: what its
+/// enclosing `impl` block fixed, plus what the call site named.
+#[must_use]
+pub fn fn_bindings(
+    fn_id: usize,
+    type_args: &[DataType],
+    state: &State<'_>,
+) -> Box<[(SmolStr, DataType)]> {
+    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
+        return Box::from([]);
+    };
+    let mut frame: Vec<(SmolStr, DataType)> = generics.bindings.to_vec();
+    for (param, arg) in generics.params.iter().zip(type_args) {
+        frame.push((param.clone(), arg.clone()));
+    }
+    frame.into_boxed_slice()
 }
 
 impl Expr {
@@ -926,7 +1756,32 @@ impl Expr {
                 DataType::Unknown => DataType::Unknown,
                 _ => unsafe { unreachable_unchecked() },
             },
-            Self::FunctionCall(args, namespace, span, _) => {
+            Self::FunctionCall(args, namespace, span, _, type_args) => {
+                // A call written with type arguments names either a variant of a
+                // generic enum (`Slot<int>::Filled(x)`) or a generic function.
+                if !type_args.is_empty() {
+                    if namespace.len() >= 2 {
+                        let (enum_id, _) =
+                            resolve_generic_variant(namespace, type_args, *span, ctx, state);
+                        return DataType::Enum(enum_id);
+                    }
+                    let fn_name = namespace.last().unwrap().clone();
+                    let (fn_id, call_type_args) =
+                        resolve_generic_call(&fn_name, type_args, *span, ctx, state);
+                    let infered_arg_types = args
+                        .iter()
+                        .map(|x| x.infer_type(v, ctx, state))
+                        .collect::<Vec<DataType>>();
+                    return infer_user_fn_return_type(
+                        fn_id,
+                        &infered_arg_types,
+                        &call_type_args,
+                        &fn_name,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
                 // A qualified enum-variant construction (`Color::Red(x)`) has an
                 // enum type; intercept before the namespaced-function paths.
                 if namespace.len() >= 2
@@ -968,7 +1823,8 @@ impl Expr {
                                 .collect::<Vec<DataType>>();
                             return infer_user_fn_return_type(
                                 fn_id as usize,
-                                infered_arg_types,
+                                &infered_arg_types,
+                                &[],
                                 function_name,
                                 v,
                                 ctx,
@@ -1023,7 +1879,8 @@ impl Expr {
 
                         infer_user_fn_return_type(
                             fn_id,
-                            infered_arg_types,
+                            &infered_arg_types,
+                            &[],
                             function_name,
                             v,
                             ctx,
@@ -1032,7 +1889,7 @@ impl Expr {
                     }
                 }
             }
-            Self::ObjFunctionCall(obj, args, namespace, _, fn_span, _) => {
+            Self::ObjFunctionCall(obj, args, namespace, _, fn_span, _, type_args) => {
                 let method = namespace.last().unwrap().as_str();
                 let obj_type = obj.infer_type(v, ctx, state);
                 // A user-defined impl method resolves by the receiver's static
@@ -1050,8 +1907,19 @@ impl Expr {
                         for a in args {
                             arg_types.push(a.infer_type(v, ctx, state));
                         }
+                        let call_type_args = if type_args.is_empty() {
+                            Vec::new()
+                        } else {
+                            resolve_call_type_args(fn_id, method, type_args, *fn_span, ctx, state)
+                        };
                         return infer_user_fn_return_type(
-                            fn_id, arg_types, &mangled, v, ctx, state,
+                            fn_id,
+                            &arg_types,
+                            &call_type_args,
+                            &mangled,
+                            v,
+                            ctx,
+                            state,
                         );
                     }
                     // No matching method: mirror the compile-time error path so
@@ -1073,8 +1941,19 @@ impl Expr {
                         for a in args {
                             arg_types.push(a.infer_type(v, ctx, state));
                         }
+                        let call_type_args = if type_args.is_empty() {
+                            Vec::new()
+                        } else {
+                            resolve_call_type_args(fn_id, method, type_args, *fn_span, ctx, state)
+                        };
                         return infer_user_fn_return_type(
-                            fn_id, arg_types, &mangled, v, ctx, state,
+                            fn_id,
+                            &arg_types,
+                            &call_type_args,
+                            &mangled,
+                            v,
+                            ctx,
+                            state,
                         );
                     }
                     crate::compiler::compiler_errors::error_no_such_method(
@@ -1096,7 +1975,15 @@ impl Expr {
                     for a in args {
                         arg_types.push(a.infer_type(v, ctx, state));
                     }
-                    return infer_user_fn_return_type(fn_id, arg_types, method, v, ctx, state);
+                    return infer_user_fn_return_type(
+                        fn_id,
+                        &arg_types,
+                        &[],
+                        method,
+                        v,
+                        ctx,
+                        state,
+                    );
                 }
                 match method {
                     "uppercase"
@@ -1189,7 +2076,11 @@ impl Expr {
                 }
                 DataType::Union(Box::from(types)).check_poly()
             }
-            Self::NamespacedRef(path, span) => {
+            Self::NamespacedRef(path, span, type_args) => {
+                if !type_args.is_empty() {
+                    let (enum_id, _) = resolve_generic_variant(path, type_args, *span, ctx, state);
+                    return DataType::Enum(enum_id);
+                }
                 if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(path, state) {
                     DataType::Enum(enum_id)
                 } else {
@@ -1202,18 +2093,9 @@ impl Expr {
                     );
                 }
             }
-            Self::Struct(namespace, _, span) => {
-                let struct_name = &namespace[namespace.len() - 1];
-                let namespace = &namespace[..(namespace.len() - 1)];
-                DataType::Struct(
-                    state
-                        .namespace
-                        .find_struct(namespace, struct_name, *span, ctx.file_idx, state.sources)
-                        .unwrap_or_else(|| {
-                            error_unknown_struct(struct_name, *span, state.sources, ctx.file_idx);
-                        }) as u16,
-                )
-            }
+            Self::Struct(namespace, fields, span, type_args) => DataType::Struct(
+                struct_literal_id(namespace, fields, type_args, *span, v, ctx, state),
+            ),
             Self::AnonymousFunction(args, code, span) => {
                 // An anonymous function is hoisted to a synthetic non-capturing
                 // top-level function and referred to by its Fn id, exactly like a
@@ -1242,6 +2124,7 @@ impl Expr {
                     name_span: *span,
                     // An anonymous function takes no return annotation.
                     return_type: None,
+                    generics: None,
                 });
                 state.fn_registers.push(Vec::new());
                 DataType::Fn(id)

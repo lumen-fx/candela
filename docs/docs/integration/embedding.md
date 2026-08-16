@@ -336,6 +336,10 @@ host side and narrows on the way in. Arrays are homogeneous and maps are
 string-keyed, matching how candela types them. A struct read back from a script
 arrives as a `Map` of its fields.
 
+A [generic](../language/generics.md) type is instantiated at compile time, so
+nothing generic reaches the host: `Cell<int>` crosses the boundary as the
+ordinary struct it compiles to.
+
 ## Errors
 
 Every fallible `Engine`/`Program` call returns `Diagnostic`:

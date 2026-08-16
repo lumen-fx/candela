@@ -77,7 +77,14 @@ is an enum, and a `match` that does not cover every variant. The
 non-exhaustive report lists the variants you left out.
 
 **Declaration errors.** Defining a function name twice. The report shows both
-definitions.
+definitions. Two `impl` blocks that define one method for the same instantiated
+generic type are reported the same way.
+
+**Generic type errors.** Type arguments whose count does not match the
+declaration, type arguments on a name that declares none, type arguments on a
+built-in method, a name in a declaration that is neither a type nor one of its
+type parameters, and a generic type whose own fields name a deeper instantiation
+of itself without end. See [generics](../language/generics.md).
 
 **Import and library errors.** An import path that cannot be read, a bare import
 whose symbols collide with names already in scope, a `dylib` library that cannot

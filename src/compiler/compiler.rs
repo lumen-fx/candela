@@ -13,6 +13,7 @@ use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_map_diff_types;
 use crate::compiler::compiler_errors::error_not_literal_map_key;
 use crate::compiler::compiler_errors::error_range_invalid_type;
+use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::data::NULL;
@@ -31,6 +32,7 @@ use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
 use compiler_data::EnumType;
 use compiler_data::EnumVariant;
+use compiler_data::FnGenerics;
 use compiler_data::FnSignature;
 use compiler_data::Function;
 use compiler_data::HostFnSig;
@@ -39,6 +41,7 @@ use compiler_data::State;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
+use expr::METHOD_SEP;
 use expr::Span;
 use expr::code_modifies_variable;
 use functions::handle_functions;
@@ -55,10 +58,16 @@ use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use type_system::DataType;
+use type_system::Generics;
+use type_system::ReturnAnnotation;
+use type_system::TypeCtx;
 use type_system::TypeExpr;
+use type_system::TypeParams;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
+use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
+use type_system::struct_literal_id;
 
 #[cfg(not(target_arch = "wasm32"))]
 use libloading::Library;
@@ -396,9 +405,11 @@ fn compile_array_literal(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_struct_literal(
     namespace: &[SmolStr],
     fields: &[(SmolStr, Expr, Span, Span)],
+    type_args: &[TypeExpr],
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -406,14 +417,8 @@ fn compile_struct_literal(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let name = &namespace[namespace.len() - 1];
-    let namespace = &namespace[..(namespace.len() - 1)];
-    let Some(expected_struct_idx) =
-        state
-            .namespace
-            .find_struct(namespace, name, span, ctx.file_idx, state.sources)
-    else {
-        compiler_errors::error_unknown_struct(name, span, state.sources, ctx.file_idx);
-    };
+    let expected_struct_idx =
+        struct_literal_id(namespace, fields, type_args, span, v, ctx, state) as usize;
     let type_id = state.structs[expected_struct_idx].id;
     let expected_fields_len = state.structs[expected_struct_idx].fields.len();
     if expected_fields_len < fields.len() {
@@ -687,9 +692,19 @@ fn compile_enum_definition(
     name: &SmolStr,
     variants: &[(SmolStr, Box<[TypeExpr]>, Span)],
     span: Span,
+    type_params: &TypeParams,
     ctx: Ctx,
     state: &mut State<'_>,
 ) {
+    if !type_params.is_empty() {
+        state.generics.add_enum_template(
+            name.clone(),
+            type_params.clone(),
+            ctx.file_idx,
+            Box::from(variants),
+        );
+        return;
+    }
     let enum_id = state.enums.len() as u16;
     state.enums.push(EnumType {
         name: name.clone(),
@@ -707,7 +722,7 @@ fn compile_enum_definition(
             name: vn.clone(),
             payload: payload
                 .iter()
-                .map(|t| t.to_datatype(ctx.file_idx, state.namespace, state.sources))
+                .map(|t| t.to_datatype(&mut state.type_ctx(ctx.file_idx)))
                 .collect(),
             name_span: *vspan,
         })
@@ -728,8 +743,8 @@ pub(crate) fn resolve_variant_pattern(
 ) -> (u16, Vec<SmolStr>) {
     let (variant_name, binders, span): (&SmolStr, Vec<SmolStr>, Span) = match pattern {
         Expr::Var(name, span) => (name, Vec::new(), *span),
-        Expr::NamespacedRef(path, span) => (&path[path.len() - 1], Vec::new(), *span),
-        Expr::FunctionCall(args, namespace, span, _) => {
+        Expr::NamespacedRef(path, span, _) => (&path[path.len() - 1], Vec::new(), *span),
+        Expr::FunctionCall(args, namespace, span, _, _) => {
             let mut binders = Vec::with_capacity(args.len());
             for arg in args {
                 if let Expr::Var(binder, _) = arg {
@@ -2490,10 +2505,20 @@ fn compile_struct_definition(
     name: &SmolStr,
     fields: &[(SmolStr, TypeExpr, Span)],
     span: Span,
+    type_params: &TypeParams,
     ctx: Ctx,
     state: &mut State<'_>,
     _output: &mut Vec<Instr>,
 ) {
+    if !type_params.is_empty() {
+        state.generics.add_struct_template(
+            name.clone(),
+            type_params.clone(),
+            ctx.file_idx,
+            Box::from(fields),
+        );
+        return;
+    }
     let struct_id = state.structs.len() as u16;
     state.structs.push(Struct {
         // pushing it first allows structs to be recursive
@@ -2511,7 +2536,7 @@ fn compile_struct_definition(
         .map(|(f, f_t, f_span)| {
             (
                 f.clone(),
-                f_t.to_datatype(ctx.file_idx, state.namespace, state.sources),
+                f_t.to_datatype(&mut state.type_ctx(ctx.file_idx)),
                 *f_span,
             )
         })
@@ -2525,6 +2550,7 @@ fn compile_function_definition(
     fn_code: &Rc<[Expr]>,
     span: Span,
     declared_return_type: Option<&(TypeExpr, Span)>,
+    type_params: &TypeParams,
     _v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2539,16 +2565,34 @@ fn compile_function_definition(
         .namespace
         .symbols
         .push((fn_name.clone(), SymbolKind::Fn(state.fns.len() as u16)));
-    state.fns.push(Function {
-        name: fn_name.clone(),
-        args: Box::from(fn_args.iter().map(|(a, t)| {
+    // An annotation naming one of this function's own type parameters resolves
+    // per call site, so it is left un-pinned here.
+    let args: Box<[(SmolStr, Option<DataType>)]> = fn_args
+        .iter()
+        .map(|(a, t)| {
             (
                 a.clone(),
                 t.clone()
-                    .map(|t_e| t_e.to_datatype(ctx.file_idx, state.namespace, state.sources)),
+                    .filter(|t_e| !t_e.mentions_any(type_params))
+                    .map(|t_e| t_e.to_datatype(&mut state.type_ctx(ctx.file_idx))),
             )
-        }))
-        .collect(),
+        })
+        .collect();
+    let return_type = declared_return_type
+        .filter(|(t_e, _)| !t_e.mentions_any(type_params))
+        .map(|(t_e, t_span)| (t_e.to_datatype(&mut state.type_ctx(ctx.file_idx)), *t_span));
+    let generics = (!type_params.is_empty()).then(|| {
+        Box::new(FnGenerics {
+            params: type_params.clone(),
+            arg_types: fn_args.iter().map(|(_, t)| t.clone()).collect(),
+            return_type: declared_return_type.map(|t| Box::new(t.clone())),
+            bindings: Box::from([]),
+            file_idx: ctx.file_idx,
+        })
+    });
+    state.fns.push(Function {
+        name: fn_name.clone(),
+        args,
         code: fn_code.clone(),
         impls: Vec::new(),
         is_recursive: None,
@@ -2557,12 +2601,8 @@ fn compile_function_definition(
         return_type_cache: Vec::new(),
         direct_calls: callees.into_boxed_slice(),
         name_span: span,
-        return_type: declared_return_type.map(|(t_e, t_span)| {
-            (
-                t_e.to_datatype(ctx.file_idx, state.namespace, state.sources),
-                *t_span,
-            )
-        }),
+        return_type,
+        generics,
     });
     state.fn_registers.push(Vec::new());
 }
@@ -2800,10 +2840,10 @@ impl Expr {
                     output,
                 ))
             }
-            Self::Struct(namespace, fields, span) => {
+            Self::Struct(namespace, fields, span, type_args) => {
                 debug_assert!(uses_id);
                 Some(compile_struct_literal(
-                    namespace, fields, *span, v, ctx, state, output,
+                    namespace, fields, type_args, *span, v, ctx, state, output,
                 ))
             }
             Self::Map(kv_pairs, span) => {
@@ -3020,29 +3060,32 @@ impl Expr {
                     tgt_id,
                 ))
             }
-            Self::FunctionCall(args, namespace, markers, args_indexes) if uses_id => Some(
-                handle_functions(
-                    output,
-                    v,
-                    ctx,
-                    state,
-                    tgt_id,
-                    args,
-                    namespace,
-                    *markers,
-                    args_indexes,
+            Self::FunctionCall(args, namespace, markers, args_indexes, type_args) if uses_id => {
+                Some(
+                    handle_functions(
+                        output,
+                        v,
+                        ctx,
+                        state,
+                        tgt_id,
+                        args,
+                        namespace,
+                        *markers,
+                        args_indexes,
+                        type_args,
+                    )
+                    .unwrap_or_else(|| {
+                        if let Some(&id) = state.const_registers.get(&NULL) {
+                            id
+                        } else {
+                            let id = state.registers.len() as u16;
+                            state.const_registers.insert(NULL, id);
+                            state.registers.push(NULL);
+                            id
+                        }
+                    }),
                 )
-                .unwrap_or_else(|| {
-                    if let Some(&id) = state.const_registers.get(&NULL) {
-                        id
-                    } else {
-                        let id = state.registers.len() as u16;
-                        state.const_registers.insert(NULL, id);
-                        state.registers.push(NULL);
-                        id
-                    }
-                }),
-            ),
+            }
             Self::AnonymousFunction(_, _, _) => {
                 debug_assert!(uses_id);
                 if let Some(&id) = state.const_registers.get(&NULL) {
@@ -3140,14 +3183,14 @@ impl Expr {
                 compile_var_assignment(name, value, *span, v, ctx, state, output);
                 None
             }
-            Self::StructDeclare(name, fields, span) => {
+            Self::StructDeclare(name, fields, span, type_params) => {
                 debug_assert!(!uses_id);
-                compile_struct_definition(name, fields, *span, ctx, state, output);
+                compile_struct_definition(name, fields, *span, type_params, ctx, state, output);
                 None
             }
-            Self::EnumDeclare(name, variants, span) => {
+            Self::EnumDeclare(name, variants, span, type_params) => {
                 debug_assert!(!uses_id);
-                compile_enum_definition(name, variants, *span, ctx, state);
+                compile_enum_definition(name, variants, *span, type_params, ctx, state);
                 None
             }
             Self::Match(scrutinee, arms, wildcard, span) => {
@@ -3164,8 +3207,23 @@ impl Expr {
                 );
                 None
             }
-            Self::NamespacedRef(path, span) => {
+            Self::NamespacedRef(path, span, type_args) => {
                 debug_assert!(uses_id);
+                if !type_args.is_empty() {
+                    let (enum_id, variant_idx) =
+                        resolve_generic_variant(path, type_args, *span, ctx, state);
+                    return Some(compile_enum_construction(
+                        enum_id,
+                        variant_idx,
+                        &[],
+                        *span,
+                        &[],
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    ));
+                }
                 if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, state) {
                     Some(compile_enum_construction(
                         enum_id,
@@ -3188,7 +3246,7 @@ impl Expr {
                     );
                 }
             }
-            Self::FunctionCall(args, namespace, markers, args_indexes) if !uses_id => {
+            Self::FunctionCall(args, namespace, markers, args_indexes, type_args) if !uses_id => {
                 let output_id = handle_functions(
                     output,
                     v,
@@ -3199,15 +3257,22 @@ impl Expr {
                     namespace,
                     *markers,
                     args_indexes,
+                    type_args,
                 );
                 if let Some(id) = output_id {
                     state.free_reg(id, v);
                 }
                 None
             }
-            Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, args_indexes)
-                if !uses_id =>
-            {
+            Self::ObjFunctionCall(
+                obj,
+                args,
+                namespace,
+                obj_span,
+                fn_span,
+                args_indexes,
+                type_args,
+            ) if !uses_id => {
                 let output_id = handle_method_calls(
                     output,
                     v,
@@ -3220,49 +3285,56 @@ impl Expr {
                     *obj_span,
                     *fn_span,
                     args_indexes,
+                    type_args,
                 );
                 if let Some(id) = output_id {
                     state.free_reg(id, v);
                 }
                 None
             }
-            Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, args_indexes)
-                if uses_id =>
-            {
-                Some(
-                    handle_method_calls(
-                        output,
-                        v,
-                        ctx,
-                        state,
-                        tgt_id,
-                        obj,
-                        args,
-                        namespace,
-                        *obj_span,
-                        *fn_span,
-                        args_indexes,
-                    )
-                    .unwrap_or_else(|| {
-                        if let Some(&id) = state.const_registers.get(&NULL) {
-                            id
-                        } else {
-                            let id = state.registers.len() as u16;
-                            state.const_registers.insert(NULL, id);
-                            state.registers.push(NULL);
-                            id
-                        }
-                    }),
+            Self::ObjFunctionCall(
+                obj,
+                args,
+                namespace,
+                obj_span,
+                fn_span,
+                args_indexes,
+                type_args,
+            ) if uses_id => Some(
+                handle_method_calls(
+                    output,
+                    v,
+                    ctx,
+                    state,
+                    tgt_id,
+                    obj,
+                    args,
+                    namespace,
+                    *obj_span,
+                    *fn_span,
+                    args_indexes,
+                    type_args,
                 )
-            }
-            Self::FunctionDecl(fn_name, fn_args, fn_code, span, return_type) => {
+                .unwrap_or_else(|| {
+                    if let Some(&id) = state.const_registers.get(&NULL) {
+                        id
+                    } else {
+                        let id = state.registers.len() as u16;
+                        state.const_registers.insert(NULL, id);
+                        state.registers.push(NULL);
+                        id
+                    }
+                }),
+            ),
+            Self::FunctionDecl(fn_name, fn_args, fn_code, span, return_type, type_params) => {
                 debug_assert!(!uses_id);
                 compile_function_definition(
                     fn_name,
                     fn_args,
                     fn_code,
                     *span,
-                    return_type.as_ref(),
+                    return_type.as_deref(),
+                    type_params,
                     v,
                     ctx,
                     state,
@@ -3460,12 +3532,7 @@ fn load_auto_prelude(
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
-    pending_fns: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Option<TypeExpr>)]>,
-        Option<(TypeExpr, Span)>,
-    )>,
+    pending_fns: &mut PendingFns,
     pending_dylibs: &mut Vec<(
         u16,
         u16,
@@ -3481,6 +3548,7 @@ fn load_auto_prelude(
         SmolStr,
         Span,
     )>,
+    generics: &mut Generics,
 ) {
     const PRELUDE_REL: &str = "std/list.cdl";
     const PRELUDE_CHILD: &str = "list";
@@ -3523,14 +3591,15 @@ fn load_auto_prelude(
         filename: file_name,
         contents,
     });
-    let file_code = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+    let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+    generics.add_impls(parsed.impls, child_src_idx);
 
     let mut child_namespace = Namespace {
         symbols: Vec::new(),
         children: Vec::new(),
     };
     parse_toplevel(
-        file_code,
+        parsed.code,
         &path,
         child_src_idx,
         fns,
@@ -3547,6 +3616,7 @@ fn load_auto_prelude(
         pending_fns,
         pending_dylibs,
         pending_host,
+        generics,
     );
     files.insert(path, child_namespace.clone());
     namespace
@@ -3595,6 +3665,16 @@ fn open_dylib(file_path: &Path, filename: &str, is_logical: bool) -> Option<libl
 /// in `resolve_types` after every type name is registered, so an enum payload
 /// may reference a type declared later.
 type PendingEnums = Vec<(u16, u16, Box<[(SmolStr, Box<[TypeExpr]>, Span)]>)>;
+/// Deferred function-signature resolution: `(fn_id, src_file_idx, args,
+/// return_type, type_params)`, resolved in `resolve_types` once every type name
+/// is registered.
+type PendingFns = Vec<(
+    u16,
+    u16,
+    Box<[(SmolStr, Option<TypeExpr>)]>,
+    ReturnAnnotation,
+    TypeParams,
+)>;
 
 fn parse_toplevel(
     code: Vec<Expr>,
@@ -3611,12 +3691,7 @@ fn parse_toplevel(
     file_namespaces: &mut FxHashMap<u16, Namespace>,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
-    pending_fns: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Option<TypeExpr>)]>,
-        Option<(TypeExpr, Span)>,
-    )>,
+    pending_fns: &mut PendingFns,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: &mut Vec<(
         u16,
         u16,
@@ -3634,11 +3709,12 @@ fn parse_toplevel(
         SmolStr,
         Span,
     )>,
+    generics: &mut Generics,
 ) {
     let mut imports = Vec::new();
     for expr in code {
         match expr {
-            Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type) => {
+            Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type, type_params) => {
                 if let Some((_, SymbolKind::Fn(func_id))) =
                     namespace.symbols.iter().rfind(|(f, _)| f == &fn_name)
                 {
@@ -3670,11 +3746,26 @@ fn parse_toplevel(
                     // Resolved with the argument types once every file's
                     // namespace is known; see the `pending_fns` drain.
                     return_type: None,
+                    generics: (!type_params.is_empty()).then(|| {
+                        Box::new(FnGenerics {
+                            params: type_params.clone(),
+                            arg_types: fn_args.iter().map(|(_, t)| t.clone()).collect(),
+                            return_type: fn_return_type.clone(),
+                            bindings: Box::from([]),
+                            file_idx: src_file_idx,
+                        })
+                    }),
                 });
-                pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type));
+                pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type, type_params));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
-            Expr::StructDeclare(name, fields, span) => {
+            Expr::StructDeclare(name, fields, span, type_params) => {
+                // A generic declaration registers no type of its own: each
+                // instantiation of it becomes an ordinary struct.
+                if !type_params.is_empty() {
+                    generics.add_struct_template(name, type_params, src_file_idx, fields);
+                    continue;
+                }
                 let struct_id = structs.len() as u16;
                 structs.push(Struct {
                     name: name.clone(),
@@ -3687,7 +3778,11 @@ fn parse_toplevel(
                     .push((name, SymbolKind::Struct(struct_id)));
                 pending_structs.push((struct_id, src_file_idx, fields));
             }
-            Expr::EnumDeclare(name, variants, span) => {
+            Expr::EnumDeclare(name, variants, span, type_params) => {
+                if !type_params.is_empty() {
+                    generics.add_enum_template(name, type_params, src_file_idx, variants);
+                    continue;
+                }
                 let enum_id = enums.len() as u16;
                 enums.push(EnumType {
                     name: name.clone(),
@@ -3733,6 +3828,7 @@ fn parse_toplevel(
             pending_fns,
             pending_dylibs,
             pending_host,
+            generics,
         );
     }
 
@@ -3889,8 +3985,9 @@ fn parse_toplevel(
                     });
 
                     // Parse the imported file's contents
-                    let file_code =
+                    let parsed =
                         parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+                    generics.add_impls(parsed.impls, child_src_idx);
 
                     let mut child_namespace = Namespace {
                         symbols: Vec::new(),
@@ -3898,7 +3995,7 @@ fn parse_toplevel(
                     };
 
                     parse_toplevel(
-                        file_code,
+                        parsed.code,
                         &file_path,
                         child_src_idx,
                         fns,
@@ -3916,6 +4013,7 @@ fn parse_toplevel(
                         #[cfg(not(target_arch = "wasm32"))]
                         pending_dylibs,
                         pending_host,
+                        generics,
                     );
                     files.insert(file_path.clone(), child_namespace.clone());
                     child_namespace
@@ -3972,17 +4070,14 @@ fn parse_toplevel(
 }
 
 fn resolve_types(
-    structs: &mut [Struct],
-    enums: &mut [EnumType],
-    fns: &mut [Function],
+    structs: &mut Vec<Struct>,
+    enums: &mut Vec<EnumType>,
+    fns: &mut Vec<Function>,
+    fn_registers: &mut Vec<Vec<u16>>,
+    generics: &mut Generics,
     pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: PendingEnums,
-    pending_fns: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Option<TypeExpr>)]>,
-        Option<(TypeExpr, Span)>,
-    )>,
+    pending_fns: PendingFns,
     #[cfg(not(target_arch = "wasm32"))] pending_dylibs: Vec<(
         u16,
         u16,
@@ -4006,13 +4101,40 @@ fn resolve_types(
     dynamic_libs: &mut [Dynamiclib],
     sources: &[Source],
 ) {
+    // An `impl` on a generic type has to name the type arguments it is written
+    // against: `impl Cell` has no instantiation to attach its methods to.
+    for func in fns.iter() {
+        let Some((type_name, _)) = func.name.split_once(METHOD_SEP) else {
+            continue;
+        };
+        if let Some(params) = generics.params_of(type_name) {
+            error_type_arg_count(
+                func.name_span,
+                func.src_file,
+                type_name,
+                params.len(),
+                0,
+                sources,
+            );
+        }
+    }
     for (struct_id, src_file_idx, fields) in pending_structs {
+        let namespace = file_namespaces[&src_file_idx].clone();
         let resolved_fields = fields
             .iter()
             .map(|(field_name, field_type, field_span)| {
                 (
                     field_name.clone(),
-                    field_type.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources),
+                    field_type.to_datatype(&mut TypeCtx {
+                        file_idx: src_file_idx,
+                        namespace: &namespace,
+                        sources,
+                        structs,
+                        enums,
+                        fns,
+                        fn_registers,
+                        generics,
+                    }),
                     *field_span,
                 )
             })
@@ -4020,51 +4142,111 @@ fn resolve_types(
         structs[struct_id as usize].fields = resolved_fields;
     }
     for (enum_id, src_file_idx, variants) in pending_enums {
+        let namespace = file_namespaces[&src_file_idx].clone();
         let resolved_variants = variants
             .iter()
             .map(|(variant_name, payload, name_span)| EnumVariant {
                 name: variant_name.clone(),
                 payload: payload
                     .iter()
-                    .map(|t| t.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources))
+                    .map(|t| {
+                        t.to_datatype(&mut TypeCtx {
+                            file_idx: src_file_idx,
+                            namespace: &namespace,
+                            sources,
+                            structs,
+                            enums,
+                            fns,
+                            fn_registers,
+                            generics,
+                        })
+                    })
                     .collect(),
                 name_span: *name_span,
             })
             .collect();
         enums[enum_id as usize].variants = resolved_variants;
     }
-    for (fn_id, src_file_idx, args, return_type) in pending_fns {
+    for (fn_id, src_file_idx, args, return_type, type_params) in pending_fns {
+        let namespace = file_namespaces[&src_file_idx].clone();
+        // An annotation naming one of the function's own type parameters is
+        // left un-pinned: it resolves per call site, once the call names its
+        // type arguments.
         let resolved_args = args
             .iter()
             .map(|(arg_name, arg_type)| {
                 (
                     arg_name.clone(),
-                    arg_type.clone().map(|t_e| {
-                        t_e.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources)
-                    }),
+                    arg_type
+                        .clone()
+                        .filter(|t_e| !t_e.mentions_any(&type_params))
+                        .map(|t_e| {
+                            t_e.to_datatype(&mut TypeCtx {
+                                file_idx: src_file_idx,
+                                namespace: &namespace,
+                                sources,
+                                structs,
+                                enums,
+                                fns,
+                                fn_registers,
+                                generics,
+                            })
+                        }),
                 )
             })
             .collect();
         fns[fn_id as usize].args = resolved_args;
-        fns[fn_id as usize].return_type = return_type.map(|(t_e, t_span)| {
-            (
-                t_e.to_datatype(src_file_idx, &file_namespaces[&src_file_idx], sources),
-                t_span,
-            )
-        });
+        fns[fn_id as usize].return_type = return_type
+            .map(|annotation| *annotation)
+            .filter(|(t_e, _)| !t_e.mentions_any(&type_params))
+            .map(|(t_e, t_span)| {
+                (
+                    t_e.to_datatype(&mut TypeCtx {
+                        file_idx: src_file_idx,
+                        namespace: &namespace,
+                        sources,
+                        structs,
+                        enums,
+                        fns,
+                        fn_registers,
+                        generics,
+                    }),
+                    t_span,
+                )
+            });
     }
     #[cfg(not(target_arch = "wasm32"))]
     for (src_file_idx, dynlib_id, fn_signatures, lib, library_spec, span) in pending_dylibs {
         let namespace = &file_namespaces[&src_file_idx];
-        let fns = fn_signatures
+        let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
                 let fn_args = fn_args
                     .iter()
-                    .map(|t| t.to_datatype(src_file_idx, namespace, sources))
+                    .map(|t| {
+                        t.to_datatype(&mut TypeCtx {
+                            file_idx: src_file_idx,
+                            namespace,
+                            sources,
+                            structs,
+                            enums,
+                            fns,
+                            fn_registers,
+                            generics,
+                        })
+                    })
                     .collect::<Vec<DataType>>()
                     .into_boxed_slice();
-                let fn_return_type = fn_return_type.to_datatype(src_file_idx, namespace, sources);
+                let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
+                    file_idx: src_file_idx,
+                    namespace,
+                    sources,
+                    structs,
+                    enums,
+                    fns,
+                    fn_registers,
+                    generics,
+                });
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
@@ -4106,7 +4288,7 @@ fn resolve_types(
                 return_val
             })
             .collect();
-        dynamic_libs[dynlib_id as usize].fns = fns;
+        dynamic_libs[dynlib_id as usize].fns = resolved.into_boxed_slice();
     }
 
     // Resolve `host "..." { ... }` blocks. Unlike dylibs there is no shared
@@ -4115,7 +4297,7 @@ fn resolve_types(
     // Rust closure the embedding `Engine` bound to `(namespace, name)`.
     for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
         let namespace = &file_namespaces[&src_file_idx];
-        let fns = fn_signatures
+        let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
                 // A lone `...` sentinel argument marks a variadic host fn: it
@@ -4128,11 +4310,31 @@ fn resolve_types(
                 } else {
                     fn_args
                         .iter()
-                        .map(|t| t.to_datatype(src_file_idx, namespace, sources))
+                        .map(|t| {
+                            t.to_datatype(&mut TypeCtx {
+                                file_idx: src_file_idx,
+                                namespace,
+                                sources,
+                                structs,
+                                enums,
+                                fns,
+                                fn_registers,
+                                generics,
+                            })
+                        })
                         .collect::<Vec<DataType>>()
                         .into_boxed_slice()
                 };
-                let fn_return_type = fn_return_type.to_datatype(src_file_idx, namespace, sources);
+                let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
+                    file_idx: src_file_idx,
+                    namespace,
+                    sources,
+                    structs,
+                    enums,
+                    fns,
+                    fn_registers,
+                    generics,
+                });
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
@@ -4152,7 +4354,7 @@ fn resolve_types(
                 return_val
             })
             .collect();
-        dynamic_libs[dynlib_id as usize].fns = fns;
+        dynamic_libs[dynlib_id as usize].fns = resolved.into_boxed_slice();
     }
 }
 
@@ -4181,6 +4383,10 @@ pub struct CompileOutput {
     pub namespace: Namespace,
     pub const_registers: FxHashMap<Data, u16>,
     pub free_registers: Vec<u16>,
+    /// The generic declarations and the instantiations made from them, kept so
+    /// a later compile against this program (an embedding host calling in, a
+    /// REPL line) resolves them the same way.
+    pub generics: Generics,
 }
 
 #[must_use]
@@ -4197,7 +4403,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         contents,
     };
 
-    let code = parser::parse(&main_src.contents, &main_src);
+    let parsed = parser::parse(&main_src.contents, &main_src);
 
     #[cfg(not(target_arch = "wasm32"))]
     if debug {
@@ -4234,12 +4440,8 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
     let mut file_namespaces: FxHashMap<u16, Namespace> = FxHashMap::default();
     let mut pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)> = Vec::new();
     let mut pending_enums: PendingEnums = Vec::new();
-    let mut pending_fns: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Option<TypeExpr>)]>,
-        Option<(TypeExpr, Span)>,
-    )> = Vec::with_capacity(2);
+    let mut pending_fns: PendingFns = Vec::with_capacity(2);
+    let mut generics = Generics::default();
     #[cfg(not(target_arch = "wasm32"))]
     let mut pending_dylibs: Vec<(
         u16,
@@ -4257,8 +4459,9 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         Span,
     )> = Vec::new();
 
+    generics.add_impls(parsed.impls, 0);
     parse_toplevel(
-        code,
+        parsed.code,
         &main_path,
         0,
         &mut functions,
@@ -4276,11 +4479,17 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         #[cfg(not(target_arch = "wasm32"))]
         &mut pending_dylibs,
         &mut pending_host,
+        &mut generics,
     );
+    // Every file's scope is known once the whole import tree is parsed; an
+    // instantiation resolves a template against the scope it was declared in.
+    generics.set_file_namespaces(&file_namespaces);
     resolve_types(
         &mut structs,
         &mut enums,
         &mut functions,
+        &mut fn_registers,
+        &mut generics,
         pending_structs,
         pending_enums,
         pending_fns,
@@ -4317,6 +4526,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         sources: &mut sources,
         reserved_registers: FxHashSet::default(),
         namespace: &mut namespace,
+        generics: &mut generics,
     };
     let mut instructions = compile_expr(
         &state.fns
@@ -4397,5 +4607,6 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         namespace,
         const_registers,
         free_registers,
+        generics,
     }
 }

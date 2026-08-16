@@ -154,3 +154,5 @@ fn main() {
 ```
 
 To give a struct behaviour, write an `impl` block; see [Methods](methods.md).
+To let one struct hold a field of whatever type you name at the point of use,
+give it a type parameter; see [Generics](generics.md).

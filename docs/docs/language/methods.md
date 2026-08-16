@@ -33,7 +33,9 @@ fn main() {
 ```
 
 `impl` blocks go at the top level, next to the type they belong to. A type may
-have several.
+have several. A block on a generic type names the type arguments it is written
+against, and a method can take type parameters of its own
+(`s.tagged<string>("hi")`); see [Generics](generics.md).
 
 ## What self is
 

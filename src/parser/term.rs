@@ -8,25 +8,39 @@ use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
+use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
+use crate::parser::TypeArgFollow;
 use crate::parser::blocks::parse_block;
 use crate::parser::blocks::parse_block_expr;
 use crate::parser::expand_macro;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
+use crate::parser::parse_type_args;
+use crate::parser::type_args_ahead;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 
 // Must be called right after LParen is skipped
 // Identifier LParen Expr RParen
 // Parses: Expr RParen
-fn parse_fn_call(parser: &mut Parser<'_>, namespace: Box<[SmolStr]>, span: Span) -> Expr {
+fn parse_fn_call(
+    parser: &mut Parser<'_>,
+    namespace: Box<[SmolStr]>,
+    span: Span,
+    type_args: Box<[TypeExpr]>,
+) -> Expr {
     let (args, arg_markers, _) = parse_args(parser);
-    Expr::FunctionCall(args, namespace, span, arg_markers)
+    Expr::FunctionCall(args, namespace, span, arg_markers, type_args)
 }
 
 // Must be called right after LParen is skipped
-fn parse_struct(parser: &mut Parser<'_>, namespace: Box<[SmolStr]>, start: u32) -> Expr {
+fn parse_struct(
+    parser: &mut Parser<'_>,
+    namespace: Box<[SmolStr]>,
+    start: u32,
+    type_args: Box<[TypeExpr]>,
+) -> Expr {
     let mut fields: Vec<(SmolStr, Expr, Span, Span)> = Vec::with_capacity(4);
     let end: u32;
     loop {
@@ -76,7 +90,42 @@ fn parse_struct(parser: &mut Parser<'_>, namespace: Box<[SmolStr]>, start: u32) 
         }
     }
 
-    Expr::Struct(namespace, Box::from(fields), (start, end).into())
+    Expr::Struct(namespace, Box::from(fields), (start, end).into(), type_args)
+}
+
+/// Parses what follows a committed type-argument list: a call, a struct
+/// literal, or a variant of a generic enum.
+#[inline(never)]
+fn parse_generic_term(
+    parser: &mut Parser<'_>,
+    name: SmolStr,
+    type_args: Box<[TypeExpr]>,
+    name_span: Span,
+) -> Expr {
+    let span: Span = (name_span.start, parser.last_token_end as u32).into();
+    match parser.peek_token() {
+        Token::LParen => {
+            parser.next_token();
+            parse_fn_call(parser, Box::from([name]), span, type_args)
+        }
+        Token::LBrace => {
+            parser.next_token();
+            parse_struct(parser, Box::from([name]), name_span.start, type_args)
+        }
+        // `Slot<int>::Filled(x)` / `Slot<int>::Empty`: a variant of one
+        // instantiation of a generic enum.
+        _ => {
+            parser.next_token_expect(Token::DoubleColon, "");
+            let (namespace, end) = parse_namespace(parser, name);
+            let span: Span = (name_span.start, end).into();
+            if parser.peek_token_opt() == Some(Token::LParen) {
+                parser.next_token();
+                parse_fn_call(parser, namespace, span, type_args)
+            } else {
+                Expr::NamespacedRef(namespace, span, type_args)
+            }
+        }
+    }
 }
 
 pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
@@ -97,12 +146,31 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 // Identifier LParen Expr RParen
                 Some(Token::LParen) => {
                     parser.next_token();
-                    parse_fn_call(parser, Box::new([s.to_smolstr()]), t_span)
+                    parse_fn_call(parser, Box::new([s.to_smolstr()]), t_span, Box::from([]))
                 }
                 // STRUCT
                 Some(Token::LBrace) if allow_struct => {
                     parser.next_token();
-                    parse_struct(parser, Box::from([SmolStr::new(s)]), start)
+                    parse_struct(parser, Box::from([SmolStr::new(s)]), start, Box::from([]))
+                }
+                // GENERIC CALL, STRUCT LITERAL OR ENUM VARIANT:
+                // Identifier '<' Type,... '>' ('(' | '{' | '::')
+                //
+                // `<` is also the comparison operator, so it opens a type
+                // argument list only when the whole list parses and closes into
+                // one of those three; see `type_args_ahead`.
+                Some(Token::OpInf)
+                    if type_args_ahead(
+                        parser,
+                        if allow_struct {
+                            TypeArgFollow::Term
+                        } else {
+                            TypeArgFollow::TermNoStruct
+                        },
+                    ) =>
+                {
+                    let type_args = parse_type_args(parser);
+                    parse_generic_term(parser, SmolStr::new(s), type_args, t_span)
                 }
                 // NAMESPACE
                 Some(Token::DoubleColon) => {
@@ -115,7 +183,12 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                         // (Identifier DoubleColon)+ Identifier LParen Expr RParen
                         Some(Token::LParen) => {
                             parser.next_token();
-                            parse_fn_call(parser, namespace, (t_span.start, end).into())
+                            parse_fn_call(
+                                parser,
+                                namespace,
+                                (t_span.start, end).into(),
+                                Box::from([]),
+                            )
                         }
                         // STRUCT WITH NAMESPACE. Gated on `allow_struct` so a
                         // brace that opens a following block (for example a
@@ -123,11 +196,15 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                         // a struct literal.
                         Some(Token::LBrace) if allow_struct => {
                             parser.next_token();
-                            parse_struct(parser, namespace, start)
+                            parse_struct(parser, namespace, start, Box::from([]))
                         }
                         // A bare namespaced identifier: a nullary enum-variant
                         // construction (`Color::Red`), resolved by the compiler.
-                        _ => Expr::NamespacedRef(namespace, (t_span.start, end).into()),
+                        _ => Expr::NamespacedRef(
+                            namespace,
+                            (t_span.start, end).into(),
+                            Box::from([]),
+                        ),
                     }
                 }
                 _ => Expr::Var(SmolStr::new(s), (t_span.start, t_span.end).into()),
