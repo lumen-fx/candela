@@ -1,6 +1,9 @@
 use super::expr::Expr;
 use super::expr::Span;
 use super::type_system::DataType;
+use super::type_system::TypeExpr;
+use super::type_system::resolve_generic_call;
+use super::type_system::resolve_generic_variant;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
@@ -107,6 +110,7 @@ pub fn check_arg_type(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle_functions(
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
@@ -118,7 +122,44 @@ pub fn handle_functions(
     namespace: &[SmolStr],
     span: Span,
     args_indexes: &[Span],
+    type_args: &[TypeExpr],
 ) -> Option<u16> {
+    // A call written with type arguments names either a variant of a generic
+    // enum (`Slot<int>::Filled(x)`) or a generic function. Both resolve against
+    // the instantiation the arguments give, so neither reaches the built-in and
+    // dynamic-library paths below.
+    if !type_args.is_empty() {
+        if namespace.len() >= 2 {
+            let (enum_id, variant_idx) =
+                resolve_generic_variant(namespace, type_args, span, ctx, state);
+            return Some(crate::compiler::compile_enum_construction(
+                enum_id,
+                variant_idx,
+                args,
+                span,
+                args_indexes,
+                v,
+                ctx,
+                state,
+                output,
+            ));
+        }
+        let fn_name = namespace[namespace.len() - 1].clone();
+        let (fn_id, call_type_args) = resolve_generic_call(&fn_name, type_args, span, ctx, state);
+        return handle_user_function(
+            &fn_name,
+            fn_id,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            args,
+            span,
+            args_indexes,
+            &call_type_args,
+        );
+    }
     // A qualified enum-variant construction (`Color::Red(x)`, `Option::Some(v)`)
     // is intercepted before the namespaced-function resolution below, which
     // would otherwise treat the enum name as a module namespace and error.
@@ -251,6 +292,7 @@ pub fn handle_functions(
             args,
             span,
             args_indexes,
+            &[],
         )
     } else {
         error_unknown_function_in_namespace(

@@ -31,6 +31,7 @@ use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::compiler::type_system::Generics;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
 use crate::trampoline::compile_trampoline;
@@ -209,6 +210,7 @@ impl Engine {
             namespace: out.namespace,
             const_registers,
             free_registers: out.free_registers,
+            generics: out.generics,
         };
 
         // Instantiate: run `main` once so top-level state is established before
@@ -247,6 +249,7 @@ pub struct Program {
     namespace: Namespace,
     const_registers: FxHashMap<Data, u16>,
     free_registers: Vec<u16>,
+    generics: Generics,
 }
 
 impl Program {
@@ -297,6 +300,7 @@ impl Program {
             Box::from([SmolStr::from(fn_name)]),
             dummy,
             arg_spans,
+            Box::from([]),
         );
 
         // Compile the trampoline (type-checks the call) under a diagnostic sink.
@@ -340,6 +344,7 @@ impl Program {
             sources: &mut self.sources,
             reserved_registers: rustc_hash::FxHashSet::default(),
             namespace: &mut self.namespace,
+            generics: &mut self.generics,
         }
     }
 

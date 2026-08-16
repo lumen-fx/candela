@@ -1,4 +1,6 @@
+use super::type_system::ReturnAnnotation;
 use super::type_system::TypeExpr;
+use super::type_system::TypeParams;
 pub use crate::rt::Span;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -36,18 +38,33 @@ pub enum Expr {
     Array(Box<[Self]>, Box<[Span]>),
     /// Map(key-value pairs, span)
     Map(Box<[(Self, Span, Self, Span)]>, Span),
-    /// Struct(name, fields, span)
-    Struct(Box<[SmolStr]>, Box<[(SmolStr, Self, Span, Span)]>, Span),
-    /// StructDeclare(name, fields, span)
-    StructDeclare(SmolStr, Box<[(SmolStr, TypeExpr, Span)]>, Span),
-    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span)
-    EnumDeclare(SmolStr, Box<[(SmolStr, Box<[TypeExpr]>, Span)]>, Span),
-    /// NamespacedRef(path, span)
+    /// Struct(name, fields, span, type_args)
+    ///
+    /// `type_args` holds the arguments of a generic struct literal
+    /// (`Cell<int>{ value: 3 }`) and is empty otherwise.
+    Struct(
+        Box<[SmolStr]>,
+        Box<[(SmolStr, Self, Span, Span)]>,
+        Span,
+        Box<[TypeExpr]>,
+    ),
+    /// StructDeclare(name, fields, span, type_params)
+    StructDeclare(SmolStr, Box<[(SmolStr, TypeExpr, Span)]>, Span, TypeParams),
+    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params)
+    EnumDeclare(
+        SmolStr,
+        Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
+        Span,
+        TypeParams,
+    ),
+    /// NamespacedRef(path, span, type_args)
     ///
     /// A bare namespaced identifier (`Color::Red`) with no call parentheses or
     /// struct braces. The only such form candela has is a nullary enum-variant
     /// construction; the compiler resolves it against the enum registry.
-    NamespacedRef(Box<[SmolStr]>, Span),
+    /// `type_args` names the instantiation of a generic enum
+    /// (`Slot<int>::Empty`) and is empty otherwise.
+    NamespacedRef(Box<[SmolStr]>, Span, Box<[TypeExpr]>),
     /// Match(scrutinee, arms: [(pattern_expr, body)], wildcard_body, span)
     ///
     /// The arm patterns are parsed as ordinary expressions; the compiler picks
@@ -79,9 +96,22 @@ pub enum Expr {
     AnonymousFunction(Box<[SmolStr]>, Box<[Self]>, Span),
     // AnonymousFunction(Box<[(SmolStr, SmolStr)]>, SmolStr, Box<[Self]>, Span),
     WhileBlock(Box<Self>, Box<[Self]>),
-    /// FunctionCall(args, (optional namespace + name), start, end, (arg_start,arg_end))
-    FunctionCall(Box<[Self]>, Box<[SmolStr]>, Span, Box<[Span]>),
-    /// ObjFunctionCall(obj, args, namespace, obj_span, fn_span, arg_markers)
+    /// FunctionCall(args, (optional namespace + name), span, (arg_start,arg_end), type_args)
+    ///
+    /// `type_args` holds the type arguments of a call written with them
+    /// (`first<int>(nums)`) and is empty otherwise.
+    FunctionCall(
+        Box<[Self]>,
+        Box<[SmolStr]>,
+        Span,
+        Box<[Span]>,
+        Box<[TypeExpr]>,
+    ),
+    /// ObjFunctionCall(obj, args, namespace, obj_span, fn_span, arg_markers, type_args)
+    ///
+    /// `type_args` holds the type arguments a method call is written with
+    /// (`b.tagged<string>("hi")`), which bind the method's own type parameters,
+    /// and is empty otherwise.
     ObjFunctionCall(
         // Will be removed soon.
         Box<Self>,
@@ -92,18 +122,22 @@ pub enum Expr {
         // fn_span
         Span,
         Box<[Span]>,
+        Box<[TypeExpr]>,
     ),
-    /// FunctionDecl(name, args, code, name_span, return_type)
+    /// FunctionDecl(name, args, code, name_span, return_type, type_params)
     ///
     /// `return_type` carries the optional `-> Type` annotation together with the
     /// span of the annotation itself, which is what a mismatch between the
-    /// declared and the returned type is reported against.
+    /// declared and the returned type is reported against. `type_params` names
+    /// the type parameters of a generic function (`fn first<T>`) and is empty
+    /// otherwise.
     FunctionDecl(
         SmolStr,
         Box<[(SmolStr, Option<TypeExpr>)]>,
         Rc<[Self]>,
         Span,
-        Option<(TypeExpr, Span)>,
+        ReturnAnnotation,
+        TypeParams,
     ),
 
     ReturnVal(Box<Option<Self>>),

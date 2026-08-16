@@ -7,10 +7,14 @@ use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::mangle_method;
+use crate::compiler::type_system::ImplTemplate;
+use crate::compiler::type_system::ReturnAnnotation;
 use crate::parser::Parser;
 use crate::parser::TypeExpr;
 use crate::parser::parse_code;
 use crate::parser::parse_type;
+use crate::parser::parse_type_args;
+use crate::parser::parse_type_params;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
@@ -164,6 +168,7 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
             ParserErr::UnexpectedToken(Token::Identifier(""), t_fn_id, "Invalid function name."),
         );
     };
+    let type_params = parse_type_params(parser);
     parser.next_token_expect(
         Token::LParen,
         "Function arguments must be delimited by parentheses",
@@ -212,6 +217,7 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         std::rc::Rc::from(fn_code),
         span,
         return_type,
+        type_params,
     )
 }
 
@@ -220,17 +226,17 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
 ///
 /// The annotation is checked against what the body returns; see
 /// `compile_function`. Leaving it off keeps the return type inferred.
-fn parse_return_annotation(parser: &mut Parser<'_>) -> Option<(TypeExpr, Span)> {
+fn parse_return_annotation(parser: &mut Parser<'_>) -> ReturnAnnotation {
     if parser.peek_token() != Token::Arrow {
         return None;
     }
     parser.next_token();
     let type_start = parser.peek_token_span().start;
     let return_type = parse_type(parser);
-    Some((
+    Some(Box::new((
         return_type,
         (type_start, parser.last_token_end as u32).into(),
-    ))
+    )))
 }
 
 pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
@@ -274,6 +280,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
             Box::new([usr_var]),
             Box::from([SmolStr::new("throw")]),
             (start, end).into(),
+            Box::from([]),
             Box::from([]),
         )])
     };
@@ -330,6 +337,7 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
             ParserErr::UnexpectedToken(Token::Identifier(""), next_token, ""),
         );
     };
+    let type_params = parse_type_params(parser);
     parser.next_token_expect(Token::LBrace, "Expected '{'");
     let mut fields: Vec<(SmolStr, TypeExpr, Span)> = Vec::with_capacity(4);
     loop {
@@ -374,7 +382,7 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
             break;
         }
     }
-    Expr::StructDeclare(struct_name, Box::from(fields), span)
+    Expr::StructDeclare(struct_name, Box::from(fields), span, type_params)
 }
 
 /// Parses an `impl Type { fn method(self, ...) { ... } ... }` block.
@@ -386,8 +394,16 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
 /// so downstream compilation treats a method exactly like a free function and
 /// the VM only ever sees ordinary calls. The receiver's static type resolves a
 /// `recv.method(...)` call site back to the matching mangled symbol.
-pub fn parse_impl_block(parser: &mut Parser<'_>, output: &mut Vec<Expr>) {
-    let (t, _) = parser.next_token();
+///
+/// A block whose header names type arguments (`impl Cell<T>`, `impl Cell<int>`)
+/// has no instantiated type to mangle against yet: it is kept as a template in
+/// `impls` and lowered the same way once the type is instantiated.
+pub fn parse_impl_block(
+    parser: &mut Parser<'_>,
+    output: &mut Vec<Expr>,
+    impls: &mut Vec<ImplTemplate>,
+) {
+    let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Impl);
     let (next_token, type_span) = parser.next_token();
     let type_name = if let Token::Identifier(id) = next_token {
@@ -403,19 +419,57 @@ pub fn parse_impl_block(parser: &mut Parser<'_>, output: &mut Vec<Expr>) {
             ),
         );
     };
+    let type_args: Box<[TypeExpr]> = if parser.peek_token() == Token::OpInf {
+        parse_type_args(parser)
+    } else {
+        Box::from([])
+    };
+    let header_span: Span = (start, parser.last_token_end as u32).into();
     parser.next_token_expect(Token::LBrace, "impl blocks must start with '{'.");
+    let mut methods: Vec<Expr> = Vec::with_capacity(4);
     loop {
         if parser.peek_token() == Token::RBrace {
             parser.next_token();
             break;
         }
-        output.push(parse_method(parser, &type_name));
+        methods.push(parse_method(parser));
+    }
+    if type_args.is_empty() {
+        for method in methods {
+            output.push(mangled_method(method, &type_name));
+        }
+    } else {
+        impls.push(ImplTemplate {
+            type_name,
+            args: type_args,
+            methods: Box::from(methods),
+            // Stamped with the file it came from when it is registered.
+            file_idx: 0,
+            span: header_span,
+        });
     }
 }
 
+/// Renames a parsed method to the mangled free-function symbol its call sites
+/// resolve to.
+fn mangled_method(method: Expr, type_name: &SmolStr) -> Expr {
+    let Expr::FunctionDecl(name, args, code, name_span, return_type, type_params) = method else {
+        cold_path();
+        unreachable!("an impl block only ever parses method declarations")
+    };
+    Expr::FunctionDecl(
+        mangle_method(type_name, &name),
+        args,
+        code,
+        name_span,
+        return_type,
+        type_params,
+    )
+}
+
 /// Parses a single `fn method(self, ...) [-> Type] { ... }` inside an impl block
-/// and lowers it to a mangled free [`Expr::FunctionDecl`].
-fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
+/// into an [`Expr::FunctionDecl`] carrying the plain method name.
+fn parse_method(parser: &mut Parser<'_>) -> Expr {
     let (t, t_span) = parser.next_token();
     if t != Token::Function {
         cold_path();
@@ -436,7 +490,7 @@ fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
             ParserErr::UnexpectedToken(Token::Identifier(""), t_id, "Invalid method name."),
         );
     };
-    let mangled = mangle_method(type_name, method_name);
+    let type_params = parse_type_params(parser);
     parser.next_token_expect(
         Token::LParen,
         "Method arguments must be delimited by parentheses",
@@ -481,11 +535,12 @@ fn parse_method(parser: &mut Parser<'_>, type_name: &SmolStr) -> Expr {
     let return_type = parse_return_annotation(parser);
     let code = parse_block(parser);
     Expr::FunctionDecl(
-        mangled,
+        SmolStr::new(method_name),
         Box::from(args),
         Rc::from(code),
         name_span,
         return_type,
+        type_params,
     )
 }
 
@@ -569,6 +624,7 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
             ),
         );
     };
+    let type_params = parse_type_params(parser);
     parser.next_token_expect(Token::LBrace, "Expected '{'");
     let mut variants: Vec<(SmolStr, Box<[TypeExpr]>, Span)> = Vec::with_capacity(4);
     loop {
@@ -628,5 +684,5 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
             break;
         }
     }
-    Expr::EnumDeclare(enum_name, Box::from(variants), span)
+    Expr::EnumDeclare(enum_name, Box::from(variants), span, type_params)
 }

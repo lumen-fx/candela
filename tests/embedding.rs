@@ -805,3 +805,36 @@ fn main() {
     });
     engine.compile(src, "main.cdl").expect("compiles");
 }
+
+/// A function reached through `Program::call` is specialized after the program
+/// was compiled, so the generic declarations it uses have to still be there.
+#[test]
+fn a_call_into_a_generic_function_specializes_after_compilation() {
+    let engine = Engine::new();
+
+    let src = r"
+struct Cell<T> {
+    value: T,
+}
+
+impl Cell<T> {
+    fn get(self) -> T {
+        return self.value;
+    }
+}
+
+fn wrap<T>(x) {
+    return Cell<T>{ value: x };
+}
+
+fn twice(n) {
+    return wrap<int>(n).get() * 2;
+}
+
+fn main() {}
+";
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let result = program.call("twice", &[21i64.into()]).expect("call ok");
+    assert_eq!(result, Value::Int(42));
+}

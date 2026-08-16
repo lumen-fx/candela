@@ -6,7 +6,9 @@ use super::super::type_system::DataType;
 use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
+use super::super::type_system::fn_bindings;
 use super::super::type_system::param_type_matches;
+use super::super::type_system::specialization_key;
 use super::super::type_system::track_returns;
 use crate::compiler::SymbolKind;
 use crate::compiler::UnwrapId;
@@ -26,6 +28,7 @@ use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle_user_function(
     fn_name: &str,
     fn_id: usize,
@@ -37,6 +40,8 @@ pub fn handle_user_function(
     args: &[Expr],
     span: Span,
     args_indexes: &[Span],
+    // The type arguments a generic call named, empty for every other call.
+    type_args: &[DataType],
 ) -> Option<u16> {
     // Lazily resolve mutual recursion the first time this function is compiled
     let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
@@ -69,7 +74,7 @@ pub fn handle_user_function(
     // Actual general function inlining is coming soon
     if state.fns[fn_id].code.len() == 1
         && let Expr::ReturnVal(ret) = &state.fns[fn_id].code[0]
-        && let Some(Expr::FunctionCall(call_args, namespace, _, _)) = &**ret
+        && let Some(Expr::FunctionCall(call_args, namespace, _, _, _)) = &**ret
         && namespace.len() >= 2
         && call_args.len() == args_len
         && call_args
@@ -126,12 +131,11 @@ pub fn handle_user_function(
 
     // A parameter with a `: Type` annotation pins that parameter: the argument
     // must match it. An un-annotated parameter takes whatever the call site
-    // passes and specialises on it.
-    let declared_arg_types = state.fns[fn_id]
-        .args
-        .iter()
-        .map(|(_, t)| t.clone())
-        .collect::<Vec<Option<DataType>>>();
+    // passes and specialises on it. An annotation naming a type parameter pins
+    // the parameter only once the call names its type arguments; without them
+    // the parameter is inferred, so a generic function keeps compiling when it
+    // is called without them.
+    let declared_arg_types = specialized_arg_types(fn_id, type_args, ctx, state);
     for (i, declared) in declared_arg_types.iter().enumerate() {
         if let Some(declared) = declared
             && !param_type_matches(declared, &infered_arg_types[i])
@@ -153,10 +157,14 @@ pub fn handle_user_function(
     // function passed to a higher-order function is a distinct specialization, so
     // the loose type-compatibility `==` (which treats all Fn as equal) cannot be
     // used as the specialization key.
-    let fn_impl_idx = state.fns[fn_id]
-        .impls
-        .iter()
-        .position(|fn_impl| arg_types_specialize_equal(&fn_impl.arg_types, &infered_arg_types));
+    // The type arguments are part of the key: a type parameter no argument
+    // mentions (`fn signal<T>(name: string)`) still changes what the body
+    // builds, so two calls that pass the same argument types are two
+    // specialisations.
+    let fn_impl_idx = state.fns[fn_id].impls.iter().position(|fn_impl| {
+        arg_types_specialize_equal(&fn_impl.arg_types, &infered_arg_types)
+            && arg_types_specialize_equal(&fn_impl.type_args, type_args)
+    });
 
     if fn_impl_idx.is_none() {
         // If it hasn't, compile it (which adds it to the function's implementation list)
@@ -177,6 +185,7 @@ pub fn handle_user_function(
             &fn_args,
             fn_name,
             &infered_arg_types,
+            type_args,
             args,
             &fn_code,
             fn_id as u16,
@@ -251,6 +260,78 @@ pub fn handle_user_function(
     }
 }
 
+/// The parameter types this call specialises on.
+///
+/// Without type arguments these are the function's own declared types, where an
+/// annotation naming a type parameter was left un-pinned. A call that names its
+/// type arguments resolves the annotations again with them bound, which is what
+/// makes `first<int>(xs)` reject a `float[]`.
+fn specialized_arg_types(
+    fn_id: usize,
+    type_args: &[DataType],
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<Option<DataType>> {
+    let declared = state.fns[fn_id]
+        .args
+        .iter()
+        .map(|(_, t)| t.clone())
+        .collect::<Vec<Option<DataType>>>();
+    if type_args.is_empty() {
+        return declared;
+    }
+    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
+        return declared;
+    };
+    let arg_types = generics.arg_types.clone();
+    let file_idx = generics.file_idx;
+    let frame = fn_bindings(fn_id, type_args, state);
+    let namespace = state.generics.file_namespace(file_idx);
+    let mut base = state.type_ctx(ctx.file_idx);
+    let mut type_ctx = base.reborrow(file_idx, &namespace);
+    type_ctx.generics.push_bindings(frame);
+    let resolved = arg_types
+        .iter()
+        .map(|t| t.as_ref().map(|t| t.to_datatype(&mut type_ctx)))
+        .collect();
+    type_ctx.generics.pop_bindings();
+    resolved
+}
+
+/// The `-> Type` annotation as it reads for the specialisation being compiled,
+/// with the type parameters currently bound.
+///
+/// An annotation naming a parameter the call left unbound stays un-pinned, so
+/// what the body returns is inferred rather than checked against a type that
+/// has no value yet.
+fn specialized_return_type(
+    fn_id: usize,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(DataType, Span)> {
+    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
+        return state.fns[fn_id].return_type.clone();
+    };
+    let unbound: Vec<SmolStr> = generics
+        .params
+        .iter()
+        .filter(|param| state.generics.bound(param).is_none())
+        .cloned()
+        .collect();
+    let generics = state.fns[fn_id].generics.as_ref()?;
+    let annotation = generics.return_type.as_deref()?;
+    if annotation.0.mentions_any(&unbound) {
+        return state.fns[fn_id].return_type.clone();
+    }
+    let (return_type, return_span) = annotation.clone();
+    let file_idx = generics.file_idx;
+    let namespace = state.generics.file_namespace(file_idx);
+    let mut base = state.type_ctx(ctx.file_idx);
+    let mut type_ctx = base.reborrow(file_idx, &namespace);
+    Some((return_type.to_datatype(&mut type_ctx), return_span))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn compile_function(
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
@@ -260,6 +341,7 @@ fn compile_function(
     fn_args: &[SmolStr],
     fn_name: &str,
     infered_arg_types: &[DataType],
+    type_args: &[DataType],
     _args: &[Expr],
     fn_code: &[Expr],
     fn_id: u16,
@@ -320,6 +402,9 @@ fn compile_function(
                 });
             }
         });
+    state
+        .generics
+        .push_bindings(fn_bindings(function_id, type_args, state));
     let fn_type = track_returns(fn_code, v, ctx, state, fn_name);
     let return_type = if fn_type.is_empty() {
         // No tracked type means either no value is returned at all, or every
@@ -339,7 +424,7 @@ fn compile_function(
     // A `-> Type` annotation pins what the body may hand back. Each
     // specialisation is checked separately, so an un-annotated parameter that
     // makes one call site return a different type is caught at that call site.
-    if let Some((declared, declared_span)) = state.fns[function_id].return_type.clone()
+    if let Some((declared, declared_span)) = specialized_return_type(function_id, ctx, state)
         && !param_type_matches(&declared, &return_type)
     {
         error_invalid_type(
@@ -363,15 +448,16 @@ fn compile_function(
         loc,
         args_loc: Box::from(args_loc.as_slice()),
         arg_types: Box::from(infered_arg_types),
+        type_args: Box::from(type_args),
     });
     // Cache the return type
+    let key = specialization_key(type_args, infered_arg_types);
     if !func
         .return_type_cache
         .iter()
-        .any(|(args, _)| arg_types_specialize_equal(args, infered_arg_types))
+        .any(|(args, _)| arg_types_specialize_equal(args, &key))
     {
-        func.return_type_cache
-            .push((Box::from(infered_arg_types), return_type));
+        func.return_type_cache.push((key, return_type));
     }
 
     // Compile the function into instructions using local vars
@@ -387,6 +473,7 @@ fn compile_function(
         },
         state,
     );
+    state.generics.pop_bindings();
     for i in anon_fns.into_iter().rev() {
         state.namespace.symbols.remove(i);
     }

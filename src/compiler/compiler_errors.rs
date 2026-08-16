@@ -1710,3 +1710,225 @@ pub fn error_import_symbol_collision(
         "import_symbol_collision",
     );
 }
+
+#[inline(never)]
+#[cold]
+pub fn error_type_arg_count(
+    span: Span,
+    file_idx: u16,
+    name: &str,
+    expected: usize,
+    received: usize,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Wrong number of type arguments")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} takes {} type {}, but {} {} given",
+                        blue(name),
+                        blue(expected),
+                        if expected == 1 {
+                            "argument"
+                        } else {
+                            "arguments"
+                        },
+                        red(received),
+                        if received == 1 { "was" } else { "were" },
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("{name} takes {expected} type arguments, but {received} were given"),
+        "type_argument_count",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_type_args_on_plain_type(
+    span: Span,
+    file_idx: u16,
+    name: &str,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Type arguments on a type that takes none")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("{} has no type parameters", blue(name)))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Declare them to make it generic: {}",
+                green(format_args!("struct {name}<T> {{ ... }}"))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("{name} has no type parameters"),
+        "type_args_on_plain_type",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_type_args_on_plain_function(
+    span: Span,
+    file_idx: u16,
+    name: &str,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Type arguments on a function that takes none")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("{} has no type parameters", blue(name)))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Declare them to make it generic: {}",
+                green(format_args!("fn {name}<T>(...) {{ ... }}"))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("{name} has no type parameters"),
+        "type_args_on_plain_function",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_type_args_on_builtin_method(
+    span: Span,
+    file_idx: u16,
+    name: &str,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Type arguments on a built-in method")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("{} is built in", blue(name)))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Built-in methods take no type arguments: {}",
+                green(format_args!("value.{name}(...)"))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("{name} is built in"),
+        "type_args_on_builtin_method",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_unknown_type_param(
+    span: Span,
+    file_idx: u16,
+    name: &str,
+    declared: &[SmolStr],
+    sources: &[Source],
+) -> ! {
+    let declared_list = declared
+        .iter()
+        .map(SmolStr::as_str)
+        .collect::<Vec<&str>>()
+        .join(", ");
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message(format_args!("Unknown type {}", red(name)))
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message("This names neither a type nor a type parameter in scope")
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(format_args!(
+                "The type parameters in scope here are {}",
+                blue(&declared_list)
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Unknown type {name}: the type parameters in scope here are {declared_list}"),
+        "unknown_type_parameter",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_instantiation_depth(span: Span, file_idx: u16, name: &str, sources: &[Source]) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Generic type nested too deeply")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "Instantiating {} needs another instantiation of it, without end",
+                        blue(name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "Every instantiation is compiled as its own type, so a type whose fields name a deeper instantiation of itself has no end",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Generic type {name} is nested too deeply"),
+        "generic_instantiation_depth",
+    );
+}

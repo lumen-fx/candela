@@ -88,8 +88,8 @@ the repository; neither is published to a marketplace yet.
 - [Variables](language/variables.md) and [Types](language/types.md).
 - [Control flow](language/control-flow.md) and
   [Functions](language/functions.md).
-- [Methods](language/methods.md), [Enums](language/enums.md) and
-  [Collections](language/collections.md).
+- [Methods](language/methods.md), [Enums](language/enums.md),
+  [Generics](language/generics.md) and [Collections](language/collections.md).
 - [Error handling](language/error-handling.md),
   [Modules](language/modules.md) and [Macros](language/macros.md).
 

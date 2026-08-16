@@ -3,7 +3,10 @@ use crate::RED;
 use crate::RESET;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::{Expr, Span, var_assign};
+use crate::compiler::type_system::GenericType;
+use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::TypeExpr;
+use crate::compiler::type_system::TypeParams;
 use crate::errors::BLUE;
 use crate::errors::blue;
 use crate::errors::crash;
@@ -854,6 +857,16 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
             parser.next_token();
             let (namespace, end) = parse_namespace(parser, SmolStr::new(i));
             TypeExpr::NamespacedIdentifier(namespace, (span.start, end).into())
+        } else if parser.peek_token() == Token::OpInf {
+            // A generic type applied to its arguments. A type position is never
+            // ambiguous, so this needs no lookahead: `<` here can only open a
+            // type-argument list.
+            let args = parse_type_args(parser);
+            TypeExpr::Generic(Box::new(GenericType {
+                name: SmolStr::new(i),
+                args,
+                span: (span.start, parser.last_token_end as u32).into(),
+            }))
         } else {
             TypeExpr::Identifier(SmolStr::new(i), span)
         }
@@ -874,6 +887,183 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
         }
     }
     t
+}
+
+/// Walks a copy of the token stream to decide whether the `<` an identifier is
+/// followed by opens a type-argument list or is a comparison.
+///
+/// `a < b` and `a < b && c > d` are comparisons and must stay comparisons, so
+/// the walk accepts only well-formed type tokens and commits only when the list
+/// closes with `>` immediately followed by `(` (a call), `{` (a struct literal,
+/// where one is allowed) or `::` (a variant of a generic enum). It reports by
+/// returning: the parser cannot fail and retry, so a walk that raised an error
+/// would abort the compile over an ordinary comparison.
+struct TypeArgScan<'a> {
+    input: TokenIter<'a>,
+}
+
+impl<'a> TypeArgScan<'a> {
+    fn peek(&mut self) -> Option<Token<'a>> {
+        self.input.peek().and_then(|(t, _)| t.ok())
+    }
+
+    fn eat(&mut self, expected: Token<'a>) -> bool {
+        if self.peek() == Some(expected) {
+            self.input.next();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn identifier(&mut self) -> bool {
+        if matches!(self.peek(), Some(Token::Identifier(_))) {
+            self.input.next();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `<Type, Type, ...>`, the `<` included.
+    fn args(&mut self) -> bool {
+        if !self.eat(Token::OpInf) {
+            return false;
+        }
+        loop {
+            if !self.type_expr() {
+                return false;
+            }
+            if !self.eat(Token::Comma) {
+                return self.eat(Token::OpSup);
+            }
+        }
+    }
+
+    fn type_expr(&mut self) -> bool {
+        loop {
+            if !self.atomic_type() {
+                return false;
+            }
+            if !self.eat(Token::Pipe) {
+                return true;
+            }
+        }
+    }
+
+    fn atomic_type(&mut self) -> bool {
+        if self.eat(Token::LBrace) {
+            if !self.type_expr() || !self.eat(Token::Colon) || !self.type_expr() {
+                return false;
+            }
+            if !self.eat(Token::RBrace) {
+                return false;
+            }
+        } else {
+            if !self.identifier() {
+                return false;
+            }
+            while self.eat(Token::DoubleColon) {
+                if !self.identifier() {
+                    return false;
+                }
+            }
+            if self.peek() == Some(Token::OpInf) && !self.args() {
+                return false;
+            }
+        }
+        while self.eat(Token::LBracket) {
+            if !self.eat(Token::RBracket) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// What a type-argument list may be followed by at the position it is read.
+///
+/// The list only counts as one when the `>` closes right before one of these,
+/// which is what tells `Cell<int>{ .. }` from the comparison `a < b`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TypeArgFollow {
+    /// A term: a call, a struct literal, or an enum-variant path.
+    Term,
+    /// A term in a position where a struct literal cannot start, which is the
+    /// header of an `if`, `while` or `for`.
+    TermNoStruct,
+    /// A method call, which is always the call parentheses.
+    Call,
+}
+
+/// Whether the `<` ahead opens a type-argument list. See [`TypeArgScan`].
+///
+/// Kept out of line: the walk's own state would otherwise enlarge every
+/// `parse_term` frame, and expression parsing recurses once per nesting level.
+#[inline(never)]
+fn type_args_ahead(parser: &Parser<'_>, follow: TypeArgFollow) -> bool {
+    let mut scan = TypeArgScan {
+        input: parser.input.clone(),
+    };
+    if !scan.args() {
+        return false;
+    }
+    match scan.peek() {
+        Some(Token::LParen) => true,
+        Some(Token::DoubleColon) => follow != TypeArgFollow::Call,
+        Some(Token::LBrace) => follow == TypeArgFollow::Term,
+        _ => false,
+    }
+}
+
+/// Parses `<Type, Type, ...>` where a type-argument list is already known to
+/// start. The opening `<` has not been consumed.
+fn parse_type_args(parser: &mut Parser<'_>) -> Box<[TypeExpr]> {
+    parser.next_token_expect(Token::OpInf, "A type argument list starts with '<'.");
+    let mut args: Vec<TypeExpr> = Vec::with_capacity(2);
+    loop {
+        args.push(parse_type(parser));
+        if parser.peek_token() == Token::Comma {
+            parser.next_token();
+        } else {
+            break;
+        }
+    }
+    parser.next_token_expect(Token::OpSup, "A type argument list ends with '>'.");
+    Box::from(args)
+}
+
+/// Parses the `<T, U>` a declaration may carry after its name, naming the type
+/// parameters its body may use. Returns an empty list when there is none.
+fn parse_type_params(parser: &mut Parser<'_>) -> TypeParams {
+    if parser.peek_token_opt() != Some(Token::OpInf) {
+        return Box::from([]);
+    }
+    parser.next_token();
+    let mut params: Vec<SmolStr> = Vec::with_capacity(2);
+    loop {
+        let (next_token, span) = parser.next_token();
+        if let Token::Identifier(name) = next_token {
+            params.push(SmolStr::new(name));
+        } else {
+            cold_path();
+            parser.error(
+                span,
+                ParserErr::UnexpectedToken(
+                    Token::Identifier(""),
+                    next_token,
+                    "Type parameters must be identifiers.",
+                ),
+            );
+        }
+        if parser.peek_token() == Token::Comma {
+            parser.next_token();
+        } else {
+            break;
+        }
+    }
+    parser.next_token_expect(Token::OpSup, "A type parameter list ends with '>'.");
+    Box::from(params)
 }
 
 fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
@@ -1012,14 +1202,15 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
 }
 
 #[inline(always)]
-fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
+fn parse_file(parser: &mut Parser<'_>, impls: &mut Vec<ImplTemplate>) -> Vec<Expr> {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while let Some(t) = parser.peek_token_opt() {
         // An `impl` block lowers to several top-level function declarations, so
         // it is expanded directly into `output` rather than yielding one Expr.
+        // A block on a generic type is kept as a template instead.
         if t == Token::Impl {
-            parse_impl_block(parser, &mut output);
+            parse_impl_block(parser, &mut output, impls);
             continue;
         }
         output.push(match t {
@@ -1039,12 +1230,26 @@ fn parse_file(parser: &mut Parser<'_>) -> Vec<Expr> {
     output
 }
 
+/// A parsed file: its top-level statements and its generic `impl` blocks.
+///
+/// A block written against a generic type carries no type of its own to attach
+/// to, so it travels beside the statements and is lowered per instantiation.
+pub struct ParsedFile {
+    pub code: Vec<Expr>,
+    pub impls: Vec<ImplTemplate>,
+}
+
 #[must_use]
-pub fn parse(input: &str, src: &Source) -> Vec<Expr> {
-    parse_file(&mut Parser {
-        input: Token::lexer(input).spanned().peekable(),
-        ctx: ParserCtx { src },
-        last_token_end: 0,
-        span_override: None,
-    })
+pub fn parse(input: &str, src: &Source) -> ParsedFile {
+    let mut impls: Vec<ImplTemplate> = Vec::new();
+    let code = parse_file(
+        &mut Parser {
+            input: Token::lexer(input).spanned().peekable(),
+            ctx: ParserCtx { src },
+            last_token_end: 0,
+            span_override: None,
+        },
+        &mut impls,
+    );
+    ParsedFile { code, impls }
 }

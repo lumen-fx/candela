@@ -305,7 +305,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 visit_expr(v, src_file, out);
             }
         }
-        Expr::Struct(path, fields, span) => {
+        Expr::Struct(path, fields, span, _) => {
             for (_, val, _, _) in fields.iter() {
                 visit_expr(val, src_file, out);
             }
@@ -347,7 +347,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 visit_expr(b, src_file, out);
             }
         }
-        Expr::FunctionCall(args, path, span, _) => {
+        Expr::FunctionCall(args, path, span, _, _) => {
             for a in args.iter() {
                 visit_expr(a, src_file, out);
             }
@@ -360,7 +360,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 });
             }
         }
-        Expr::ObjFunctionCall(obj, args, path, _obj_span, fn_span, _) => {
+        Expr::ObjFunctionCall(obj, args, path, _obj_span, fn_span, _, _) => {
             visit_expr(obj, src_file, out);
             for a in args.iter() {
                 visit_expr(a, src_file, out);
@@ -374,7 +374,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 });
             }
         }
-        Expr::FunctionDecl(_, _, body, _, _) => {
+        Expr::FunctionDecl(_, _, body, _, _, _) => {
             for b in body.iter() {
                 visit_expr(b, src_file, out);
             }

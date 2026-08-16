@@ -317,6 +317,7 @@ pub fn builtin_functions(
                     args,
                     span,
                     args_indexes,
+                    &[],
                 )
             } else if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
                 std::slice::from_ref(&SmolStr::new(fn_name)),

@@ -36,6 +36,7 @@ nav = [
      "language/functions.md",
      "language/methods.md",
      "language/enums.md",
+     "language/generics.md",
      "language/collections.md",
      "language/error-handling.md",
      "language/modules.md",

@@ -159,6 +159,7 @@ fn compile_export(
         Box::from([SmolStr::from(name)]),
         dummy,
         arg_types.iter().map(|_| dummy).collect(),
+        Box::from([]),
     );
 
     let entry = out.instructions.len() as u16;
@@ -208,6 +209,7 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         allocated_call_depth: &mut out.allocated_call_depth,
         const_registers: &mut out.const_registers,
         free_registers: &mut out.free_registers,
+        generics: &mut out.generics,
         sources: &mut out.sources,
         reserved_registers: FxHashSet::default(),
         namespace: &mut out.namespace,
