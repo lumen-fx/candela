@@ -15,6 +15,9 @@ name: release
 #
 # Releases published before this naming carry the older arch-first names and
 # are not renamed.
+#
+# One asset is not a native build: candela-web.tar.gz is candela compiled to
+# WebAssembly, for a host with a browser instead of a file system.
 
 on:
   push:
@@ -253,9 +256,51 @@ jobs:
             ${{ matrix.embed_artifact }}.tar.gz
             ${{ matrix.embed_artifact }}.zip
 
+  # candela compiled to WebAssembly, for a host that has a browser instead of a
+  # file system: the compiler and the virtual machine, driven through `run` and
+  # `get_output`. It has no file access, so a program it runs cannot `import`.
+  # candela.lumenfx.dev loads this asset to run the prompt on its front page.
+  web:
+    name: build (candela-web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+
+      # The generator has to be the version the crate was built against, or the
+      # module it writes will not load, so take it from the lockfile.
+      - name: Install wasm-bindgen-cli
+        shell: bash
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; print }' Cargo.lock \
+            | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          echo "building against wasm-bindgen $version"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      - name: Build the runtime
+        run: cargo build --release --lib --target wasm32-unknown-unknown
+
+      - name: Generate the loader
+        run: |
+          wasm-bindgen --target web --out-dir pkg --out-name candela \
+            target/wasm32-unknown-unknown/release/candela.wasm
+
+      - name: Package candela-web.tar.gz
+        run: tar -czf candela-web.tar.gz -C pkg candela.js candela_bg.wasm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: candela-web
+          path: candela-web.tar.gz
+
   release:
     name: publish release
-    needs: build
+    needs: [build, web]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
