@@ -151,6 +151,39 @@ structural selection and bracket matching. Both live in the repository, under
 Each directory has a README with the full setup, including how to point an
 editor at a server you built yourself.
 
+## In a browser
+
+Every release also carries `candela-web.tar.gz`: candela compiled to
+WebAssembly, as the pair of files `wasm-bindgen` writes.
+
+```
+candela.js          loads the runtime
+candela_bg.wasm     the compiler and the virtual machine
+```
+
+Load the module, hand `run` a whole program, and read what the program printed
+with `get_output`. A compile or run error arrives as a thrown value, and the
+report itself goes to the output, so read the output after catching.
+
+```js
+import init, { run, get_output } from "./candela.js";
+
+await init({ module_or_path: "./candela_bg.wasm" });
+try {
+  run('fn main() { print("hello"); }');
+} catch {
+  // the report is in the output read below
+}
+console.log(get_output());
+```
+
+This build has no file system, so a program it runs cannot `import` and the
+standard library is out of reach. The language itself works, including the
+[built-ins](../standard-library/builtins.md).
+
+The prompt on [candela.lumenfx.dev](https://candela.lumenfx.dev/) is this
+asset.
+
 ## Building from source
 
 To build the toolchain yourself, see
