@@ -68,4 +68,11 @@ tasks.processResources {
         include("language-configuration.json")
         rename { "candela.json" }
     }
+    // Stamp the plugin version into the bundle, so the unpack directory
+    // changes with each release.
+    val pluginVersion = providers.gradleProperty("pluginVersion").get()
+    inputs.property("bundleVersion", pluginVersion)
+    filesMatching("textmate/bundle-version.txt") {
+        expand("version" to pluginVersion)
+    }
 }
