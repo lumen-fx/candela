@@ -577,6 +577,15 @@ pub fn execute(
             Instr::AddStr(o1, o2, dest) => {
                 let d1 = r[o1];
                 let d2 = r[o2];
+                // Concatenation is compiled from static string types, so both
+                // operands are strings unless a value crossed a boundary the
+                // compiler could not check: a variadic host function returning
+                // something other than what its block declares. Reading that as
+                // a string would read unrelated bits, so it raises instead.
+                if !d1.is_string() || !d2.is_string() {
+                    let culprit = if d1.is_string() { d2 } else { d1 };
+                    error_with_catch!(ErrType::NotAString(culprit.type_name()));
+                }
                 let left = d1.as_str(str_pool);
                 let right = d2.as_str(str_pool);
                 let mut s = String::with_capacity(left.len() + right.len());

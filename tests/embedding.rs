@@ -391,6 +391,104 @@ fn main() {}
 }
 
 // ---------------------------------------------------------------------------
+// HOST NAMES THAT COLLIDE WITH BUILT-INS
+// ---------------------------------------------------------------------------
+
+/// A host function named like a built-in (`read`, `str`, `exists`, ...) is
+/// typed from the `host` block it is declared in, not from the built-in that
+/// shares its bare name. `gpio::read` returns `int` here, so the sum is
+/// arithmetic.
+#[test]
+fn a_host_fn_named_like_a_builtin_keeps_its_declared_type() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("gpio", "read", |pin: i64| pin);
+
+    let src = r#"
+host "gpio" {
+    int read(int);
+}
+fn level(pin) { return gpio::read(pin) + 1; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "gpio.cdl").unwrap();
+    assert_eq!(
+        program.call("level", &[21i64.into()]).unwrap(),
+        Value::Int(22)
+    );
+}
+
+/// The same collision on every built-in name whose return type the inference
+/// table pins, across the shapes a declaration can take.
+#[test]
+fn builtin_names_are_shadowed_by_their_host_declarations() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("dev", "str", |n: i64| n * 2);
+    engine.register_host_fn("dev", "exists", |n: i64| n + 1);
+    engine.register_host_fn("dev", "range", |n: i64| format!("<{n}>"));
+    engine.register_host_fn("dev", "argv", |n: f64| n / 2.0);
+
+    let src = r#"
+host "dev" {
+    int str(int);
+    int exists(int);
+    string range(int);
+    float argv(float);
+}
+fn doubled(n) { return dev::str(n) + 1; }
+fn bumped(n) { return dev::exists(n) + 1; }
+fn tagged(n) { return dev::range(n) + "!"; }
+fn halved(n) { return dev::argv(n) + 0.5; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "dev.cdl").unwrap();
+    assert_eq!(
+        program.call("doubled", &[4i64.into()]).unwrap(),
+        Value::Int(9)
+    );
+    assert_eq!(
+        program.call("bumped", &[4i64.into()]).unwrap(),
+        Value::Int(6)
+    );
+    assert_eq!(
+        program.call("tagged", &[7i64.into()]).unwrap(),
+        Value::String("<7>!".to_owned())
+    );
+    assert_eq!(
+        program.call("halved", &[5.0f64.into()]).unwrap(),
+        Value::Float(3.0)
+    );
+}
+
+/// A variadic host function is not signature-checked, so its closure can hand
+/// back a value of a type the block does not declare. Concatenating that value
+/// is a runtime diagnostic naming what it turned out to be, and the program
+/// stays usable afterwards.
+#[test]
+fn concatenating_a_non_string_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_variadic("app", "label", |_args: &[Value]| Value::Int(7));
+
+    let src = r#"
+host "app" {
+    string label(...);
+}
+fn tagged() { return app::label("pin") + "!"; }
+fn plain() { return "ok"; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "label.cdl").unwrap();
+
+    let err = program.call("tagged", &[]).unwrap_err();
+    assert_eq!(err.code, "not_a_string");
+    assert!(err.message.contains("int"), "{}", err.message);
+
+    assert_eq!(
+        program.call("plain", &[]).unwrap(),
+        Value::String("ok".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
 // VARIADIC HOST FUNCTIONS
 // ---------------------------------------------------------------------------
 
