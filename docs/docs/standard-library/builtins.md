@@ -25,6 +25,10 @@ arguments of any type and returns nothing. A list prints as `[1,2,3]`, a map as
 name with any payload in brackets. A float with no fractional part prints
 without one, so `print(3.0)` writes `3` where `str(3.0)` gives `"3.0"`.
 
+A stream that refuses the write costs the line, not the run. `program | head -1`
+leaves standard output with no reader, and the prints that follow go nowhere
+while the program runs to the end as it otherwise would.
+
 ### input
 
 ```rust

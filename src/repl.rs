@@ -1,12 +1,23 @@
 use crate::errors::BLUE;
 use crate::errors::RESET;
-use std::io::{Write, stdin, stdout};
+use std::io::{Write, stderr, stdin, stdout};
+
+/// Writes to the REPL's stdout, and drops the text when the write fails.
+///
+/// The prompt and the output of every line evaluated go through here. A stdout
+/// whose reader has exited fails every write, and the session ending on the
+/// first of those would take the loop down over text nobody is reading.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let _ = write!(stdout(), $($arg)*);
+    }};
+}
 
 #[cold]
 #[inline(never)]
 pub fn repl() {
-    println!(
-        "{BLUE}CANDELA {} REPL (read-eval-print-loop){RESET}",
+    say!(
+        "{BLUE}CANDELA {} REPL (read-eval-print-loop){RESET}\n",
         env!("CARGO_PKG_VERSION")
     );
 
@@ -26,7 +37,7 @@ pub fn repl() {
         update = update.and_then(crate::update::poll);
 
         let mut s = String::new();
-        print!("> ");
+        say!("> ");
         let _ = stdout().flush();
         let read = stdin()
             .read_line(&mut s)
@@ -35,7 +46,7 @@ pub fn repl() {
         // script ran out of lines. There is no next line to prompt for, so
         // leave rather than loop on an empty read.
         if read == 0 {
-            println!();
+            say!("\n");
             return;
         }
         if s.ends_with('\n') {
@@ -51,8 +62,8 @@ pub fn repl() {
             s.push(';');
         }
         if s.contains("exit()") && !s.contains('"') {
-            println!(
-                "{BLUE}[CANDELA TIP]{RESET} To exit, press Ctrl+D (Ctrl+Z then enter on Windows) or Ctrl+C"
+            say!(
+                "{BLUE}[CANDELA TIP]{RESET} To exit, press Ctrl+D (Ctrl+Z then enter on Windows) or Ctrl+C\n"
             );
         }
 
@@ -85,11 +96,11 @@ pub fn repl() {
 
         if output.status.success() {
             if new_stdout.len() > prev_stdout.len() {
-                print!("{}", &new_stdout[prev_stdout.len()..]);
+                say!("{}", &new_stdout[prev_stdout.len()..]);
             }
             prev_stdout = new_stdout;
         } else {
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            let _ = write!(stderr(), "{}", String::from_utf8_lossy(&output.stderr));
             all_lines.pop();
         }
     }

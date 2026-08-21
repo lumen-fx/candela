@@ -206,15 +206,15 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     )
     .finish();
 
-    report
-        .write(
-            (
-                src.filename.as_str(),
-                ariadne::Source::from(src.contents.as_str()),
-            ),
-            &mut out,
-        )
-        .unwrap();
+    // A stderr that refuses the report costs the report. Raising here would
+    // replace the error in the source with an unrelated one about the stream.
+    let _ = report.write(
+        (
+            src.filename.as_str(),
+            ariadne::Source::from(src.contents.as_str()),
+        ),
+        &mut out,
+    );
 
     #[cfg(debug_assertions)]
     panic!();
@@ -365,15 +365,13 @@ impl<'a> Parser<'a> {
         }
         let report = report();
 
-        report
-            .write(
-                (
-                    self.ctx.src.filename.as_str(),
-                    ariadne::Source::from(self.ctx.src.contents.as_str()),
-                ),
-                candela_vm::captured_output::stderr(),
-            )
-            .unwrap();
+        let _ = report.write(
+            (
+                self.ctx.src.filename.as_str(),
+                ariadne::Source::from(self.ctx.src.contents.as_str()),
+            ),
+            candela_vm::captured_output::stderr(),
+        );
 
         crash();
     }

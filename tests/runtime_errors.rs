@@ -6,6 +6,8 @@
 //! failure these guard against is a program that never finishes rather than one
 //! that finishes wrongly.
 
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -175,6 +177,76 @@ fn main() {
 "#,
     );
     assert_eq!(out, ["raised", "1024", "0.25"]);
+}
+
+/// `program | head -1` leaves a pipe with no reader, and every `print` after
+/// that fails. The write used to be unwrapped, so the program died on the first
+/// line nobody was there to take. Losing the line is the price; losing the run
+/// is not, and an embedding host runs candela on a thread it needs back.
+#[test]
+fn output_a_reader_left_behind_costs_the_line_not_the_run() {
+    let dir = std::env::temp_dir().join(format!("candela_pipe_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create scratch directory");
+    let path = dir.join("closed_pipe.cdl");
+    // More output than a pipe holds, so the program is still writing when the
+    // reader goes away rather than already finished.
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    let i = 0;
+    while i < 20000 {
+        print("a line of program output");
+        i = i + 1;
+    }
+}
+"#,
+    )
+    .expect("write program");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_candela"))
+        .arg(&path)
+        .env("CANDELA_LIB_PATH", repo().join("libs"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("candela binary runs");
+
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let mut first = String::new();
+    reader.read_line(&mut first).expect("read the first line");
+    assert_eq!(first.trim_end(), "a line of program output");
+    drop(reader);
+
+    let mut child_stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = child_stderr.read_to_end(&mut buffer);
+        buffer
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().expect("poll the run") {
+            Some(status) => break status,
+            None if started.elapsed() > RUN_DEADLINE => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&dir);
+                panic!("the run never finished after its reader left");
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+
+    let stderr = stderr.join().expect("read stderr");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        status.success(),
+        "the run exited with {:?}\nstderr: {}",
+        status.code(),
+        String::from_utf8_lossy(&stderr),
+    );
 }
 
 #[test]

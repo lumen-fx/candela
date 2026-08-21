@@ -1,4 +1,6 @@
 use crate::array_gc::alloc_array;
+use crate::captured_output::out;
+use crate::captured_output::outln;
 use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::FALSE;
@@ -895,84 +897,80 @@ pub fn execute(
             Instr::Print(tgt) => {
                 let tgt = r[tgt];
                 if tgt.is_string() {
-                    writeln!(handle, "{}", tgt.as_str(str_pool)).unwrap();
+                    outln!(handle, "{}", tgt.as_str(str_pool));
                 } else if tgt.is_int() {
-                    writeln!(handle, "{}", tgt.as_int()).unwrap();
+                    outln!(handle, "{}", tgt.as_int());
                 } else if tgt.is_float() {
-                    writeln!(handle, "{}", tgt.as_float()).unwrap();
+                    outln!(handle, "{}", tgt.as_float());
                 } else if tgt.is_bool() {
-                    writeln!(handle, "{}", tgt.as_bool()).unwrap();
+                    outln!(handle, "{}", tgt.as_bool());
                 } else if tgt.is_array() {
                     let array = &obj_pool[tgt.as_array()];
-                    write!(handle, "[").unwrap();
+                    out!(handle, "[");
                     for (idx, item) in array.iter().enumerate() {
                         if idx != 0 {
-                            write!(handle, ",").unwrap();
+                            out!(handle, ",");
                         }
-                        write!(
+                        out!(
                             handle,
                             "{}",
                             item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                        )
-                        .unwrap();
+                        );
                     }
-                    writeln!(handle, "]").unwrap();
+                    outln!(handle, "]");
                 } else if tgt.is_struct() {
                     let s = unsafe { structs.get_unchecked(tgt.struct_type_id() as usize) };
                     let s_name = &s.name;
                     let s_fields = &s.fields;
-                    write!(handle, "{s_name} {{").unwrap();
+                    out!(handle, "{s_name} {{");
                     for (idx, item) in obj_pool[tgt.as_struct()].iter().enumerate() {
                         if idx != 0 {
-                            write!(handle, ",").unwrap();
+                            out!(handle, ",");
                         }
-                        write!(
+                        out!(
                             handle,
                             "{}:{}",
                             unsafe { &s_fields.get_unchecked(idx).0 },
                             item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                        )
-                        .unwrap();
+                        );
                     }
-                    writeln!(handle, "}}").unwrap();
+                    outln!(handle, "}}");
                 } else if tgt.is_enum() {
                     let e = unsafe { enums.get_unchecked(tgt.enum_type_id() as usize) };
                     let entry = &obj_pool[tgt.as_enum()];
                     let tag = entry[0].as_int() as usize;
                     let variant = unsafe { e.variants.get_unchecked(tag) };
                     if entry.len() <= 1 {
-                        writeln!(handle, "{}", variant.name).unwrap();
+                        outln!(handle, "{}", variant.name);
                     } else {
-                        write!(handle, "{}(", variant.name).unwrap();
+                        out!(handle, "{}(", variant.name);
                         for (idx, item) in entry[1..].iter().enumerate() {
                             if idx != 0 {
-                                write!(handle, ",").unwrap();
+                                out!(handle, ",");
                             }
-                            write!(
+                            out!(
                                 handle,
                                 "{}",
                                 item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                            )
-                            .unwrap();
+                            );
                         }
-                        writeln!(handle, ")").unwrap();
+                        outln!(handle, ")");
                     }
                 } else if tgt.is_map() {
                     let m = &map_pool[tgt.as_map()];
-                    write!(handle, "{{").unwrap();
+                    out!(handle, "{{");
                     for (i, (key, val)) in m.iter().enumerate() {
                         if i != 0 {
-                            write!(handle, ",").unwrap();
+                            out!(handle, ",");
                         }
-                        write!(
+                        out!(
                             handle,
                             "{}:{}",
                             key.format(obj_pool, str_pool, map_pool, structs, enums, false),
                             val.format(obj_pool, str_pool, map_pool, structs, enums, false),
-                        )
-                        .unwrap();
+                        );
                     }
-                    writeln!(handle, "}}").unwrap();
+                    outln!(handle, "}}");
                 }
             }
             Instr::StoreFuncArg(id) => args.push(id),
@@ -1334,8 +1332,11 @@ pub fn execute(
             Instr::CallLibFunc(LibFunc::Input, tgt, dest) => {
                 let temp_tgt = r[tgt];
                 let str_msg = temp_tgt.as_str(str_pool);
-                write!(handle, "{str_msg}").unwrap();
-                std::io::stdout().flush().unwrap();
+                out!(handle, "{str_msg}");
+                // The prompt has no newline of its own, so it sits in the
+                // buffer until something pushes it out. A lost prompt is not
+                // worth ending the run over either.
+                let _ = handle.flush();
                 let mut line = String::new();
                 std::io::stdin().read_line(&mut line).unwrap();
                 r[dest] = string!(line.trim_end_matches(['\n', '\r']));
@@ -1343,9 +1344,8 @@ pub fn execute(
             Instr::CallLibFunc(LibFunc::Floor, tgt, dest) => {
                 r[dest] = r[tgt].as_float().floor().into();
             }
-            #[allow(unused_must_use)]
             Instr::CallLibFunc(LibFunc::TheAnswer, _, dest) => {
-                writeln!(
+                outln!(
                     handle,
                     "The answer to the Ultimate Question of Life, the Universe, and Everything is 42."
                 );
