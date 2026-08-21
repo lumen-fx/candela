@@ -23,10 +23,13 @@ manifest while the asset names come from the tag.
 
 ## What the tag sets off
 
-`release.yml` builds the toolchain for each platform, packages the archives,
-the Windows installer and the embedding library, writes `sha256sums.txt`, and
-publishes the GitHub release. A leg that fails takes the release with it, so a
-partial set of archives never goes out; fix what failed and re-run the workflow.
+`release.yml` checks the tag against the manifest, then calls
+`build-artifacts.yml`, which builds the toolchain for each platform and
+packages the archives, the Windows installer, the embedding library and the
+WebAssembly build, and writes `sha256sums.txt` over the lot. `release.yml`
+publishes them as the GitHub release. A leg that fails takes the release with
+it, so a partial set of archives never goes out; fix what failed and re-run the
+workflow.
 
 Publishing the release starts two more workflows, both of which check out the
 tag rather than `main`:
@@ -79,6 +82,25 @@ not its to make:
 Re-running a release is safe here too. The job derives its branch name from the
 version it is setting and commits the same content, so it lands on the branch it
 used the first time and adds nothing to a pull request that is already open.
+
+## The nightly channel
+
+`nightly.yml` calls the same `build-artifacts.yml` every night and publishes
+what comes out as a prerelease on one rolling tag, `nightly`, force-moved to
+the commit it built. Nothing about it is yours to run, but two things about it
+are worth knowing when you are about to tag.
+
+A red nightly is the first news that the release build is broken, and it is
+news you get on a quiet day too, because it runs whether or not `main` moved.
+Read it the same way as `ci`: green before you tag.
+
+It cannot cut a release. The tag is `nightly`, so it misses the `v*` trigger
+that starts `release.yml`, and the release is a prerelease, so `publish.yml`
+and `publish-extensions.yml` stop on their own and every version-keyed lookup
+skips it. It publishes no Windows installer: the package stamps the version
+from the manifest and Windows compares packages by that number, so a nightly
+installer would be indistinguishable from a released one carrying the same
+number.
 
 ## What the bump script moves
 

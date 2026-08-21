@@ -1,0 +1,323 @@
+name: build-artifacts
+
+# Builds the toolchain assets, for whoever asks for them: release.yml on a
+# version tag, and nightly.yml every night off main. One definition serves
+# both, so a nightly is the same build a release runs and a night when it
+# breaks says so before a tag does.
+#
+# Assets are named candela-<os>-<arch>.<ext>, the same scheme lumen-fx/lumen
+# uses, and install.sh looks each one up by that exact name. The Windows
+# package is candela-windows-x86_64.msi and the portable archive beside it is
+# candela-windows-x86_64.zip. The embedding library ships as
+# libcandela-<os>-<arch>.<ext>.
+#
+# linux-x86_64 has two builds. The unsuffixed asset is the baseline every
+# x86-64 machine can run; candela-linux-x86_64-v3 is the extra for CPUs with
+# AVX2, which install.sh takes when it finds one. A suffix marks an extra, so
+# the baseline never carries one.
+#
+# Releases published before this naming carry the older arch-first names and
+# are not renamed.
+#
+# One asset is not a native build: candela-web.tar.gz is candela compiled to
+# WebAssembly, for a host with a browser instead of a file system.
+#
+# Every job leaves its output as a run artifact. The caller downloads the lot
+# with merge-multiple and decides what to publish it as.
+
+on:
+  workflow_call:
+    inputs:
+      msi_version:
+        description: >-
+          Version to stamp the Windows installer with, as x.y.z. Leave it
+          empty to build no installer. A build with no tag behind it wants it
+          empty: the package carries fixed product ids and compares versions
+          three fields deep, so one stamped with a number a release also
+          carries would replace that release's install, or refuse to be
+          replaced by it.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: candela-linux-x86_64
+            embed_artifact: libcandela-linux-x86_64
+            rustflags: "-C target-cpu=x86-64"
+            bin: candela
+            lib: libcandela.so
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: candela-linux-x86_64-v3
+            embed_artifact: libcandela-linux-x86_64-v3
+            rustflags: "-C target-cpu=x86-64-v3"
+            bin: candela
+            lib: libcandela.so
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: candela-linux-aarch64
+            embed_artifact: libcandela-linux-aarch64
+            rustflags: ""
+            bin: candela
+            lib: libcandela.so
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: candela-macos-aarch64
+            embed_artifact: libcandela-macos-aarch64
+            rustflags: ""
+            bin: candela
+            lib: libcandela.dylib
+
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
+            artifact: candela-macos-x86_64
+            embed_artifact: libcandela-macos-x86_64
+            rustflags: "-C target-cpu=x86-64-v3"
+            bin: candela
+            lib: libcandela.dylib
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: candela-windows-x86_64
+            embed_artifact: libcandela-windows-x86_64
+            rustflags: "-C target-cpu=x86-64-v3"
+            bin: candela.exe
+            lib: candela.dll
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: llvm-tools-preview
+          target: ${{ matrix.target }}
+
+      - name: Install cargo-pgo
+        run: cargo install cargo-pgo
+
+      - name: Build instrumented binary
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo pgo build -- --target ${{ matrix.target }}
+
+      - name: Build PGO dylib (macOS)
+        if: runner.os == 'macOS'
+        run: clang -dynamiclib -O2 -o pgo/libpgo_dynlib.dylib pgo/pgo_dynlib.c
+
+      - name: Build PGO dylib (Linux)
+        if: runner.os == 'Linux'
+        run: clang -shared -fPIC -O2 -o pgo/libpgo_dynlib.so pgo/pgo_dynlib.c
+
+      - name: Build PGO dylib (Windows)
+        if: runner.os == 'Windows'
+        run: clang -shared -O2 -o pgo/pgo_dynlib.dll pgo/pgo_dynlib.c
+
+      - name: Gather PGO profiles
+        run: |
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-std-library.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_lua.cdl 10000
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/nbody/nbody_py.cdl 10000
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/binary-trees/binary-trees.cdl 10
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/fib/fib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} examples/iter_fib/iter_fib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-fizzbuzz.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-dynlib.cdl
+          target/${{ matrix.target }}/release/${{ matrix.bin }} pgo/pgo-import.cdl
+
+      - name: Build stdlib dylibs (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/math/math.dylib libs/std_src/math/math.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/time/time.dylib libs/std_src/time/time.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/random/random.dylib libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
+
+      - name: Build stdlib dylibs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/math/math.so libs/std_src/math/math.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/time/time.so libs/std_src/time/time.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/random/random.so libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
+
+      - name: Build stdlib dylibs (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/math/math.dll libs/std_src/math/math.c
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/time/time.dll libs/std_src/time/time.c
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/random/random.dll libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
+
+      - name: Build final binary
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo pgo optimize -- --target ${{ matrix.target }}
+
+      - name: Build candela-vm runtime
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/candela dist/
+          cp target/${{ matrix.target }}/release/candela-vm dist/
+          cp -R libs dist/
+          cp LICENSE THIRD-PARTY-LICENSE dist/
+          tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType "Directory" -Force -Path "dist"
+          Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
+          Copy-Item "target/${{ matrix.target }}/release/candela-vm.exe" "dist/"
+          Copy-Item -Path "libs" -Destination "dist/" -Recurse
+          Copy-Item "LICENSE" "dist/"
+          Copy-Item "THIRD-PARTY-LICENSE" "dist/"
+          Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      # Staging happens after the zip is sealed. The receipt is what turns the
+      # update check on, and it belongs only to installed copies: inside the
+      # portable zip it would make a hand-extracted copy offer an update that
+      # then installs a second Candela somewhere else.
+      - name: Stage the MSI payload (Windows)
+        if: runner.os == 'Windows' && inputs.msi_version != ''
+        shell: pwsh
+        run: |
+          Copy-Item -Path "dist" -Destination "msi-stage" -Recurse
+          $receipt = "version ${{ inputs.msi_version }}`ninstaller msi`n"
+          [IO.File]::WriteAllText("$PWD\msi-stage\receipt", $receipt, [Text.Encoding]::ASCII)
+
+      - name: Install WiX (Windows)
+        if: runner.os == 'Windows' && inputs.msi_version != ''
+        run: dotnet tool install --global wix --version 6.0.1
+
+      - name: Build the MSI (Windows)
+        if: runner.os == 'Windows' && inputs.msi_version != ''
+        shell: pwsh
+        run: |
+          ./msi/build-msi.ps1 -Version "${{ inputs.msi_version }}" -StageDir "msi-stage" -OutFile "${{ matrix.artifact }}.msi"
+
+      - name: Build final binary (LIB)
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo pgo optimize build -- --target ${{ matrix.target }} --profile embed --features embed
+
+      - name: Package (Unix) (LIB)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist-lib
+          cp target/${{ matrix.target }}/embed/${{ matrix.lib }} dist-lib/
+          cp LICENSE THIRD-PARTY-LICENSE dist-lib/
+          tar -czf ${{ matrix.embed_artifact }}.tar.gz -C dist-lib .
+
+      - name: Package (Windows) (LIB)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType "Directory" -Force -Path "dist-lib"
+          Copy-Item "target/${{ matrix.target }}/embed/${{ matrix.lib }}" "dist-lib/"
+          Copy-Item "LICENSE" "dist-lib/"
+          Copy-Item "THIRD-PARTY-LICENSE" "dist-lib/"
+          Compress-Archive -Path "dist-lib/*" -DestinationPath "${{ matrix.embed_artifact }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.msi
+            ${{ matrix.embed_artifact }}.tar.gz
+            ${{ matrix.embed_artifact }}.zip
+
+  # candela compiled to WebAssembly, for a host that has a browser instead of a
+  # file system: the compiler and the virtual machine, driven through `run` and
+  # `get_output`. It has no file access, so a program it runs cannot `import`.
+  # candela.lumenfx.dev loads this asset to run the prompt on its front page.
+  web:
+    name: build (candela-web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+
+      # The generator has to be the version the crate was built against, or the
+      # module it writes will not load, so take it from the lockfile.
+      - name: Install wasm-bindgen-cli
+        shell: bash
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; print }' Cargo.lock \
+            | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          echo "building against wasm-bindgen $version"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      - name: Build the runtime
+        run: cargo build --release --lib --target wasm32-unknown-unknown
+
+      - name: Generate the loader
+        run: |
+          wasm-bindgen --target web --out-dir pkg --out-name candela \
+            target/wasm32-unknown-unknown/release/candela.wasm
+
+      - name: Package candela-web.tar.gz
+        run: tar -czf candela-web.tar.gz -C pkg candela.js candela_bg.wasm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: candela-web
+          path: candela-web.tar.gz
+
+  # One checksum file per set of assets, in sha256sum's own format, covering
+  # every file the caller is about to publish. install.sh downloads it first
+  # and refuses to install an archive whose hash is not the one recorded here.
+  sums:
+    name: checksum the assets
+    needs: [build, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate sha256sums.txt
+        working-directory: artifacts
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(*.tar.gz *.zip *.msi)
+          sha256sum "${files[@]}" > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums
+          path: artifacts/sha256sums.txt
