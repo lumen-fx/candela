@@ -52,7 +52,8 @@ comment saying why.
 
 A change to the language, the standard library, or the CLI updates the matching
 page under `docs/` in the same pull request. A change to how a program behaves
-should come with a test: `tests/` covers the compiler, artifacts, imports and
-embedding, and `libs/std/tests` covers the standard library.
+should come with a test: `tests/` covers the compiler, artifacts, imports,
+embedding, whole-program runs and the REPL, and `libs/std/tests` covers the
+standard library.
 
 Keep the code fast, then simplify it as far as it goes without giving that back.
