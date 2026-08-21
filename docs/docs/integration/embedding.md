@@ -94,6 +94,10 @@ The closure's signature is derived from its Rust types and checked against the
 script's `host` declaration when you compile. A disagreement in arity, argument
 type or return type is returned as a `Diagnostic`, never a panic.
 
+A namespace is a namespace, so a host function may take a name a built-in
+already has: `gpio::read` is the `int` its block declares, not the `read` that
+returns a string.
+
 ### register_host_fn_variadic
 
 ```rust

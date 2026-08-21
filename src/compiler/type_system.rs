@@ -920,6 +920,27 @@ pub fn resolve_call_type_args(
     resolve_type_args(type_args, ctx, state)
 }
 
+/// The return type a `host` or `dylib` block declares for a namespaced call,
+/// or `None` when the path names no declared function.
+///
+/// The path is resolved whole, the way the call is compiled: the leading
+/// element selects the block and the last element the function in it. A `host`
+/// declaration wins over a `dylib` one of the same name, matching the order the
+/// two are bound in.
+fn declared_return_type(namespace: &[SmolStr], state: &State<'_>) -> Option<DataType> {
+    let fn_name = namespace.last()?;
+    let block = &namespace[0];
+    let declared = |is_host: bool| {
+        state
+            .dyn_libs
+            .iter()
+            .find(|lib| lib.is_host == is_host && lib.name == *block)
+            .and_then(|lib| lib.fns.iter().find(|f| f.name == *fn_name))
+            .map(|f| f.return_type.clone())
+    };
+    declared(true).or_else(|| declared(false))
+}
+
 /// Renders a [`DataType`] with full struct/function detail for diagnostics.
 ///
 /// Field and argument names are resolved against the compiler `State` by
@@ -1789,6 +1810,15 @@ impl Expr {
                         crate::compiler::resolve_enum_variant(namespace, state)
                 {
                     return DataType::Enum(enum_id);
+                }
+                // A call into a declared namespace takes its type from the
+                // declaration, before the built-in table below gets to read the
+                // bare name. `gpio::read` is whatever its `host` block says it
+                // is, not the `read` that returns a string.
+                if namespace.len() >= 2
+                    && let Some(declared) = declared_return_type(namespace, state)
+                {
+                    return declared;
                 }
                 match namespace.last().unwrap().as_str() {
                     "print" | "write" | "append" | "delete" | "delete_dir" => DataType::Null,

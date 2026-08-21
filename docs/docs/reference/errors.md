@@ -128,6 +128,7 @@ runs; the kinds above cover the cases where a value is only known at run time.
 | `invalid_float` | `float()` on a string that is not a number |
 | `invalid_bool` | `bool()` on a string that is neither `true` nor `false` |
 | `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type |
+| `not_a_string` | Joining a value onto a string when the value is not one. A variadic host function is the way this happens: it is not signature-checked, so its closure can return a type its `host` block does not declare |
 | `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason. Objects and arrays nest to a fixed depth, and text past it is rejected the same way |
 
 ### Files
