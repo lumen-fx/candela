@@ -1,8 +1,8 @@
 # Methods
 
 A method is a function called with a receiver in front of it: `value.name(args)`.
-The built-in types come with methods, and you add methods to your own types with
-an `impl` block.
+The built-in types come with methods, and an `impl` block adds methods to your
+own types and to the built-in ones.
 
 ## impl blocks
 

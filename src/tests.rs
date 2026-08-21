@@ -6481,6 +6481,20 @@ pub fn type_arguments_on_a_builtin_method() {
 }
 
 #[test]
+pub fn type_arguments_on_a_builtin_impl_method_that_takes_none() {
+    // A method a builtin type gets from an `impl` block is an ordinary
+    // function, so a type argument on one that declares no parameters reports
+    // the plain-function error, not the builtin-method one.
+    let err = compile_diag(
+        "impl list { fn second(self) { return self[1]; } }
+         fn main() { print([1, 2].second<int>()); }",
+        "generics.cdl",
+    )
+    .expect_err("second has no type parameters");
+    assert_eq!(err.code, "type_args_on_plain_function");
+}
+
+#[test]
 pub fn unknown_type_parameter_in_a_declaration() {
     let err = compile_diag(
         "struct Cell<T> { value: U }
