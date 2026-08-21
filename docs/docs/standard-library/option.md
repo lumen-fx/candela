@@ -3,7 +3,7 @@
 `Option` is a value that is either present or absent.
 
 ```rust
-import "std/option" as option;
+import "std/option";
 ```
 
 ## The type
@@ -21,7 +21,7 @@ Importing the module brings the variants into scope, so you construct and match
 them directly:
 
 ```rust
-import "std/option" as option;
+import "std/option";
 
 fn main() {
     let o = Some(5);
@@ -40,18 +40,14 @@ or work on it through type-agnostic operations such as `str`. See
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
-## Helpers
+## Methods
 
-Every helper has two spellings that do the same work: a free function taking the
-option as its first argument, and a method on the value. Under a bare
-`import "std/option";` the free functions are unqualified (`unwrap(o)`); under
-`as option` they are qualified (`option::unwrap(o)`). The method form
-(`o.unwrap()`) works either way.
+The helpers are methods on the option value, defined in an `impl Option` block;
+importing the module brings them in.
 
 ### is_some
 
 ```rust
-option::is_some(o)
 o.is_some()
 ```
 
@@ -60,7 +56,6 @@ o.is_some()
 ### is_none
 
 ```rust
-option::is_none(o)
 o.is_none()
 ```
 
@@ -69,7 +64,6 @@ o.is_none()
 ### unwrap
 
 ```rust
-option::unwrap(o)
 o.unwrap()
 ```
 
@@ -79,7 +73,6 @@ o.unwrap()
 ### unwrap_or
 
 ```rust
-option::unwrap_or(o, default)
 o.unwrap_or(default)
 ```
 
@@ -90,7 +83,6 @@ o.unwrap_or(default)
 ### map
 
 ```rust
-option::map(o, f)
 o.map(f)
 ```
 
@@ -99,7 +91,7 @@ o.map(f)
   `f` is not called on a `None`.
 
 ```rust
-import "std/option" as option;
+import "std/option";
 
 fn describe(x) { return "value " + str(x); }
 

@@ -11,25 +11,51 @@ use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::resolve_call_type_args;
 use crate::instr::Instr;
 use builtin_methods::builtin_methods;
+use builtin_methods::is_builtin_method;
 use smol_strc::SmolStr;
 
 #[path = "builtin/builtin_methods.rs"]
 mod builtin_methods;
 
-/// Resolves an array-receiver method call to a `std/list` helper when the
-/// method is one of the collection higher-order functions (`map`, `filter`,
-/// `reduce`, `each`, `any`, `all`, `sort_by`) or the reductions/slicers the
-/// module provides (`first`, `last`, `sum`, ...). Returns the list function id
-/// so the caller lowers `arr.map(f)` to `list::map(arr, f)`. `find` routes here
-/// only when its argument is a function value (the predicate form); the value
-/// form stays on the builtin index search. Returns `None` when the method is not
-/// a list helper, the receiver is not an array, or the prelude did not load.
+/// The type name an `impl` block uses to add methods to a builtin-typed
+/// receiver: `string`, `list`, `map`, `int`, `float`, or `bool`. A union
+/// resolves only when every member maps to the same name. Struct, enum, and
+/// `any` receivers return `None`; the first two dispatch through their own
+/// paths and the last stays on the builtin table.
+fn builtin_receiver_name(obj_type: &DataType) -> Option<&'static str> {
+    match obj_type {
+        DataType::String => Some("string"),
+        DataType::Array(_) => Some("list"),
+        DataType::Map(_) => Some("map"),
+        DataType::Int => Some("int"),
+        DataType::Float => Some("float"),
+        DataType::Bool => Some("bool"),
+        DataType::Union(union) => {
+            let first = builtin_receiver_name(union.first()?)?;
+            union
+                .iter()
+                .all(|t| builtin_receiver_name(t) == Some(first))
+                .then_some(first)
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a builtin-typed receiver to a user-visible `impl` method: an
+/// `impl list { fn sum(self) ... }` lowers to the mangled free function
+/// `list#sum`, and `arr.sum()` finds it here by the receiver's type name. The
+/// builtin method table keeps precedence, so an `impl` cannot shadow core
+/// methods like `len` or `push`. The one carve-out is `find` on an array with
+/// a function argument: the builtin `find` is the index search by value, and
+/// the predicate form only exists as the `std/list` method. Returns `None`
+/// when the receiver is not a builtin type, the name belongs to the builtin
+/// table, or no impl method with the mangled name is loaded.
 //
 // `pub(crate)` (not private) so the sibling `type_system` module can reuse the
 // routing decision for return-type inference; clippy's `redundant_pub_crate`
 // does not account for that cross-module access.
 #[allow(clippy::redundant_pub_crate)]
-pub(crate) fn routed_list_method(
+pub(crate) fn impl_method_on_builtin(
     name: &str,
     obj_type: &DataType,
     args: &[Expr],
@@ -37,29 +63,16 @@ pub(crate) fn routed_list_method(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<usize> {
-    let is_array = match obj_type {
-        DataType::Array(_) => true,
-        DataType::Union(union) => union.iter().all(|t| matches!(t, DataType::Array(_))),
-        _ => false,
-    };
-    if !is_array {
+    let type_name = builtin_receiver_name(obj_type)?;
+    let find_predicate = name == "find"
+        && type_name == "list"
+        && args.len() == 1
+        && matches!(args[0].infer_type(v, ctx, state), DataType::Fn(_));
+    if is_builtin_method(name, type_name) && !find_predicate {
         return None;
     }
-    let route = match name {
-        "map" | "filter" | "reduce" | "each" | "any" | "all" | "sort_by" | "first" | "last"
-        | "is_empty" | "sum" | "product" | "min" | "max" | "index_of" | "count" | "unique"
-        | "chunk" | "take" | "drop" => true,
-        // `find(value)` is the builtin index search; `find(predicate)` is the
-        // list helper returning the matching element.
-        "find" => args.len() == 1 && matches!(args[0].infer_type(v, ctx, state), DataType::Fn(_)),
-        _ => false,
-    };
-    if !route {
-        return None;
-    }
-    state
-        .namespace
-        .try_find_function(&[SmolStr::from("list")], name)
+    let mangled = mangle_method(type_name, name);
+    state.fns.iter().position(|f| f.name == mangled)
 }
 
 pub fn handle_method_calls(
@@ -161,15 +174,18 @@ pub fn handle_method_calls(
         error_no_such_method(name, &enum_name, fn_span, ctx.file_idx, state.sources);
     }
 
-    // An array-receiver collection method (`arr.map(f)`, `arr.reduce(init, f)`,
-    // ...) lowers to the `std/list` helper of the same name with the receiver
-    // as argument 0, reusing the ordinary user-function call path. The helper is
-    // not generic, so a call written with type arguments is reported the same as
-    // any other built-in method.
-    if let Some(fn_id) = routed_list_method(name, &obj_type, args, v, ctx, state) {
-        if !type_args.is_empty() {
-            error_type_args_on_builtin_method(fn_span, ctx.file_idx, name, state.sources);
-        }
+    // A builtin-typed receiver (string/list/map/number) picks up methods from
+    // `impl` blocks naming the builtin type: `arr.sum()` lowers to `list#sum`
+    // with the receiver as argument 0, reusing the ordinary user-function call
+    // path. The `std` collection modules define their helpers this way. Type
+    // arguments resolve against the method's own type parameters, exactly as
+    // on a struct method.
+    if let Some(fn_id) = impl_method_on_builtin(name, &obj_type, args, v, ctx, state) {
+        let call_type_args = if type_args.is_empty() {
+            Vec::new()
+        } else {
+            resolve_call_type_args(fn_id, name, type_args, fn_span, ctx, state)
+        };
         let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
         call_args.push(obj.clone());
         call_args.extend_from_slice(args);
@@ -187,7 +203,7 @@ pub fn handle_method_calls(
             &call_args,
             fn_span,
             &call_arg_spans,
-            &[],
+            &call_type_args,
         );
     }
 

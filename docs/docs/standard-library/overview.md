@@ -34,27 +34,19 @@ A library import is a quoted path with no file extension. The resolver appends
 from any working directory:
 
 ```rust
-import "std/string" as string;
-
-fn main() {
-    print(string::capitalize("hello"));
-}
-```
-
-A bare import merges the module's functions into the importing file's own scope,
-so you call them unqualified:
-
-```rust
 import "std/string";
 
 fn main() {
-    print(capitalize("hello"));
+    print("hello".capitalize());
 }
 ```
 
-Two bare imports that export the same name are a compile error; several modules
-export `map`, `count`, `find`, `len`, `is_empty`, `contains`, and `unwrap`. Use
-`as` to keep them apart. The import form is covered in full in
+A module of free functions binds a namespace under `as` (`import "std/json" as
+json;` then `json::parse(text)`), or merges into the file's own scope under a
+bare import. A module of methods (`string`, `map`, the enum helpers) only needs
+importing; the methods then resolve on the receiver's type. Two bare imports
+that export the same free-function name are a compile error; use `as` to keep
+them apart. The import form is covered in full in
 [modules](../language/modules.md).
 
 ## Built-ins and modules
@@ -64,23 +56,24 @@ Built-in functions and methods are part of the language. `print`, `str`,
 available under `candela-vm` with nothing installed. They are listed in
 [built-in functions](builtins.md).
 
-Standard library modules are candela code layered on those built-ins. They add
-names that read as a library rather than as syntax: `list::sum`, `set::union`,
-`option::unwrap_or`, `math::sqrt`.
+Standard library modules are candela code layered on those built-ins. The
+collection and enum modules define their helpers as methods in `impl` blocks
+(`xs.sum()`, `s.capitalize()`, `o.unwrap_or(0)`), and the rest are namespaced
+free functions (`set::union`, `math::sqrt`).
 
-One module is special. `std/list` loads automatically as a `list` namespace, so
-its helpers work as array methods with no import at all:
+One module is special. `std/list` loads automatically, so its methods work on
+any array with no import at all:
 
 ```rust
 fn main() {
     let xs = [1, 2, 3, 4];
     print(xs.map(fn(x) { return x * 2; }));
-    print(list::sum(xs));
+    print(xs.sum());
 }
 ```
 
-The automatic prelude is skipped when the library directory is missing, and when
-your file already binds the name `list`.
+The automatic prelude is skipped when the library directory is missing, and
+when your file already binds the name `list`.
 
 ## The modules
 
@@ -90,12 +83,12 @@ your file already binds the name `list`.
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
 | [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` wrappers over the built-in conversions |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
-| [list](list.md) | Reductions, slicing, and higher-order helpers over arrays |
-| [map](map.md) | Free-function spellings of the map methods, plus `get_or` |
+| [list](list.md) | Reductions, slicing, and higher-order methods on arrays |
+| [map](map.md) | Extra map methods: `is_empty` and `get_or` |
 | [math](math.md) | Trigonometry, logarithms, roots, rounding, and the constants |
-| [option](option.md) | The `Option` enum: `Some(x)` or `None`, with helpers |
+| [option](option.md) | The `Option` enum: `Some(x)` or `None`, with methods |
 | [random](random.md) | A seedable pseudo-random generator for ints and floats |
-| [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with helpers |
+| [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with methods |
 | [set](set.md) | A set of unique values, with union, intersection, and difference |
 | [string](string.md) | Substrings, padding, capitalisation, line splitting, counting |
 | [time](time.md) | The current unix time, and formatting a timestamp |

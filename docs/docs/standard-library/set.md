@@ -12,7 +12,9 @@ That has two consequences you can rely on: a set value accepts the built-in map
 methods, and `for x in s` iterates the members.
 
 Create one with `set::new()`, add with `set::add`, and test with
-`set::contains`.
+`set::contains`. The operations are free functions rather than methods: a set
+value is typed as a map, and method resolution goes by type, so set methods
+would attach to every map.
 
 The helpers are polymorphic through compile-time monomorphisation: one definition
 specialises to the member type at the call site. The module is pure candela, so

@@ -4172,6 +4172,126 @@ pub fn method_error_duplicate() {
 }
 
 #[test]
+pub fn method_on_builtin_string() {
+    // An `impl string` block adds methods to string receivers, resolved by the
+    // builtin type name (`string#shout`).
+    run_and_check_registers!(
+        "
+        impl string {
+            fn shout_len(self) { return (self.uppercase() + \"!\").len(); }
+        }
+        fn main() {
+            print(\"hey\".shout_len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_list() {
+    run_and_check_registers!(
+        "
+        impl list {
+            fn second(self) { return self[1]; }
+        }
+        fn main() {
+            print([7, 8, 9].second());
+        }
+        ",
+        8.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_map() {
+    run_and_check_registers!(
+        "
+        impl map {
+            fn get_or(self, k, default) {
+                if self.contains(k) {
+                    return self.get(k);
+                }
+                return default;
+            }
+        }
+        fn main() {
+            let m = {};
+            m.insert(\"a\", 5);
+            print(m.get_or(\"a\", 0) + m.get_or(\"b\", 30));
+        }
+        ",
+        35.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_int() {
+    run_and_check_registers!(
+        "
+        impl int {
+            fn doubled(self) { return self * 2; }
+        }
+        fn main() {
+            let n = 21;
+            print(n.doubled());
+        }
+        ",
+        42.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_float() {
+    run_and_check_registers!(
+        "
+        impl float {
+            fn halved(self) { return self / 2.0; }
+        }
+        fn main() {
+            let f = 5.0;
+            print(f.halved());
+        }
+        ",
+        2.5.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_with_type_parameter() {
+    // A method on a builtin type takes type parameters on the same terms as a
+    // struct method; the explicit type argument binds `U` at the call site.
+    run_and_check_registers!(
+        "
+        impl list {
+            fn tagged<U>(self, extra: U) -> U { return extra; }
+        }
+        fn main() {
+            print([1, 2].tagged<int>(9) + [1, 2].tagged<string>(\"hi\").len());
+        }
+        ",
+        11.into()
+    );
+}
+
+#[test]
+pub fn method_on_builtin_cannot_shadow_builtin() {
+    // The builtin method table keeps precedence: an `impl list` method named
+    // `len` never resolves; `[..].len()` stays the builtin length.
+    run_and_check_registers!(
+        "
+        impl list {
+            fn len(self) { return 999; }
+        }
+        fn main() {
+            print([1, 2, 3].len());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
 pub fn hof_named_function_reference() {
     run_and_check_registers!(
         "

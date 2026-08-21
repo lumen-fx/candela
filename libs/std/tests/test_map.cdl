@@ -1,24 +1,24 @@
 /// Checks for the `map` module and the map primitives. Prints "map ok" on
 /// success; a failed check aborts the run with a message.
-import "std/map" as map;
+import "std/map";
 import "std/assert" as assert;
 
 fn main() {
     // Empty-literal, insert, len.
     let m = {};
-    assert::assert_true(map::is_empty(m));
+    assert::assert_true(m.is_empty());
     m.insert("a", 1);
     m.insert("b", 2);
     m.insert("c", 3);
     assert::assert_eq(m.len(), 3);
-    assert::assert_false(map::is_empty(m));
+    assert::assert_false(m.is_empty());
 
     // get / contains.
     assert::assert_eq(m.get("b"), 2);
     assert::assert_true(m.contains("a"));
     assert::assert_false(m.contains("z"));
-    assert::assert_eq(map::get_or(m, "c", 99), 3);
-    assert::assert_eq(map::get_or(m, "z", 99), 99);
+    assert::assert_eq(m.get_or("c", 99), 3);
+    assert::assert_eq(m.get_or("z", 99), 99);
 
     // keys / values.
     assert::assert_eq(m.keys().len(), 3);
@@ -30,12 +30,6 @@ fn main() {
         sum += m.get(k);
     }
     assert::assert_eq(sum, 6);
-
-    // Free-function forms.
-    assert::assert_eq(map::len(m), 3);
-    assert::assert_true(map::contains(m, "b"));
-    assert::assert_eq(map::keys(m).len(), 3);
-    assert::assert_eq(map::values(m).len(), 3);
 
     // Overwrite keeps the length and replaces the value.
     m.insert("a", 10);

@@ -1,16 +1,11 @@
 # list
 
-Reductions, slicing, and higher-order helpers over arrays.
+Reductions, slicing, and higher-order methods on arrays.
 
-```rust
-import "std/list" as list;
-```
-
-The module also loads automatically, without any import, so every helper here has
-a method spelling on an array receiver: `list::map(xs, f)` and `xs.map(f)` are
-the same call. The automatic prelude binds the `list` namespace too, so
-`list::sum(xs)` works with no import line. Add the import when you want the bare
-spelling (`sum(xs)`), or to be explicit.
+The module loads automatically, so every method here works on any array with no
+import line: `[1, 2, 3].sum()`, `xs.map(f)`. The methods are defined in an
+`impl list` block; see [methods](../language/methods.md) for how `impl` blocks
+on the built-in types resolve.
 
 The helpers are polymorphic through compile-time monomorphisation: one definition
 specialises to whatever element type the call site uses. The reductions `sum`,
@@ -27,7 +22,6 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 ### first
 
 ```rust
-list::first(arr)
 arr.first()
 ```
 
@@ -37,7 +31,6 @@ arr.first()
 ### last
 
 ```rust
-list::last(arr)
 arr.last()
 ```
 
@@ -47,7 +40,6 @@ arr.last()
 ### is_empty
 
 ```rust
-list::is_empty(arr)
 arr.is_empty()
 ```
 
@@ -56,7 +48,6 @@ arr.is_empty()
 ### index_of
 
 ```rust
-list::index_of(arr, value)
 arr.index_of(value)
 ```
 
@@ -67,7 +58,6 @@ arr.index_of(value)
 ### count
 
 ```rust
-list::count(arr, value)
 arr.count(value)
 ```
 
@@ -79,7 +69,6 @@ arr.count(value)
 ### sum
 
 ```rust
-list::sum(arr)
 arr.sum()
 ```
 
@@ -92,7 +81,6 @@ concatenation.
 ### product
 
 ```rust
-list::product(arr)
 arr.product()
 ```
 
@@ -102,7 +90,6 @@ arr.product()
 ### min
 
 ```rust
-list::min(arr)
 arr.min()
 ```
 
@@ -112,7 +99,6 @@ arr.min()
 ### max
 
 ```rust
-list::max(arr)
 arr.max()
 ```
 
@@ -124,7 +110,6 @@ arr.max()
 ### take
 
 ```rust
-list::take(arr, n)
 arr.take(n)
 ```
 
@@ -135,7 +120,6 @@ arr.take(n)
 ### drop
 
 ```rust
-list::drop(arr, n)
 arr.drop(n)
 ```
 
@@ -146,7 +130,6 @@ arr.drop(n)
 ### chunk
 
 ```rust
-list::chunk(arr, size)
 arr.chunk(size)
 ```
 
@@ -164,7 +147,6 @@ fn main() {
 ### unique
 
 ```rust
-list::unique(arr)
 arr.unique()
 ```
 
@@ -179,7 +161,6 @@ see [functions](../language/functions.md).
 ### map
 
 ```rust
-list::map(arr, f)
 arr.map(f)
 ```
 
@@ -189,7 +170,6 @@ arr.map(f)
 ### filter
 
 ```rust
-list::filter(arr, f)
 arr.filter(f)
 ```
 
@@ -199,7 +179,6 @@ arr.filter(f)
 ### reduce
 
 ```rust
-list::reduce(arr, init, f)
 arr.reduce(init, f)
 ```
 
@@ -217,7 +196,6 @@ fn main() {
 ### each
 
 ```rust
-list::each(arr, f)
 arr.each(f)
 ```
 
@@ -227,7 +205,6 @@ arr.each(f)
 ### find
 
 ```rust
-list::find(arr, f)
 arr.find(f)
 ```
 
@@ -240,7 +217,6 @@ which returns an int index or -1. The argument type picks between the two.
 ### any
 
 ```rust
-list::any(arr, f)
 arr.any(f)
 ```
 
@@ -250,7 +226,6 @@ arr.any(f)
 ### all
 
 ```rust
-list::all(arr, f)
 arr.all(f)
 ```
 
@@ -260,7 +235,6 @@ arr.all(f)
 ### sort_by
 
 ```rust
-list::sort_by(arr, less)
 arr.sort_by(less)
 ```
 

@@ -183,7 +183,7 @@ function inside either.
 ```rust
 print(point.x);
 print(name.len());
-print(string::capitalize(name));
+print(name.capitalize());
 let c = Colour::Red;
 ```
 

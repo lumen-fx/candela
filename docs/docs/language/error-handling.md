@@ -144,7 +144,7 @@ enums from the standard library, so the caller handles them with a `match` and
 cannot forget the failing case.
 
 ```rust
-import "std/result" as result;
+import "std/result";
 
 fn divide(a, b) {
     if b == 0 {
@@ -158,7 +158,7 @@ fn main() {
         Ok(value) => { print(value); }
         Err(message) => { print(message); }
     }
-    print(result::unwrap_or(divide(1, 0), 0));
+    print(divide(1, 0).unwrap_or(0));
 }
 ```
 

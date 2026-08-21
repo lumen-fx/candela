@@ -1,228 +1,234 @@
-/// List helpers built on Candela's array operators and built-in methods.
+/// List methods built on Candela's array operators and built-in methods.
 ///
-/// The functions are polymorphic through Candela's compile-time monomorphization:
-/// a single definition specializes to whatever element type the call site uses.
-/// Reductions such as `sum`, `min`, and `max` read their seed from the first
-/// element, so they require a non-empty list.
+/// Every helper is a method on the list value (`arr.sum()`, `arr.map(f)`),
+/// defined in an `impl list` block. The module loads automatically, so the
+/// methods need no import. They are polymorphic through Candela's compile-time
+/// monomorphization: a single definition specializes to whatever element type
+/// the call site uses. Reductions such as `sum`, `min`, and `max` read their
+/// seed from the first element, so they require a non-empty list.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-/// The first element. Requires a non-empty list.
-fn first(arr) {
-    return arr[0];
-}
-
-/// The last element. Requires a non-empty list.
-fn last(arr) {
-    return arr[arr.len() - 1];
-}
-
-/// True when `arr` has no elements.
-fn is_empty(arr) {
-    return arr.len() == 0;
-}
-
-/// The sum of the elements. Requires a non-empty list whose element type
-/// supports `+`.
-fn sum(arr) {
-    let total = arr[0];
-    for i in 1..arr.len() {
-        total = total + arr[i];
+impl list {
+    /// The first element. Requires a non-empty list.
+    fn first(self) {
+        return self[0];
     }
-    return total;
-}
 
-/// The product of the elements. Requires a non-empty list whose element type
-/// supports `*`.
-fn product(arr) {
-    let acc = arr[0];
-    for i in 1..arr.len() {
-        acc = acc * arr[i];
+    /// The last element. Requires a non-empty list.
+    fn last(self) {
+        return self[self.len() - 1];
     }
-    return acc;
-}
 
-/// The smallest element. Requires a non-empty list.
-fn min(arr) {
-    let m = arr[0];
-    for x in arr {
-        if x < m {
-            m = x;
+    /// True when the list has no elements.
+    fn is_empty(self) {
+        return self.len() == 0;
+    }
+
+    /// The sum of the elements. Requires a non-empty list whose element type
+    /// supports `+`.
+    fn sum(self) {
+        let total = self[0];
+        for i in 1..self.len() {
+            total = total + self[i];
         }
+        return total;
     }
-    return m;
-}
 
-/// The largest element. Requires a non-empty list.
-fn max(arr) {
-    let m = arr[0];
-    for x in arr {
-        if x > m {
-            m = x;
+    /// The product of the elements. Requires a non-empty list whose element
+    /// type supports `*`.
+    fn product(self) {
+        let acc = self[0];
+        for i in 1..self.len() {
+            acc = acc * self[i];
         }
+        return acc;
     }
-    return m;
-}
 
-/// The index of the first element equal to `value`, or -1 if there is none.
-fn index_of(arr, value) {
-    for i in 0..arr.len() {
-        if arr[i] == value {
-            return i;
-        }
-    }
-    return 0 - 1;
-}
-
-/// The number of elements equal to `value`.
-fn count(arr, value) {
-    let n = 0;
-    for x in arr {
-        if x == value {
-            n = n + 1;
-        }
-    }
-    return n;
-}
-
-/// A new list with duplicate elements removed, preserving first-seen order.
-fn unique(arr) {
-    if arr.len() == 0 {
-        return arr;
-    }
-    let out = [arr[0]];
-    for i in 1..arr.len() {
-        if !out.contains(arr[i]) {
-            out.push(arr[i]);
-        }
-    }
-    return out;
-}
-
-/// `arr` broken into consecutive sub-lists of at most `size` elements. The final
-/// chunk is shorter when the length is not a multiple of `size`.
-fn chunk(arr, size) {
-    let out = [];
-    let i = 0;
-    while i < arr.len() {
-        let end = i + size;
-        if end > arr.len() {
-            end = arr.len();
-        }
-        out.push(arr[i..end]);
-        i = i + size;
-    }
-    return out;
-}
-
-/// The first `n` elements (all of them when `n` exceeds the length).
-fn take(arr, n) {
-    let count = n;
-    if count > arr.len() {
-        count = arr.len();
-    }
-    return arr[0..count];
-}
-
-/// Every element except the first `n` (an empty list when `n` exceeds the
-/// length).
-fn drop(arr, n) {
-    let start = n;
-    if start > arr.len() {
-        start = arr.len();
-    }
-    return arr[start..arr.len()];
-}
-
-/// Applies `f` to every element and returns the list of results. `f` takes one
-/// element and returns the mapped value.
-fn map(arr, f) {
-    let out = [];
-    for x in arr {
-        out.push(f(x));
-    }
-    return out;
-}
-
-/// The elements for which the predicate `f` returns true, in order. `f` takes
-/// one element and returns a bool.
-fn filter(arr, f) {
-    let out = [];
-    for x in arr {
-        if f(x) {
-            out.push(x);
-        }
-    }
-    return out;
-}
-
-/// Folds the list into a single value. Starts from `init` and combines it with
-/// each element left to right: `acc = f(acc, x)`.
-fn reduce(arr, init, f) {
-    let acc = init;
-    for x in arr {
-        acc = f(acc, x);
-    }
-    return acc;
-}
-
-/// Calls `f` on every element for its side effect and returns null.
-fn each(arr, f) {
-    for x in arr {
-        f(x);
-    }
-}
-
-/// The first element for which the predicate `f` returns true, or null when none
-/// match. `f` takes one element and returns a bool.
-fn find(arr, f) {
-    for x in arr {
-        if f(x) {
-            return x;
-        }
-    }
-    return null;
-}
-
-/// True when the predicate `f` returns true for at least one element.
-fn any(arr, f) {
-    for x in arr {
-        if f(x) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// True when the predicate `f` returns true for every element (including the
-/// empty list).
-fn all(arr, f) {
-    for x in arr {
-        if !f(x) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/// A new list sorted so that `less(a, b)` is true when `a` comes before `b`.
-/// A stable insertion sort; `less` is a two-argument predicate returning a bool.
-fn sort_by(arr, less) {
-    let out = [];
-    for x in arr {
-        let i = out.len();
-        out.push(x);
-        while i > 0 {
-            if less(out[i], out[i - 1]) {
-                let tmp = out[i - 1];
-                out[i - 1] = out[i];
-                out[i] = tmp;
-                i = i - 1;
-            } else {
-                i = 0;
+    /// The smallest element. Requires a non-empty list.
+    fn min(self) {
+        let m = self[0];
+        for x in self {
+            if x < m {
+                m = x;
             }
         }
+        return m;
     }
-    return out;
+
+    /// The largest element. Requires a non-empty list.
+    fn max(self) {
+        let m = self[0];
+        for x in self {
+            if x > m {
+                m = x;
+            }
+        }
+        return m;
+    }
+
+    /// The index of the first element equal to `value`, or -1 if there is none.
+    fn index_of(self, value) {
+        for i in 0..self.len() {
+            if self[i] == value {
+                return i;
+            }
+        }
+        return 0 - 1;
+    }
+
+    /// The number of elements equal to `value`.
+    fn count(self, value) {
+        let n = 0;
+        for x in self {
+            if x == value {
+                n = n + 1;
+            }
+        }
+        return n;
+    }
+
+    /// A new list with duplicate elements removed, preserving first-seen order.
+    fn unique(self) {
+        if self.len() == 0 {
+            return self;
+        }
+        let out = [self[0]];
+        for i in 1..self.len() {
+            if !out.contains(self[i]) {
+                out.push(self[i]);
+            }
+        }
+        return out;
+    }
+
+    /// The list broken into consecutive sub-lists of at most `size` elements.
+    /// The final chunk is shorter when the length is not a multiple of `size`.
+    fn chunk(self, size) {
+        let out = [];
+        let i = 0;
+        while i < self.len() {
+            let end = i + size;
+            if end > self.len() {
+                end = self.len();
+            }
+            out.push(self[i..end]);
+            i = i + size;
+        }
+        return out;
+    }
+
+    /// The first `n` elements (all of them when `n` exceeds the length).
+    fn take(self, n) {
+        let count = n;
+        if count > self.len() {
+            count = self.len();
+        }
+        return self[0..count];
+    }
+
+    /// Every element except the first `n` (an empty list when `n` exceeds the
+    /// length).
+    fn drop(self, n) {
+        let start = n;
+        if start > self.len() {
+            start = self.len();
+        }
+        return self[start..self.len()];
+    }
+
+    /// Applies `f` to every element and returns the list of results. `f` takes
+    /// one element and returns the mapped value.
+    fn map(self, f) {
+        let out = [];
+        for x in self {
+            out.push(f(x));
+        }
+        return out;
+    }
+
+    /// The elements for which the predicate `f` returns true, in order. `f`
+    /// takes one element and returns a bool.
+    fn filter(self, f) {
+        let out = [];
+        for x in self {
+            if f(x) {
+                out.push(x);
+            }
+        }
+        return out;
+    }
+
+    /// Folds the list into a single value. Starts from `init` and combines it
+    /// with each element left to right: `acc = f(acc, x)`.
+    fn reduce(self, init, f) {
+        let acc = init;
+        for x in self {
+            acc = f(acc, x);
+        }
+        return acc;
+    }
+
+    /// Calls `f` on every element for its side effect and returns null.
+    fn each(self, f) {
+        for x in self {
+            f(x);
+        }
+    }
+
+    /// The first element for which the predicate `f` returns true, or null when
+    /// none match. `f` takes one element and returns a bool. With a non-function
+    /// argument, `find` is the built-in index search instead.
+    fn find(self, f) {
+        for x in self {
+            if f(x) {
+                return x;
+            }
+        }
+        return null;
+    }
+
+    /// True when the predicate `f` returns true for at least one element.
+    fn any(self, f) {
+        for x in self {
+            if f(x) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// True when the predicate `f` returns true for every element (including
+    /// the empty list).
+    fn all(self, f) {
+        for x in self {
+            if !f(x) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// A new list sorted so that `less(a, b)` is true when `a` comes before
+    /// `b`. A stable insertion sort; `less` is a two-argument predicate
+    /// returning a bool.
+    fn sort_by(self, less) {
+        let out = [];
+        for x in self {
+            let i = out.len();
+            out.push(x);
+            while i > 0 {
+                if less(out[i], out[i - 1]) {
+                    let tmp = out[i - 1];
+                    out[i - 1] = out[i];
+                    out[i] = tmp;
+                    i = i - 1;
+                } else {
+                    i = 0;
+                }
+            }
+        }
+        return out;
+    }
 }

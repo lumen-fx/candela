@@ -49,10 +49,10 @@ that export the same name collide.
 that name with `::`.
 
 ```rust
-import "std/list" as list;
+import "std/json" as json;
 
 fn main() {
-    print(list::map([1, 2, 3], fn(x) { return x * 2; }));
+    print(json::stringify([1, 2, 3]));
 }
 ```
 
@@ -116,6 +116,8 @@ toolchain and compile into your program like any other module. The
 [Standard library](../standard-library/overview.md) section lists what each one
 provides.
 
-The `list` module is a special case: its helpers are available as methods on any
-list without an import, so `xs.map(f)` works in a file with no imports at all.
-Import it as a module when you want the free-function form, `list::map(xs, f)`.
+The collection and enum modules (`list`, `string`, `map`, `option`, `result`)
+define their helpers as methods in `impl` blocks, so importing them is enough;
+the methods then resolve on the receiver's type. The `list` module goes one step
+further and loads automatically, so `xs.map(f)` works in a file with no imports
+at all.

@@ -3,7 +3,7 @@
 `Result` is either a success or a failure that carries a reason.
 
 ```rust
-import "std/result" as result;
+import "std/result";
 ```
 
 ## The type
@@ -21,7 +21,7 @@ Importing the module brings the variants into scope, so you construct and match
 them directly:
 
 ```rust
-import "std/result" as result;
+import "std/result";
 
 fn main() {
     let r = Ok(5);
@@ -43,18 +43,14 @@ language's raised errors, which unwind to a `try`/`catch`; see
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
-## Helpers
+## Methods
 
-Every helper has two spellings that do the same work: a free function taking the
-result as its first argument, and a method on the value. Under a bare
-`import "std/result";` the free functions are unqualified (`unwrap(r)`); under
-`as result` they are qualified (`result::unwrap(r)`). The method form
-(`r.unwrap()`) works either way.
+The helpers are methods on the result value, defined in an `impl Result` block;
+importing the module brings them in.
 
 ### is_ok
 
 ```rust
-result::is_ok(r)
 r.is_ok()
 ```
 
@@ -63,7 +59,6 @@ r.is_ok()
 ### is_err
 
 ```rust
-result::is_err(r)
 r.is_err()
 ```
 
@@ -72,7 +67,6 @@ r.is_err()
 ### unwrap
 
 ```rust
-result::unwrap(r)
 r.unwrap()
 ```
 
@@ -83,7 +77,6 @@ r.unwrap()
 ### unwrap_err
 
 ```rust
-result::unwrap_err(r)
 r.unwrap_err()
 ```
 
@@ -93,7 +86,6 @@ r.unwrap_err()
 ### unwrap_or
 
 ```rust
-result::unwrap_or(r, default)
 r.unwrap_or(default)
 ```
 
@@ -102,7 +94,7 @@ r.unwrap_or(default)
 - Raises: nothing.
 
 ```rust
-import "std/result" as result;
+import "std/result";
 
 fn parse_port(text) {
     if text.is_int() {

@@ -1,19 +1,18 @@
 /// Checks for the `list` module (reductions and lookups). Run with `candela
 /// run`, or build to a `.cdlb` and run under `candela-vm`. Prints "list ok" on
 /// success; a failed check aborts the run with a message.
-import "std/list" as list;
 import "std/assert" as assert;
 
 fn main() {
-    assert::assert_eq(list::first([10, 20, 30]), 10);
-    assert::assert_eq(list::last([10, 20, 30]), 30);
-    assert::assert_true(list::is_empty([]));
-    assert::assert_eq(list::sum([1, 2, 3, 4]), 10);
-    assert::assert_eq(list::sum([1.5, 2.5]), 4.0);
-    assert::assert_eq(list::product([1, 2, 3, 4]), 24);
-    assert::assert_eq(list::min([3, 1, 2]), 1);
-    assert::assert_eq(list::max([3, 1, 2]), 3);
-    assert::assert_eq(list::index_of([5, 6, 7], 6), 1);
-    assert::assert_eq(list::count([1, 1, 2, 1], 1), 3);
+    assert::assert_eq([10, 20, 30].first(), 10);
+    assert::assert_eq([10, 20, 30].last(), 30);
+    assert::assert_true([].is_empty());
+    assert::assert_eq([1, 2, 3, 4].sum(), 10);
+    assert::assert_eq([1.5, 2.5].sum(), 4.0);
+    assert::assert_eq([1, 2, 3, 4].product(), 24);
+    assert::assert_eq([3, 1, 2].min(), 1);
+    assert::assert_eq([3, 1, 2].max(), 3);
+    assert::assert_eq([5, 6, 7].index_of(6), 1);
+    assert::assert_eq([1, 1, 2, 1].count(1), 3);
     print("list ok");
 }

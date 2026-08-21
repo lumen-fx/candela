@@ -8,74 +8,33 @@
 ///         Err(e) => { print(e); }
 ///     }
 ///
-/// The helpers below work either as free functions (`unwrap(r)`, with a bare import) or as
-/// methods on the value (`r.unwrap()`). This module is pure candela and inlines
-/// into a `.cdlb`, so it runs under `candela-vm` with no source tree.
+/// The helpers are methods on the value (`r.unwrap()`, `r.is_ok()`). This
+/// module is pure candela and inlines into a `.cdlb`, so it runs under
+/// `candela-vm` with no source tree.
 
 enum Result {
     Ok(any),
     Err(any),
 }
 
-/// True when the result is `Ok`.
-fn is_ok(r) {
-    match r {
-        Ok(_) => { return true; }
-        Err(_) => { return false; }
-    }
-}
-
-/// True when the result is `Err`.
-fn is_err(r) {
-    match r {
-        Ok(_) => { return false; }
-        Err(_) => { return true; }
-    }
-}
-
-/// Returns the success value, or raises when the result is `Err`.
-fn unwrap(r) {
-    let value = null;
-    match r {
-        Ok(v) => { value = v; }
-        Err(e) => { throw("called unwrap on an Err result"); }
-    }
-    return value;
-}
-
-/// Returns the error value, or raises when the result is `Ok`.
-fn unwrap_err(r) {
-    let value = null;
-    match r {
-        Ok(v) => { throw("called unwrap_err on an Ok result"); }
-        Err(e) => { value = e; }
-    }
-    return value;
-}
-
-/// Returns the success value, or `default` when the result is `Err`.
-fn unwrap_or(r, default) {
-    let value = default;
-    match r {
-        Ok(v) => { value = v; }
-        Err(e) => { value = default; }
-    }
-    return value;
-}
-
 impl Result {
+    /// True when the result is `Ok`.
     fn is_ok(self) {
         match self {
             Ok(_) => { return true; }
             Err(_) => { return false; }
         }
     }
+
+    /// True when the result is `Err`.
     fn is_err(self) {
         match self {
             Ok(_) => { return false; }
             Err(_) => { return true; }
         }
     }
+
+    /// Returns the success value, or raises when the result is `Err`.
     fn unwrap(self) {
         let value = null;
         match self {
@@ -84,6 +43,8 @@ impl Result {
         }
         return value;
     }
+
+    /// Returns the error value, or raises when the result is `Ok`.
     fn unwrap_err(self) {
         let value = null;
         match self {
@@ -92,6 +53,8 @@ impl Result {
         }
         return value;
     }
+
+    /// Returns the success value, or `default` when the result is `Err`.
     fn unwrap_or(self, default) {
         let value = default;
         match self {
