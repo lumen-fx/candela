@@ -7,6 +7,10 @@
 /// `contains`; iterate the members through `members` or by iterating the map
 /// the set wraps.
 ///
+/// A set value is typed as a map, and method resolution goes by type, so the
+/// set operations are free functions; defining them as methods would attach
+/// them to every map.
+///
 /// The functions are polymorphic through Candela's compile-time
 /// monomorphization: a single definition specializes to the member type at the
 /// call site.

@@ -1,7 +1,7 @@
-/// Checks the collection higher-order helpers in their method spelling
-/// (`arr.map(f)`, `arr.filter(f)`, ...), which resolve without importing
-/// `std/list`: the array-method auto-prelude routes them to the module. Prints
-/// "list methods ok" on success; a failed check aborts the run.
+/// Checks the collection higher-order methods (`arr.map(f)`, `arr.filter(f)`,
+/// ...), which resolve without an import: `std/list` loads automatically and
+/// its `impl list` block supplies the methods. Prints "list methods ok" on
+/// success; a failed check aborts the run.
 import "std/assert" as assert;
 
 fn double(x) {

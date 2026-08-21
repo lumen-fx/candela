@@ -1,56 +1,29 @@
-/// Map helpers built on Candela's map methods.
+/// Map methods that extend the built-in map operations.
 ///
-/// A map holds key-value pairs. The core operations are methods on a map value
-/// (`m.get(k)`, `m.insert(k, v)`, `m.len()`, `m.contains(k)`, `m.keys()`,
-/// `m.values()`), and a map iterates its keys (`for k in m { ... }`). These
-/// free functions wrap those methods, and add a few conveniences.
+/// A map holds key-value pairs. The core operations are built-in methods on a
+/// map value (`m.get(k)`, `m.insert(k, v)`, `m.len()`, `m.contains(k)`,
+/// `m.keys()`, `m.values()`), and a map iterates its keys
+/// (`for k in m { ... }`). This module adds conveniences on top, defined in an
+/// `impl map` block; import the module to bring them in.
 ///
-/// The functions are polymorphic through Candela's compile-time
+/// The methods are polymorphic through Candela's compile-time
 /// monomorphization: a single definition specializes to whatever key and value
 /// types the call site uses.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-/// The number of entries.
-fn len(m) {
-    return m.len();
-}
-
-/// True when the map has no entries.
-fn is_empty(m) {
-    return m.len() == 0;
-}
-
-/// True when `k` is a key in the map.
-fn contains(m, k) {
-    return m.contains(k);
-}
-
-/// The value stored under `k`. Raises when the key is absent.
-fn get(m, k) {
-    return m.get(k);
-}
-
-/// The value stored under `k`, or `default` when the key is absent.
-fn get_or(m, k, default) {
-    if m.contains(k) {
-        return m.get(k);
+impl map {
+    /// True when the map has no entries.
+    fn is_empty(self) {
+        return self.len() == 0;
     }
-    return default;
-}
 
-/// Stores `v` under `k`, replacing any existing value.
-fn insert(m, k, v) {
-    m.insert(k, v);
-}
-
-/// A list of the keys.
-fn keys(m) {
-    return m.keys();
-}
-
-/// A list of the values.
-fn values(m) {
-    return m.values();
+    /// The value stored under `k`, or `default` when the key is absent.
+    fn get_or(self, k, default) {
+        if self.contains(k) {
+            return self.get(k);
+        }
+        return default;
+    }
 }

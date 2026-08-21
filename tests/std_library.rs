@@ -56,11 +56,6 @@ fn list_slices() {
 }
 
 #[test]
-fn list_higher_order() {
-    assert!(run_std_test("test_list_hof").contains("list hof ok"));
-}
-
-#[test]
 fn list_methods() {
     assert!(run_std_test("test_list_methods").contains("list methods ok"));
 }
@@ -117,13 +112,13 @@ fn option_result_inline_into_cdlb() {
         std::env::set_var("CANDELA_LIB_PATH", repo().join("libs"));
     }
     let src = r#"
-import "std/option" as option;
-import "std/result" as result;
+import "std/option";
+import "std/result";
 fn main() {
-    print(option::unwrap_or(None, 3));
-    print(option::unwrap(Some(7)));
-    print(result::is_ok(Ok(1)));
-    print(result::unwrap_err(Err("x")));
+    print(None.unwrap_or(3));
+    print(Some(7).unwrap());
+    print(Ok(1).is_ok());
+    print(Err("x").unwrap_err());
 }
 "#;
     let filename = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -158,7 +153,7 @@ fn default_resolution_needs_no_env() {
     std::fs::create_dir_all(&work).expect("create work dir");
     std::fs::write(
         work.join("prog.cdl"),
-        "import \"std/list\";\nfn main() { print(max([5, 9, 2])); }\n",
+        "import \"std/list\";\nfn main() { print([5, 9, 2].max()); }\n",
     )
     .expect("write program");
 
@@ -201,12 +196,11 @@ fn json_map_set_inline_into_cdlb() {
     }
     let src = r#"
 import "std/json" as json;
-import "std/map" as map;
 import "std/set" as set;
 fn main() {
     let obj = as_map(json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}"));
-    print(as_int(map::get(obj, "n")));
-    print(as_list(map::get(obj, "xs")).len());
+    print(as_int(obj.get("n")));
+    print(as_list(obj.get("xs")).len());
     print(json::stringify(json::parse("[1,2,3]")));
     let s = set::new();
     set::add(s, 1);
@@ -236,14 +230,13 @@ fn std_inlines_into_cdlb() {
         std::env::set_var("CANDELA_LIB_PATH", repo().join("libs"));
     }
     let src = r#"
-import "std/list" as list;
-import "std/string" as string;
+import "std/string";
 fn inc(x) { return x + 1; }
 fn main() {
-    print(list::sum([1, 2, 3]));
-    print(list::map([1, 2, 3], inc));
-    print(list::filter([1, 2, 3, 4], fn(x) { return x % 2 == 0; }));
-    print(string::capitalize("hi"));
+    print([1, 2, 3].sum());
+    print([1, 2, 3].map(inc));
+    print([1, 2, 3, 4].filter(fn(x) { return x % 2 == 0; }));
+    print("hi".capitalize());
 }
 "#;
     let filename = Path::new(env!("CARGO_MANIFEST_DIR"))

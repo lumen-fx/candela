@@ -1,20 +1,23 @@
 /// Checks for the `string` module. Run with `candela run`, or build to a `.cdlb`
 /// and run under `candela-vm`. Prints "string ok" on success; a failed check
 /// aborts the run with a message.
-import "std/string" as string;
+import "std/string";
 import "std/assert" as assert;
 
 fn main() {
-    assert::assert_eq(string::substring("hello world", 6, 5), "world");
-    assert::assert_eq(string::char_at("abc", 1), "b");
-    assert::assert_true(string::is_empty(""));
-    assert::assert_false(string::is_empty("x"));
-    assert::assert_eq(string::capitalize("hello"), "Hello");
-    assert::assert_eq(string::capitalize(""), "");
-    assert::assert_eq(string::lines("a\nb\nc").len(), 3);
-    assert::assert_eq(string::pad_left("7", 3, "0"), "007");
-    assert::assert_eq(string::pad_right("7", 3, "0"), "700");
-    assert::assert_eq(string::count("banana", "a"), 3);
-    assert::assert_eq(string::count("aaaa", "aa"), 2);
+    assert::assert_eq("hello world".substring(6, 5), "world");
+    assert::assert_eq("abc".char_at(1), "b");
+    assert::assert_true("".is_empty());
+    assert::assert_false("x".is_empty());
+    assert::assert_eq("hello".capitalize(), "Hello");
+    assert::assert_eq("".capitalize(), "");
+    assert::assert_eq("a\nb\nc".lines().len(), 3);
+    assert::assert_eq("7".pad_left(3, "0"), "007");
+    assert::assert_eq("7".pad_right(3, "0"), "700");
+    assert::assert_eq("banana".count("a"), 3);
+    assert::assert_eq("aaaa".count("aa"), 2);
+
+    // Methods chain with the built-in string methods.
+    assert::assert_eq("  hi  ".trim().capitalize(), "Hi");
     print("string ok");
 }

@@ -3,8 +3,6 @@
 /// "errors ok" on success; a failed check aborts the run with a message.
 import "std/assert" as assert;
 import "std/json" as json;
-import "std/list" as list;
-import "std/map" as map;
 
 fn doubled(x) {
     return x * 2;
@@ -107,17 +105,17 @@ fn main() {
 
     // A parsed object is looked up by keys of any length.
     let obj = as_map(json::parse("{\"n\": 7, \"long_key_name\": 42}"));
-    assert::assert_eq(as_int(map::get(obj, "n")), 7);
-    assert::assert_eq(as_int(map::get(obj, "long_key_name")), 42);
+    assert::assert_eq(as_int(obj.get("n")), 7);
+    assert::assert_eq(as_int(obj.get("long_key_name")), 42);
 
     // take and drop hold at the boundaries their descriptions promise.
-    assert::assert_eq(list::take([], 0), []);
-    assert::assert_eq(list::take([], 3), []);
-    assert::assert_eq(list::take([1, 2, 3], 2), [1, 2]);
-    assert::assert_eq(list::take([1, 2, 3], 9), [1, 2, 3]);
-    assert::assert_eq(list::drop([1, 2, 3], 3), []);
-    assert::assert_eq(list::drop([1, 2, 3], 9), []);
-    assert::assert_eq(list::drop([1, 2, 3], 1), [2, 3]);
+    assert::assert_eq([].take(0), []);
+    assert::assert_eq([].take(3), []);
+    assert::assert_eq([1, 2, 3].take(2), [1, 2]);
+    assert::assert_eq([1, 2, 3].take(9), [1, 2, 3]);
+    assert::assert_eq([1, 2, 3].drop(3), []);
+    assert::assert_eq([1, 2, 3].drop(9), []);
+    assert::assert_eq([1, 2, 3].drop(1), [2, 3]);
 
     // A slice starting where the value ends is empty, not an error.
     let xs = [1, 2, 3];

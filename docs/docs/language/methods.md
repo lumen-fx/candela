@@ -6,8 +6,9 @@ an `impl` block.
 
 ## impl blocks
 
-An `impl` block names a struct or an enum and holds functions whose first
-parameter is the receiver.
+An `impl` block names a type and holds functions whose first parameter is the
+receiver. The type is a struct or enum you declare, or one of the built-in type
+names: `string`, `list`, `map`, `int`, `float`, `bool`.
 
 ```rust
 struct Rect {
@@ -109,11 +110,32 @@ define `len`, and neither collides with the other or with a free function of the
 same name.
 
 Calling a method a struct or enum does not define is a compile error naming the
-type, so a misspelling is caught before the program runs. `impl` applies to
-structs and enums you declare; the built-in types take their methods from the
-language instead.
+type, so a misspelling is caught before the program runs.
 
 ## Methods on the built-in types
+
+An `impl` block can also name a built-in type, which is how the standard
+library's collection modules define their helpers:
+
+```rust
+impl string {
+    fn shout(self) {
+        return self.uppercase() + "!";
+    }
+}
+
+fn main() {
+    print("hey".shout());
+}
+```
+
+The built-in methods listed below keep precedence: an `impl list` method named
+`len` never resolves, `[1, 2].len()` stays the built-in length. The one
+exception is `find` on a list: with a function argument it resolves to the
+standard library's predicate search, because the built-in `find` is the index
+search by value and the argument type picks between the two.
+
+## The built-in methods
 
 These come with the language and need no import.
 
@@ -139,8 +161,9 @@ Lists carry a second set of methods from the standard library's `list` module,
 available without an import: `map`, `filter`, `reduce`, `each`, `any`, `all`,
 `find`, `sort_by`, `first`, `last`, `is_empty`, `sum`, `product`, `min`, `max`,
 `index_of`, `count`, `unique`, `chunk`, `take`, and `drop`. See
-[Collections](collections.md).
+[Collections](collections.md). The standard library's `string` and `map`
+modules add methods to strings and maps the same way, behind an import.
 
 The `Option` and `Result` types from the standard library are enums with `impl`
-blocks, so their helpers work in method form once the module is imported; see
+blocks, so their helpers are called as methods once the module is imported; see
 [Error handling](error-handling.md).

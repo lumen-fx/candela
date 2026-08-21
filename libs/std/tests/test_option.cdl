@@ -1,7 +1,7 @@
 /// Checks for the `option` module. Run with `candela run`, or build to a
 /// `.cdlb` and run under `candela-vm`. Prints "option ok" on success; a failed
 /// check aborts the run with a message.
-import "std/option" as option;
+import "std/option";
 import "std/assert" as assert;
 
 // An `Option` payload is dynamically typed (`any`), so a mapper works on it
@@ -13,25 +13,20 @@ fn main() {
     let s = Some(5);
     let n = None;
 
-    assert::assert_true(option::is_some(s));
-    assert::assert_false(option::is_some(n));
-    assert::assert_true(option::is_none(n));
-    assert::assert_false(option::is_none(s));
-
-    assert::assert_eq(option::unwrap(s), 5);
-    assert::assert_eq(option::unwrap_or(n, 99), 99);
-    assert::assert_eq(option::unwrap_or(s, 99), 5);
-
-    // Method form.
     assert::assert_true(s.is_some());
+    assert::assert_false(n.is_some());
+    assert::assert_true(n.is_none());
+    assert::assert_false(s.is_none());
+
     assert::assert_eq(s.unwrap(), 5);
-    assert::assert_eq(n.unwrap_or(7), 7);
+    assert::assert_eq(n.unwrap_or(99), 99);
+    assert::assert_eq(s.unwrap_or(99), 5);
 
     // map over the payload.
-    let m = option::map(s, describe);
-    assert::assert_eq(option::unwrap(m), "5");
-    let mn = option::map(n, describe);
-    assert::assert_true(option::is_none(mn));
+    let m = s.map(describe);
+    assert::assert_eq(m.unwrap(), "5");
+    let mn = n.map(describe);
+    assert::assert_true(mn.is_none());
 
     print("option ok");
 }

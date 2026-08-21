@@ -16,6 +16,53 @@ use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
 
+/// True when `name` is a builtin method on the receiver type named `type_name`
+/// (the names an `impl` block uses: `string`, `list`, `map`, `int`, `float`,
+/// `bool`). Impl-method dispatch consults this so a user method can never
+/// shadow a builtin; keep it in sync with the match in [`builtin_methods`].
+pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
+    let names: &[&str] = match type_name {
+        "string" => &[
+            "uppercase",
+            "lowercase",
+            "starts_with",
+            "ends_with",
+            "replace",
+            "len",
+            "contains",
+            "trim",
+            "trim_sequence",
+            "trim_left",
+            "trim_right",
+            "trim_sequence_left",
+            "trim_sequence_right",
+            "find",
+            "is_float",
+            "is_int",
+            "repeat",
+            "reverse",
+            "split",
+        ],
+        "list" => &[
+            "len",
+            "contains",
+            "find",
+            "repeat",
+            "push",
+            "reverse",
+            "partition",
+            "join",
+            "remove",
+            "sort",
+        ],
+        "map" => &["len", "keys", "values", "contains", "get", "insert"],
+        "int" => &["abs"],
+        "float" => &["abs", "sqrt", "round", "floor"],
+        _ => &[],
+    };
+    names.contains(&name)
+}
+
 pub fn builtin_methods(
     name: &str,
     id: u16,

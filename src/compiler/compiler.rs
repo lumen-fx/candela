@@ -3473,25 +3473,6 @@ impl Namespace {
             }
         })
     }
-    /// Resolves a namespaced function without raising a compile error when the
-    /// namespace or function is absent. Used by the array-method auto-prelude,
-    /// which routes `arr.map(f)` to `list::map` only when that module resolved.
-    #[must_use]
-    pub fn try_find_function(&self, path: &[SmolStr], function_name: &str) -> Option<usize> {
-        let mut current = self;
-        for sub in path {
-            current = &current.children.iter().find(|(name, _)| name == sub)?.1;
-        }
-        current.symbols.iter().find_map(|(name, kind)| {
-            if name.as_str() == function_name
-                && let SymbolKind::Fn(fn_id) = kind
-            {
-                Some(*fn_id as usize)
-            } else {
-                None
-            }
-        })
-    }
     #[must_use]
     pub fn walk_to_namespace(
         &self,
@@ -3514,11 +3495,11 @@ impl Namespace {
     }
 }
 
-/// Loads the `std/list` module as an implicit `list` child namespace so its
-/// higher-order helpers work as array methods (`arr.map(f)`) with no explicit
-/// import. Resolution mirrors the library-import path (`CANDELA_LIB_PATH` or
-/// `libs/` beside the executable); a missing library directory is not an error,
-/// the prelude is absent.
+/// Loads the `std/list` module implicitly so its `impl list` methods
+/// (`arr.map(f)`, `arr.sum()`, ...) work with no explicit import. Resolution
+/// mirrors the library-import path (`CANDELA_LIB_PATH` or `libs/` beside the
+/// executable); a missing library directory is not an error, the prelude is
+/// absent.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_auto_prelude(
     fns: &mut Vec<Function>,

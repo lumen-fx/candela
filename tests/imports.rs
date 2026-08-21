@@ -160,15 +160,15 @@ fn legacy_namespaced_import_suggests_replacement() {
     assert!(stderr.contains("import \"std/list\";"), "stderr: {stderr}");
 }
 
-/// A bare library import merges the shipped module into scope; the enum, its
-/// impl methods, and the free helpers all arrive.
+/// A bare library import merges the shipped module into scope; the enum and
+/// its impl methods both arrive.
 #[test]
 fn bare_library_import_merges_enum_and_methods() {
     let dir = std::env::temp_dir().join(format!("candela_imports_lib_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     std::fs::write(
         dir.join("prog.cdl"),
-        "import \"std/option\";\nfn main() { print(unwrap(Some(7))); print(is_some(None)); print(Some(1).unwrap_or(9)); }\n",
+        "import \"std/option\";\nfn main() { print(Some(7).unwrap()); print(None.is_some()); print(Some(1).unwrap_or(9)); }\n",
     )
     .expect("write test file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));

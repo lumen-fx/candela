@@ -111,17 +111,6 @@ fn main() {
 }
 ```
 
-The same helpers are callable as free functions after importing the module,
-which is the form to use when the receiver is not a list literal or variable:
-
-```rust
-import "std/list" as list;
-
-fn main() {
-    print(list::map([1, 2], fn(x) { return x + 1; }));
-}
-```
-
 The functions you pass do not capture surrounding variables; see
 [Functions](functions.md).
 
@@ -154,8 +143,8 @@ fn main() {
 ```
 
 `insert` adds a pair or replaces the value of an existing key. `get` raises when
-the key is absent, so test with `contains` first, or use `map::get_or` from the
-standard library to supply a fallback.
+the key is absent, so test with `contains` first, or use the `get_or` method
+from the standard library's `map` module to supply a fallback.
 
 ### Iterating
 

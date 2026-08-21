@@ -140,7 +140,7 @@ toolchain. `Option` is `Some(any)` or `None`; `Result` is `Ok(any)` or
 `Err(any)`. They are matched exactly like your own enums.
 
 ```rust
-import "std/option" as option;
+import "std/option";
 
 fn main() {
     let found = Some(5);
@@ -148,7 +148,7 @@ fn main() {
         Some(v) => { print(v); }
         None => { print("nothing"); }
     }
-    print(option::unwrap_or(None, 0));
+    print(None.unwrap_or(0));
 }
 ```
 

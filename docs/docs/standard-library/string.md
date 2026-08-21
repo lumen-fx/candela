@@ -1,15 +1,17 @@
 # string
 
-Substrings, padding, capitalisation, line splitting, and counting.
+Substrings, padding, capitalisation, line splitting, and counting, as methods
+on strings.
 
 ```rust
-import "std/string" as string;
+import "std/string";
 ```
 
-These helpers sit on top of the built-in string methods and the indexing and
-slicing operators. The built-in methods (`len`, `split`, `trim`, `uppercase`,
-`replace`, `find`, and the rest) are listed in
-[built-in functions](builtins.md).
+The import brings the methods in; they are defined in an `impl string` block
+(see [methods](../language/methods.md)) and sit on top of the built-in string
+methods and the indexing and slicing operators. The built-in methods (`len`,
+`split`, `trim`, `uppercase`, `replace`, `find`, and the rest) need no import
+and are listed in [built-in functions](builtins.md).
 
 Indices and lengths count bytes, not characters, so a string of non-ASCII text
 does not index by character. A four-letter word ending in an accented vowel has a
@@ -17,7 +19,7 @@ length of 5, and slicing it by character position cuts the accented letter in
 half.
 
 Slicing raises `slice_out_of_bounds` when the end runs past the string, and also
-when the start index reaches the length. Every helper here that slices therefore
+when the start index reaches the length. Every method here that slices therefore
 raises on an empty string.
 
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
@@ -26,7 +28,7 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 ## substring
 
 ```rust
-string::substring(s, start, count)
+s.substring(start, count)
 ```
 
 - `start`: the 0-based index to start at.
@@ -36,17 +38,17 @@ string::substring(s, start, count)
   `start` reaches the length, or when `s` is empty.
 
 ```rust
-import "std/string" as string;
+import "std/string";
 
 fn main() {
-    print(string::substring("hello world", 6, 5));
+    print("hello world".substring(6, 5));
 }
 ```
 
 ## char_at
 
 ```rust
-string::char_at(s, i)
+s.char_at(i)
 ```
 
 - `i`: the 0-based index.
@@ -57,7 +59,7 @@ string::char_at(s, i)
 ## is_empty
 
 ```rust
-string::is_empty(s)
+s.is_empty()
 ```
 
 - Returns: a bool, true when `s` has no characters.
@@ -65,7 +67,7 @@ string::is_empty(s)
 ## capitalize
 
 ```rust
-string::capitalize(s)
+s.capitalize()
 ```
 
 - Returns: `s` with its first character upper-cased and the rest left as it is.
@@ -74,7 +76,7 @@ string::capitalize(s)
 ## lines
 
 ```rust
-string::lines(s)
+s.lines()
 ```
 
 - Returns: a list of the lines of `s`, split on newline boundaries. A trailing
@@ -84,7 +86,7 @@ string::lines(s)
 ## pad_left
 
 ```rust
-string::pad_left(s, width, fill)
+s.pad_left(width, fill)
 ```
 
 - `width`: the minimum width, as an int.
@@ -93,10 +95,10 @@ string::pad_left(s, width, fill)
   already that wide returns unchanged.
 
 ```rust
-import "std/string" as string;
+import "std/string";
 
 fn main() {
-    print(string::pad_left("7", 3, "0"));
+    print("7".pad_left(3, "0"));
 }
 ```
 
@@ -106,7 +108,7 @@ at the first length that reaches it.
 ## pad_right
 
 ```rust
-string::pad_right(s, width, fill)
+s.pad_right(width, fill)
 ```
 
 - `width`: the minimum width, as an int.
@@ -117,11 +119,11 @@ string::pad_right(s, width, fill)
 ## count
 
 ```rust
-string::count(s, needle)
+s.count(needle)
 ```
 
 - `needle`: the string to look for.
 - Returns: the number of non-overlapping occurrences of `needle` in `s`, as an
   int. An empty `needle` returns 0.
 
-Occurrences are counted without overlap, so `string::count("aaaa", "aa")` is 2.
+Occurrences are counted without overlap, so `"aaaa".count("aa")` is 2.

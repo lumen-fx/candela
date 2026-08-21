@@ -1964,10 +1964,11 @@ impl Expr {
                         state.sources,
                     );
                 }
-                // An array collection method routed to a `std/list` helper
-                // infers its return type from that helper, specialized for the
-                // receiver and argument types.
-                if let Some(fn_id) = crate::compiler::methods::routed_list_method(
+                // A builtin-typed receiver resolving to an `impl` method
+                // (`impl list { fn sum(self) ... }` -> `list#sum`) infers its
+                // return type from that method, specialized for the receiver
+                // and argument types.
+                if let Some(fn_id) = crate::compiler::methods::impl_method_on_builtin(
                     method, &obj_type, args, v, ctx, state,
                 ) {
                     let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
@@ -1975,10 +1976,15 @@ impl Expr {
                     for a in args {
                         arg_types.push(a.infer_type(v, ctx, state));
                     }
+                    let call_type_args = if type_args.is_empty() {
+                        Vec::new()
+                    } else {
+                        resolve_call_type_args(fn_id, method, type_args, *fn_span, ctx, state)
+                    };
                     return infer_user_fn_return_type(
                         fn_id,
                         &arg_types,
-                        &[],
+                        &call_type_args,
                         method,
                         v,
                         ctx,
