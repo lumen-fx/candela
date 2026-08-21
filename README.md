@@ -49,13 +49,13 @@ Run `candela` with no arguments for a REPL.
   program starts.
 - **Structs, enums and match.** Enum variants carry payloads, and `match`
   binds them by pattern.
-- **Methods.** An `impl` block attaches methods to a struct or an enum, called
-  as `value.method()`.
+- **Methods.** An `impl` block attaches methods to a struct, an enum, or a
+  built-in type, called as `value.method()`.
 - **Functions as values.** Pass a named function or an anonymous `fn(x) { ... }`
   to another function.
 - **Collections.** List and map literals, a set built on maps, and JSON parsing
   and serialisation in the standard library.
-- **One import form.** `import "std/list" as list;` for a namespace, or
+- **One import form.** `import "std/json" as json;` for a namespace, or
   `import "std/option";` to bring the module's symbols into scope.
 - **A standard library written in candela.** The `.cdl` sources ship beside the
   toolchain, so you can read any of it.

@@ -266,6 +266,8 @@ Each distinct type argument produces its own instantiation, so a type whose
 fields name a deeper instantiation of itself (`struct L<T> { next: L<L<T>> }`)
 has no end and is rejected.
 
-Only methods you declare in an `impl` block take type arguments. The built-in
-methods on strings, arrays, maps and numbers, including the collection helpers
-`map`, `filter` and `reduce`, are not generic and reject them.
+Only methods that declare type parameters take type arguments. The built-in
+methods on strings, arrays, maps and numbers are not generic and reject them,
+and the standard library's collection methods (`map`, `filter`, `reduce`, and
+the rest) declare none, so a type argument on one is reported the same as on
+any plain function.
