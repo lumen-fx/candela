@@ -6,7 +6,7 @@
 //! state persisting between calls and errors surfaced as `Diagnostic` values.
 
 use candela::macros::{MacroError, scan_regions};
-use candela::{Engine, Value};
+use candela::{Engine, HostError, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -466,7 +466,7 @@ fn main() {}
 #[test]
 fn concatenating_a_non_string_is_a_diagnostic() {
     let mut engine = Engine::new();
-    engine.register_host_fn_variadic("app", "label", |_args: &[Value]| Value::Int(7));
+    engine.register_host_fn_variadic("app", "label", |_args: &[Value]| Ok(Value::Int(7)));
 
     let src = r#"
 host "app" {
@@ -489,6 +489,159 @@ fn main() {}
 }
 
 // ---------------------------------------------------------------------------
+// HOST FUNCTIONS THAT FAIL
+// ---------------------------------------------------------------------------
+
+/// A closure that returns `Err` raises where the script called it. The
+/// diagnostic names the function and carries what the host reported, and the
+/// program is still usable afterwards.
+#[test]
+fn a_failing_host_fn_raises_at_the_call_site() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("gpio", "read", |pin: i64| {
+        if pin == 21 {
+            Ok(1i64)
+        } else {
+            Err(HostError::new(format!("pin {pin} is not wired")))
+        }
+    });
+
+    let src = r#"
+host "gpio" {
+    int read(int);
+}
+fn level(pin) { return gpio::read(pin); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "gpio.cdl").unwrap();
+
+    let err = program.call("level", &[7i64.into()]).unwrap_err();
+    assert_eq!(err.code, "host_fn_error");
+    assert!(err.message.contains("gpio::read"), "{}", err.message);
+    assert!(
+        err.message.contains("pin 7 is not wired"),
+        "{}",
+        err.message
+    );
+    assert_eq!(err.filename, "gpio.cdl");
+    assert!(err.span.start < err.span.end);
+
+    assert_eq!(
+        program.call("level", &[21i64.into()]).unwrap(),
+        Value::Int(1)
+    );
+}
+
+/// A function that returns nothing can fail too: `Result<(), HostError>` binds
+/// to a declaration with no return type.
+#[test]
+fn a_void_host_fn_can_fail() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "save", |contents: &str| {
+        if contents.is_empty() {
+            Err(HostError::new("nothing to save"))
+        } else {
+            Ok(())
+        }
+    });
+
+    let src = r#"
+host "app" {
+    save(string);
+}
+fn store(text) { app::save(text); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "save.cdl").unwrap();
+
+    assert_eq!(
+        program.call("store", &["rows".into()]).unwrap(),
+        Value::Null
+    );
+
+    let err = program.call("store", &["".into()]).unwrap_err();
+    assert_eq!(err.code, "host_fn_error");
+    assert!(err.message.contains("app::save"), "{}", err.message);
+}
+
+/// The error is an ordinary candela runtime error, so a script handles it with
+/// `try`/`catch` under the kind `host_fn_error`.
+#[test]
+fn a_script_catches_a_host_error() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("gpio", "read", |_pin: i64| {
+        Err::<i64, HostError>(HostError::new("the bus is down"))
+    });
+
+    let src = r#"
+host "gpio" {
+    int read(int);
+}
+fn level(pin) {
+    try {
+        return gpio::read(pin);
+    } catch "host_fn_error" {
+        return -1;
+    }
+}
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "gpio.cdl").unwrap();
+    assert_eq!(
+        program.call("level", &[7i64.into()]).unwrap(),
+        Value::Int(-1)
+    );
+}
+
+/// A variadic closure raises the same way a typed one does.
+#[test]
+fn a_failing_variadic_host_fn_raises() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_variadic("app", "log", |args: &[Value]| {
+        if args.is_empty() {
+            Err(HostError::from("nothing to log"))
+        } else {
+            Ok(Value::Null)
+        }
+    });
+
+    let src = r#"
+host "app" {
+    log(...);
+}
+fn quiet() { app::log(); }
+fn loud() { app::log("hi"); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "log.cdl").unwrap();
+
+    let err = program.call("quiet", &[]).unwrap_err();
+    assert_eq!(err.code, "host_fn_error");
+    assert!(err.message.contains("app::log"), "{}", err.message);
+    assert!(err.message.contains("nothing to log"), "{}", err.message);
+
+    assert_eq!(program.call("loud", &[]).unwrap(), Value::Null);
+}
+
+/// The signature a `Result`-returning closure is checked against is the one
+/// inside the `Result`: a mismatch there is still a compile-time `Diagnostic`.
+#[test]
+fn a_fallible_closure_is_signature_checked_on_its_value_type() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("gpio", "read", |_pin: i64| {
+        Ok::<String, HostError>(String::new())
+    });
+    let src = r#"
+host "gpio" {
+    int read(int);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "gpio.cdl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+}
+
+// ---------------------------------------------------------------------------
 // VARIADIC HOST FUNCTIONS
 // ---------------------------------------------------------------------------
 
@@ -502,7 +655,7 @@ fn variadic_host_fn_receives_all_args() {
         let calls = Rc::clone(&calls);
         engine.register_host_fn_variadic("app", "log", move |args: &[Value]| {
             calls.borrow_mut().push(args.to_vec());
-            Value::Null
+            Ok(Value::Null)
         });
     }
 
@@ -540,7 +693,7 @@ fn main() {}
 #[test]
 fn variadic_closure_with_fixed_declaration_is_a_diagnostic() {
     let mut engine = Engine::new();
-    engine.register_host_fn_variadic("app", "log", |_args: &[Value]| Value::Null);
+    engine.register_host_fn_variadic("app", "log", |_args: &[Value]| Ok(Value::Null));
     let src = r#"
 host "app" {
     log(string);

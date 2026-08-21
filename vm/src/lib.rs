@@ -44,9 +44,11 @@ pub use errors::collect_diagnostic;
 
 pub use embed::FromHostValue;
 pub use embed::HostBindError;
+pub use embed::HostError;
 pub use embed::HostRegistry;
 pub use embed::HostType;
 pub use embed::IntoHostFn;
+pub use embed::IntoHostResult;
 pub use embed::IntoHostValue;
 pub use embed::Value;
 pub use embed::marshal_value;

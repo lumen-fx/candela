@@ -148,6 +148,16 @@ Every filesystem builtin maps the operating system's failure to one kind:
 | `c_array_return_type_not_supported` | A `dylib` signature that returns an array; C does not convey the length |
 | `invalid_return_type` | A return type that has no C representation |
 
+### Host functions
+
+| Kind | Raised by |
+| --- | --- |
+| `host_fn_error` | A function a `host` block declares failed. The message names the function and repeats what the host reported |
+
+An embedding program decides when this happens: its closure returns an error
+instead of a value. Catch it like any other kind, or let it end the run. See
+[embedding](../integration/embedding.md).
+
 ### Your own
 
 `throw("message")` raises an error whose kind is the string you pass, so
