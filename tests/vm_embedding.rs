@@ -10,6 +10,7 @@ use candela::CallError;
 use candela::HostBindError;
 use candela::HostError;
 use candela::HostRegistry;
+use candela::HostType;
 use candela::LoadError;
 use candela::RuntimeProgram;
 use candela::Value;
@@ -290,6 +291,51 @@ fn a_runtime_error_comes_back_as_a_diagnostic() {
     assert_eq!(
         program.call("at", &[list, Value::Int(0)]).unwrap(),
         Value::Int(1)
+    );
+}
+
+/// A signature handed over as data is checked at load like a derived one, and
+/// binds a closure the artifact then calls.
+#[test]
+fn a_signature_given_as_data_binds_at_load() {
+    let src = "
+        host \"gpio\" {
+            int read(int);
+        }
+
+        fn level(pin: int) -> int { return gpio::read(pin) + 1; }
+
+        fn main() {}
+    ";
+    let bytes = build_bytecode(src.to_owned(), "gpio.cdl").expect("builds");
+
+    let mut wrong = HostRegistry::new();
+    wrong.register_host_fn_typed(
+        "gpio",
+        "read",
+        vec![HostType::String],
+        HostType::Int,
+        |_args: &[Value]| Ok(Value::Int(0)),
+    );
+    assert!(matches!(
+        load_program(&bytes, &wrong),
+        Err(LoadError::HostBinding(HostBindError::SignatureMismatch(_)))
+    ));
+
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn_typed(
+        "gpio",
+        "read",
+        vec![HostType::Int],
+        HostType::Int,
+        |args: &[Value]| Ok(Value::Int(args[0].as_i64().unwrap_or(0) * 2)),
+    );
+    let mut program = load_program(&bytes, &hosts).expect("binds");
+    program.run();
+
+    assert_eq!(
+        program.call("level", &[Value::Int(20)]).unwrap(),
+        Value::Int(41)
     );
 }
 

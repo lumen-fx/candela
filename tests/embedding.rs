@@ -6,7 +6,7 @@
 //! state persisting between calls and errors surfaced as `Diagnostic` values.
 
 use candela::macros::{MacroError, scan_regions};
-use candela::{Engine, HostError, Value};
+use candela::{Engine, HostError, HostType, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -639,6 +639,136 @@ fn main() {}
 "#;
     let err = engine.compile(src, "gpio.cdl").err().unwrap();
     assert_eq!(err.code, "host_fn_signature_mismatch");
+}
+
+// ---------------------------------------------------------------------------
+// SIGNATURES GIVEN AS DATA
+// ---------------------------------------------------------------------------
+
+/// A host that only knows its signatures at run time registers them as data.
+/// The closure takes a slice, and the declaration is checked against the types
+/// it was registered with, so the call is typed like any other.
+#[test]
+fn a_signature_given_as_data_binds_and_calls() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "gpio",
+        "read",
+        vec![HostType::Int, HostType::String],
+        HostType::Int,
+        |args: &[Value]| {
+            let pin = args[0].as_i64().unwrap_or(0);
+            let mode = args[1].as_str().unwrap_or_default();
+            Ok(Value::Int(if mode == "pullup" { pin + 1 } else { pin }))
+        },
+    );
+
+    let src = r#"
+host "gpio" {
+    int read(int, string);
+}
+fn level(pin, mode) { return gpio::read(pin, mode) + 10; }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "gpio.cdl").unwrap();
+    assert_eq!(
+        program
+            .call("level", &[21i64.into(), "pullup".into()])
+            .unwrap(),
+        Value::Int(32)
+    );
+    assert_eq!(
+        program
+            .call("level", &[21i64.into(), "float".into()])
+            .unwrap(),
+        Value::Int(31)
+    );
+}
+
+/// The declaration is held to the registered types, not waved through because
+/// the closure is erased.
+#[test]
+fn a_declaration_that_disagrees_with_the_given_signature_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "gpio",
+        "read",
+        vec![HostType::Int],
+        HostType::Int,
+        |_args: &[Value]| Ok(Value::Int(0)),
+    );
+
+    let src = r#"
+host "gpio" {
+    string read(int);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "gpio.cdl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+    assert!(err.message.contains("gpio::read"), "{}", err.message);
+}
+
+/// A signature given as data is a fixed one, so a `...` declaration does not
+/// bind to it.
+#[test]
+fn a_given_signature_does_not_bind_to_a_variadic_declaration() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "app",
+        "log",
+        vec![HostType::String],
+        HostType::Unit,
+        |_args: &[Value]| Ok(Value::Null),
+    );
+
+    let src = r#"
+host "app" {
+    log(...);
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "log.cdl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+}
+
+/// A closure registered this way raises like any other host function.
+#[test]
+fn a_given_signature_can_fail() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "gpio",
+        "read",
+        vec![HostType::Int],
+        HostType::Int,
+        |args: &[Value]| match args[0].as_i64() {
+            Some(21) => Ok(Value::Int(1)),
+            Some(pin) => Err(HostError::new(format!("pin {pin} is not wired"))),
+            None => Err(HostError::new("a pin is an int")),
+        },
+    );
+
+    let src = r#"
+host "gpio" {
+    int read(int);
+}
+fn level(pin) { return gpio::read(pin); }
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "gpio.cdl").unwrap();
+
+    let err = program.call("level", &[7i64.into()]).unwrap_err();
+    assert_eq!(err.code, "host_fn_error");
+    assert!(
+        err.message.contains("pin 7 is not wired"),
+        "{}",
+        err.message
+    );
+
+    assert_eq!(
+        program.call("level", &[21i64.into()]).unwrap(),
+        Value::Int(1)
+    );
 }
 
 // ---------------------------------------------------------------------------

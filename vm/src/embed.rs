@@ -410,6 +410,37 @@ impl HostRegistry {
         );
     }
 
+    /// Registers a host function whose signature is given as data.
+    ///
+    /// The closure takes the arguments as a `&[Value]` slice, as a variadic one
+    /// does, but `arg_types` and `ret_type` pin the signature, so the binding is
+    /// checked against the `host` block exactly as [`register_host_fn`] is and
+    /// the declaration must not use `...`. This is what a host registers
+    /// through when the signature is only known at run time: a plugin table, a
+    /// generated binding, anything with no Rust type to derive it from.
+    ///
+    /// [`register_host_fn`]: HostRegistry::register_host_fn
+    pub fn register_host_fn_typed<F>(
+        &mut self,
+        namespace: &str,
+        name: &str,
+        arg_types: Vec<HostType>,
+        ret_type: HostType,
+        f: F,
+    ) where
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
+    {
+        self.fns.insert(
+            (namespace.to_owned(), name.to_owned()),
+            RegisteredFn {
+                func: Rc::new(f),
+                arg_types,
+                ret_type,
+                variadic: false,
+            },
+        );
+    }
+
     /// Registers a variadic host function under `namespace::name`.
     ///
     /// The closure receives every argument as a `&[Value]` slice of any length
