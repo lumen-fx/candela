@@ -33,10 +33,10 @@ Its functions are then called with no prefix, as if you had written them
 yourself.
 
 ```rust
-import "std/convert";
+import "std/assert";
 
 fn main() {
-    print(to_int("42") + 1);
+    assert_eq(2 + 2, 4);
 }
 ```
 
@@ -116,7 +116,8 @@ toolchain and compile into your program like any other module. The
 [Standard library](../standard-library/overview.md) section lists what each one
 provides.
 
-The collection and enum modules (`list`, `string`, `map`, `option`, `result`)
+The collection, conversion, and enum modules (`list`, `string`, `map`,
+`convert`, `option`, `result`)
 define their helpers as methods in `impl` blocks, so importing them is enough;
 the methods then resolve on the receiver's type. The `list` module goes one step
 further and loads automatically, so `xs.map(f)` works in a file with no imports

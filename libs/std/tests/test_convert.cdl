@@ -4,10 +4,15 @@ import "std/convert";
 import "std/assert";
 
 fn main() {
-    assert_eq(to_int("42"), 42);
-    assert_eq(to_float("1.5"), 1.5);
-    assert_eq(to_string(42), "42");
-    assert_true(to_bool("true"));
-    assert_false(to_bool("false"));
+    assert_eq("42".to_int(), 42);
+    assert_eq("1.5".to_float(), 1.5);
+    assert_true("true".to_bool());
+    assert_false("false".to_bool());
+    assert_eq(3.9.to_int(), 3);
+    assert_eq(2.5.to_string(), "2.5");
+    let n = 42;
+    assert_eq(n.to_string(), "42");
+    assert_eq(n.to_float(), 42.0);
+    assert_eq(true.to_string(), "true");
     print("convert ok");
 }

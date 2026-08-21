@@ -1,25 +1,55 @@
-/// Type-conversion helpers with names that read as verbs, wrapping Candela's
-/// built-in `int`, `float`, `str`, and `bool` conversions.
+/// Type-conversion methods with names that read as verbs, wrapping Candela's
+/// built-in `int`, `float`, `str`, and `bool` conversions. Each conversion is
+/// defined on the receiver types it makes sense for: `"42".to_int()`,
+/// `3.9.to_int()`, `(5).to_string()`.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-/// Parses a string or truncates a float to an `int`.
-fn to_int(x) {
-    return int(x);
+impl string {
+    /// Parses the string into an `int`. Raises when it does not parse.
+    fn to_int(self) {
+        return int(self);
+    }
+
+    /// Parses the string into a `float`. Raises when it does not parse.
+    fn to_float(self) {
+        return float(self);
+    }
+
+    /// Parses "true" and "false" into a `bool`. Raises on any other string.
+    fn to_bool(self) {
+        return bool(self);
+    }
 }
 
-/// Parses a string or widens an `int` to a `float`.
-fn to_float(x) {
-    return float(x);
+impl int {
+    /// Widens the int to a `float`.
+    fn to_float(self) {
+        return float(self);
+    }
+
+    /// Renders the int as its string form.
+    fn to_string(self) {
+        return str(self);
+    }
 }
 
-/// Renders any value as its string form.
-fn to_string(x) {
-    return str(x);
+impl float {
+    /// Truncates the float towards zero to an `int`.
+    fn to_int(self) {
+        return int(self);
+    }
+
+    /// Renders the float as its string form.
+    fn to_string(self) {
+        return str(self);
+    }
 }
 
-/// Parses the strings "true" and "false" into a `bool`.
-fn to_bool(x) {
-    return bool(x);
+impl bool {
+    /// Renders the bool as "true" or "false".
+    fn to_string(self) {
+        return str(self);
+    }
 }
