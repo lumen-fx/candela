@@ -53,6 +53,10 @@ env:
 jobs:
   crates-io:
     name: crates on crates.io
+    # nightly.yml publishes a prerelease every night, and crates.io takes a
+    # version once. A nightly is a build of main, not a version, so it has
+    # nothing to upload here.
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
