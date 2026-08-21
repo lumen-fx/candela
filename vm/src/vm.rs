@@ -270,9 +270,9 @@ pub fn execute(
     // Embedding: `host` function signatures and the Rust closures they dispatch
     // to, both indexed by host-function id. Empty for the CLI/REPL/WASM paths.
     // Marshalling is driven by the runtime `Data` tag, so the signatures are
-    // currently only consumed at compile/bind time (kept here for future
+    // read only to name a function in a report (kept here, too, for future
     // per-argument coercion).
-    _host_sigs: &[HostFnSig],
+    host_sigs: &[HostFnSig],
     host_dispatch: &[HostDispatch],
     // Instruction index to begin execution at. `0` runs `main`; the embedding
     // `Program::call` passes the entry index of an appended call trampoline.
@@ -561,12 +561,24 @@ pub fn execute(
                 }
                 args.clear();
 
-                let result = (**dispatch)(&host_call_args);
-
-                // Marshal the result back, allocating arrays/maps into the pools.
-                // `Value::Null` (including a void closure's `()`) becomes NULL,
-                // which is what register 0 expects for a discarded result.
-                r[dest] = crate::embed::marshal_value(&result, obj_pool, map_pool, str_pool);
+                match (**dispatch)(&host_call_args) {
+                    // Marshal the result back, allocating arrays/maps into the
+                    // pools. `Value::Null` (including a void closure's `()`)
+                    // becomes NULL, which is what register 0 expects for a
+                    // discarded result.
+                    Ok(value) => {
+                        r[dest] = crate::embed::marshal_value(&value, obj_pool, map_pool, str_pool);
+                    }
+                    // The closure raised. Report it where the script called it,
+                    // naming the function the way the script spells it.
+                    Err(err) => {
+                        let function = host_sigs.get(fn_id as usize).map_or_else(
+                            || format!("#{fn_id}"),
+                            |sig| crate::embed::qualified_name(&sig.namespace, &sig.name),
+                        );
+                        error_with_catch!(ErrType::HostFn(&function, err.message()));
+                    }
+                }
             }
             Instr::AddFloat(o1, o2, dest) => {
                 r[dest] = (r[o1].as_float() + r[o2].as_float()).into();

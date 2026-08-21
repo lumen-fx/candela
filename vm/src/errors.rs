@@ -312,6 +312,9 @@ pub enum ErrType<'a> {
     /// A downcast of an `any` value found a different runtime type than the
     /// requested one. Carries (requested, found) type names.
     BadDowncast(&'static str, &'static str),
+    /// A registered host function returned an error. Carries the name the
+    /// script calls it by and the message the host reported.
+    HostFn(&'a str, &'a str),
     /// A string concatenation reached a value that is not a string, which only
     /// happens when a value arrived typed as a string and is not one. Carries
     /// the type name it turned out to have.
@@ -350,6 +353,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::UnknownMapKey(key) => format_args!("Unknown key {RED}{BOLD}{key}{RESET}").to_smolstr(),
             ErrType::JsonParse(reason) => format_args!("Invalid JSON: {RED}{BOLD}{reason}{RESET}").to_smolstr(),
             ErrType::BadDowncast(want, got) => format_args!("Cannot read this {RED}{BOLD}{got}{RESET} value as {BLUE}{BOLD}{want}{RESET}").to_smolstr(),
+            ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
             ErrType::NotAString(got) => format_args!("Cannot join this {RED}{BOLD}{got}{RESET} value onto a {BLUE}{BOLD}string{RESET}").to_smolstr(),
         }
     }
@@ -387,6 +391,7 @@ impl ErrType<'_> {
             ErrType::UnknownMapKey(_) => "unknown_map_key",
             ErrType::JsonParse(_) => "json_parse_error",
             ErrType::BadDowncast(_, _) => "bad_downcast",
+            ErrType::HostFn(_, _) => "host_fn_error",
             ErrType::NotAString(_) => "not_a_string",
         }
     }

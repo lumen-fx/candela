@@ -38,6 +38,7 @@ use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
 use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
+use candela_vm::embed::HostError;
 use candela_vm::embed::HostRegistry;
 use candela_vm::embed::IntoHostFn;
 use candela_vm::embed::Value;
@@ -86,6 +87,21 @@ impl Engine {
     /// The declared types are checked against the script's `host` block when
     /// [`Engine::compile`] runs; a mismatch is a clean [`Diagnostic`], never a
     /// panic.
+    ///
+    /// A closure that can fail returns `Result<T, HostError>` instead of `T`,
+    /// and the error is raised at the call site in the script:
+    ///
+    /// ```no_run
+    /// use candela::HostError;
+    ///
+    /// let mut engine = candela::Engine::new();
+    /// engine.register_host_fn("fs", "read", |path: &str| {
+    ///     std::fs::read_to_string(path).map_err(HostError::new)
+    /// });
+    /// ```
+    ///
+    /// The type checked against the declaration is the `T` inside the `Result`,
+    /// so both spellings bind to the same `host` signature.
     pub fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
     where
         F: IntoHostFn<Marker>,
@@ -96,10 +112,11 @@ impl Engine {
     /// Registers a variadic host function under `namespace::name`.
     ///
     /// Unlike [`Engine::register_host_fn`], the closure receives every argument
-    /// as a `&[Value]` slice of any length and returns a single [`Value`], so
-    /// arguments of mixed / dynamically-typed shape can cross the boundary
-    /// without a fixed Rust signature. The `host` block must declare the
-    /// function with a `...` argument list:
+    /// as a `&[Value]` slice of any length and returns a single [`Value`] (or a
+    /// [`HostError`] to raise in the script), so arguments of mixed /
+    /// dynamically-typed shape can cross the boundary without a fixed Rust
+    /// signature. The `host` block must declare the function with a `...`
+    /// argument list:
     ///
     /// ```candela
     /// host "app" {
@@ -113,7 +130,7 @@ impl Engine {
     /// [`Diagnostic`] at [`Engine::compile`] time.
     pub fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
     where
-        F: Fn(&[Value]) -> Value + 'static,
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
     {
         self.registry.register_host_fn_variadic(namespace, name, f);
     }

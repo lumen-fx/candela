@@ -98,6 +98,24 @@ A namespace is a namespace, so a host function may take a name a built-in
 already has: `gpio::read` is the `int` its block declares, not the `read` that
 returns a string.
 
+A closure that can fail returns `Result<T, HostError>` in place of `T`:
+
+```rust
+use candela::HostError;
+
+engine.register_host_fn("fs", "read", |path: &str| {
+    std::fs::read_to_string(path).map_err(HostError::new)
+});
+```
+
+`HostError::new` takes anything that renders, so an error from the work the
+closure was doing carries through with `map_err`. What the script sees is a
+runtime error at the call, naming the function and repeating the message; it
+can be caught with `catch "host_fn_error"`, and it reaches the host as a
+`Diagnostic` with that code when it is not. The type checked against the
+declaration is the `T` inside the `Result`, so the two spellings bind to the
+same `host` signature.
+
 ### register_host_fn_variadic
 
 ```rust
@@ -105,13 +123,14 @@ engine.register_host_fn_variadic("app", "log", |args: &[Value]| {
     for arg in args {
         println!("{arg:?}");
     }
-    Value::Null
+    Ok(Value::Null)
 });
 ```
 
 Binds a closure that receives every argument as a slice and returns one `Value`,
-so mixed and dynamically shaped arguments cross the boundary without a fixed
-Rust signature. The script must declare the function with `...`:
+or a `HostError` to raise in the script, so mixed and dynamically shaped
+arguments cross the boundary without a fixed Rust signature. The script must
+declare the function with `...`:
 
 ```rust
 host "app" {
@@ -359,7 +378,8 @@ pub struct Diagnostic {
 
 `code` is a stable snake_case identifier you can match on, such as
 `unknown_variable`, `argument_type_mismatch`, `index_out_of_bounds`,
-`unregistered_host_fn` or `host_fn_signature_mismatch`. `message` is plain text
+`unregistered_host_fn`, `host_fn_signature_mismatch` or `host_fn_error` (one of
+your own closures returned a `HostError`). `message` is plain text
 with the terminal colouring removed, and `span` is a byte range into the file
 `filename` names, which is enough to underline the offending source yourself.
 See [errors](../reference/errors.md).

@@ -8,6 +8,7 @@
 
 use candela::CallError;
 use candela::HostBindError;
+use candela::HostError;
 use candela::HostRegistry;
 use candela::LoadError;
 use candela::RuntimeProgram;
@@ -141,7 +142,7 @@ fn variadic_host_fn_binds_through_an_artifact() {
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn_variadic("app", "log", move |args: &[Value]| {
         sink.borrow_mut().extend_from_slice(args);
-        Value::Null
+        Ok(Value::Null)
     });
 
     let mut program = load(src, "variadic.cdl", &hosts);
@@ -288,6 +289,47 @@ fn a_runtime_error_comes_back_as_a_diagnostic() {
 
     assert_eq!(
         program.call("at", &[list, Value::Int(0)]).unwrap(),
+        Value::Int(1)
+    );
+}
+
+/// A host closure that returns an error raises in the artifact the same way it
+/// does with the compiler resident: the call comes back as a runtime error
+/// naming the function, and the program keeps working.
+#[test]
+fn a_host_fn_error_comes_back_from_an_artifact_call() {
+    let src = "
+        host \"gpio\" {
+            int read(int);
+        }
+
+        fn level(pin: int) -> int { return gpio::read(pin); }
+
+        fn main() {}
+    ";
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("gpio", "read", |pin: i64| {
+        if pin == 21 {
+            Ok(1i64)
+        } else {
+            Err(HostError::new("no such pin"))
+        }
+    });
+
+    let mut program = load(src, "gpio.cdl", &hosts);
+    program.run();
+
+    match program.call("level", &[Value::Int(7)]) {
+        Err(CallError::Runtime(diagnostic)) => {
+            assert_eq!(diagnostic.code, "host_fn_error");
+            assert!(diagnostic.message.contains("gpio::read"), "{diagnostic:?}");
+            assert!(diagnostic.message.contains("no such pin"), "{diagnostic:?}");
+        }
+        other => panic!("expected a host function error, got: {other:?}"),
+    }
+
+    assert_eq!(
+        program.call("level", &[Value::Int(21)]).unwrap(),
         Value::Int(1)
     );
 }

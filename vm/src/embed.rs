@@ -2,9 +2,10 @@
 //!
 //! These types cross the boundary between a Rust host and a running candela
 //! script: [`Value`] is the dynamically-typed carrier, [`HostType`] describes
-//! the shapes that can cross, the `FromHostValue`/`IntoHostValue`/`IntoHostFn`
-//! traits adapt Rust closures into registered host functions,
-//! [`HostRegistry`] holds the closures a script's `host` blocks bind to, and
+//! the shapes that can cross, the `FromHostValue`/`IntoHostValue`/
+//! `IntoHostResult`/`IntoHostFn` traits adapt Rust closures into registered
+//! host functions, [`HostError`] is how one of them fails, [`HostRegistry`]
+//! holds the closures a script's `host` blocks bind to, and
 //! [`marshal_value`]/[`unmarshal_value`] convert between [`Value`] and the VM's
 //! NaN-boxed [`Data`]. They carry no compiler state and the VM depends on them,
 //! so they live in the VM-only crate. The `Engine`/`Program` embedding surface
@@ -299,7 +300,58 @@ pub fn value_matches_type(value: &Value, ty: &DataType) -> bool {
 }
 
 /// The type-erased closure the VM dispatches a `host` call to.
-pub type HostDispatch = Rc<dyn Fn(&[Value]) -> Value>;
+pub type HostDispatch = Rc<dyn Fn(&[Value]) -> Result<Value, HostError>>;
+
+/// Why a registered host function failed.
+///
+/// A closure returns this in place of a value to raise inside the script that
+/// called it. The VM reports it the way it reports its own runtime failures,
+/// naming the function and pointing at the call, and a script can catch it
+/// under the kind `host_fn_error`.
+///
+/// [`HostError::new`] takes anything that renders, so an error from the work
+/// the closure was doing propagates with `map_err(HostError::new)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostError {
+    message: String,
+}
+
+impl HostError {
+    /// Builds an error from anything that renders.
+    pub fn new(message: impl fmt::Display) -> Self {
+        Self {
+            message: message.to_string(),
+        }
+    }
+
+    /// What the host reported, as the diagnostic will read it.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl From<String> for HostError {
+    fn from(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl From<&str> for HostError {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for HostError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HostError {}
 
 /// A registered host function: its erased dispatcher plus the argument/return
 /// type signature derived from the closure, used to validate it against the
@@ -338,9 +390,10 @@ impl HostRegistry {
     ///
     /// The closure may take any combination of `i64`/`i32`, `f64`, `bool`,
     /// `String` (or a single `&str`), `Vec<T>` and string-keyed map arguments,
-    /// and return one of those or `()`. The derived types are checked against
-    /// the `host` block when the script is bound; a mismatch is an error, never
-    /// a panic.
+    /// and return one of those or `()`. A closure that can fail returns
+    /// `Result<T, HostError>` instead, and the error is raised in the script
+    /// that called it. The derived types are checked against the `host` block
+    /// when the script is bound; a mismatch is an error, never a panic.
     pub fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
     where
         F: IntoHostFn<Marker>,
@@ -360,13 +413,14 @@ impl HostRegistry {
     /// Registers a variadic host function under `namespace::name`.
     ///
     /// The closure receives every argument as a `&[Value]` slice of any length
-    /// and returns one [`Value`], so arguments of mixed or dynamically-typed
-    /// shape cross the boundary without a fixed Rust signature. The `host`
-    /// block must declare the function with a `...` argument list, and no
-    /// arity or per-argument type checking happens at the call site.
+    /// and returns one [`Value`], or a [`HostError`] to raise in the script that
+    /// called it, so arguments of mixed or dynamically-typed shape cross the
+    /// boundary without a fixed Rust signature. The `host` block must declare
+    /// the function with a `...` argument list, and no arity or per-argument
+    /// type checking happens at the call site.
     pub fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
     where
-        F: Fn(&[Value]) -> Value + 'static,
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
     {
         self.fns.insert(
             (namespace.to_owned(), name.to_owned()),
@@ -413,7 +467,7 @@ fn key_of(sig: &HostFnSig) -> (String, String) {
 }
 
 /// Renders a host function the way a script writes the call.
-fn qualified_name(namespace: &str, name: &str) -> String {
+pub(crate) fn qualified_name(namespace: &str, name: &str) -> String {
     if namespace.is_empty() {
         name.to_owned()
     } else {
@@ -717,6 +771,36 @@ impl<T: IntoHostValue, S: std::hash::BuildHasher> IntoHostValue for HashMap<Stri
     }
 }
 
+/// What a registered host closure returns: a value, or an error to raise in the
+/// script that called it.
+///
+/// Implemented for every [`IntoHostValue`], so an infallible closure returns a
+/// plain `i64`/`String`/`Vec<T>`/..., and for `Result<T, HostError>`, so a
+/// fallible one returns that instead. Either way the host type checked against
+/// the `host` block is `T`'s.
+pub trait IntoHostResult {
+    fn into_host_result(self) -> Result<Value, HostError>;
+    fn host_type() -> HostType;
+}
+
+impl<T: IntoHostValue> IntoHostResult for T {
+    fn into_host_result(self) -> Result<Value, HostError> {
+        Ok(self.into_host_value())
+    }
+    fn host_type() -> HostType {
+        <T as IntoHostValue>::host_type()
+    }
+}
+
+impl<T: IntoHostValue> IntoHostResult for Result<T, HostError> {
+    fn into_host_result(self) -> Result<Value, HostError> {
+        self.map(IntoHostValue::into_host_value)
+    }
+    fn host_type() -> HostType {
+        <T as IntoHostValue>::host_type()
+    }
+}
+
 /// Adapts a Rust closure into a registered host function.
 ///
 /// The `Marker` type parameter disambiguates the blanket impls by arity (and,
@@ -737,13 +821,13 @@ pub struct ArityStr1;
 impl<F, R> IntoHostFn<Arity0> for F
 where
     F: Fn() -> R + 'static,
-    R: IntoHostValue,
+    R: IntoHostResult,
 {
     fn into_host_fn_parts(self) -> (HostDispatch, Vec<HostType>, HostType) {
         (
-            Rc::new(move |_args: &[Value]| self().into_host_value()),
+            Rc::new(move |_args: &[Value]| self().into_host_result()),
             Vec::new(),
-            <R as IntoHostValue>::host_type(),
+            <R as IntoHostResult>::host_type(),
         )
     }
 }
@@ -751,16 +835,16 @@ where
 impl<F, R> IntoHostFn<ArityStr1> for F
 where
     F: Fn(&str) -> R + 'static,
-    R: IntoHostValue,
+    R: IntoHostResult,
 {
     fn into_host_fn_parts(self) -> (HostDispatch, Vec<HostType>, HostType) {
         (
             Rc::new(move |args: &[Value]| {
                 let s = args.first().and_then(Value::as_str).unwrap_or_default();
-                self(s).into_host_value()
+                self(s).into_host_result()
             }),
             vec![HostType::String],
-            <R as IntoHostValue>::host_type(),
+            <R as IntoHostResult>::host_type(),
         )
     }
 }
@@ -773,17 +857,17 @@ macro_rules! impl_into_host_fn {
         impl<F, R, $($ty,)+> IntoHostFn<($($ty,)+)> for F
         where
             F: Fn($($ty,)+) -> R + 'static,
-            R: IntoHostValue,
+            R: IntoHostResult,
             $( $ty: FromHostValue + 'static, )+
         {
             fn into_host_fn_parts(self) -> (HostDispatch, Vec<HostType>, HostType) {
                 (
                     Rc::new(move |args: &[Value]| {
                         self( $( <$ty as FromHostValue>::from_host_value(&args[$idx]), )+ )
-                            .into_host_value()
+                            .into_host_result()
                     }),
                     vec![ $( <$ty as FromHostValue>::host_type(), )+ ],
-                    <R as IntoHostValue>::host_type(),
+                    <R as IntoHostResult>::host_type(),
                 )
             }
         }

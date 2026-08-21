@@ -84,8 +84,10 @@ pub use candela_vm::Diagnostic;
 pub use candela_vm::collect_diagnostic;
 
 pub use candela_vm::FromHostValue;
+pub use candela_vm::HostError;
 pub use candela_vm::HostType;
 pub use candela_vm::IntoHostFn;
+pub use candela_vm::IntoHostResult;
 pub use candela_vm::IntoHostValue;
 pub use candela_vm::Value;
 #[cfg(feature = "compiler")]
