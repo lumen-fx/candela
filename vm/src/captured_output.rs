@@ -120,3 +120,54 @@ impl Write for OutputHandle {
         }
     }
 }
+
+#[cfg(test)]
+mod output_tests {
+    use super::CAPTURED_OUTPUT;
+    use super::OutputHandle;
+    use std::io::Write;
+
+    /// A stream that fails every write, the way a pipe reads once its reader
+    /// has exited.
+    struct Refuses {
+        attempts: u32,
+    }
+
+    impl Write for Refuses {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            self.attempts += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_refused_write_costs_the_text_and_nothing_else() {
+        let mut refuses = Refuses { attempts: 0 };
+
+        out!(refuses, "part of a line");
+        outln!(refuses, "a whole {}", "line");
+
+        // Getting this far is the property under test: neither write raised,
+        // so whatever was printing carries on to whatever it does next.
+        assert_eq!(
+            refuses.attempts, 2,
+            "both writes reach the stream before their errors are dropped"
+        );
+    }
+
+    #[test]
+    fn a_write_that_lands_keeps_its_text() {
+        CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+
+        let mut handle = OutputHandle::Captured;
+        out!(handle, "{}:", "key");
+        outln!(handle, "{}", 42);
+
+        let captured = CAPTURED_OUTPUT.with(|o| o.borrow().clone());
+        assert_eq!(captured, "key:42\n");
+    }
+}
