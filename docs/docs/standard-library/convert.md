@@ -1,23 +1,25 @@
 # convert
 
-Type conversions under names that read as verbs. Each function wraps the
-built-in conversion of the same effect; see
+Type conversions under names that read as verbs, as methods on the value. Each
+method wraps the built-in conversion of the same effect; see
 [built-in functions](builtins.md) for `int`, `float`, `str`, and `bool`.
 
 ```rust
-import "std/convert" as convert;
+import "std/convert";
 ```
 
-The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
-`candela-vm` with no dynamic library.
+The import brings the methods in; each conversion is defined on the receiver
+types it makes sense for. The module is pure candela, so it compiles into a
+`.cdlb` artifact and runs under `candela-vm` with no dynamic library.
 
 ## to_int
 
 ```rust
-convert::to_int(x)
+s.to_int()
+f.to_int()
 ```
 
-- `x`: a string or a float.
+- Receiver: a string or a float.
 - Returns: an int.
 
 Parses a string, or truncates a float towards zero. Raises `Invalid integer`
@@ -26,10 +28,11 @@ when the string does not parse.
 ## to_float
 
 ```rust
-convert::to_float(x)
+s.to_float()
+n.to_float()
 ```
 
-- `x`: a string or an int.
+- Receiver: a string or an int.
 - Returns: a float.
 
 Parses a string, or widens an int. Raises `Invalid float` when the string does
@@ -38,33 +41,36 @@ not parse.
 ## to_string
 
 ```rust
-convert::to_string(x)
+n.to_string()
+f.to_string()
+b.to_string()
 ```
 
-- `x`: any value.
+- Receiver: an int, a float, or a bool.
 - Returns: a string.
 
-Renders the value in its string form. Never raises.
+Renders the value in its string form. Never raises. For other types, the
+built-in `str(x)` renders any value.
 
 ## to_bool
 
 ```rust
-convert::to_bool(x)
+s.to_bool()
 ```
 
-- `x`: a string.
+- Receiver: a string.
 - Returns: a bool.
 
 Parses `"true"` and `"false"`. Any other string raises `The string could not be
 parsed into a boolean`.
 
 ```rust
-import "std/convert" as convert;
+import "std/convert";
 
 fn main() {
-    print(convert::to_int("42") + 1);
-    print(convert::to_int(3.9));
-    print(convert::to_string(2.5) + "!");
-    print(convert::to_bool("true"));
+    print("42".to_int() + 1);
+    print(3.9.to_int());
+    print(2.5.to_string() + "!");
+    print("true".to_bool());
 }
 ```

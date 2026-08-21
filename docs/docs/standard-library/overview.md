@@ -57,9 +57,9 @@ available under `candela-vm` with nothing installed. They are listed in
 [built-in functions](builtins.md).
 
 Standard library modules are candela code layered on those built-ins. The
-collection and enum modules define their helpers as methods in `impl` blocks
-(`xs.sum()`, `s.capitalize()`, `o.unwrap_or(0)`), and the rest are namespaced
-free functions (`set::union`, `math::sqrt`).
+collection, conversion, and enum modules define their helpers as methods in
+`impl` blocks (`xs.sum()`, `s.capitalize()`, `"42".to_int()`, `o.unwrap_or(0)`),
+and the rest are namespaced free functions (`set::union`, `math::sqrt`).
 
 One module is special. `std/list` loads automatically, so its methods work on
 any array with no import at all:
@@ -81,7 +81,7 @@ when your file already binds the name `list`.
 | --- | --- |
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
-| [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` wrappers over the built-in conversions |
+| [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` methods over the built-in conversions |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
 | [list](list.md) | Reductions, slicing, and higher-order methods on arrays |
 | [map](map.md) | Extra map methods: `is_empty` and `get_or` |
