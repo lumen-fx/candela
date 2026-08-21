@@ -12,7 +12,7 @@ on:
       - "msi/**"
       - "src/update.rs"
       - ".github/workflows/msi-smoke.yml"
-      - ".github/workflows/release.yml"
+      - ".github/workflows/build-artifacts.yml"
 
 env:
   CARGO_TERM_COLOR: always
