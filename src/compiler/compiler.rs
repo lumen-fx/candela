@@ -2143,7 +2143,7 @@ fn compile_for_loop(
                 DataType::String => DataType::String,
                 DataType::Array(a_type) => a_type.map_or(DataType::Null, |t| *t),
                 // A map iterates its keys; the loop variable is a key.
-                DataType::Map(m) => m.0.map_or(DataType::Unknown, |t| t),
+                DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
                 t => {
                     error_type_not_indexable(&t, span, true, ctx.file_idx, state.sources);
                 }
