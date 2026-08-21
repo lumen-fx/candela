@@ -427,15 +427,15 @@ pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
     )
     .finish();
 
-    report
-        .write(
-            (
-                src.filename.as_str(),
-                ariadne::Source::from(src.contents.as_str()),
-            ),
-            &mut out,
-        )
-        .unwrap();
+    // A stderr that refuses the report costs the report. Raising here would
+    // replace the error the program hit with an unrelated one about the stream.
+    let _ = report.write(
+        (
+            src.filename.as_str(),
+            ariadne::Source::from(src.contents.as_str()),
+        ),
+        &mut out,
+    );
 
     crash();
 }
@@ -468,20 +468,18 @@ pub fn throw_compiler_error<'a>(
     }
     let report = report();
 
-    report
-        .write(
-            FnCache::new((move |id| Err(format!("Failed to fetch source {id}"))) as fn(&_) -> _)
-                .with_sources(
-                    sources
-                        .iter()
-                        .map(|Source { filename, contents }| {
-                            (filename.as_str(), ariadne::Source::from(contents.as_str()))
-                        })
-                        .collect(),
-                ),
-            crate::captured_output::stderr(),
-        )
-        .unwrap();
+    let _ = report.write(
+        FnCache::new((move |id| Err(format!("Failed to fetch source {id}"))) as fn(&_) -> _)
+            .with_sources(
+                sources
+                    .iter()
+                    .map(|Source { filename, contents }| {
+                        (filename.as_str(), ariadne::Source::from(contents.as_str()))
+                    })
+                    .collect(),
+            ),
+        crate::captured_output::stderr(),
+    );
 
     crash();
 }

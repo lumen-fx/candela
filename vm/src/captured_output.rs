@@ -5,6 +5,9 @@
 //! candela code, and read the buffer back. Redirection is a runtime setting, so
 //! a single build serves both the command-line toolchain and an embedding host.
 //! wasm builds always redirect, since there are no process streams to write to.
+//!
+//! A stream that refuses a write costs the text, never the run: write through
+//! [`out!`] and [`outln!`] rather than unwrapping.
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -49,6 +52,32 @@ pub fn stderr() -> OutputHandle {
         OutputHandle::Stderr(std::io::stderr())
     }
 }
+
+/// Writes to an [`OutputHandle`], and drops the text when the write fails.
+///
+/// A pipe whose reader has already exited fails every write it is given, and
+/// the same goes for a stream a supervisor closed. Raising there ends the run
+/// over output nobody reads: it kills a piped command mid-program, and it kills
+/// the thread an embedding host renders on. The line is worth less than the
+/// run, so it goes nowhere and execution carries on.
+macro_rules! out {
+    ($handle:expr, $($arg:tt)*) => {{
+        let _ = std::io::Write::write_fmt(&mut $handle, format_args!($($arg)*));
+    }};
+}
+
+/// [`out!`] with a trailing newline, for a whole line of program output.
+macro_rules! outln {
+    ($handle:expr, $($arg:tt)*) => {{
+        let _ = std::io::Write::write_fmt(
+            &mut $handle,
+            format_args!("{}\n", format_args!($($arg)*)),
+        );
+    }};
+}
+
+pub(crate) use out;
+pub(crate) use outln;
 
 /// A writer that resolves to a process stream or to the capture buffer,
 /// whichever is in effect when it is created.
