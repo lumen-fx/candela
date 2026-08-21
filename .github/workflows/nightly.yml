@@ -1,0 +1,110 @@
+name: nightly
+
+# Builds main every night and publishes it as a prerelease on one rolling tag.
+#
+# The assets are the ones a release publishes, from the same definition in
+# build-artifacts.yml, minus the Windows installer. Windows takes the portable
+# zip instead: the installer carries fixed product ids and compares versions
+# three fields deep, so a nightly stamped with the number main happens to be
+# at would replace a released install of that number, or refuse to be replaced
+# by it. Making it safe means a second product, which is a decision rather than
+# a build flag.
+#
+# One tag, `nightly`, force-moved to the commit that was built, and the assets
+# clobbered onto the prerelease already sitting on it. So the download address
+# never changes and only the newest build is reachable. It is a prerelease, and
+# every version-keyed lookup candela makes resolves through the releases page's
+# `latest`, which skips prereleases: install.sh, the update check in
+# src/update.rs, and the Windows download link in the README all keep pointing
+# at the newest real release.
+#
+# It runs whether or not main moved. A build off an unchanged tree is the
+# cheapest evidence there is that the release build still works, and the night
+# it stops working is the night to find out.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One nightly at a time. Two runs would race over the tag and leave the
+# prerelease carrying halves of both.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  artifacts:
+    name: build
+    uses: ./.github/workflows/build-artifacts.yml
+
+  publish:
+    name: publish the prerelease
+    needs: artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Move the tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The release follows its tag, so moving the tag first is what makes
+          # the prerelease describe tonight's commit rather than last night's.
+          git push -f origin "${GITHUB_SHA}:refs/tags/nightly"
+
+          built_on="$(date -u +%Y-%m-%d)"
+          notes="$(cat <<NOTES
+          A build of \`main\` from ${GITHUB_SHA}, made on ${built_on}.
+
+          This is not a release. It carries whatever version \`main\` is at,
+          which is usually a number no release has been cut for, and it is a
+          prerelease, so nothing that resolves the latest release finds it:
+          \`install.sh\` with no arguments, candela's own update check, and the
+          Windows download link on the README all stay on the newest real
+          release.
+
+          Install it by asking for this tag:
+
+          \`\`\`sh
+          curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --version nightly --force
+          \`\`\`
+
+          The pin keeps candela from offering you a release as an update, and
+          \`--force\` is what reinstalls over yesterday's nightly, since the
+          version the receipt records does not change from one to the next.
+
+          On Windows, unpack \`candela-windows-x86_64.zip\`. There is no
+          installer here; the one a release publishes cannot tell itself apart
+          from a nightly of the same number.
+
+          One tag carries the newest build and nothing else, so yesterday's is
+          gone.
+          NOTES
+          )"
+
+          # Both branches pass --prerelease, so the flag is set again every
+          # night rather than only on the night the release was created. An
+          # upload leaves a release's flags alone, so a nightly that ends up
+          # marked stable, by a hand edit or a first run that went wrong, would
+          # otherwise answer `releases/latest` until somebody noticed.
+          title="nightly (${built_on})"
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "$title" --notes "$notes"
+          else
+            gh release create nightly --prerelease --title "$title" --notes "$notes"
+          fi
+
+          gh release upload nightly artifacts/* --clobber

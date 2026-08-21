@@ -106,6 +106,36 @@ A portable `candela-windows-x86_64.zip` is published alongside the package for
 anyone who would rather unpack the toolchain by hand. Extract it somewhere and
 keep the `libs` directory beside the executables.
 
+## Nightly builds
+
+A build of `main` goes out every night at
+<https://github.com/lumen-fx/candela/releases/tag/nightly>, for trying a change
+before there is a release carrying it. It is a prerelease, so nothing that
+looks up the newest release finds it: the install script with no arguments,
+candela's update check, and the Windows link above all stay on the newest real
+release.
+
+Ask for the tag to install one:
+
+```sh
+curl -fsSL https://candela.lumenfx.dev/install.sh | sh -s -- --version nightly --force
+```
+
+That pins the install, so candela never offers you a release as an update.
+`--force` is what lets a later run replace yesterday's build: the receipt
+records the version as `nightly` either way, so without it the installer finds
+nothing to do. Install again without `--version` to go back to releases.
+
+One tag holds the newest build, which is why the address never changes and last
+night's build is gone once tonight's is up. A nightly reports whatever version
+`main` carries, which is usually a number no release was ever cut for.
+
+The assets are the ones a release publishes, apart from the Windows installer.
+On Windows, take `candela-windows-x86_64.zip` and unpack it. The installer
+stamps the version from the manifest and Windows compares packages by that
+number, so a nightly installer and a release installer of the same number would
+replace one another.
+
 ## Staying up to date
 
 `candela --help` and the REPL check at most once a day whether a newer release
