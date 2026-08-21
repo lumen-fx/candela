@@ -40,6 +40,7 @@ use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
 use candela_vm::embed::HostError;
 use candela_vm::embed::HostRegistry;
+use candela_vm::embed::HostType;
 use candela_vm::embed::IntoHostFn;
 use candela_vm::embed::Value;
 use candela_vm::embed::marshal_value;
@@ -107,6 +108,45 @@ impl Engine {
         F: IntoHostFn<Marker>,
     {
         self.registry.register_host_fn(namespace, name, f);
+    }
+
+    /// Registers a host function whose signature is given as data rather than
+    /// derived from a Rust closure's types.
+    ///
+    /// The closure takes the arguments as a `&[Value]` slice, and `arg_types` /
+    /// `ret_type` say what the script may pass and expect. The binding is
+    /// checked against the `host` block exactly as [`Engine::register_host_fn`]
+    /// is, so a declaration that disagrees is a [`Diagnostic`] at
+    /// [`Engine::compile`] time, and the declaration must not use `...`.
+    ///
+    /// ```no_run
+    /// use candela::{HostType, Value};
+    ///
+    /// let mut engine = candela::Engine::new();
+    /// engine.register_host_fn_typed(
+    ///     "gpio",
+    ///     "read",
+    ///     vec![HostType::Int],
+    ///     HostType::Int,
+    ///     |args: &[Value]| Ok(Value::Int(args[0].as_i64().unwrap_or(0))),
+    /// );
+    /// ```
+    ///
+    /// Use it when the signature is only known at run time: a plugin table, a
+    /// generated binding, anything with no Rust signature to read the types
+    /// from.
+    pub fn register_host_fn_typed<F>(
+        &mut self,
+        namespace: &str,
+        name: &str,
+        arg_types: Vec<HostType>,
+        ret_type: HostType,
+        f: F,
+    ) where
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
+    {
+        self.registry
+            .register_host_fn_typed(namespace, name, arg_types, ret_type, f);
     }
 
     /// Registers a variadic host function under `namespace::name`.

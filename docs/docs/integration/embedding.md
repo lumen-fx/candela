@@ -142,6 +142,45 @@ No arity or type checking happens at the call site; the closure interprets what
 it is handed. A variadic declaration bound to a fixed closure, or the reverse,
 is a `Diagnostic` at compile time.
 
+### register_host_fn_typed
+
+```rust
+use candela::{HostType, Value};
+
+engine.register_host_fn_typed(
+    "gpio",
+    "read",
+    vec![HostType::Int],
+    HostType::Int,
+    |args: &[Value]| Ok(Value::Int(args[0].as_i64().unwrap_or(0))),
+);
+```
+
+Binds a closure that takes a slice, like the variadic form, but with the
+signature handed over as data instead of read off a Rust closure. The
+declaration is checked against those types the same way, so it must not use
+`...`, and a script calling `gpio::read` gets an `int`.
+
+Use it when the signature is only known at run time: a plugin table, a
+generated binding, anything a fixed Rust closure cannot spell.
+
+```rust
+pub enum HostType {
+    Int,
+    Float,
+    Bool,
+    String,
+    Unit,
+    Array(Box<HostType>),
+    Map(Box<HostType>),
+}
+```
+
+These are the same types the table above lists, in the order arguments are
+passed. `Unit` is candela's `null`, which is what a function that returns
+nothing declares. `Map` is always string-keyed, so only the value type is
+carried.
+
 ### register_macro
 
 ```rust
@@ -293,9 +332,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### HostRegistry
 
-The table of closures a script's `host` blocks bind to. `register_host_fn` and
-`register_host_fn_variadic` take the same arguments and derive the same
-signatures as their `Engine` counterparts above.
+The table of closures a script's `host` blocks bind to. `register_host_fn`,
+`register_host_fn_typed` and `register_host_fn_variadic` take the same arguments
+and derive the same signatures as their `Engine` counterparts above.
 
 Binding happens in `load_program`, and it checks what compiling a script checks:
 every declared function must be registered, and each closure's arity, argument
