@@ -153,7 +153,7 @@ pub(crate) fn region_len(rest: &str) -> Option<usize> {
 
 /// Byte index just past the string literal that opens at `start`. `None` when
 /// the literal is never closed.
-fn skip_string(bytes: &[u8], start: usize) -> Option<usize> {
+const fn skip_string(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start + 1;
     while i < bytes.len() {
         match bytes[i] {
@@ -168,7 +168,7 @@ fn skip_string(bytes: &[u8], start: usize) -> Option<usize> {
 /// Byte index of the line ending that ends the `//` comment at `start`, or the
 /// end of the input. Both `\n` and `\r` end a comment, as they do for the
 /// lexer.
-fn skip_line_comment(bytes: &[u8], start: usize) -> usize {
+const fn skip_line_comment(bytes: &[u8], start: usize) -> usize {
     let mut i = start + 2;
     while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
         i += 1;

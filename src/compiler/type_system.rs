@@ -1337,7 +1337,7 @@ fn track_return_flow(
                     DataType::String => DataType::String,
                     DataType::Unknown => DataType::Unknown,
                     // A map iterates its keys.
-                    DataType::Map(m) => m.0.map_or(DataType::Unknown, |t| t),
+                    DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
                     _ => unsafe { unreachable_unchecked() },
                 };
                 let v_len = v.len();
