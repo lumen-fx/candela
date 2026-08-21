@@ -114,7 +114,9 @@ jobs:
           }
 
       # From an unrelated directory and with nothing pointing at the checkout,
-      # so the compiler has to find libs/ next to its own executable.
+      # so the compiler has to find libs/ next to its own executable. The
+      # import is what loads std/list, so a libs/ the compiler cannot reach
+      # fails the step on the import line.
       - name: Run the installed binary
         run: |
           $exe = "$env:LOCALAPPDATA\Programs\Candela\candela.exe"
@@ -129,7 +131,7 @@ jobs:
             'import "std/list" as list;',
             '',
             'fn main() {',
-            '    print(list::sum([1, 2, 3, 4]));',
+            '    print([1, 2, 3, 4].sum());',
             '}'
           ) -join "`n"
           [IO.File]::WriteAllText("$work\smoke.cdl", $program, [Text.Encoding]::ASCII)
