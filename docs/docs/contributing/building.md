@@ -51,6 +51,8 @@ The rest of the tree:
   profile-guided release build.
 - `msi/` holds the WiX package definition and the script that builds the Windows
   installer.
+- `scripts/` holds the release tooling: `bump-version.py`, which sets the
+  version the tree calls itself, and the checklist for cutting a release.
 - `editors/vscode/` holds the VS Code extension: the language server client,
   the grammar, and snippets.
 - `editors/jetbrains/` holds the plugin for the IntelliJ-based IDEs. It is a
