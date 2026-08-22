@@ -468,6 +468,7 @@ fn compile_function(
             is_compiling_recursive: is_recursive,
             file_idx: fn_file_idx,
             single_run: false,
+            in_function: true,
             offset: ctx.offset + output.len() as u16,
             ..ctx
         },
