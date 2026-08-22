@@ -45,6 +45,19 @@ pub type ObjectPool = Pool<Vec<Data>>;
 pub type MapPool = Pool<HashMap<Data, Data, BuildHasherDefault<DataHash>>>;
 pub type StringPool = Pool<String>;
 
+/// The buffers every collection reuses, kept together for the length of a run.
+///
+/// One trace reaches through all three pools, because a list can hold a map, a
+/// map can hold a list, and either can hold a pooled string. So each collection
+/// needs a mark slot per array, per map and per string, plus the stack the
+/// trace pops from, whichever pool it is about to sweep.
+pub struct GcScratch {
+    pub array_live: Vec<bool>,
+    pub map_live: Vec<bool>,
+    pub string_live: Vec<bool>,
+    pub work: Vec<Data>,
+}
+
 /// Compares two values with the string-comparison instructions.
 ///
 /// The compiler emits these whenever either operand is statically a `string`,
@@ -289,9 +302,12 @@ pub fn execute(
     let mut free_arrays: Vec<u32> = Vec::with_capacity(obj_pool.len());
     let mut free_maps: Vec<u32> = Vec::with_capacity(map_pool.len());
     let mut free_strings: Vec<u16> = Vec::with_capacity(str_pool.len());
-    let mut array_live: Vec<bool> = Vec::new();
-    let mut map_live: Vec<bool> = Vec::new();
-    let mut string_live: Vec<bool> = Vec::new();
+    let mut gc = GcScratch {
+        array_live: Vec::new(),
+        map_live: Vec::new(),
+        string_live: Vec::new(),
+        work: Vec::with_capacity(obj_pool.len()),
+    };
 
     // Args converted from Data to libffi args are stored here
     #[cfg(not(target_arch = "wasm32"))]
@@ -299,7 +315,6 @@ pub fn execute(
     let mut dyn_lib_args: Vec<u64> = Vec::new();
     let mut host_call_args: Vec<Value> = Vec::new();
     let mut keep_alive: Vec<Box<[u8]>> = Vec::new();
-    let mut obj_gc_stack: Vec<Data> = Vec::with_capacity(obj_pool.len());
 
     let mut gc_string_threshold: u32 = 256;
     let mut gc_array_threshold: u32 = 256;
@@ -312,12 +327,13 @@ pub fn execute(
             Data::string(
                 $e,
                 obj_pool,
+                map_pool,
                 str_pool,
                 r,
                 &recursion_stack,
                 &mut free_strings,
                 &mut gc_string_threshold,
-                &mut string_live,
+                &mut gc,
             )
         };
     }
@@ -524,13 +540,14 @@ pub fn execute(
                                 &return_buf,
                                 &field_offsets,
                                 obj_pool,
+                                map_pool,
                                 str_pool,
                                 struct_fields,
                                 r,
                                 &recursion_stack,
                                 &mut free_strings,
                                 &mut gc_string_threshold,
-                                &mut string_live,
+                                &mut gc,
                                 structs,
                             );
                             let new_id = obj_pool.len();
@@ -613,9 +630,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 r[arr_reg_id] = Data::array(array_id);
             }
@@ -628,9 +643,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 ) as usize;
                 let src_ptr = obj_pool[src_id].as_ptr();
                 let dst = obj_pool.get_mut(new_id);
@@ -649,9 +662,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 ) as usize;
                 let src_reg = r[src_reg];
                 let src = &obj_pool[src_reg.as_struct()];
@@ -673,9 +684,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 ) as usize;
                 let src_reg = r[src_reg];
                 let src = &obj_pool[src_reg.as_enum()];
@@ -699,9 +708,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 let array_idx = array_id as usize;
                 unsafe {
@@ -1063,9 +1070,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 unsafe {
                     if arr_id < (new_array_id as usize) {
@@ -1154,9 +1159,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_map_threshold,
-                    &mut map_live,
-                    &mut array_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 unsafe {
                     map_pool[new_id as usize] = new_map;
@@ -1259,9 +1262,7 @@ pub fn execute(
                         r,
                         &recursion_stack,
                         &mut gc_array_threshold,
-                        &mut array_live,
-                        &mut map_live,
-                        &mut obj_gc_stack,
+                        &mut gc,
                     );
                     obj_pool[array_id as usize] =
                         obj_pool[reg.as_array()].repeat(repeat_count as usize);
@@ -1393,9 +1394,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 let keys: Vec<Data> = map_pool[map_data.as_map()].keys().copied().collect();
                 let out = obj_pool.get_mut(out_id as usize);
@@ -1412,9 +1411,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 let vals: Vec<Data> = map_pool[map_data.as_map()].values().copied().collect();
                 let out = obj_pool.get_mut(out_id as usize);
@@ -1536,9 +1533,7 @@ pub fn execute(
                         r,
                         &recursion_stack,
                         &mut gc_array_threshold,
-                        &mut array_live,
-                        &mut map_live,
-                        &mut obj_gc_stack,
+                        &mut gc,
                     );
                     let source = source.as_str(str_pool);
                     let separator_data = r[separator];
@@ -1605,9 +1600,7 @@ pub fn execute(
                             r,
                             &recursion_stack,
                             &mut gc_array_threshold,
-                            &mut array_live,
-                            &mut map_live,
-                            &mut obj_gc_stack,
+                            &mut gc,
                         ) as usize;
                         unsafe {
                             if dest_array_id < source_array_id {
@@ -1633,9 +1626,7 @@ pub fn execute(
                         r,
                         &recursion_stack,
                         &mut gc_array_threshold,
-                        &mut array_live,
-                        &mut map_live,
-                        &mut obj_gc_stack,
+                        &mut gc,
                     );
                     obj_pool[array_id as usize] = sub_arrays;
 
@@ -1652,9 +1643,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 let range_arr = obj_pool.get_mut(output_array_id as usize);
                 range_arr.extend((min..max).map(Data::from));
@@ -1744,9 +1733,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 ))
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1758,9 +1745,7 @@ pub fn execute(
                     r,
                     &recursion_stack,
                     &mut gc_array_threshold,
-                    &mut array_live,
-                    &mut map_live,
-                    &mut obj_gc_stack,
+                    &mut gc,
                 );
                 obj_pool[array_id as usize] = std::env::args()
                     .skip(2)
