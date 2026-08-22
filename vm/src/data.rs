@@ -1,6 +1,6 @@
 use crate::rt::EnumType;
 use crate::rt::Struct;
-use crate::vm::{MapPool, RegisterFile, StringPool};
+use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool};
 use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -226,12 +226,13 @@ impl Data {
     pub fn string<S: PoolString>(
         s: S,
         array_pool: &ObjectPool,
+        map_pool: &MapPool,
         string_pool: &mut StringPool,
         registers: &RegisterFile,
         recursion_stack: &RegisterFile,
         free_strings: &mut Vec<u16>,
         gc_string_threshold: &mut u32,
-        string_live: &mut Vec<bool>,
+        gc: &mut GcScratch,
     ) -> Self {
         if s.str_len() <= 6 {
             Self::small_str(s.pool_as_str())
@@ -240,11 +241,12 @@ impl Data {
                 raise_string_gc_threshold(gc_string_threshold, string_pool.len());
                 string_gc(
                     array_pool,
+                    map_pool,
                     string_pool,
                     free_strings,
                     registers,
                     recursion_stack,
-                    string_live,
+                    gc,
                 );
             }
             if let Some(id) = free_strings.pop() {

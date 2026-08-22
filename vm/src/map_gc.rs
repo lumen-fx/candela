@@ -1,5 +1,6 @@
+use crate::array_gc::reset_marks;
 use crate::array_gc::track;
-use crate::data::Data;
+use crate::vm::GcScratch;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
@@ -12,9 +13,7 @@ pub fn alloc_map(
     registers: &RegisterFile,
     recursion_stack: &RegisterFile,
     gc_map_threshold: &mut u32,
-    map_live: &mut Vec<bool>,
-    live: &mut Vec<bool>,
-    obj_gc_stack: &mut Vec<Data>,
+    gc: &mut GcScratch,
 ) -> u32 {
     if let Some(id) = free_maps.pop() {
         map_pool[id as usize].clear();
@@ -28,9 +27,7 @@ pub fn alloc_map(
                 free_maps,
                 registers,
                 recursion_stack,
-                map_live,
-                live,
-                obj_gc_stack,
+                gc,
             );
         }
         if let Some(id) = free_maps.pop() {
@@ -50,70 +47,44 @@ pub fn map_gc(
     free_maps: &mut Vec<u32>,
     registers: &RegisterFile,
     recursion_stack: &RegisterFile,
-    map_live: &mut Vec<bool>,
-    live: &mut Vec<bool>,
-    obj_gc_stack: &mut Vec<Data>,
+    gc: &mut GcScratch,
 ) {
-    map_live.clear();
-    map_live.resize(map_pool.len(), false);
+    reset_marks(gc, obj_pool.len(), map_pool.len());
     for data in registers.0.iter().chain(recursion_stack.0.iter()) {
         if data.is_map() {
-            track_maps(
-                data.as_map(),
-                map_pool,
-                obj_pool,
-                live,
-                map_live,
-                obj_gc_stack,
-            );
+            track_maps(data.as_map(), map_pool, obj_pool, gc);
         } else if data.is_array() || data.is_struct() || data.is_enum() {
-            track(*data, obj_pool, map_pool, live, map_live, obj_gc_stack);
+            track(*data, obj_pool, map_pool, gc);
         }
     }
 
     for &id in free_maps.iter() {
         unsafe {
-            *map_live.get_unchecked_mut(id as usize) = true;
+            *gc.map_live.get_unchecked_mut(id as usize) = true;
         }
     }
 
-    for (i, map_alive) in map_live.iter().enumerate() {
+    for (i, map_alive) in gc.map_live.iter().enumerate() {
         if !map_alive {
             free_maps.push(i as u32);
         }
     }
 }
 
-pub fn track_maps(
-    idx: usize,
-    map_pool: &MapPool,
-    obj_pool: &ObjectPool,
-    live: &mut Vec<bool>,
-    map_live: &mut Vec<bool>,
-    obj_gc_stack: &mut Vec<Data>,
-) {
-    let is_live = unsafe { map_live.get_unchecked_mut(idx) };
+pub fn track_maps(idx: usize, map_pool: &MapPool, obj_pool: &ObjectPool, gc: &mut GcScratch) {
+    let is_live = unsafe { gc.map_live.get_unchecked_mut(idx) };
     if *is_live {
         return;
     }
     *is_live = true;
-    let map = &map_pool[idx];
-    let Some((&first_key, &first_val)) = map.iter().next() else {
-        return;
-    };
-    let track_keys =
-        first_key.is_array() || first_key.is_struct() || first_key.is_enum() || first_key.is_map();
-    let track_vals =
-        first_val.is_array() || first_val.is_struct() || first_val.is_enum() || first_val.is_map();
-    if !track_keys && !track_vals {
-        return;
-    }
-    for (k, v) in map {
-        if track_keys {
-            track(*k, obj_pool, map_pool, live, map_live, obj_gc_stack);
-        }
-        if track_vals {
-            track(*v, obj_pool, map_pool, live, map_live, obj_gc_stack);
+    // Each entry is tested on its own, for the same reason the array trace
+    // tests each element: a map typed `any` holds whatever the document held,
+    // so one entry cannot stand in for the rest.
+    for (k, v) in &map_pool[idx] {
+        for d in [k, v] {
+            if d.is_array() || d.is_struct() || d.is_enum() || d.is_map() {
+                track(*d, obj_pool, map_pool, gc);
+            }
         }
     }
 }

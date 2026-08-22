@@ -516,3 +516,45 @@ fn main() {{
     );
     assert_eq!(run("deep_json", &source), ["raised"]);
 }
+
+/// A parsed document is the one thing that puts lists, maps and pooled strings
+/// in each other, and holds them across thousands of later allocations. Every
+/// collection past the first garbage collection used to walk off the end of a
+/// mark vector and kill the process, and a string the document still held
+/// could be handed out again to a later value.
+#[test]
+fn a_parsed_document_survives_later_allocation() {
+    let entries: Vec<String> = (0..200)
+        .map(|i| {
+            format!(
+                "{{\\\"id\\\": {i}, \\\"name\\\": \\\"a-fairly-long-entry-name-{i}\\\", \
+                 \\\"tags\\\": [\\\"alpha-tag\\\", \\\"beta-tag\\\"]}}"
+            )
+        })
+        .collect();
+    let document = format!("[{}]", entries.join(", "));
+    let source = format!(
+        r#"
+fn main() {{
+    let doc = as_list(json_parse("{document}"));
+    let n = 0;
+    let text = "";
+    while n < 5000 {{
+        let a_map = {{"key-number-here": n}};
+        let a_list = [n, n + 1, n + 2];
+        text = "a-string-built-at-run-time-" + str(n);
+        n = n + 1;
+    }}
+    print(doc.len());
+    let last = as_map(doc[199]);
+    print(as_int(last.get("id")));
+    print(as_str(last.get("name")));
+    print(as_str(as_list(last.get("tags"))[1]));
+}}
+"#
+    );
+    assert_eq!(
+        run("parsed_document_survives", &source),
+        ["200", "199", "a-fairly-long-entry-name-199", "beta-tag"]
+    );
+}

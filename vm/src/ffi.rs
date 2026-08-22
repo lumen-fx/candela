@@ -1,5 +1,7 @@
 use super::Data;
 use super::DataType;
+use super::GcScratch;
+use super::MapPool;
 use super::NULL;
 use super::ObjectPool;
 use super::RegisterFile;
@@ -228,13 +230,14 @@ pub fn c_struct_to_candela_struct(
     c_struct: &[u8],
     field_offsets: &[usize],
     obj_pool: &mut ObjectPool,
+    map_pool: &MapPool,
     string_pool: &mut StringPool,
     struct_fields: &[(SmolStr, DataType, Span)],
     r: &mut RegisterFile,
     recursion_stack: &RegisterFile,
     free_strings: &mut Vec<u16>,
     gc_string_threshold: &mut u32,
-    string_live: &mut Vec<bool>,
+    gc: &mut GcScratch,
     structs: &[Struct],
 ) -> Vec<Data> {
     let mut buf: Vec<Data> = Vec::new();
@@ -270,12 +273,13 @@ pub fn c_struct_to_candela_struct(
                             .to_string_lossy()
                             .into_owned(),
                         obj_pool,
+                        map_pool,
                         string_pool,
                         r,
                         recursion_stack,
                         free_strings,
                         gc_string_threshold,
-                        string_live,
+                        gc,
                     )
                 });
             }
@@ -286,13 +290,14 @@ pub fn c_struct_to_candela_struct(
                     &c_struct[field_offset..],
                     &inner_offsets,
                     obj_pool,
+                    map_pool,
                     string_pool,
                     &s.fields,
                     r,
                     recursion_stack,
                     free_strings,
                     gc_string_threshold,
-                    string_live,
+                    gc,
                     structs,
                 );
                 let new_struct_id = obj_pool.len();
