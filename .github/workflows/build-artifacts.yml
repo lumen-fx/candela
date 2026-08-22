@@ -265,6 +265,10 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: wasm32-unknown-unknown
+          # Clear the action's default `-D warnings`, as every toolchain step
+          # in ci.yml does. Lint is clippy's job. Without this the build fails
+          # on the imports vm/src/ffi.rs uses only off wasm32.
+          rustflags: ""
 
       # The generator has to be the version the crate was built against, or the
       # module it writes will not load, so take it from the lockfile.
