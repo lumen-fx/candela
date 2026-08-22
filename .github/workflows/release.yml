@@ -4,9 +4,8 @@ name: release
 #
 # The assets come from build-artifacts.yml, which nightly.yml calls too. What
 # is here is the part only a tag does: check the tag against the manifest,
-# publish the release, and open the pull request that moves main to the next
-# version, so tagging is the only thing cutting a release asks anyone to type
-# and merging that pull request is the only thing it asks afterwards.
+# publish the release, and move main to the next version, so pushing the tag is
+# the whole of cutting a release and there is nothing left to type afterwards.
 
 on:
   push:
@@ -83,43 +82,51 @@ jobs:
           generate_release_notes: true
 
   # Cutting a release is a tag push and nothing else, so the version main
-  # carries has to move afterwards on its own. This opens the pull request that
-  # moves it, which leaves merging as the last thing a release asks of anyone.
+  # carries has to move afterwards on its own. This commits that move straight
+  # to main, which leaves a release asking nothing of anyone once the tag is
+  # pushed.
+  #
+  # It pushes over SSH with the BUMP_DEPLOY_KEY deploy key rather than with the
+  # workflow token, for two reasons. A deploy key is a bypass actor the main
+  # ruleset names, so the push is allowed where the token's would be refused;
+  # and a push made with the workflow token raises no events, so the bump
+  # commit would land on main without a ci run behind it.
   #
   # The next version is always the next patch. Nothing here can know whether the
   # work after this release is a fix or a feature, and being predictable is
   # worth more than being right: a number that is always one patch ahead is
-  # corrected by editing the branch, while a number that follows a rule somebody
+  # corrected by one more commit, while a number that follows a rule somebody
   # has to remember is not. Tags in any other shape, a prerelease among them,
   # are left alone, because incrementing one is a decision rather than an
   # increment.
   #
   # Re-running the workflow after fixing a build leg reaches this job again, and
-  # it lands on the branch and the number it did the first time, so there is one
-  # pull request however many times it runs. Once that pull request is merged,
-  # main is already at the next version and a later re-run stops before it
-  # commits anything, which is also what keeps a re-run of an older release from
-  # walking main backwards.
+  # finds main already at the next version, so it stops before it commits
+  # anything. The same check is what keeps a re-run of an older release from
+  # walking main backwards, and it is read off main each time round rather than
+  # off the tree this run started with.
   #
-  # Only main moves here. publish.yml and publish-extensions.yml run off the
-  # release and check out the tag, so neither is disturbed by main moving under
-  # them.
+  # The push is never forced. A main that moved under a long build refuses the
+  # push instead of losing the commit that moved it, and the retry takes main
+  # again and re-decides on top of it.
+  #
+  # Only main moves here. publish.yml and publish-extensions.yml are run against
+  # the tag, so neither is disturbed by main moving under them.
   bump:
-    name: open the version bump
+    name: move main to the next version
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
           ref: main
 
-      - name: Open the pull request that moves main to the next version
+      - name: Commit the next version to main
         env:
-          GH_TOKEN: ${{ github.token }}
+          DEPLOY_KEY: ${{ secrets.BUMP_DEPLOY_KEY }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -131,54 +138,71 @@ jobs:
           fi
           next="${released%.*}.$(( 10#${released##*.} + 1 ))"
 
-          current="$(awk -F'"' '
-            /^\[package\]/ { in_section = 1; next }
-            /^\[/          { in_section = 0 }
-            in_section && /^version[[:space:]]*=/ { print $2; exit }
-          ' Cargo.toml)"
-          if [ -z "$current" ]; then
-            echo "release.yml: no [package] version in Cargo.toml" >&2
-            exit 1
-          fi
-
-          # A merged bump, or a re-run of an older release after later ones went
-          # out. Either way main is where it should be or further on, and
-          # bumping would walk it backwards.
-          oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
-          if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
-            echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
-            exit 0
-          fi
-
-          python3 scripts/bump-version.py "$next"
-          if git diff --quiet; then
-            echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
-            exit 1
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore: set the version to ${next}"
 
-          branch="bump-version-${next}"
-          git push -f origin "HEAD:refs/heads/${branch}"
-          if gh pr list --head "${branch}" --json number --jq '.[].number' | grep -q .; then
-            echo "::notice::the pull request for ${next} is already open, and now carries this run's commit"
-            exit 0
-          fi
-          gh pr create --head "${branch}" \
-            --title "chore: set the version to ${next}" \
-            --body "$(cat <<BODY
-          ${TAG} is out, so main is free to move on. \`scripts/bump-version.py\` set
-          the version to ${next} everywhere the tree writes it out: the two crates
-          the release ships, the pin between them, and \`Cargo.lock\`.
+          key_file="$(mktemp)"
+          chmod 600 "${key_file}"
+          trap 'rm -f "${key_file}"' EXIT
+          printf '%s\n' "${DEPLOY_KEY:-}" > "${key_file}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
-          Merging this means a build from main calls itself ${next}, which is the
-          version the next release gets tagged as. The number stays inert until that
-          tag exists, because every version-keyed lookup resolves through the
-          releases page rather than through what a binary says it is.
+          attempt=0
+          while :; do
+            attempt=$(( attempt + 1 ))
 
-          To go somewhere other than the next patch, run that script with the version
-          you want and push to this branch.
-          BODY
-          )"
+            # Decide against main as it is now, not as it was when this run
+            # started. A build takes long enough for main to move under it, and
+            # a retry after a refused push has to see what refused it.
+            git fetch --quiet origin main
+            git reset --quiet --hard FETCH_HEAD
+
+            current="$(awk -F'"' '
+              /^\[package\]/ { in_section = 1; next }
+              /^\[/          { in_section = 0 }
+              in_section && /^version[[:space:]]*=/ { print $2; exit }
+            ' Cargo.toml)"
+            if [ -z "$current" ]; then
+              echo "release.yml: no [package] version in Cargo.toml" >&2
+              exit 1
+            fi
+
+            # A bump that already landed, or a re-run of an older release after
+            # later ones went out. Either way main is where it should be or
+            # further on, and bumping would walk it backwards.
+            oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
+            if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
+              echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+              exit 0
+            fi
+
+            # Failing here rather than reporting and stopping. Without the push
+            # main goes on calling itself a version that is already released,
+            # and the next tag of that number is rejected for disagreeing with
+            # the manifest, so this has to be visible on the release run.
+            if [ -z "${DEPLOY_KEY:-}" ]; then
+              echo "release.yml: BUMP_DEPLOY_KEY is not set, so main stays at ${current} while ${TAG} is out." >&2
+              echo "Add the secret and re-run this workflow, or run scripts/bump-version.py ${next} on main by hand." >&2
+              exit 1
+            fi
+
+            python3 scripts/bump-version.py "$next"
+            if git diff --quiet; then
+              echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
+              exit 1
+            fi
+            git commit -am "chore: set the version to ${next}"
+
+            if git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
+              echo "main is at ${next}"
+              exit 0
+            fi
+
+            if [ "$attempt" -ge 3 ]; then
+              echo "release.yml: pushing ${next} was refused, so main stays at ${current} while ${TAG} is out." >&2
+              echo "Either main is moving faster than this job can follow, or the deploy key is not a bypass actor on the main ruleset." >&2
+              echo "Fix the bypass and re-run this workflow, or run scripts/bump-version.py ${next} on main by hand." >&2
+              exit 1
+            fi
+            echo "::notice::the push was refused; taking main again and re-deciding"
+          done
