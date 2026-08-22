@@ -4,8 +4,15 @@ name: release
 #
 # The assets come from build-artifacts.yml, which nightly.yml calls too. What
 # is here is the part only a tag does: check the tag against the manifest,
-# publish the release, and move main to the next version, so pushing the tag is
-# the whole of cutting a release and there is nothing left to type afterwards.
+# publish the release, send the crates and the editor extensions out after it,
+# and move main to the next version, so pushing the tag is the whole of cutting
+# a release and there is nothing left to type afterwards.
+#
+# publish.yml and publish-extensions.yml are called from here rather than
+# started by the release they follow. The release is created with the workflow
+# token and a workflow token raises no events, so neither would ever hear about
+# it. Calling them keeps them on this run's ref, which is the tag, so both read
+# the version that was released rather than the one main moves to below.
 
 on:
   push:
@@ -81,6 +88,24 @@ jobs:
             artifacts/sha256sums.txt
           generate_release_notes: true
 
+  # The other two channels a release goes out on. Both run at this run's ref,
+  # so the tree they read and the version they claim are the tagged ones. Each
+  # keeps its workflow_dispatch, so a leg that fails is re-run by hand against
+  # the tag without re-running the release.
+  crates:
+    name: publish the crates
+    needs: release
+    uses: ./.github/workflows/publish.yml
+    with:
+      dry_run: false
+    secrets: inherit
+
+  extensions:
+    name: publish the editor extensions
+    needs: release
+    uses: ./.github/workflows/publish-extensions.yml
+    secrets: inherit
+
   # Cutting a release is a tag push and nothing else, so the version main
   # carries has to move afterwards on its own. This commits that move straight
   # to main, which leaves a release asking nothing of anyone once the tag is
@@ -110,8 +135,9 @@ jobs:
   # push instead of losing the commit that moved it, and the retry takes main
   # again and re-decides on top of it.
   #
-  # Only main moves here. publish.yml and publish-extensions.yml are run against
-  # the tag, so neither is disturbed by main moving under them.
+  # Only main moves here, and it moves alongside the two publish legs rather
+  # than after them. Both run at the tag, so neither notices main moving under
+  # them.
   bump:
     name: move main to the next version
     needs: release

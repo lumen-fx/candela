@@ -2,7 +2,8 @@ name: publish
 
 # Publishes the candela crates to crates.io. This is a different channel from
 # release.yml, which builds the toolchain archives people install with
-# install.sh; both run off the same release.
+# install.sh; release.yml calls this one once the release is out, so both
+# channels leave on the same tag.
 #
 # Two crates go out, in this order:
 #
@@ -28,10 +29,25 @@ name: publish
 #
 # The run is re-runnable: a version already on crates.io is skipped, so a
 # release that failed halfway is fixed by running the workflow again.
+#
+# release.yml calls this rather than a `release: published` trigger starting
+# it. The release is created with the workflow token and a workflow token
+# raises no events, so a trigger here would wait for something that never
+# arrives. A called run carries the caller's ref, which for a release is the
+# tag, so `GITHUB_REF_NAME` is the released version and the tree this checks
+# out is the tree that was tagged.
+#
+# The version a run may upload comes from the ref, so a run off anything but a
+# vX.Y.Z tag verifies and uploads nothing. Dispatching this from `main` reads
+# the version the next release will carry, not the one that just shipped.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Package and verify everything, upload nothing"
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       dry_run:
@@ -53,10 +69,6 @@ env:
 jobs:
   crates-io:
     name: crates on crates.io
-    # nightly.yml publishes a prerelease every night, and crates.io takes a
-    # version once. A nightly is a build of main, not a version, so it has
-    # nothing to upload here.
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -83,29 +95,39 @@ jobs:
           echo "publishing version $version"
 
       # A release publishes the tag it was cut from, so the tag and the crate
-      # version have to agree.
+      # version have to agree. The tag is the ref this ran at, whether
+      # release.yml called it there or somebody dispatched it there by hand.
       - name: Compare the tag with the crate version
-        if: github.event_name == 'release'
+        if: startsWith(github.ref, 'refs/tags/')
         env:
-          TAG: ${{ github.event.release.tag_name }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          tag="${TAG#v}"
+          tag="${GITHUB_REF_NAME#v}"
           if [ "$tag" != "$VERSION" ]; then
-            echo "publish.yml: release $TAG says $tag, Cargo.toml says $VERSION." >&2
+            echo "publish.yml: tag $GITHUB_REF_NAME says $tag, Cargo.toml says $VERSION." >&2
             exit 1
           fi
-          echo "release $TAG matches the crate version"
+          echo "tag $GITHUB_REF_NAME matches the crate version"
 
       # Secrets cannot be read in a step-level `if`, so the decision is made
       # here and the steps below read it back.
+      #
+      # crates.io takes a version once, and only a vX.Y.Z tag names a version
+      # that was released. A branch carries whatever number it is between
+      # releases, and the rolling `nightly` tag carries a build rather than a
+      # version, so neither may upload.
       - name: Decide whether this run may upload
         id: mode
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           upload=true
+          if [ "$RELEASE_TAG" != "true" ]; then
+            upload=false
+            echo "::notice::$GITHUB_REF_NAME is not a release tag, so this run verifies only"
+          fi
           if [ "$DRY_RUN_INPUT" = "true" ]; then
             upload=false
             echo "::notice::dry run requested, nothing will be uploaded"
