@@ -5,7 +5,7 @@
 # command-line tool is `[[bin]] name = "candela"`. Inside this workspace the
 # dependency is written `candela = { package = "candela-lang", ... }`.
 name = "candela-lang"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 authors = [
     "Horace Hoff <horace.hoff@gmail.com>",
@@ -97,7 +97,7 @@ embed = ["candela-vm/embed"]
 # The self-contained runtime core. Strict dependency direction: candela ->
 # candela-vm (never the reverse). The full `candela` binary compiles this one VM
 # into itself via this dep, so the VM is never duplicated.
-candela-vm = { path = "vm", version = "0.0.5" }
+candela-vm = { path = "vm", version = "0.0.6" }
 smol_strc = "0.3.6"
 ariadne = "0.6.0"
 memchr = "2.8.3"
