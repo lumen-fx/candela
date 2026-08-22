@@ -67,6 +67,10 @@ level.
 file you run counts; a `main` in an imported module is ignored. A program with
 no `main` is an error.
 
+A `return` inside `main` ends the program, wherever it sits. Nothing is waiting
+on a value from `main`, so `return expr;` there drops the value; use `exit(code)`
+to choose the exit status.
+
 ## Returning
 
 `return expr;` hands a value back. `return;` on its own, and reaching the end of

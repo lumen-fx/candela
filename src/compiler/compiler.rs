@@ -2614,15 +2614,33 @@ fn compile_return(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
-    if let Some(x) = return_value {
-        let id = x
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
-        if ctx.is_compiling_recursive {
-            output.push(Instr::RecursiveReturn(id));
-        } else {
-            output.push(Instr::Return(id));
+    // `main` is compiled inline at the program's top level, so a `return` there
+    // has no call frame to pop. It ends the program, and its value, like the
+    // value of `main` itself, has nowhere to go.
+    if !ctx.in_function {
+        if let Some(x) = return_value {
+            let id = x
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id();
+            state.free_reg(id, v);
         }
+        output.push(Instr::Halt(0));
+        return;
+    }
+    let Some(x) = return_value else {
+        // `return;` leaves the function with no value. A body always ends in a
+        // `VoidReturn`, but an early return needs one of its own, or control
+        // falls through into the statements that follow it.
+        output.push(Instr::VoidReturn);
+        return;
+    };
+    let id = x
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    if ctx.is_compiling_recursive {
+        output.push(Instr::RecursiveReturn(id));
+    } else {
+        output.push(Instr::Return(id));
     }
 }
 
@@ -4489,6 +4507,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         is_compiling_recursive: false,
         file_idx: 0,
         single_run: true,
+        in_function: false,
         offset: 0,
     };
     let mut state = State {

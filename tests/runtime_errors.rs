@@ -558,3 +558,194 @@ fn main() {{
         ["200", "199", "a-fairly-long-entry-name-199", "beta-tag"]
     );
 }
+
+/// `return` with no value used to compile to nothing at all, so a guard clause
+/// fell straight through into the body it was written to skip.
+#[test]
+fn a_bare_return_leaves_the_function() {
+    let out = run(
+        "bare_return",
+        r#"
+fn guard(x) {
+    if x == 1 {
+        return;
+    }
+    print("body ran");
+}
+
+fn main() {
+    guard(1);
+    print("next");
+    guard(2);
+}
+"#,
+    );
+    assert_eq!(out, ["next", "body ran"]);
+}
+
+/// A bare `return` leaves the whole function, not just the block it sits in.
+#[test]
+fn a_bare_return_in_a_nested_if_leaves_the_function() {
+    let out = run(
+        "bare_return_nested",
+        r#"
+fn guard(x, y) {
+    if x == 1 {
+        if y == 1 {
+            return;
+        }
+        print("inner body");
+    }
+    print("outer body");
+}
+
+fn main() {
+    guard(1, 1);
+    print("next");
+    guard(1, 2);
+}
+"#,
+    );
+    assert_eq!(out, ["next", "inner body", "outer body"]);
+}
+
+/// The same in an `else`, which lowers through its own jump.
+#[test]
+fn a_bare_return_in_an_else_branch_leaves_the_function() {
+    let out = run(
+        "bare_return_else",
+        r#"
+fn guard(x) {
+    if x == 1 {
+        print("then");
+    } else {
+        return;
+    }
+    print("after the if");
+}
+
+fn main() {
+    guard(2);
+    print("next");
+    guard(1);
+}
+"#,
+    );
+    assert_eq!(out, ["next", "then", "after the if"]);
+}
+
+/// A bare `return` in a loop body ends the function rather than the loop, so it
+/// is not a `break`: the statements after the loop are skipped too.
+#[test]
+fn a_bare_return_in_a_loop_body_leaves_the_function() {
+    let out = run(
+        "bare_return_loop",
+        r#"
+fn count_while(limit) {
+    let i = 0;
+    while i < limit {
+        if i == 2 {
+            return;
+        }
+        print("while " + str(i));
+        i += 1;
+    }
+    print("after the while");
+}
+
+fn count_for(limit) {
+    for i in 0..limit {
+        if i == 2 {
+            return;
+        }
+        print("for " + str(i));
+    }
+    print("after the for");
+}
+
+fn main() {
+    count_while(5);
+    count_for(5);
+    print("done");
+}
+"#,
+    );
+    assert_eq!(out, ["while 0", "while 1", "for 0", "for 1", "done"]);
+}
+
+/// A bare `return` as the first statement of a body skips all of it.
+#[test]
+fn a_bare_return_at_the_top_of_a_body_skips_the_rest() {
+    let out = run(
+        "bare_return_first",
+        r#"
+fn nothing() {
+    return;
+    print("body ran");
+}
+
+fn main() {
+    nothing();
+    print("done");
+}
+"#,
+    );
+    assert_eq!(out, ["done"]);
+}
+
+/// A bare `return` where the body would have ended anyway keeps working: the
+/// body runs, and the extra return changes nothing.
+#[test]
+fn a_bare_return_as_the_last_statement_still_runs_the_body() {
+    let out = run(
+        "bare_return_last",
+        r#"
+fn greet(name) {
+    print("hello " + name);
+    return;
+}
+
+fn main() {
+    greet("world");
+    print("done");
+}
+"#,
+    );
+    assert_eq!(out, ["hello world", "done"]);
+}
+
+/// `main` is compiled inline at the program's top level, where there is no call
+/// frame to pop, so a `return` there ends the program. Returning a value does
+/// the same, and the value is dropped the way the value of `main` is.
+#[test]
+fn a_return_at_the_program_top_level_ends_the_program() {
+    let out = run(
+        "top_level_return",
+        r#"
+fn main() {
+    print("before");
+    return;
+    print("after");
+}
+"#,
+    );
+    assert_eq!(out, ["before"]);
+
+    let out = run(
+        "top_level_return_value",
+        r#"
+fn main() {
+    let i = 0;
+    while i < 5 {
+        if i == 2 {
+            return 7;
+        }
+        print("while " + str(i));
+        i += 1;
+    }
+    print("after the while");
+}
+"#,
+    );
+    assert_eq!(out, ["while 0", "while 1"]);
+}

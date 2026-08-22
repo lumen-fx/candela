@@ -41,6 +41,7 @@ pub fn compile_trampoline(
         block_id: 0,
         is_compiling_recursive: false,
         single_run: false,
+        in_function: false,
         file_idx: 0,
         offset,
     };

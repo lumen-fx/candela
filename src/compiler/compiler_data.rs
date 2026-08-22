@@ -115,6 +115,10 @@ pub struct Ctx {
     pub is_compiling_recursive: bool,
     /// Whether the code being compiled is guaranteed to run at most once
     pub single_run: bool,
+    /// Whether the code being compiled sits inside a function body. The body of
+    /// `main` is compiled inline at the program's top level, where there is no
+    /// call frame to return to, so a `return` there ends the program instead.
+    pub in_function: bool,
     /// Index of the current file in State's `sources`
     pub file_idx: u16,
     /// Instruction offset that's only used when compiling a function
