@@ -6,21 +6,32 @@ name: publish-extensions
 # so the workflow is safe before the accounts exist. The first JetBrains
 # upload is manual by marketplace rule; this takes over from the second.
 #
-# Prereleases are skipped. nightly.yml publishes one every night, and the
-# extensions are versioned as the tools they are rather than as candela, so a
-# build of main is not something either marketplace has a version for.
+# release.yml calls this rather than a `release: published` trigger starting
+# it. The release is created with the workflow token and a workflow token
+# raises no events, so a trigger here would wait for something that never
+# arrives.
+#
+# Only a vX.Y.Z tag uploads anything. A called run carries the caller's ref,
+# and release.yml runs on that tag alone. Every other ref packages the
+# extensions and stops there: the rolling `nightly` tag is a build of main
+# rather than a version, and a branch is whatever it is between releases.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One publish at a time per ref. Two runs would build the same extension
+# version twice and race to upload it, and a marketplace takes a version once,
+# so the loser fails on a version that is already there.
+concurrency:
+  group: publish-extensions-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   vscode:
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -29,6 +40,7 @@ jobs:
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_TOKEN }}
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,16 +56,17 @@ jobs:
 
       - name: publish to the marketplace
         run: |
+          if [ "$RELEASE_TAG" != "true" ]; then echo "$GITHUB_REF_NAME is not a release tag; skipping"; exit 0; fi
           if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT absent; skipping"; exit 0; fi
           npx @vscode/vsce publish --packagePath ./*.vsix -p "$VSCE_PAT"
 
       - name: publish to open vsx
         run: |
+          if [ "$RELEASE_TAG" != "true" ]; then echo "$GITHUB_REF_NAME is not a release tag; skipping"; exit 0; fi
           if [ -z "$OVSX_PAT" ]; then echo "OVSX_TOKEN absent; skipping"; exit 0; fi
           npx ovsx publish ./*.vsix -p "$OVSX_PAT"
 
   jetbrains:
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -61,6 +74,7 @@ jobs:
         working-directory: editors/jetbrains
     env:
       PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,5 +88,6 @@ jobs:
 
       - name: publish to the jetbrains marketplace
         run: |
+          if [ "$RELEASE_TAG" != "true" ]; then echo "$GITHUB_REF_NAME is not a release tag; skipping"; exit 0; fi
           if [ -z "$PUBLISH_TOKEN" ]; then echo "JETBRAINS_PUBLISH_TOKEN absent; skipping"; exit 0; fi
           ./gradlew --no-daemon publishPlugin

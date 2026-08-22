@@ -1,7 +1,8 @@
 # Cutting a candela release
 
-Pushing a tag builds the toolchain, publishes the release, and leaves `main`
-already carrying the next version:
+Pushing a tag builds the toolchain, publishes the release, sends the crates and
+the editor extensions out after it, and leaves `main` already carrying the next
+version:
 
 ```sh
 git tag v0.0.5 && git push origin v0.0.5
@@ -31,33 +32,44 @@ publishes them as the GitHub release. A leg that fails takes the release with
 it, so a partial set of archives never goes out; fix what failed and re-run the
 workflow.
 
-Its last job then commits `chore: set the version to X.Y.Z+1` straight to
-`main`, so the tag is the last thing a release asks anyone to type. Only `main`
-moves; the release keeps the tree the tag pointed at.
+It then calls `publish.yml` and `publish-extensions.yml`, and commits
+`chore: set the version to X.Y.Z+1` straight to `main`, so the tag is the last
+thing a release asks anyone to type. Only `main` moves; the release keeps the
+tree the tag pointed at.
 
-## Verify
+## The crates and the extensions
 
-Install from the published release on a machine that has no candela on it, run
-a program, and check `candela --version` reports the version you tagged.
+`publish.yml` uploads `candela-vm` and then `candela-lang` to crates.io.
+`publish-extensions.yml` ships the VS Code extension to the marketplace and Open
+VSX, and the plugin to the JetBrains marketplace. Each step skips with a notice
+when its token is absent.
 
-## Publish the crates and the extensions
+`release.yml` calls both in the same run rather than leaving them to start on
+the release they follow. The release is created with the workflow token and a
+workflow token raises no events, so a workflow waiting on a published release
+waits forever. Being called also puts both on the release run's ref, which is
+the tag, so each reads the version that was released rather than the one `main`
+moves to.
 
-Two workflows finish the release and neither starts on its own. Both trigger on
-a published release, and `release.yml` creates the release with the workflow
-token, which raises no events. Run each from the Actions tab, or from a
-terminal, against the tag rather than against `main`. The tag is what carries
-the version that was released; `main` has already moved past it.
+Re-run a leg by hand when it fails, and give it the tag rather than `main`. The
+tag carries the version that was released; `main` has already moved past it, and
+a run off anything but a `vX.Y.Z` tag verifies and uploads nothing.
 
 ```sh
 gh workflow run publish.yml --ref v0.0.5 -f dry_run=false
 gh workflow run publish-extensions.yml --ref v0.0.5
 ```
 
-`publish.yml` uploads `candela-vm` and then `candela-lang` to crates.io. A
-version already there is skipped, so running it twice is safe.
-`publish-extensions.yml` ships the VS Code extension to the marketplace and
-Open VSX, and the plugin to the JetBrains marketplace. Each step skips with a
-notice when its token is absent.
+A version already on crates.io is skipped, so running `publish.yml` again is
+safe. `publish-extensions.yml` has no such check; it takes one run at a time per
+tag, so nothing races, but re-run it for a leg that has not uploaded yet rather
+than for one that has.
+
+## Verify
+
+Install from the published release on a machine that has no candela on it, run
+a program, and check `candela --version` reports the version you tagged. Check
+the crate versions on crates.io and the extension listings while you are there.
 
 ## The version bump
 
@@ -114,13 +126,17 @@ A red nightly is the first news that the release build is broken, and it is
 news you get on a quiet day too, because it runs whether or not `main` moved.
 Read it the same way as `ci`: green before you tag.
 
-It cannot cut a release. The tag is `nightly`, so it misses the `v*` trigger
-that starts `release.yml`, and what it publishes is a prerelease, which
-`publish.yml` and `publish-extensions.yml` refuse before they do anything and
-every version-keyed lookup skips. It publishes no Windows installer: the
-package stamps the version from the manifest and Windows compares packages by
-that number, so a nightly installer would be indistinguishable from a released
-one carrying the same number.
+It cannot cut a release, and it cannot reach crates.io or either marketplace.
+The tag is `nightly`, so it misses the `v*` trigger that starts `release.yml`,
+and `release.yml` is the only thing that calls the two publish workflows;
+nothing else can start them but a hand dispatch. Both refuse to upload off a ref
+that is not a `vX.Y.Z` tag, so `nightly` gets no further even when dispatched at
+it. What the nightly publishes is a prerelease, which every version-keyed lookup
+skips.
+
+It publishes no Windows installer: the package stamps the version from the
+manifest and Windows compares packages by that number, so a nightly installer
+would be indistinguishable from a released one carrying the same number.
 
 ## What the bump script moves
 
