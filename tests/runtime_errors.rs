@@ -165,6 +165,65 @@ fn main() {
     assert_eq!(out, ["3", "after"]);
 }
 
+/// A recursive call saves the registers the caller still needs afterwards, and
+/// the return puts them back. A function that ends without a value returns
+/// through a different instruction, which used to skip the restore, so every
+/// level read the deepest call's `n` and printed `up -1` four times over.
+#[test]
+fn a_void_recursive_call_gives_the_caller_its_locals_back() {
+    let out = run(
+        "void_recursion",
+        r#"
+fn countdown(n) {
+    if n < 0 {
+        return;
+    }
+    countdown(n - 1);
+    print("up " + str(n));
+}
+
+fn main() {
+    let tally = 11;
+    countdown(3);
+    print("tally " + str(tally));
+}
+"#,
+    );
+    assert_eq!(out, ["up 0", "up 1", "up 2", "up 3", "tally 11"]);
+}
+
+/// The same restore has to happen when the recursion ends by falling off the
+/// end of the body rather than at a `return`, and when two functions call each
+/// other rather than one calling itself.
+#[test]
+fn mutual_void_recursion_unwinds_in_order() {
+    let out = run(
+        "mutual_void_recursion",
+        r#"
+fn ping(n) {
+    if n > 0 {
+        let mine = "ping " + str(n);
+        pong(n - 1);
+        print(mine);
+    }
+}
+
+fn pong(n) {
+    if n > 0 {
+        let mine = "pong " + str(n);
+        ping(n - 1);
+        print(mine);
+    }
+}
+
+fn main() {
+    ping(4);
+}
+"#,
+    );
+    assert_eq!(out, ["pong 1", "ping 2", "pong 3", "ping 4"]);
+}
+
 #[test]
 fn a_throw_below_the_block_reaches_the_catch() {
     let out = run(

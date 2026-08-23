@@ -137,7 +137,11 @@ fn obj_eq(
 struct CallFrame {
     return_addr: u16,
     return_reg: u16,
-    callsite_id: u16,
+    /// The callsite whose live registers this frame pushed onto the recursion
+    /// stack, or `None` when the call saved nothing. `SaveFrame` fills it in;
+    /// every way out of that call reads it back, so the registers the call
+    /// overwrote are restored once, whether the callee returns a value or not.
+    saved_callsite: Option<u16>,
 }
 
 pub trait UncheckedVecOps<T> {
@@ -369,6 +373,26 @@ pub fn execute(
         };
     }
 
+    /// Puts back the registers `SaveFrame` pushed for `$callsite`, and drops
+    /// them from the recursion stack. The top of the stack belongs to the
+    /// frame being popped, so the saved values sit in the last
+    /// `fn_registers[$callsite].len()` slots.
+    macro_rules! restore_saved_registers {
+        ($callsite:expr) => {
+            let regs = unsafe { fn_registers.get_unchecked($callsite as usize) };
+            let base = recursion_stack.len() - regs.len();
+            for (reg, &saved) in regs
+                .iter()
+                .zip(unsafe { recursion_stack.0.get_unchecked(base..) })
+            {
+                r[*reg] = saved;
+            }
+            unsafe {
+                recursion_stack.0.set_len(base);
+            }
+        };
+    }
+
     'main: loop {
         match unsafe { *instructions.get_unchecked(i) } {
             Instr::Jmp(size) => {
@@ -386,7 +410,7 @@ pub fn execute(
                 call_frames.push(CallFrame {
                     return_addr: i as u16,
                     return_reg: return_id,
-                    callsite_id: 0,
+                    saved_callsite: None,
                 });
                 i = new_loc as usize;
                 continue;
@@ -396,14 +420,19 @@ pub fn execute(
                 continue;
             }
             Instr::VoidReturn => {
-                // Simply jump back to the callsite, since there's nothing to return
-                i = call_frames.pop_unchecked().return_addr as usize;
+                // Nothing to return, but a recursive call still has to hand the
+                // caller back the registers the call overwrote before jumping.
+                let call_frame = call_frames.pop_unchecked();
+                if let Some(callsite_id) = call_frame.saved_callsite {
+                    restore_saved_registers!(callsite_id);
+                }
+                i = call_frame.return_addr as usize;
             }
             Instr::SaveFrame(relative_func_loc, return_register, callsite_id) => {
                 call_frames.push(CallFrame {
                     return_addr: (i as u16) + relative_func_loc,
                     return_reg: return_register,
-                    callsite_id,
+                    saved_callsite: Some(callsite_id),
                 });
                 recursion_stack.0.extend(
                     unsafe { fn_registers.get_unchecked(callsite_id as usize) }
@@ -420,16 +449,8 @@ pub fn execute(
             Instr::RecursiveReturn(tgt) => {
                 let call_frame = call_frames.pop_unchecked();
                 let temp = r[tgt];
-                let regs = unsafe { fn_registers.get_unchecked(call_frame.callsite_id as usize) };
-                let base = recursion_stack.len() - regs.len();
-                for (reg, &saved) in regs
-                    .iter()
-                    .zip(unsafe { recursion_stack.0.get_unchecked(base..) })
-                {
-                    r[*reg] = saved;
-                }
-                unsafe {
-                    recursion_stack.0.set_len(base);
+                if let Some(callsite_id) = call_frame.saved_callsite {
+                    restore_saved_registers!(callsite_id);
                 }
                 i = call_frame.return_addr as usize;
                 r[call_frame.return_reg] = temp;
