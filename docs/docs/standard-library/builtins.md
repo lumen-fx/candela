@@ -141,11 +141,18 @@ part in ordinary typed expressions. A value whose run-time type differs raises
 `bad_downcast`, with a message naming both the requested and the found type.
 There is no `as_null`; use `is_null`.
 
+`as_list` gives a list of `any`, and `as_map` a map with `any` keys and values,
+because the entries of a dynamic collection are dynamic too. Such a collection
+takes a `push` or an `insert` of any type, in any order, and an entry read back
+out is an `any` that needs its own downcast.
+
 ```rust
 fn main() {
     let v = json_parse("{\"n\": 7}");
     let m = as_map(v);
     print(as_int(m.get("n")) + 1);
+    m.insert("name", "ada");
+    print(as_str(m.get("name")));
 }
 ```
 
@@ -347,7 +354,9 @@ unspecified and is not insertion order. `keys` and `values` walk the map the sam
 way, so their results line up entry for entry.
 
 An empty map literal `{}` takes its key and value types from the first `insert`,
-the way an empty list takes its element type from the first `push`.
+the way an empty list takes its element type from the first `push`. Only a
+literal written empty works that way. A map whose entries are typed `any`, which
+is what `as_map` hands back, keeps taking entries of any type.
 
 ## Number methods
 

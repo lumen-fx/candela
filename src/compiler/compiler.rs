@@ -629,19 +629,16 @@ pub(crate) fn compile_enum_construction(
         ctx.file_idx,
     );
     for (i, expected) in payload_types.iter().enumerate() {
-        // An `any` (Unknown) payload accepts a value of any type.
-        if *expected != DataType::Unknown {
-            functions::check_arg_type(
-                &variant_name,
-                v,
-                ctx,
-                state,
-                args,
-                args_indexes,
-                i,
-                std::slice::from_ref(expected),
-            );
-        }
+        functions::check_arg_type(
+            &variant_name,
+            v,
+            ctx,
+            state,
+            args,
+            args_indexes,
+            i,
+            std::slice::from_ref(expected),
+        );
     }
 
     let pool_idx = {

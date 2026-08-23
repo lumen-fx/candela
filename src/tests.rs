@@ -4737,6 +4737,101 @@ pub fn map_iteration_over_keys() {
     );
 }
 
+#[test]
+pub fn map_downcast_takes_mixed_value_types() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = as_map(json_parse(\"{\\\"a\\\": 1}\"));
+            m.insert(\"b\", 2);
+            m.insert(\"c\", \"three\");
+            print(m.len());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn map_downcast_entries_stay_dynamic() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = as_map(json_parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\"));
+            print(as_int(m.get(\"a\")) + as_str(m.get(\"b\")).len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn map_downcast_takes_mixed_key_types() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = as_map(json_parse(\"{\\\"a\\\": 1}\"));
+            m.insert(\"b\", 2);
+            m.insert(7, 3);
+            print(m.len());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn list_downcast_takes_mixed_element_types() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let l = as_list(json_parse(\"[1]\"));
+            l.push(2);
+            l.push(\"three\");
+            print(l.len());
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn list_downcast_elements_stay_dynamic() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let l = as_list(json_parse(\"[1, \\\"two\\\"]\"));
+            print(as_int(l[0]) + as_str(l[1]).len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn empty_map_literal_pins_its_types_on_the_first_insert() {
+    let src = "fn main() { let m = {}; m.insert(\"a\", 1); m.insert(\"b\", \"s\"); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert_eq!(
+        d.message,
+        "Function insert expects this argument to be of type int, but this expression's type is string"
+    );
+}
+
+#[test]
+pub fn empty_array_literal_pins_its_type_on_the_first_push() {
+    let src = "fn main() { let a = []; a.push(1); a.push(\"s\"); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert_eq!(
+        d.message,
+        "Function push expects this argument to be of type int, but this expression's type is string"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // TYPED PARAMETERS AND RETURN ANNOTATIONS
 // ---------------------------------------------------------------------------
