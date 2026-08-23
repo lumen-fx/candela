@@ -253,6 +253,183 @@ fn main() {
     assert_eq!(out, ["declined", "5"]);
 }
 
+/// A call made inside a `try` saves the caller's live registers, and a throw
+/// out of that call never reaches the return that would put them back. The
+/// catch does it instead. It used to leave the save behind, so every level
+/// above the catch read one call too deep and `dig` printed 10, 10, 20 on its
+/// way out instead of counting up to 30.
+#[test]
+fn a_catch_hands_the_resuming_call_its_registers_back() {
+    let out = run(
+        "catch_restores_registers",
+        r#"
+fn dig(n) {
+    if n <= 0 {
+        throw("bottom");
+    }
+    let mine = n * 10;
+    try {
+        dig(n - 1);
+    } catch e {
+        print("caught at " + str(mine));
+    }
+    print("after " + str(mine));
+}
+
+fn main() {
+    dig(3);
+}
+"#,
+    );
+    assert_eq!(out, ["caught at 10", "after 10", "after 20", "after 30"]);
+}
+
+/// A recursion that returns a value leaves through a different instruction than
+/// one that returns nothing, and both restore the caller's registers, so a
+/// catch has to unwind to the same place for either.
+#[test]
+fn a_catch_in_a_recursion_that_returns_a_value_unwinds_the_same() {
+    let out = run(
+        "catch_value_recursion",
+        r#"
+fn sum(n) {
+    if n <= 0 {
+        throw("bottom");
+    }
+    let mine = n * 10;
+    let got = 0;
+    try {
+        got = sum(n - 1);
+    } catch e {
+        got = 1;
+    }
+    print("level " + str(mine) + " got " + str(got));
+    return mine + got;
+}
+
+fn main() {
+    print("total " + str(sum(3)));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        [
+            "level 10 got 1",
+            "level 20 got 11",
+            "level 30 got 31",
+            "total 61"
+        ]
+    );
+}
+
+/// One catch can end several calls at once. The frame that resumes takes back
+/// what its own call saved; the levels below it are gone and what they saved
+/// goes with them.
+#[test]
+fn a_throw_across_several_calls_leaves_one_level_to_restore() {
+    let out = run(
+        "catch_across_levels",
+        r#"
+fn dig(n) {
+    if n <= 0 {
+        throw("bottom");
+    }
+    let mine = n * 10;
+    if n == 3 {
+        try {
+            dig(n - 1);
+        } catch e {
+            print("caught at " + str(mine));
+        }
+    } else {
+        dig(n - 1);
+    }
+    print("after " + str(mine));
+}
+
+fn main() {
+    dig(5);
+}
+"#,
+    );
+    assert_eq!(out, ["caught at 30", "after 30", "after 40", "after 50"]);
+}
+
+/// A catch that throws again is a throw from a frame that has already been
+/// unwound once, and the next catch up unwinds from there.
+#[test]
+fn a_throw_from_inside_a_catch_unwinds_the_frames_above_it() {
+    let out = run(
+        "rethrow_from_catch",
+        r#"
+fn dig(n) {
+    if n <= 0 {
+        throw("bottom");
+    }
+    let mine = n * 10;
+    try {
+        dig(n - 1);
+    } catch e {
+        if n < 3 {
+            throw("rethrown at " + str(mine));
+        }
+        print("caught " + e + " at " + str(mine));
+    }
+    print("after " + str(mine));
+}
+
+fn main() {
+    dig(4);
+}
+"#,
+    );
+    assert_eq!(out, ["caught rethrown at 20 at 30", "after 30", "after 40"]);
+}
+
+/// Two `try` blocks in one frame start at the same depth, so the second catch
+/// has nothing left to unwind and has to leave the registers the first one
+/// restored alone.
+#[test]
+fn nested_catches_in_one_frame_restore_once() {
+    let out = run(
+        "nested_catch_one_frame",
+        r#"
+fn dig(n) {
+    if n <= 0 {
+        throw("bottom");
+    }
+    let mine = n * 10;
+    try {
+        try {
+            dig(n - 1);
+        } catch inner {
+            print("inner at " + str(mine));
+            throw("again");
+        }
+    } catch outer {
+        print("outer at " + str(mine));
+    }
+    print("after " + str(mine));
+}
+
+fn main() {
+    dig(3);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        [
+            "inner at 10",
+            "outer at 10",
+            "after 10",
+            "after 20",
+            "after 30"
+        ]
+    );
+}
+
 /// An invalid operation answers with a quiet NaN whose sign bit is set, which is
 /// the bit pattern the enum tag uses. Printing one used to walk the enum table
 /// and abort the process.

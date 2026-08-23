@@ -133,6 +133,35 @@ pub fn void_recursion_restores_the_callers_registers() {
     );
 }
 
+/// A throw out of a call made inside a `try` skips the return that would have
+/// put the caller's registers back, so the catch does it instead. The save the
+/// aborted call left behind used to stay on the recursion stack, and every
+/// level above the catch then read `mine` one call too deep.
+#[test]
+pub fn a_catch_restores_the_registers_of_the_call_it_ended() {
+    run_and_check_registers!(
+        "
+        fn dig(n) {
+            if n <= 0 {
+                throw(\"bottom\");
+            }
+            let mine = n * 10;
+            try {
+                dig(n - 1);
+            } catch e {
+                print(mine);
+            }
+            print(mine);
+        }
+
+        fn main() {
+            dig(3);
+        }
+        ",
+        30.into()
+    );
+}
+
 #[test]
 pub fn fn_call_in_if_in_for() {
     run_and_check_registers!(
