@@ -58,3 +58,7 @@ pub use artifact::CallError;
 pub use artifact::LoadError;
 pub use artifact::RuntimeProgram;
 pub use artifact::load_program;
+
+// Where a `dylib` import looks for its library file.
+pub use rt::dylib_dir;
+pub use rt::set_dylib_dir;

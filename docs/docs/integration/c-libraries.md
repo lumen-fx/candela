@@ -57,6 +57,12 @@ straight to the loader, resolved relative to the importing file. This makes a
 bare name behave the same way everywhere, since the loaders differ on whether
 they consider the application directory at all.
 
+A Rust host that embeds candela can name a directory to look in ahead of all
+that, which is what an application whose sources and libraries sit apart (`src/`
+beside `lib/`) uses. Both forms honor it: a plain name is looked for there first,
+and a relative path is resolved against it first. See [where a dylib import
+looks](embedding.md#where-a-dylib-import-looks).
+
 For a path form with no extension, an architecture-suffixed build is preferred
 when one sits beside it, so `"../native/mylib"` picks up `mylib-x86_64.so` or
 `mylib-aarch64.so` before falling back to `mylib.so`. That is how you ship one

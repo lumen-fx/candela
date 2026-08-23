@@ -16,7 +16,9 @@ use libloading::Library;
 use serde::Deserialize;
 use serde::Serialize;
 use smol_strc::SmolStr;
+use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
+use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
 
@@ -307,6 +309,48 @@ pub fn resolve_library_filename(spec: &str, os: TargetOs) -> String {
             os.dynamic_lib_extension()
         )
     }
+}
+
+thread_local! {
+    static DYLIB_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Sets the directory a `dylib` import's library is looked for in on this
+/// thread, and returns the one that was in effect, so a caller can put it back.
+///
+/// A host whose native libraries do not sit beside the script names their
+/// directory here: an application that keeps its candela sources in `src/` and
+/// its shared libraries in `lib/` points this at `lib/`, and `dylib "md"` finds
+/// `libmd.so` there. Passing `None` goes back to searching beside the importing
+/// file only.
+///
+/// The directory is searched first; whatever the library name resolved to
+/// before is still tried after it, so a program that names a system library
+/// keeps working. The setting is read when a program is compiled and when a
+/// `.cdlb` artifact is loaded, so set it before either.
+pub fn set_dylib_dir(dir: Option<PathBuf>) -> Option<PathBuf> {
+    DYLIB_DIR.replace(dir)
+}
+
+/// The directory [`set_dylib_dir`] put in effect on this thread, if any.
+#[must_use]
+pub fn dylib_dir() -> Option<PathBuf> {
+    DYLIB_DIR.with(|dir| dir.borrow().clone())
+}
+
+/// Opens `filename` under the [`dylib_dir`] directory when one is set and the
+/// file is there, and hands the name to the OS loader otherwise.
+///
+/// The loader's own error comes back, so a caller reports the same message it
+/// did before a directory was ever set.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_library(filename: &str) -> Result<Library, libloading::Error> {
+    if let Some(dir) = dylib_dir()
+        && let Ok(lib) = unsafe { Library::new(dir.join(filename)) }
+    {
+        return Ok(lib);
+    }
+    unsafe { Library::new(filename) }
 }
 
 #[cfg(test)]

@@ -609,12 +609,16 @@ impl RuntimeProgram {
 /// Libraries are opened once and shared across their symbols. The logical name
 /// is mapped to this platform's filename convention via
 /// [`resolve_library_filename`], so an artifact built on one OS resolves the
-/// right file on another.
+/// right file on another. The directory a host named with
+/// [`set_dylib_dir`](crate::rt::set_dylib_dir) is searched before the loader's
+/// own paths, which is how an application ships its libraries in a directory of
+/// its own.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_dyn_lib_fns(
     recipes: &[DynLibFnImage],
     structs: &[Struct],
 ) -> Result<Vec<DynamicLibFn>, LoadError> {
+    use crate::rt::open_library;
     use libloading::Library;
     use std::rc::Rc;
 
@@ -626,13 +630,11 @@ fn resolve_dyn_lib_fns(
         let lib = if let Some(lib) = libs.get(&filename) {
             Rc::clone(lib)
         } else {
-            let lib = Rc::new(unsafe {
-                Library::new(&filename).map_err(|e| LoadError::LibraryOpen {
-                    spec: recipe.library.clone(),
-                    filename: filename.clone(),
-                    message: e.to_string(),
-                })?
-            });
+            let lib = Rc::new(open_library(&filename).map_err(|e| LoadError::LibraryOpen {
+                spec: recipe.library.clone(),
+                filename: filename.clone(),
+                message: e.to_string(),
+            })?);
             libs.insert(filename.clone(), Rc::clone(&lib));
             lib
         };

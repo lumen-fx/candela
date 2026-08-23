@@ -47,7 +47,9 @@ are never embedded; the runtime re-opens the library by name and re-resolves the
 symbol when it loads the artifact, then rebuilds the calling interface from the
 recorded signature. This keeps artifacts small and lets a system library be
 upgraded underneath one, and it means the library has to be present wherever the
-artifact runs. See [C libraries](../integration/c-libraries.md).
+artifact runs. A Rust host that ships its libraries in a directory of its own
+names it, and the load looks there before the loader's own paths. See [C
+libraries](../integration/c-libraries.md).
 
 The same applies to the standard library. A program that imports only
 pure-candela modules is self-contained. The `math`, `random` and `time` modules
