@@ -107,6 +107,32 @@ pub fn rec_fib_25() {
     );
 }
 
+/// A recursive call saves the registers that stay live across it, and every way
+/// out of that call puts them back. A function that ends without a value leaves
+/// through `VoidReturn`, which used to jump straight to the caller and leave it
+/// reading whatever the deepest call left behind, so `mine` printed the
+/// innermost `10` at all three levels instead of counting back up to `30`.
+#[test]
+pub fn void_recursion_restores_the_callers_registers() {
+    run_and_check_registers!(
+        "
+        fn walk(n) {
+            if n <= 0 {
+                return;
+            }
+            let mine = n * 10;
+            walk(n - 1);
+            print(mine);
+        }
+
+        fn main() {
+            walk(3);
+        }
+        ",
+        30.into()
+    );
+}
+
 #[test]
 pub fn fn_call_in_if_in_for() {
     run_and_check_registers!(
