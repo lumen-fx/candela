@@ -50,6 +50,10 @@ The workspace enables clippy's `pedantic` and `nursery` groups as warnings. Do
 not add new ones; if a lint is wrong for your case, allow it locally with a
 comment saying why.
 
+CodeQL scans every pull request. A new security alert of high or higher
+severity blocks the merge; fix the finding or dismiss it with a reason on the
+Security tab.
+
 A change to the language, the standard library, or the CLI updates the matching
 page under `docs/` in the same pull request. A change to how a program behaves
 should come with a test: `tests/` covers the compiler, artifacts, imports,
