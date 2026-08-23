@@ -176,6 +176,10 @@ pub struct ErrorCatch {
     pub error_reg: u16,
     pub call_frames_len: u32,
     pub args_len: u32,
+    /// How deep the recursion stack was when the `try` began. A call made
+    /// inside the `try` saves the resuming function's registers from here up,
+    /// so a catch unwinds back to this depth.
+    pub recursion_len: u32,
 }
 
 /// Marshalling signature for a `host` function, indexed by

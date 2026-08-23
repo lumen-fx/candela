@@ -144,6 +144,73 @@ struct CallFrame {
     saved_callsite: Option<u16>,
 }
 
+/// Winds the recursion stack back to where `handle`'s `try` began.
+///
+/// The call the `try` wrapped is the first frame the catch drops, and on its
+/// way in it saved the registers the resuming function still reads. That
+/// function carries on where the call left it, so it gets those registers
+/// back, the same values a return of the call would have handed over. The
+/// calls made below the abort never return, and the levels they saved go with
+/// them. A `try` that throws without calling anything has nothing above its
+/// own depth and leaves the stack alone.
+#[cold]
+#[inline(never)]
+fn unwind_to_catch(
+    handle: &ErrorCatch,
+    call_frames: &[CallFrame],
+    fn_registers: &[Vec<u16>],
+    recursion_stack: &mut RegisterFile,
+    r: &mut RegisterFile,
+) {
+    let Some(aborted) = call_frames.get(handle.call_frames_len as usize) else {
+        return;
+    };
+    let base = handle.recursion_len as usize;
+    // The aborted call saved nothing when it was an ordinary call, so the
+    // resuming function has its registers already and only the deeper levels
+    // go.
+    let regs: &[u16] = match aborted.saved_callsite {
+        Some(callsite_id) => unsafe { fn_registers.get_unchecked(callsite_id as usize) },
+        None => &[],
+    };
+    restore_registers(base, regs, recursion_stack, r);
+}
+
+/// Puts back the registers `SaveFrame` pushed for `callsite` on the way into a
+/// call that is now returning, and drops them from the recursion stack. The top
+/// of the stack belongs to that call, so the saved values sit in the last
+/// `fn_registers[callsite].len()` slots.
+#[inline(always)]
+fn restore_saved_registers(
+    callsite: u16,
+    fn_registers: &[Vec<u16>],
+    recursion_stack: &mut RegisterFile,
+    r: &mut RegisterFile,
+) {
+    let regs = unsafe { fn_registers.get_unchecked(callsite as usize) };
+    restore_registers(recursion_stack.len() - regs.len(), regs, recursion_stack, r);
+}
+
+/// Copies the `regs` a call saved at `base` back into the register file, and
+/// drops everything from `base` up off the recursion stack.
+#[inline(always)]
+fn restore_registers(
+    base: usize,
+    regs: &[u16],
+    recursion_stack: &mut RegisterFile,
+    r: &mut RegisterFile,
+) {
+    for (reg, &saved) in regs
+        .iter()
+        .zip(unsafe { recursion_stack.0.get_unchecked(base..) })
+    {
+        r[*reg] = saved;
+    }
+    unsafe {
+        recursion_stack.0.set_len(base);
+    }
+}
+
 pub trait UncheckedVecOps<T> {
     fn pop_unchecked(&mut self) -> T;
 }
@@ -347,11 +414,16 @@ pub fn execute(
             cold_path();
             if !error_handles.is_empty() {
                 let err_handle = unsafe { error_handles.pop_unchecked() };
+                // The message is built while the throwing frame is still
+                // standing: a thrown value the unwind is about to overwrite is
+                // still a garbage-collection root here.
+                let caught = string!($err.kind());
+                unwind_to_catch(&err_handle, &call_frames, fn_registers, &mut recursion_stack, r);
                 unsafe {
                     args.set_len(err_handle.args_len as usize);
                     call_frames.set_len(err_handle.call_frames_len as usize);
                 }
-                r[err_handle.error_reg] = string!($err.kind());
+                r[err_handle.error_reg] = caught;
                 i = err_handle.catch_loc as usize;
                 continue;
             }
@@ -361,35 +433,20 @@ pub fn execute(
             cold_path();
             if !error_handles.is_empty() {
                 let err_handle = unsafe { error_handles.pop_unchecked() };
+                // The message is built while the throwing frame is still
+                // standing: a thrown value the unwind is about to overwrite is
+                // still a garbage-collection root here.
+                let caught = string!($err.kind());
+                unwind_to_catch(&err_handle, &call_frames, fn_registers, &mut recursion_stack, r);
                 unsafe {
                     args.set_len(err_handle.args_len as usize);
                     call_frames.set_len(err_handle.call_frames_len as usize);
                 }
-                r[err_handle.error_reg] = string!($err.kind());
+                r[err_handle.error_reg] = caught;
                 i = err_handle.catch_loc as usize;
                 continue $label;
             }
             throw_error(err_ctx, unsafe {*instructions.get_unchecked(i)}, $err);
-        };
-    }
-
-    /// Puts back the registers `SaveFrame` pushed for `$callsite`, and drops
-    /// them from the recursion stack. The top of the stack belongs to the
-    /// frame being popped, so the saved values sit in the last
-    /// `fn_registers[$callsite].len()` slots.
-    macro_rules! restore_saved_registers {
-        ($callsite:expr) => {
-            let regs = unsafe { fn_registers.get_unchecked($callsite as usize) };
-            let base = recursion_stack.len() - regs.len();
-            for (reg, &saved) in regs
-                .iter()
-                .zip(unsafe { recursion_stack.0.get_unchecked(base..) })
-            {
-                r[*reg] = saved;
-            }
-            unsafe {
-                recursion_stack.0.set_len(base);
-            }
         };
     }
 
@@ -424,7 +481,7 @@ pub fn execute(
                 // caller back the registers the call overwrote before jumping.
                 let call_frame = call_frames.pop_unchecked();
                 if let Some(callsite_id) = call_frame.saved_callsite {
-                    restore_saved_registers!(callsite_id);
+                    restore_saved_registers(callsite_id, fn_registers, &mut recursion_stack, r);
                 }
                 i = call_frame.return_addr as usize;
             }
@@ -450,7 +507,7 @@ pub fn execute(
                 let call_frame = call_frames.pop_unchecked();
                 let temp = r[tgt];
                 if let Some(callsite_id) = call_frame.saved_callsite {
-                    restore_saved_registers!(callsite_id);
+                    restore_saved_registers(callsite_id, fn_registers, &mut recursion_stack, r);
                 }
                 i = call_frame.return_addr as usize;
                 r[call_frame.return_reg] = temp;
@@ -1796,6 +1853,7 @@ pub fn execute(
                     error_reg: err_reg_id,
                     call_frames_len: call_frames.len() as u32,
                     args_len: args.len() as u32,
+                    recursion_len: recursion_stack.len() as u32,
                 });
             }
             Instr::StopErrorCatch => unsafe {
