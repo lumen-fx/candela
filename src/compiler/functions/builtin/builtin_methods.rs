@@ -415,8 +415,11 @@ pub fn builtin_methods(
                 );
             }
 
-            // If the array was declared as empty, upgrade its type so downstream indexing resolves correctly
-            if obj_type == DataType::Array(None)
+            // If the array was declared as empty, upgrade its type so
+            // downstream indexing resolves correctly. The match is on a missing
+            // element type, not on `== Array(None)`: an array of `any` compares
+            // equal to it and must keep taking elements of any type.
+            if matches!(obj_type, DataType::Array(None))
                 && let Expr::Var(var_name, _) = obj
                 && let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name)
             {
@@ -604,8 +607,11 @@ pub fn builtin_methods(
             }
             // An untyped empty map (`{}`) takes its key/value types from the
             // first insert, mirroring how an empty array upgrades on `push`, so
-            // later `get`/iteration see concrete types instead of `any`.
-            if obj_type == DataType::Map(Box::from((None, None)))
+            // later `get`/iteration see concrete types instead of `any`. The
+            // match is on missing key/value types, not on `== Map((None, None))`:
+            // a map of `any` compares equal to it and must keep taking entries
+            // of any type, which is what a downcast (`as_map`) hands back.
+            if matches!(&obj_type, DataType::Map(m) if m.0.is_none() && m.1.is_none())
                 && let Expr::Var(var_name, _) = obj
             {
                 let key_type = args[0].infer_type(v, ctx, state);

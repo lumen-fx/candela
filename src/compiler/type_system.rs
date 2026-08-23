@@ -1376,10 +1376,13 @@ fn track_return_flow(
             Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _)
                 if namespace.last().unwrap().as_str() == "push" =>
             {
+                // Only an array with no element type at all upgrades here; an
+                // array of `any` compares equal to `Array(None)` and keeps its
+                // dynamic element type.
                 if let Expr::Var(var_name, _) = obj.as_ref()
                     && v.iter()
                         .rfind(|var| &var.name == var_name)
-                        .is_some_and(|var| var.var_type == DataType::Array(None))
+                        .is_some_and(|var| matches!(var.var_type, DataType::Array(None)))
                 {
                     let arg_type = args[0].infer_type(v, ctx, state);
                     if let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name) {
@@ -1832,9 +1835,15 @@ impl Expr {
                     "range" => DataType::Array(Some(Box::from(DataType::Int))),
                     "argv" => DataType::Array(Some(Box::from(DataType::String))),
                     // A downcast to a collection yields an element/entry type of
-                    // `any` (Unknown); json::parse yields a fully dynamic value.
-                    "as_list" => DataType::Array(None),
-                    "as_map" => DataType::Map(Box::from((None, None))),
+                    // `any` (Unknown). That is a known type, not a gap: the
+                    // entries stay dynamic instead of taking their type from
+                    // the first `push`/`insert` the way an empty literal does.
+                    // json::parse yields a fully dynamic value.
+                    "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
+                    "as_map" => DataType::Map(Box::from((
+                        Some(DataType::Unknown),
+                        Some(DataType::Unknown),
+                    ))),
                     "json_parse" => DataType::Unknown,
                     function_name => {
                         // A call to a function-typed parameter (a higher-order

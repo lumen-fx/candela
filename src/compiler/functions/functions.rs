@@ -81,6 +81,12 @@ pub(crate) fn store_call_args(
     }
 }
 
+/// Checks argument `arg_idx` against the types the callee accepts.
+///
+/// An `any` (Unknown) expected type is a wildcard: it says the position holds a
+/// dynamic value, so every argument fits. That is what a downcast collection
+/// (`as_map`, `as_list`) hands its entries, and what an `any` annotation means
+/// on a parameter or an enum payload.
 pub fn check_arg_type(
     fn_name: &str,
     v: &mut Vec<Variable>,
@@ -92,6 +98,9 @@ pub fn check_arg_type(
     expected: &[DataType],
 ) {
     let inferred = args[arg_idx].infer_type(v, ctx, state);
+    if expected.iter().any(|t| matches!(t, DataType::Unknown)) {
+        return;
+    }
     let matches = if let DataType::Union(polytype) = &inferred {
         polytype.iter().all(|x| expected.contains(x))
     } else {
