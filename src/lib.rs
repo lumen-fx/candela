@@ -102,6 +102,11 @@ pub use candela_vm::HostRegistry;
 pub use candela_vm::LoadError;
 pub use candela_vm::RuntimeProgram;
 pub use candela_vm::load_program;
+// Where a `dylib` import looks for its library file. Read by a compile and by
+// an artifact load alike, so a host that keeps its libraries in a directory of
+// its own sets it once.
+pub use candela_vm::dylib_dir;
+pub use candela_vm::set_dylib_dir;
 // Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]

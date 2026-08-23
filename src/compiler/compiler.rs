@@ -24,6 +24,8 @@ use crate::errors::RESET;
 use crate::instr::LibFunc;
 use crate::parser;
 use crate::rt::TargetOs;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::rt::dylib_dir;
 use crate::rt::resolve_library_filename;
 use crate::vm::Pool;
 use crate::{data::Data, instr::Instr};
@@ -3623,10 +3625,9 @@ fn load_auto_prelude(
         .push((PRELUDE_CHILD.into(), child_namespace));
 }
 
-/// Opens the dynamic library a `dylib` import resolved to.
-///
-/// `filename` is the OS-mapped name (`resolve_library_filename`'s output) for a
-/// logical import, or the already-resolved explicit path otherwise.
+/// Opens the library a bare logical import (`dylib "z"`) names. `filename` is
+/// that name in this platform's convention (`resolve_library_filename`'s
+/// output), and `dirs` are the directories it is looked for in, in order.
 ///
 /// A bare filename handed to the OS loader (`dlopen` on Linux/macOS) is
 /// resolved only through the system search path (the run-path,
@@ -3637,26 +3638,79 @@ fn load_auto_prelude(
 /// (rather than installed as a system library) therefore loads on Windows but
 /// silently fails on Linux/macOS.
 ///
-/// To match Windows' default search order, a logical import is tried, in
-/// order: next to the importing file, then in the current directory, and only
-/// then handed to the OS loader bare, so genuine system libraries (`z`, `m`,
+/// To match Windows' default search order, the name is tried, in order: under
+/// each directory in `dirs`, then in the current directory, and only then
+/// handed to the OS loader bare, so genuine system libraries (`z`, `m`,
 /// `sqlite3`) still resolve exactly as before.
 #[cfg(not(target_arch = "wasm32"))]
-fn open_dylib(file_path: &Path, filename: &str, is_logical: bool) -> Option<libloading::Library> {
-    if is_logical {
-        let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut candidates = vec![file_dir.join(filename)];
-        let cwd_candidate = Path::new(".").join(filename);
-        if !candidates.contains(&cwd_candidate) {
-            candidates.push(cwd_candidate);
-        }
-        for candidate in &candidates {
-            if let Ok(lib) = unsafe { libloading::Library::new(candidate) } {
-                return Some(lib);
-            }
+fn open_logical_dylib(dirs: &[&Path], filename: &str) -> Option<Library> {
+    let mut candidates: Vec<PathBuf> = Vec::with_capacity(dirs.len() + 1);
+    for dir in dirs {
+        let candidate = dir.join(filename);
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
         }
     }
-    unsafe { libloading::Library::new(filename) }.ok()
+    let cwd_candidate = Path::new(".").join(filename);
+    if !candidates.contains(&cwd_candidate) {
+        candidates.push(cwd_candidate);
+    }
+    for candidate in &candidates {
+        if let Ok(lib) = unsafe { Library::new(candidate) } {
+            return Some(lib);
+        }
+    }
+    unsafe { Library::new(filename) }.ok()
+}
+
+/// Opens the library a path import (`dylib "../native/mylib"`) names, and
+/// returns the namespace name its functions live under.
+///
+/// A relative path is tried under each directory in `dirs`, in order; an
+/// absolute one goes straight to the loader. The namespace comes from the last
+/// component of the path either way, so where the file was found does not
+/// change how the program calls into it.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_path_dylib(dirs: &[&Path], spec: &str) -> (Option<Library>, SmolStr) {
+    let name = Path::new(spec)
+        .file_prefix()
+        .and_then(|s| s.to_str())
+        .unwrap_or(spec)
+        .to_smolstr();
+
+    if Path::new(spec).is_absolute() {
+        return (open_library_path(spec), name);
+    }
+    for dir in dirs {
+        if let Some(lib) = open_library_path(dir.join(spec).to_string_lossy().as_ref()) {
+            return (Some(lib), name);
+        }
+    }
+    (None, name)
+}
+
+/// Opens the library file `base` stands for.
+///
+/// A path that already carries an extension is used as written. One without
+/// picks up an architecture-specific build when it sits beside it
+/// (`mylib-x86_64.so`), so a single directory can hold builds for several
+/// architectures, and otherwise gets this platform's extension.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_library_path(base: &str) -> Option<Library> {
+    let resolved = if Path::new(base).extension().is_none() {
+        let arch_path = format!(
+            "{base}{ARCH_SUFFIX}.{}",
+            TargetOs::CURRENT.dynamic_lib_extension()
+        );
+        if Path::new(&arch_path).exists() {
+            arch_path
+        } else {
+            resolve_library_filename(base, TargetOs::CURRENT)
+        }
+    } else {
+        base.to_owned()
+    };
+    unsafe { Library::new(&resolved) }.ok()
 }
 
 /// Recursively collects functions, dyn libs, and imported files
@@ -3845,57 +3899,35 @@ fn parse_toplevel(
                 // A bare logical name (no path separator, not absolute, no
                 // extension, e.g. `z`, `sqlite3`) names a system library the
                 // OS loader searches for. Anything with a separator or extension
-                // is an explicit path resolved relative to the importing file.
+                // is an explicit path.
                 let is_logical = !spec.contains('/')
                     && !spec.contains('\\')
                     && !Path::new(spec.as_str()).is_absolute()
                     && Path::new(spec.as_str()).extension().is_none();
 
-                let (open_target, dylib_name): (SmolStr, SmolStr) = if is_logical {
-                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`. Resolution
-                    // of where that file is found happens in `open_dylib` below.
-                    (
-                        resolve_library_filename(spec.as_str(), TargetOs::CURRENT).into(),
-                        spec.clone(),
-                    )
+                // Where a relative library reference is looked for, in order:
+                // the directory the embedding host named, then the importing
+                // file's own. A host whose libraries sit apart from its sources
+                // (`lib/` beside `src/`) names that directory and both forms
+                // find it.
+                let host_dir = dylib_dir();
+                let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
+                let mut dirs: Vec<&Path> = Vec::with_capacity(2);
+                if let Some(dir) = host_dir.as_deref() {
+                    dirs.push(dir);
+                }
+                dirs.push(file_dir);
+
+                let (lib, dylib_name) = if is_logical {
+                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`.
+                    let filename = resolve_library_filename(spec.as_str(), TargetOs::CURRENT);
+                    (open_logical_dylib(&dirs, &filename), spec.clone())
                 } else {
-                    let base_path = if Path::new(spec.as_str()).is_relative() {
-                        file_path
-                            .parent()
-                            .unwrap_or_else(|| Path::new("."))
-                            .join(spec.as_str())
-                            .to_string_lossy()
-                            .to_smolstr()
-                    } else {
-                        spec.clone()
-                    };
-                    let dylib_name = PathBuf::from(base_path.as_str())
-                        .file_prefix()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(base_path.as_str())
-                        .to_smolstr();
-                    // When the extension is omitted, prefer an arch-specific
-                    // build if one is present next to the base path, else fall
-                    // back to the per-OS filename convention.
-                    let resolved = if Path::new(base_path.as_str()).extension().is_none() {
-                        let arch_path = format!(
-                            "{base_path}{ARCH_SUFFIX}.{}",
-                            TargetOs::CURRENT.dynamic_lib_extension()
-                        );
-                        if Path::new(&arch_path).exists() {
-                            SmolStr::from(arch_path)
-                        } else {
-                            resolve_library_filename(base_path.as_str(), TargetOs::CURRENT).into()
-                        }
-                    } else {
-                        base_path
-                    };
-                    (resolved, dylib_name)
+                    open_path_dylib(&dirs, spec.as_str())
                 };
 
                 let lib = Rc::new(
-                    open_dylib(file_path, open_target.as_str(), is_logical)
-                        .unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources)),
+                    lib.unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources)),
                 );
                 pending_dylibs.push((
                     src_file_idx,

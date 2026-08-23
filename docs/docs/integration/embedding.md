@@ -372,6 +372,27 @@ Errors come back as a `CallError`: the name is not exported, the argument count
 or an argument type disagrees with the declaration, or the call raised a runtime
 error, which arrives as the `Diagnostic` it produced.
 
+## Where a dylib import looks
+
+```rust
+candela::set_dylib_dir(Some(app_root.join("lib")));
+```
+
+A script's `dylib` import is looked for beside the script itself, which is the
+wrong place for an application that keeps its sources in one directory and its
+native libraries in another. Name that directory and it is searched first, by a
+compile and by an artifact load alike, so `dylib "md"` in `src/main.cdl` finds
+`lib/libmd.so`.
+
+The call returns the directory that was in effect, so a host that changes it for
+one script can put the previous one back, and `None` goes back to looking beside
+the script alone. It is a per-thread setting, read while a script compiles and
+while an artifact loads, so set it before either. `candela_vm::set_dylib_dir` is
+the same function, for a program that links only the runtime.
+
+See [C libraries](c-libraries.md) for what a `dylib` import resolves to before
+any directory is searched.
+
 ## Values
 
 `Value` is the type that crosses the boundary in both directions:
