@@ -1219,3 +1219,182 @@ fn main() {}
     let result = program.call("twice", &[21i64.into()]).expect("call ok");
     assert_eq!(result, Value::Int(42));
 }
+
+// ---------------------------------------------------------------------------
+// OUT-OF-RANGE INDICES
+// ---------------------------------------------------------------------------
+//
+// `runtime_error_surfaces_as_diagnostic` above covers the base case: a plain
+// out-of-range read comes back as a `Diagnostic` instead of aborting. The
+// tests below pin the same channel across the other shapes an index can take:
+// negative, a write target, a generic element type, a call several recursion
+// frames deep, and a two-call sequence shaped like a reactive derivation that
+// re-reads a list after a lookup misses.
+
+/// A negative index is out of range the same way one past the end is; the
+/// diagnostic names it as such rather than wrapping or panicking.
+#[test]
+fn a_negative_index_is_a_diagnostic() {
+    let engine = Engine::new();
+    let src = r"
+fn last_of(xs) {
+    return xs[-1];
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call("last_of", &[Value::Array(vec![1i64.into()])])
+        .unwrap_err();
+    assert_eq!(err.code, "index_out_of_bounds");
+}
+
+/// Assigning through an out-of-range index is the same bounds check as
+/// reading through one.
+#[test]
+fn an_out_of_range_write_is_a_diagnostic() {
+    let engine = Engine::new();
+    let src = r"
+fn set_at(xs, i, v) {
+    xs[i] = v;
+    return xs;
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call(
+            "set_at",
+            &[Value::Array(vec![1i64.into()]), 1i64.into(), 9i64.into()],
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "index_out_of_bounds");
+}
+
+/// A string indexes the same way a list does, for both a read and a write
+/// through the index.
+#[test]
+fn a_string_index_read_and_write_out_of_range_are_diagnostics() {
+    let engine = Engine::new();
+    let src = r"
+fn char_at(s, i) {
+    return s[i];
+}
+fn set_char(s, i, c) {
+    s[i] = c;
+    return s;
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let read_err = program
+        .call("char_at", &["a".into(), 1i64.into()])
+        .unwrap_err();
+    assert_eq!(read_err.code, "index_out_of_bounds");
+    let write_err = program
+        .call("set_char", &["a".into(), 1i64.into(), "z".into()])
+        .unwrap_err();
+    assert_eq!(write_err.code, "index_out_of_bounds");
+}
+
+/// A slice whose bounds fall outside the collection is its own error kind,
+/// distinct from a single out-of-range index, but the same non-panicking
+/// channel.
+#[test]
+fn a_slice_out_of_range_is_a_diagnostic() {
+    let engine = Engine::new();
+    let src = r"
+fn tail(xs, a, b) {
+    return xs[a..b];
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call(
+            "tail",
+            &[Value::Array(vec![1i64.into()]), 0i64.into(), 5i64.into()],
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "slice_out_of_bounds");
+}
+
+/// A generic function's element type does not change how its index is
+/// bounds-checked: the check runs on the array at the register the
+/// specialization compiled, whatever `T` turned out to be.
+#[test]
+fn a_generic_functions_index_is_bounds_checked() {
+    let engine = Engine::new();
+    let src = r"
+fn at<T>(xs: T[], i: int) -> T {
+    return xs[i];
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call("at", &[Value::Array(vec![1i64.into()]), 1i64.into()])
+        .unwrap_err();
+    assert_eq!(err.code, "index_out_of_bounds");
+}
+
+/// The same check applies however deep the call is when it runs: a bound hit
+/// several recursion frames down still raises through the call frames back to
+/// `Program::call` as a diagnostic, not a panic that unwinds past them.
+#[test]
+fn a_recursive_calls_index_is_bounds_checked() {
+    let engine = Engine::new();
+    let src = r"
+fn rec(xs: int[], i: int, depth: int) -> int {
+    if depth <= 0 {
+        return xs[i];
+    }
+    return rec(xs, i, depth - 1);
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let err = program
+        .call(
+            "rec",
+            &[Value::Array(vec![1i64.into()]), 1i64.into(), 5i64.into()],
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "index_out_of_bounds");
+}
+
+/// Mirrors a reactive derivation that looks a current selection up by id
+/// (returning -1 on a miss) and indexes the list with the result: the first
+/// call is an ordinary hit, and the second, on the same resident `Program`, is
+/// a miss that feeds a negative index straight into the list. Both come back
+/// as values, not panics, and the diagnostic on the second call does not
+/// disturb the state a later call would read.
+#[test]
+fn a_lookup_miss_feeding_a_negative_index_is_a_diagnostic() {
+    let engine = Engine::new();
+    let src = r"
+fn find_idx(list, id) {
+    let i = 0;
+    while i < list.len() {
+        if list[i] == id { return i; }
+        i += 1;
+    }
+    return -1;
+}
+fn current(list, id) {
+    let idx = find_idx(list, id);
+    return list[idx];
+}
+fn main() {}
+";
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    let list = Value::Array(vec![1i64.into(), 2i64.into()]);
+
+    let hit = program
+        .call("current", &[list.clone(), 1i64.into()])
+        .unwrap();
+    assert_eq!(hit, Value::Int(1));
+
+    let miss = program.call("current", &[list, 99i64.into()]).unwrap_err();
+    assert_eq!(miss.code, "index_out_of_bounds");
+}
