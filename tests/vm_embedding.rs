@@ -400,3 +400,140 @@ fn an_any_parameter_accepts_every_value() {
         Value::String(String::from("seven"))
     );
 }
+
+// ---------------------------------------------------------------------------
+// OUT-OF-RANGE INDICES
+// ---------------------------------------------------------------------------
+//
+// `a_runtime_error_comes_back_as_a_diagnostic` above covers the base case
+// through this loaded-artifact path: an out-of-range read comes back as a
+// `Diagnostic` and the artifact keeps working for the next call. The tests
+// below pin the same channel across a negative index, a write target, a
+// string, a slice, and the two-call lookup-miss shape a host that reruns a
+// reactive derivation on each tick actually drives `RuntimeProgram::call`
+// with.
+
+/// A negative index through a loaded artifact is out of range the same way
+/// one past the end is.
+#[test]
+fn a_negative_index_through_an_artifact_is_a_diagnostic() {
+    let src = "
+        fn last_of(xs: int[]) -> int { return xs[-1]; }
+        fn main() {}
+    ";
+    let mut program = load(src, "neg.cdl", &HostRegistry::new());
+    program.run();
+
+    match program.call("last_of", &[Value::Array(vec![Value::Int(1)])]) {
+        Err(CallError::Runtime(diagnostic)) => {
+            assert_eq!(diagnostic.code, "index_out_of_bounds");
+        }
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+}
+
+/// Assigning through an out-of-range index is the same bounds check as
+/// reading through one, and a string indexes the same way a list does.
+#[test]
+fn write_and_string_index_out_of_range_through_an_artifact_are_diagnostics() {
+    let src = r"
+        fn set_at(xs: int[], i: int, v: int) -> int[] { xs[i] = v; return xs; }
+        fn char_at(s: string, i: int) -> string { return s[i]; }
+        fn set_char(s: string, i: int, c: string) -> string { s[i] = c; return s; }
+        fn main() {}
+    ";
+    let mut program = load(src, "write.cdl", &HostRegistry::new());
+    program.run();
+
+    match program.call(
+        "set_at",
+        &[
+            Value::Array(vec![Value::Int(1)]),
+            Value::Int(1),
+            Value::Int(9),
+        ],
+    ) {
+        Err(CallError::Runtime(diagnostic)) => assert_eq!(diagnostic.code, "index_out_of_bounds"),
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+
+    match program.call("char_at", &[Value::from("a"), Value::Int(1)]) {
+        Err(CallError::Runtime(diagnostic)) => assert_eq!(diagnostic.code, "index_out_of_bounds"),
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+
+    match program.call(
+        "set_char",
+        &[Value::from("a"), Value::Int(1), Value::from("z")],
+    ) {
+        Err(CallError::Runtime(diagnostic)) => assert_eq!(diagnostic.code, "index_out_of_bounds"),
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+}
+
+/// A slice whose bounds fall outside the collection is its own error kind,
+/// distinct from a single out-of-range index, but the same non-panicking
+/// channel.
+#[test]
+fn a_slice_out_of_range_through_an_artifact_is_a_diagnostic() {
+    let src = "
+        fn tail(xs: int[], a: int, b: int) -> int[] { return xs[a..b]; }
+        fn main() {}
+    ";
+    let mut program = load(src, "slice.cdl", &HostRegistry::new());
+    program.run();
+
+    match program.call(
+        "tail",
+        &[
+            Value::Array(vec![Value::Int(1)]),
+            Value::Int(0),
+            Value::Int(5),
+        ],
+    ) {
+        Err(CallError::Runtime(diagnostic)) => assert_eq!(diagnostic.code, "slice_out_of_bounds"),
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+}
+
+/// Mirrors how a host reruns a reactive derivation: a lookup by id returns -1
+/// on a miss, and that result indexes the list directly. The first call is an
+/// ordinary hit; the second, on the same resident artifact, is a miss that
+/// feeds a negative index into the list. Both come back as values through
+/// `call`, never a panic, and the artifact is still usable afterward.
+#[test]
+fn a_lookup_miss_feeding_a_negative_index_through_an_artifact_is_a_diagnostic() {
+    let src = r"
+        fn find_idx(list: int[], id: int) -> int {
+            let i = 0;
+            while i < list.len() {
+                if list[i] == id { return i; }
+                i += 1;
+            }
+            return -1;
+        }
+        fn current(list: int[], id: int) -> int {
+            let idx = find_idx(list, id);
+            return list[idx];
+        }
+        fn main() {}
+    ";
+    let mut program = load(src, "derive.cdl", &HostRegistry::new());
+    program.run();
+
+    let list = Value::Array(vec![Value::Int(1), Value::Int(2)]);
+
+    assert_eq!(
+        program
+            .call("current", &[list.clone(), Value::Int(1)])
+            .unwrap(),
+        Value::Int(1)
+    );
+
+    match program.call("current", &[list, Value::Int(99)]) {
+        Err(CallError::Runtime(diagnostic)) => {
+            assert_eq!(diagnostic.code, "index_out_of_bounds");
+        }
+        other => panic!("expected a runtime error, got: {other:?}"),
+    }
+}
