@@ -274,6 +274,15 @@ declaration rather than accepted as a new specialisation.
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.
 
+A `Program` that returns a `Diagnostic` stays usable. Some of that error
+handling happens while `call` compiles the specialization it needs (an
+undeclared name at the call site, an argument that fails to type-check, a
+nested call that needed compiling first); whatever that compile step wrote to
+the program's resident tables before hitting the error is undone, so the next
+`call` runs as if the failed one had never been made. A runtime error, once the
+call has started running, leaves the program's globals and any host-side state
+exactly as the call left them; nothing after the failing point ran.
+
 ## Finding macro regions
 
 A build tool often needs to know where a macro is used before anything is

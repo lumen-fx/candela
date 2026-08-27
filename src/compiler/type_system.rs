@@ -388,6 +388,53 @@ impl Generics {
     pub fn pop_bindings(&mut self) {
         self.bindings.pop();
     }
+
+    /// Snapshots the state a single generic instantiation (or a function
+    /// specialization's own type-parameter frame) can grow or unbalance, so an
+    /// aborted compile attempt can undo it with [`Generics::rollback_to`].
+    ///
+    /// `instantiations` and the structs/enums it names are a cache: an
+    /// `instantiate` call registers the pair before the instantiation's own
+    /// fields are resolved, so a type whose fields name itself resolves to the
+    /// type being built instead of recursing. A diagnostic raised while
+    /// resolving those fields (or while lowering an `impl` block against the
+    /// instantiation, which pushes its lowered methods the same way a closure
+    /// literal pushes an anonymous function) leaves the cache entry pointing at
+    /// a struct or enum whose fields were never filled in. `bindings` and
+    /// `depth` are pushed and incremented, respectively, before that same
+    /// resolution and are only popped or decremented after it returns; a
+    /// `push_bindings` without a matching `pop_bindings` (function
+    /// specialization has its own such pair too, see
+    /// `functions/user_functions.rs`) leaks a frame, and an unmatched `depth`
+    /// increment eventually trips the instantiation-depth cap for programs
+    /// nowhere near it.
+    #[must_use]
+    pub const fn checkpoint(&self) -> GenericsCheckpoint {
+        GenericsCheckpoint {
+            instantiations: self.instantiations.len(),
+            bindings: self.bindings.len(),
+            depth: self.depth,
+        }
+    }
+
+    /// Undoes everything a failed compile attempt did to the instantiation
+    /// cache and the binding/depth bookkeeping, back to `checkpoint`. The
+    /// structs and enums an aborted `instantiate` call registered are not
+    /// `Generics`' to remove; the caller truncates those (see
+    /// `Program::rollback_to`) using the same pre-attempt lengths.
+    pub fn rollback_to(&mut self, checkpoint: &GenericsCheckpoint) {
+        self.instantiations.truncate(checkpoint.instantiations);
+        self.bindings.truncate(checkpoint.bindings);
+        self.depth = checkpoint.depth;
+    }
+}
+
+/// A checkpoint of the [`Generics`] state taken by [`Generics::checkpoint`] and
+/// undone by [`Generics::rollback_to`].
+pub struct GenericsCheckpoint {
+    instantiations: usize,
+    bindings: usize,
+    depth: u32,
 }
 
 /// What resolving a [`TypeExpr`] needs: the scope the type is written in, and

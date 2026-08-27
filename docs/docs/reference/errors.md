@@ -215,5 +215,5 @@ See [artifacts](artifacts.md).
 `candela` and `candela-vm` exit with a non-zero status after reporting any
 error, and with zero when the program finishes. Inside a host process, a
 candela built with the `embed` feature unwinds instead of exiting, so the host
-survives and receives a structured diagnostic. See
-[embedding](../integration/embedding.md).
+survives and receives a structured diagnostic, and the `Program` it called into
+stays usable for the next call. See [embedding](../integration/embedding.md).

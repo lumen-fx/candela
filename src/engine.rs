@@ -32,6 +32,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
 use crate::compiler::type_system::Generics;
+use crate::compiler::type_system::GenericsCheckpoint;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
 use crate::trampoline::compile_trampoline;
@@ -309,6 +310,46 @@ pub struct Program {
     generics: Generics,
 }
 
+/// A checkpoint of the resident tables [`Program::call`] can grow while
+/// compiling a trampoline, taken by [`Program::checkpoint`] and undone by
+/// [`Program::rollback_to`] if the compile ends in a diagnostic.
+struct CompileCheckpoint {
+    registers: usize,
+    /// `Program::functions` itself grows during a compile, not just once at
+    /// [`Engine::compile`]: an anonymous function literal hoists to a fresh
+    /// entry the first time it is reached, and instantiating a generic type
+    /// lowers every applicable `impl` method the same way. Each of those
+    /// pushes a matching entry onto `Program::fn_registers` in the same
+    /// breath, so the two must be truncated back to the same length together;
+    /// truncating one without the other is what left `fn_registers` a
+    /// function short of `functions` and panicked the next call that reached
+    /// the orphaned entry.
+    functions: usize,
+    /// Each pre-existing function's specialization-cache length, indexed the
+    /// same as the first `functions` entries of `Program::functions`.
+    fn_impls: Box<[usize]>,
+    fn_registers: usize,
+    /// The length of every already-existing entry in `Program::fn_registers`
+    /// at checkpoint time, indexed the same way; a non-recursive call site
+    /// extends its own function's entry in place.
+    fn_registers_inner: Box<[usize]>,
+    namespace_symbols: usize,
+    /// A generic type is instantiated (and, symmetrically, an enum's variants
+    /// added) the first time a call site needs it, the same on-demand way a
+    /// function is specialized; `structs`/`enums` cover that growth exactly as
+    /// `functions` covers a closure or a lowered `impl` method.
+    structs: usize,
+    enums: usize,
+    /// `add_to_src` grows this in step with the trampoline's local `output`
+    /// buffer, keyed by instruction value rather than position, so a stale
+    /// entry cannot point past the end of `Program::instructions`; it can only
+    /// mislabel a later instruction that happens to be identical to one the
+    /// aborted attempt compiled. Rolled back for the same reason as
+    /// everything else here: it is not this call's to leave behind.
+    instr_src: usize,
+    generics: GenericsCheckpoint,
+}
+
 impl Program {
     /// Invokes the script-defined function `fn_name` with `args`, returning its
     /// value (or [`Value::Null`] for a void function).
@@ -318,11 +359,22 @@ impl Program {
     /// instruction stream and runs it against the persistent register/heap
     /// state, so globals mutated by a previous call remain visible.
     ///
+    /// A diagnostic raised while compiling the trampoline (an undeclared name
+    /// at the call site, a type mismatch, a nested call that needed its own
+    /// specialization first) leaves the resident tables exactly as they stood
+    /// before this call began; see [`Program::rollback_to`]. The `Program`
+    /// stays callable afterward.
+    ///
     /// # Errors
     ///
     /// Returns a [`Diagnostic`] if `fn_name` is unknown, if the arguments don't
     /// type-check against its signature, or if the call raises a runtime error.
     pub fn call(&mut self, fn_name: &str, args: &[Value]) -> Result<Value, Diagnostic> {
+        // Every table a trampoline compile can grow is snapshotted up front, so
+        // a diagnostic raised while compiling it can be undone rather than
+        // leaving a half-compiled specialization for a later call to trip on.
+        let checkpoint = self.checkpoint();
+
         // Scalars compile as literal exprs; arrays/maps can't, so they are
         // allocated into the heap pools now and passed as a pre-seeded variable
         // that holds the handle in a register the trampoline moves into place.
@@ -362,10 +414,16 @@ impl Program {
 
         // Compile the trampoline (type-checks the call) under a diagnostic sink.
         let offset = self.instructions.len() as u16;
-        let (mut output, ret_id) = collect_diagnostic(|| {
+        let (mut output, ret_id) = match collect_diagnostic(|| {
             let mut state = self.compiler_state();
             compile_trampoline(&mut state, offset, &call_expr, seed_vars)
-        })?;
+        }) {
+            Ok(compiled) => compiled,
+            Err(diagnostic) => {
+                self.rollback_to(&checkpoint);
+                return Err(diagnostic);
+            }
+        };
 
         let ret_id = ret_id.unwrap_or(0);
         output.push(Instr::Halt(0));
@@ -403,6 +461,92 @@ impl Program {
             namespace: &mut self.namespace,
             generics: &mut self.generics,
         }
+    }
+
+    /// Snapshots the resident tables a trampoline compile writes into as it
+    /// goes, so a diagnostic raised partway through can be undone with
+    /// [`Program::rollback_to`].
+    ///
+    /// `self.instructions` needs no entry here: the bytecode a trampoline
+    /// compiles lives in a local buffer and only reaches the resident stream
+    /// once the whole attempt succeeds (see [`Program::call`]). Everything
+    /// captured below, by contrast, is written in place as compilation
+    /// proceeds, because a nested call can only reuse a specialization another
+    /// call site already produced. Left unrestored on a later error, a
+    /// specialization compiled and cached here during an attempt that then
+    /// aborts records a bytecode address in a region `self.instructions` never
+    /// reached, and the next call that reuses it jumps into whatever unrelated
+    /// code, or none, later lands there.
+    ///
+    /// This is a handful of lengths, not a copy of the tables themselves, so a
+    /// call that does not error pays for little more than reading them.
+    fn checkpoint(&self) -> CompileCheckpoint {
+        CompileCheckpoint {
+            registers: self.registers.len(),
+            functions: self.functions.len(),
+            fn_impls: self.functions.iter().map(|f| f.impls.len()).collect(),
+            fn_registers: self.fn_registers.len(),
+            fn_registers_inner: self.fn_registers.iter().map(Vec::len).collect(),
+            namespace_symbols: self.namespace.symbols.len(),
+            structs: self.structs.len(),
+            enums: self.enums.len(),
+            instr_src: self.instr_src.len(),
+            generics: self.generics.checkpoint(),
+        }
+    }
+
+    /// Undoes everything a failed trampoline compile wrote to the resident
+    /// tables, back to `checkpoint`. `Program::call` runs this only when the
+    /// compile step itself returned a diagnostic; a successful compile leaves
+    /// the tables as they stand and commits the compiled bytecode alongside
+    /// them.
+    fn rollback_to(&mut self, checkpoint: &CompileCheckpoint) {
+        // A `const_registers`/`free_registers` entry naming a register at or
+        // past `registers` was necessarily added during the aborted attempt
+        // (registers only ever grow, and a constant is registered the moment
+        // its register is pushed), so it goes with the registers themselves.
+        // An entry `free_registers` lost, because the attempt popped and
+        // reused an already-free register it never got to write through
+        // committed bytecode, is not restored: that register is simply
+        // orphaned rather than double-allocated, which the next compile
+        // cannot observe.
+        self.const_registers
+            .retain(|_, &mut reg| (reg as usize) < checkpoint.registers);
+        self.free_registers
+            .retain(|&reg| (reg as usize) < checkpoint.registers);
+        self.registers.truncate(checkpoint.registers);
+
+        // `functions` and `fn_registers` are truncated to the same length
+        // together first, so every function this attempt added (a hoisted
+        // closure, a lowered `impl` method) goes with the `fn_registers` entry
+        // it was pushed alongside, and the two tables index each other the
+        // same way they did before this call began.
+        self.functions.truncate(checkpoint.functions);
+        for (func, &len) in self.functions.iter_mut().zip(checkpoint.fn_impls.iter()) {
+            func.impls.truncate(len);
+        }
+        for (inner, &len) in self
+            .fn_registers
+            .iter_mut()
+            .zip(checkpoint.fn_registers_inner.iter())
+        {
+            inner.truncate(len);
+        }
+        self.fn_registers.truncate(checkpoint.fn_registers);
+
+        self.namespace
+            .symbols
+            .truncate(checkpoint.namespace_symbols);
+
+        // A generic type instantiated during the attempt is cached in
+        // `self.generics` by rendered name, pointing at the struct or enum
+        // entry the attempt pushed here; both go together for the same reason
+        // `functions`/`fn_registers` do.
+        self.structs.truncate(checkpoint.structs);
+        self.enums.truncate(checkpoint.enums);
+        self.generics.rollback_to(&checkpoint.generics);
+
+        self.instr_src.truncate(checkpoint.instr_src);
     }
 
     /// Runs the VM against the resident state starting at instruction `start`,
