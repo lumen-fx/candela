@@ -225,6 +225,162 @@ fn main() {}
     );
 }
 
+/// A compile diagnostic thrown while lazily specializing a called function
+/// (here: a call into a host function no `host` block declares) must not
+/// corrupt the resident compiler/VM state. A prior successful call into the
+/// same program must still work after it.
+#[test]
+fn a_diagnostic_mid_call_does_not_corrupt_a_later_call() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("lumen", "ping", |_n: i64| {});
+    let src = r#"
+host "lumen" {
+    ping(int);
+}
+
+struct Item {
+    title: string,
+}
+
+fn helper(item) {
+    return item.title;
+}
+
+fn a() {
+    let items = [];
+    items.push(Item { title: "one" });
+    items.push(Item { title: "two" });
+    let t = helper(items[0]);
+    lumen::no_such_builtin(0.7);
+    return t;
+}
+
+fn b() {
+    let items = [];
+    items.push(Item { title: "three" });
+    items.push(Item { title: "four" });
+    let t = helper(items[0]);
+    let out = "";
+    for item in items {
+        out = out + item.title;
+    }
+    return out + t;
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").unwrap();
+
+    let err = program.call("a", &[]);
+    assert!(
+        err.is_err(),
+        "expected a diagnostic from the undeclared call"
+    );
+
+    // The program must remain usable for a later call, even one that reuses a
+    // function specialization ("helper") the aborted call compiled partway.
+    assert_eq!(
+        program.call("b", &[]).unwrap(),
+        Value::String("threefourthree".to_owned())
+    );
+}
+
+/// The same shape as `a_diagnostic_mid_call_does_not_corrupt_a_later_call`,
+/// stripped of every loop, so a stale specialization address left behind by
+/// the aborted call lands on the very next instruction the second call runs
+/// instead of somewhere it can only be found by chance. Before the fix, this
+/// is what turned up the VM's `debug_assert!(self.is_struct() ||
+/// self.is_enum())` in `as_struct()`: the second call's `CallFunc` jumped to
+/// the address the aborted call's compile recorded for `helper`, which
+/// `self.instructions` never actually held, and read whatever landed there as
+/// `helper`'s struct-typed parameter.
+#[test]
+fn a_diagnostic_mid_call_does_not_leave_a_stale_specialization_address() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("lumen", "ping", |_n: i64| {});
+    let src = r#"
+host "lumen" {
+    ping(int);
+}
+
+struct Item {
+    title: string,
+}
+
+fn helper(item) {
+    return item.title;
+}
+
+fn a() {
+    let x = Item { title: "one" };
+    let t = helper(x);
+    lumen::no_such_builtin(0.7);
+    return t;
+}
+
+fn b() {
+    let y = Item { title: "two" };
+    return helper(y);
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").unwrap();
+
+    let err = program.call("a", &[]);
+    assert!(
+        err.is_err(),
+        "expected a diagnostic from the undeclared call"
+    );
+
+    assert_eq!(
+        program.call("b", &[]).unwrap(),
+        Value::String("two".to_owned())
+    );
+}
+
+/// A closure literal hoists to a fresh entry in the function table the first
+/// time it is reached, with a matching entry pushed onto the per-function
+/// saved-register table in the same breath. An aborted `Program::call` used to
+/// leave the first entry behind while a truncate elsewhere removed the second,
+/// so the next call's own closure took a function id one past where its
+/// saved-register entry actually landed, and calling it panicked on
+/// `state.fn_registers.get_mut(fn_id).unwrap()` in
+/// `functions/user_functions.rs` instead of running.
+#[test]
+fn a_diagnostic_mid_call_does_not_desync_a_later_closure() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("lumen", "ping", |_n: i64| {});
+    let src = r#"
+host "lumen" {
+    ping(int);
+}
+
+fn a() {
+    let f = fn(x) { return x + 1; };
+    let t = f(1);
+    lumen::no_such_builtin(0.7);
+    return t;
+}
+
+fn b() {
+    let g = fn(y) { return y + 2; };
+    return g(3);
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").unwrap();
+
+    let err = program.call("a", &[]);
+    assert!(
+        err.is_err(),
+        "expected a diagnostic from the undeclared call"
+    );
+
+    assert_eq!(program.call("b", &[]).unwrap(), Value::Int(5));
+}
+
 // ---------------------------------------------------------------------------
 // ARRAY + MAP MARSHALLING
 // ---------------------------------------------------------------------------
