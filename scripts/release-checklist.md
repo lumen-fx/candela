@@ -60,10 +60,9 @@ gh workflow run publish.yml --ref v0.0.5 -f dry_run=false
 gh workflow run publish-extensions.yml --ref v0.0.5
 ```
 
-A version already on crates.io is skipped, so running `publish.yml` again is
-safe. `publish-extensions.yml` has no such check; it takes one run at a time per
-tag, so nothing races, but re-run it for a leg that has not uploaded yet rather
-than for one that has.
+Both workflows ask their registry what it already holds and upload only what is
+missing, so re-running either one is safe. A leg that already uploaded says so
+and does nothing; a leg that did not uploads on the re-run.
 
 ## Verify
 
@@ -154,3 +153,8 @@ carry. So does every version that names a release that exists, such as the
 dependency line in `docs/docs/integration/embedding.md`, which tells an embedder
 what to ask crates.io for. The version the script sets is what the tree will be
 next, which is a different thing.
+
+An extension therefore ships only when its own version moves, so a change to one
+bumps `editors/vscode/package.json` or `editors/jetbrains/gradle.properties` in
+the same commit. A release carrying an unchanged extension publishes nothing and
+says which registry already holds that version.

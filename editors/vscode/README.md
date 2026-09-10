@@ -92,7 +92,12 @@ There is no compile step; `src/extension.js` is plain CommonJS, not TypeScript.
   ```
 
   Install the produced `.vsix` with
-  `code --install-extension candela-0.2.0.vsix`.
+  `code --install-extension candela-<version>.vsix`.
+
+The extension carries its own version, independent of the candela toolchain
+release it ships alongside. A change here bumps `version` in `package.json` and
+adds a `CHANGELOG.md` entry; without that the next release publishes nothing new,
+because the registries already hold the version in the manifest.
 
 ## License
 

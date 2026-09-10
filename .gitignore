@@ -11,3 +11,4 @@ docs/benchmarks.py
 *.so
 *.dll
 node_modules
+.serena
