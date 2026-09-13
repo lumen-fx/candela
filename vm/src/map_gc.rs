@@ -1,4 +1,5 @@
 use crate::array_gc::reset_marks;
+use crate::array_gc::trace_roots;
 use crate::array_gc::track;
 use crate::vm::GcScratch;
 use crate::vm::MapPool;
@@ -50,13 +51,7 @@ pub fn map_gc(
     gc: &mut GcScratch,
 ) {
     reset_marks(gc, obj_pool.len(), map_pool.len());
-    for data in registers.0.iter().chain(recursion_stack.0.iter()) {
-        if data.is_map() {
-            track_maps(data.as_map(), map_pool, obj_pool, gc);
-        } else if data.is_array() || data.is_struct() || data.is_enum() {
-            track(*data, obj_pool, map_pool, gc);
-        }
-    }
+    trace_roots(registers, recursion_stack, obj_pool, map_pool, gc);
 
     for &id in free_maps.iter() {
         unsafe {
