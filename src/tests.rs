@@ -6801,3 +6801,73 @@ pub fn comparisons_as_call_arguments() {
         true.into()
     );
 }
+
+/// A source nested exactly `levels` deep, each level built from `open` and
+/// `close` around `core`, dropped into `frame` at its `{}`.
+fn nested(frame: &str, open: &str, core: &str, close: &str, levels: usize) -> String {
+    frame.replacen(
+        "{}",
+        &format!("{}{core}{}", open.repeat(levels), close.repeat(levels)),
+        1,
+    )
+}
+
+/// Every construct the parser recurses on stops at the same depth with the
+/// same structured error, one level past what compiles. The nesting counted
+/// includes the enclosing `main` block and the innermost term, so the source
+/// text nests two levels fewer than the cap.
+#[test]
+pub fn nesting_past_the_limit_is_a_structured_error() {
+    use crate::parser::MAX_NESTING_DEPTH;
+    let cap = MAX_NESTING_DEPTH as usize;
+    let cases: [(&str, &str, &str, &str, usize); 5] = [
+        ("fn main() { let x = {}; }", "(", "1", ")", cap - 2),
+        ("fn main() { let x = {}; }", "[", "1", "]", cap - 2),
+        ("fn main() { let x = {}; }", "-", "1", "", cap - 2),
+        // Statement blocks: only `main`'s block is around them.
+        ("fn main() { {} }", "{ ", "", " }", cap - 1),
+        // Types: a parameter's type stands outside every block.
+        (
+            "fn f(x: {}) { } fn main() { }",
+            "{int: ",
+            "int",
+            "}",
+            cap - 1,
+        ),
+    ];
+    for (frame, open, core, close, fits) in cases {
+        let src = nested(frame, open, core, close, fits);
+        assert!(
+            compile_diag(&src, "nest.cdl").is_ok(),
+            "{open}{core}{close} nested {fits} deep compiles: {:?}",
+            compile_diag(&src, "nest.cdl")
+        );
+        let src = nested(frame, open, core, close, fits + 1);
+        let err = compile_diag(&src, "nest.cdl").expect_err("one level past the cap is an error");
+        assert_eq!(err.code, "nesting_too_deep", "{open}{core}{close}: {err:?}");
+        assert_wellformed(&err, &src);
+    }
+}
+
+/// A macro's expansion is parsed at the depth of its invocation, so a chain
+/// of expansions cannot dodge the cap by starting each one from zero.
+#[test]
+pub fn a_macro_expansion_nests_at_its_invocation_depth() {
+    use crate::parser::MAX_NESTING_DEPTH;
+    let mut env = MacroEnv::new();
+    env.register("deep", |_: &str| Ok(String::from("((1))")));
+    // `main`'s block, the parens, the invocation itself, then the expansion's
+    // two parens and its literal: one more paren and the literal is past the
+    // cap.
+    let fits = MAX_NESTING_DEPTH as usize - 5;
+    let src = nested("fn main() { let x = {}; }", "(", "deep!(x)", ")", fits);
+    let fitting = env.scope(|| compile_diag(&src, "nest.cdl"));
+    assert!(fitting.is_ok(), "{fitting:?}");
+    let src = nested("fn main() { let x = {}; }", "(", "deep!(x)", ")", fits + 1);
+    let err = env
+        .scope(|| compile_diag(&src, "nest.cdl"))
+        .expect_err("the expansion's own nesting counts");
+    assert_eq!(err.code, "nesting_too_deep");
+    // Reported against the invocation the reader wrote.
+    assert_eq!(err.span.start, src.find("deep!").unwrap());
+}

@@ -129,6 +129,14 @@ fn parse_generic_term(
 }
 
 pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
+    let span = parser.peek_token_span();
+    parser.enter(span);
+    let term = parse_term_inner(parser, allow_struct);
+    parser.leave();
+    term
+}
+
+fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
     let (t, t_span) = parser.next_token();
     match t {
         Token::Int(i) => Expr::Int(i),

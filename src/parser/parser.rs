@@ -61,7 +61,19 @@ struct Parser<'a> {
     /// invocation instead: expressions spliced into the program point at the
     /// macro site, and so does any error raised while parsing them.
     span_override: Option<Span>,
+    /// How many terms, blocks and types enclose the one being parsed. Each
+    /// level is one recursive descent frame, so this is what bounds the stack
+    /// the parser (and the compiler walking the tree it builds) can use.
+    nesting: u32,
 }
+
+/// The deepest that terms, blocks and types may nest.
+///
+/// A level is one term inside another (`(`, `[`, `-`, a call argument, a
+/// struct field), one block inside another, or one type inside another; a
+/// macro expansion parsed inside an expression counts the levels around the
+/// invocation. The json parser caps documents at the same depth.
+pub const MAX_NESTING_DEPTH: u32 = 128;
 
 #[derive(Clone)]
 enum ParserErr<'a> {
@@ -97,6 +109,8 @@ enum ParserErr<'a> {
     MacroExpansionTrailingTokens(&'a str),
     /// Macros expanded into one another past [`MAX_EXPANSION_DEPTH`].
     MacroRecursionLimit(&'a str),
+    /// Terms, blocks or types nested past [`MAX_NESTING_DEPTH`].
+    NestingTooDeep,
 }
 
 impl ParserErr<'_> {
@@ -126,6 +140,7 @@ impl ParserErr<'_> {
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
             ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
+            ParserErr::NestingTooDeep => "nesting_too_deep",
         }
     }
 }
@@ -183,6 +198,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::MacroRecursionLimit(name) => &format!(
             "Expanding this macro reached {RED}{BOLD}{name}!{RESET} more than {MAX_EXPANSION_DEPTH} macros deep. An expansion may use another macro, but the chain has to end"
+        ),
+        ParserErr::NestingTooDeep => &format!(
+            "This is nested more than {MAX_NESTING_DEPTH} levels deep. Move the inner part into a variable or a function"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -248,6 +266,20 @@ impl<'a> Parser<'a> {
     #[inline(never)]
     fn error(&self, span: Span, error: ParserErr) -> ! {
         throw_parser_error(self.ctx.src, span, error)
+    }
+    /// Opens one nesting level for the construct starting at `span`, or raises
+    /// [`ParserErr::NestingTooDeep`] at it. Pair with [`Parser::leave`].
+    #[inline(always)]
+    fn enter(&mut self, span: Span) {
+        if self.nesting >= MAX_NESTING_DEPTH {
+            cold_path();
+            self.error(span, ParserErr::NestingTooDeep);
+        }
+        self.nesting += 1;
+    }
+    #[inline(always)]
+    const fn leave(&mut self) {
+        self.nesting -= 1;
     }
     #[inline(always)]
     fn next_token(&mut self) -> (Token<'a>, Span) {
@@ -481,6 +513,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         },
         last_token_end: span.end as usize,
         span_override: Some(span),
+        nesting: parser.nesting,
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -825,6 +858,14 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
 }
 
 fn parse_type(parser: &mut Parser<'_>) -> TypeExpr {
+    let span = parser.peek_token_span();
+    parser.enter(span);
+    let t = parse_type_inner(parser);
+    parser.leave();
+    t
+}
+
+fn parse_type_inner(parser: &mut Parser<'_>) -> TypeExpr {
     let t = parse_atomic_type(parser);
     if parser.peek_token() == Token::Pipe {
         let mut poly = Vec::with_capacity(2);
@@ -1246,6 +1287,7 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             ctx: ParserCtx { src },
             last_token_end: 0,
             span_override: None,
+            nesting: 0,
         },
         &mut impls,
     );

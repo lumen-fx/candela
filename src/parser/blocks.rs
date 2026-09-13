@@ -62,7 +62,9 @@ pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
 pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
     let opener_token_span =
         parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'");
+    parser.enter(opener_token_span);
     let code = parse_code(parser);
+    parser.leave();
     parser.next_token_expect_closer(Token::LBrace, opener_token_span, Token::RBrace);
     code
 }
@@ -72,7 +74,9 @@ pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
 pub fn parse_block_expr(parser: &mut Parser<'_>) -> Expr {
     let opener_token_span =
         parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'");
+    parser.enter(opener_token_span);
     let code = parse_expr(parser);
+    parser.leave();
     parser.next_token_expect_closer(Token::LBrace, opener_token_span, Token::RBrace);
     code
 }
