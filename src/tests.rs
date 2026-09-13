@@ -4690,6 +4690,53 @@ pub fn json_parse_nested_array() {
 }
 
 #[test]
+pub fn gc_state_persists_across_runs() {
+    // The pools outlive one run of the interpreter, so what the collector
+    // knows about them has to as well. A second run over the same pools
+    // reuses the slots the first run's collection freed and keeps the raised
+    // threshold, instead of collecting again on its first allocation.
+    let filename = "test.kl";
+    let contents = "
+        fn main() {
+            let i = 0;
+            while i < 300 {
+                let t = [i];
+                i = i + 1;
+            }
+        }
+    ";
+    let out = compile(String::from(contents), filename, true);
+    let mut pools = out.pools;
+    let mut reg = RegisterFile(out.registers);
+    let err_ctx = crate::errors::ErrorCtx {
+        instr_src: out.instr_src,
+        sources: vec![Source {
+            filename: filename.into(),
+            contents: String::from(contents),
+        }],
+    };
+    for _ in 0..2 {
+        crate::vm::execute(
+            &out.instructions,
+            &mut reg,
+            &mut pools,
+            &err_ctx,
+            &out.fn_registers,
+            &[],
+            &[],
+            &[],
+            out.allocated_arg_count,
+            out.allocated_call_depth,
+            &[],
+            &[],
+            0,
+        );
+    }
+    assert_eq!(pools.gc.scratch.collections, 1);
+    assert!(pools.objs.len() < 512, "pool grew to {}", pools.objs.len());
+}
+
+#[test]
 pub fn parsed_array_survives_array_gc() {
     // An array a parsed document hangs off its root map is reachable only
     // through that map. The array collector has to follow a map register to

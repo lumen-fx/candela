@@ -4440,11 +4440,11 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
 
     let mut variables: Vec<Variable> = Vec::new();
     let mut registers: Vec<Data> = Vec::new();
-    let mut pools: Pools = Pools {
-        objs: Pool::with_capacity(10),
-        maps: Pool::with_capacity(2),
-        strings: Pool::with_capacity(10),
-    };
+    let mut pools: Pools = Pools::new(
+        Pool::with_capacity(10),
+        Pool::with_capacity(2),
+        Pool::with_capacity(10),
+    );
     let mut instr_src: Vec<InstrSrc> = Vec::new();
     let mut fn_registers: Vec<Vec<u16>> = Vec::new();
     let mut functions: Vec<Function> = Vec::new();
