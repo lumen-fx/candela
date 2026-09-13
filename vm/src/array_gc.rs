@@ -93,6 +93,7 @@ pub fn trace_roots(
 /// earlier collection reads as "already visited" and stops the trace short of
 /// objects that are still live.
 pub fn reset_marks(gc: &mut GcScratch, arrays: usize, maps: usize) {
+    gc.collections += 1;
     gc.array_live.clear();
     gc.array_live.resize(arrays, false);
     gc.map_live.clear();

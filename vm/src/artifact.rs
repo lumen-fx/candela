@@ -568,11 +568,7 @@ impl RuntimeProgram {
         Ok(Self {
             instructions: img.instructions,
             registers: img.registers.into_iter().map(Data).collect(),
-            pools: Pools {
-                objs,
-                maps,
-                strings,
-            },
+            pools: Pools::new(objs, maps, strings),
             instr_src: img
                 .instr_src
                 .into_iter()
