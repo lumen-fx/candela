@@ -234,14 +234,17 @@ pub fn c_struct_to_candela_struct(
     string_pool: &mut StringPool,
     struct_fields: &[(SmolStr, DataType, Span)],
     r: &mut RegisterFile,
-    recursion_stack: &RegisterFile,
+    recursion_stack: &mut RegisterFile,
     free_strings: &mut Vec<u16>,
     gc_string_threshold: &mut u32,
     gc: &mut GcScratch,
     structs: &[Struct],
 ) -> Vec<Data> {
-    let mut buf: Vec<Data> = Vec::new();
-    buf.reserve_exact(struct_fields.len());
+    // Each field goes onto the recursion stack as it is built, because that
+    // stack is a garbage-collection root and a Rust-local buffer is not. A
+    // string field's allocation can run the string collector, which would free
+    // the strings of every field built before it if nothing rooted them.
+    let base = recursion_stack.0.len();
     for (i, (_, field_type, _)) in struct_fields.iter().enumerate() {
         let field_offset = *unsafe { field_offsets.get_unchecked(i) };
         match field_type {
@@ -250,14 +253,16 @@ pub fn c_struct_to_candela_struct(
                 unsafe {
                     bytes.copy_from_slice_unchecked(&c_struct[field_offset..(field_offset + 4)]);
                 }
-                buf.push(Data::int(i32::from_ne_bytes(bytes)));
+                recursion_stack.0.push(Data::int(i32::from_ne_bytes(bytes)));
             }
             DataType::Float => {
                 let mut bytes: [u8; 8] = [0; 8];
                 unsafe {
                     bytes.copy_from_slice_unchecked(&c_struct[field_offset..(field_offset + 8)]);
                 }
-                buf.push(Data::float(f64::from_ne_bytes(bytes)));
+                recursion_stack
+                    .0
+                    .push(Data::float(f64::from_ne_bytes(bytes)));
             }
             DataType::String => {
                 let mut bytes: [u8; 8] = [0; 8];
@@ -265,7 +270,7 @@ pub fn c_struct_to_candela_struct(
                     bytes.copy_from_slice_unchecked(&c_struct[field_offset..(field_offset + 8)]);
                 }
                 let ptr = usize::from_ne_bytes(bytes) as *const std::ffi::c_char;
-                buf.push(if ptr.is_null() {
+                let field = if ptr.is_null() {
                     NULL
                 } else {
                     Data::string(
@@ -281,7 +286,8 @@ pub fn c_struct_to_candela_struct(
                         gc_string_threshold,
                         gc,
                     )
-                });
+                };
+                recursion_stack.0.push(field);
             }
             DataType::Struct(nested_struct_id) => {
                 let s = unsafe { structs.get_unchecked(*nested_struct_id as usize) };
@@ -302,7 +308,7 @@ pub fn c_struct_to_candela_struct(
                 );
                 let new_struct_id = obj_pool.len();
                 obj_pool.push(nested_data_fields);
-                buf.push(Data::struct_instance(
+                recursion_stack.0.push(Data::struct_instance(
                     *nested_struct_id,
                     new_struct_id as u32,
                 ));
@@ -310,5 +316,5 @@ pub fn c_struct_to_candela_struct(
             _ => unsafe { unreachable_unchecked() },
         }
     }
-    buf
+    recursion_stack.0.drain(base..).collect()
 }

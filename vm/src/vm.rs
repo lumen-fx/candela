@@ -621,7 +621,7 @@ pub fn execute(
                                 str_pool,
                                 struct_fields,
                                 r,
-                                &recursion_stack,
+                                &mut recursion_stack,
                                 free_strings,
                                 gc_string_threshold,
                                 gc,
