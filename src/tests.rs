@@ -4690,6 +4690,39 @@ pub fn json_parse_nested_array() {
 }
 
 #[test]
+pub fn parsed_array_survives_array_gc() {
+    // An array a parsed document hangs off its root map is reachable only
+    // through that map. The array collector has to follow a map register to
+    // see it, or the sweep hands its pool slot to the next allocation and the
+    // script reads whatever that wrote.
+    let doc = (0..300)
+        .map(|i| format!("[{i}]"))
+        .collect::<Vec<_>>()
+        .join(",");
+    run_and_check_registers!(
+        &format!(
+            r#"
+            fn libs_len(body) {{
+                let root = as_map(json_parse(body));
+                let s = "a,b,c";
+                let i = 0;
+                while i < 50 {{
+                    let parts = s.split(",");
+                    i = i + 1;
+                }}
+                return as_list(root.get("libraries")).len();
+            }}
+
+            fn main() {{
+                print(libs_len("{{\"libraries\": [{doc}], \"other\": \"x\"}}"));
+            }}
+        "#
+        ),
+        300.into()
+    );
+}
+
+#[test]
 pub fn json_roundtrip_preserves_int() {
     run_and_check_registers!(
         "

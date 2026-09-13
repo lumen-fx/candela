@@ -47,13 +47,7 @@ fn array_gc(
     gc: &mut GcScratch,
 ) {
     reset_marks(gc, obj_pool.len(), map_pool.len());
-
-    // Find all used arrays
-    for data in registers.0.iter().chain(recursion_stack.0.iter()) {
-        if data.is_array() || data.is_struct() || data.is_enum() {
-            track(*data, obj_pool, map_pool, gc);
-        }
-    }
+    trace_roots(registers, recursion_stack, obj_pool, map_pool, gc);
 
     // Mark slots that are already free as live
     for &id in free_arrays.iter() {
@@ -66,6 +60,27 @@ fn array_gc(
     for (i, array_alive) in gc.array_live.iter().enumerate() {
         if !array_alive {
             free_arrays.push(i as u32);
+        }
+    }
+}
+
+/// Marks every array and every map the registers can still reach.
+///
+/// The root set is the same whichever pool is about to be swept, because the
+/// trace crosses between the two: an array reachable only through a map in a
+/// register is live, and so is a map reachable only through an array. Reading
+/// a register's tag as a verdict on what it can reach is what used to free the
+/// arrays of a parsed json document, which hang off its root map.
+pub fn trace_roots(
+    registers: &RegisterFile,
+    recursion_stack: &RegisterFile,
+    obj_pool: &ObjectPool,
+    map_pool: &MapPool,
+    gc: &mut GcScratch,
+) {
+    for data in registers.0.iter().chain(recursion_stack.0.iter()) {
+        if data.is_array() || data.is_struct() || data.is_enum() || data.is_map() {
+            track(*data, obj_pool, map_pool, gc);
         }
     }
 }
