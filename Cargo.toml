@@ -142,11 +142,11 @@ debug = false
 strip = true
 
 # `panic = "unwind"` is required, not a preference: the compiler recovers from a
-# compile error by catching the unwind its error funnel raises, and `candela
-# build` relies on that recovery to leave a function it cannot give a host entry
-# point out of the export table instead of failing the whole build. Under
-# `panic = "abort"` that recovery is impossible and the CLI aborts with no
-# output. Owner ruling 2026-09-14, issue #69.
+# compile error by catching the unwind its error funnel raises, and that
+# recovery is how `Engine::compile`, `Program::call` and the LSP turn an error
+# into a `Diagnostic` the host can read. Under `panic = "abort"` the first error
+# in a script aborts the process with no output. Owner ruling 2026-09-14,
+# issue #69.
 [profile.release]
 opt-level = 3
 lto = "fat"

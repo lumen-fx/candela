@@ -53,6 +53,22 @@ from the script, since there is no call site to take the types from; see
 [embedding](../integration/embedding.md). A parameter annotated `any` stays
 dynamic and accepts a value of any type.
 
+Annotating every parameter also decides when the body is checked. A function
+whose parameters are all annotated is compiled at those types whether or not
+anything calls it, so an error in it is reported at compile time. `any` is one
+of those types, and it carries no operations of its own: a body that adds,
+indexes or compares an `any` parameter has to name the type it wants, either by
+annotating the parameter concretely or by converting inside the body.
+
+```candela
+fn plus_one(x: any) -> int {
+    return as_int(x) + 1;
+}
+```
+
+A function with a bare parameter has no declared type to compile against, so its
+body is first checked by the call that reaches it.
+
 Declaration order does not matter, so a function may call one declared further
 down the file. Two functions cannot share a name: there is no overloading, and a
 repeated name is a compile error.

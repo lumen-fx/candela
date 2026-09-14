@@ -235,9 +235,17 @@ Parses and type-checks the source, binds every `host` function it declares to a
 registered closure, and runs `main` once so top-level setup is done before the
 host makes its first call. The filename is what error reports name.
 
-Returns a `Diagnostic` when the script does not compile, when a declared `host`
-function has no registered closure, when a registered closure disagrees with its
-declaration, or when running `main` raises a runtime error.
+It also compiles the body of every function whose parameters are all annotated,
+at those declared types, whether or not anything calls it. An error in a
+function `main` never reaches comes back from `compile` rather than from the
+first `call`. A function with a bare parameter has no declared type to compile
+against, so it is left for the call. The check runs before `main`, so a broken
+body is reported before any top-level setup has run.
+
+Returns a `Diagnostic` when the script does not compile, when the body of an
+annotated function does not compile at its declared parameter types, when a
+declared `host` function has no registered closure, when a registered closure
+disagrees with its declaration, or when running `main` raises a runtime error.
 
 ## Program
 
@@ -268,8 +276,10 @@ fn banner(label: string) -> int {
 ```
 
 Leaving the parameters bare still works, and the types are then taken from the
-first host call. Annotate when you want a mismatch reported against the
-declaration rather than accepted as a new specialisation.
+first host call, which is also the first time the body is type-checked.
+Annotate when you want a mismatch reported against the declaration rather than
+accepted as a new specialisation, and when you want the body checked by
+`compile` rather than by whichever call reaches it first.
 
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.

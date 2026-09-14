@@ -15,6 +15,7 @@ use candela::LoadError;
 use candela::RuntimeProgram;
 use candela::Value;
 use candela::build_bytecode;
+use candela::collect_diagnostic;
 use candela::load_program;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -240,33 +241,49 @@ fn calling_a_name_the_artifact_does_not_export() {
     );
 }
 
-/// A function the build cannot give an entry point is left out of the export
-/// table, and the rest of the program still builds. The build finds that out by
-/// compiling the trampoline and recovering from the error, which is an unwind:
-/// under `panic = "abort"` both programs below aborted the process instead,
-/// printing nothing.
+/// A function whose body does not compile at its declared parameter types fails
+/// the build; it used to lose its export entry and ship as an unknown name.
+/// The diagnostic leaves the compile as an unwind, so the recovery here needs
+/// `panic = "unwind"`: under `panic = "abort"` each build below aborts the
+/// process instead, printing nothing.
 #[test]
-fn a_function_with_no_compilable_entry_point_is_left_out() {
-    // `any` is a host-callable parameter type, but nothing concrete can be read
-    // off it, so the `len` in the body has no receiver type to compile against.
-    // A candela caller specialises the body per call site, which is why the
-    // program itself runs.
-    let src = "fn f(x: any) { print(x.len()); }\nfn main() { f(\"hi\"); }\n";
-    let mut program = load(src, "anyparam.cdl", &HostRegistry::new());
+fn a_broken_annotated_function_fails_the_build() {
+    let src = "
+        fn on_click(id: string) { nope(); }
+        fn main() {}
+    ";
+    let diagnostic = collect_diagnostic(|| build_bytecode(src.to_owned(), "broken.cdl"))
+        .expect_err("a body that does not compile must fail the build");
     assert!(
-        program.exports().next().is_none(),
-        "a body that needs a concrete receiver has no entry point"
+        diagnostic.message.contains("nope"),
+        "the diagnostic must name the call it could not resolve: {}",
+        diagnostic.message
     );
-    assert!(matches!(
-        program.call("f", &[Value::String(String::from("hi"))]),
-        Err(CallError::UnknownFunction(_))
-    ));
 
-    // The same recovery covers a body that names a function that does not
-    // exist, which is how this was first found.
-    let src = "fn handle(id: string) { nope(); }\nfn main() {}\n";
-    let program = load(src, "handle.cdl", &HostRegistry::new());
-    assert!(program.exports().next().is_none());
+    // `any` is an annotation, so the body is checked at that type too, and
+    // `len` has no receiver type to compile against there. A candela caller
+    // specialises the body per call site, which is why `f("hi")` is fine.
+    let src = "fn f(x: any) { print(x.len()); }\nfn main() { f(\"hi\"); }\n";
+    let diagnostic = collect_diagnostic(|| build_bytecode(src.to_owned(), "anyparam.cdl"))
+        .expect_err("`any` is an annotation, so the body is checked at it");
+    assert!(
+        diagnostic.message.contains("len"),
+        "the diagnostic must name the call it could not resolve: {}",
+        diagnostic.message
+    );
+
+    let src = "
+        fn on_click(id: string) { print(id); }
+        fn main() {}
+    ";
+    let mut program = load(src, "sound.cdl", &HostRegistry::new());
+    assert!(program.exports().any(|name| name == "on_click"));
+    assert_eq!(
+        program
+            .call("on_click", &[Value::String("ok".to_owned())])
+            .expect("the sound function must still be callable"),
+        Value::Null
+    );
 }
 
 /// Arguments are checked against the declared parameter types before the
