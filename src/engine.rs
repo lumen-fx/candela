@@ -35,9 +35,9 @@ use crate::compiler::type_system::Generics;
 use crate::compiler::type_system::GenericsCheckpoint;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
+use crate::trampoline::compile_entry_points;
 use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
-use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
 use candela_vm::embed::HostError;
 use candela_vm::embed::HostRegistry;
@@ -63,6 +63,20 @@ use candela_vm::vm;
 use candela_vm::vm::RegisterFile;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
+
+// `Engine::compile` and `Program::call` recover from a compile error by
+// catching the unwind the error funnel raises, so this API exists only under an
+// unwinding panic strategy. Built with `panic = "abort"` the first error in a
+// script would abort the process instead of coming back as a `Diagnostic`,
+// which is what the LSP and every embedding host read.
+//
+// wasm32 aborts on panic whatever the profile says, so the check is for the
+// profiles that build the toolchain.
+#[cfg(not(target_arch = "wasm32"))]
+const _: () = assert!(
+    cfg!(panic = "unwind"),
+    "the candela embedding API needs an unwinding panic strategy; see [profile.release]"
+);
 
 /// The persistent embedding entry point. Holds the table of registered host
 /// functions and compiles scripts into reusable [`Program`]s.
@@ -212,20 +226,37 @@ impl Engine {
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
     /// it declares to the matching registered closure.
     ///
+    /// Every function whose parameters are all annotated is compiled at those
+    /// declared types, whether or not anything calls it, so an error in the
+    /// body of a function `main` never reaches comes back from here rather than
+    /// from the first [`Program::call`]. A function with a bare parameter has
+    /// no declared type to compile against and stays lazy.
+    ///
     /// `main` is executed once here (module instantiation), so any top-level
-    /// setup runs before the host makes its first [`Program::call`].
+    /// setup runs before the host makes its first [`Program::call`]. The
+    /// entry-point check runs first, so a broken body is reported before any
+    /// top-level side effect.
     ///
     /// # Errors
     ///
-    /// Returns a [`Diagnostic`] if the script fails to parse/type-check, if a
-    /// declared `host` function has no registered closure, if a registered
-    /// closure's arity/types disagree with the `host` block, or if running
-    /// `main` raises a runtime error.
+    /// Returns a [`Diagnostic`] if the script fails to parse/type-check, if the
+    /// body of an annotated function does not compile at its declared parameter
+    /// types, if a declared `host` function has no registered closure, if a
+    /// registered closure's arity/types disagree with the `host` block, or if
+    /// running `main` raises a runtime error.
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
-        let out: CompileOutput = self
-            .macros
-            .scope(|| collect_diagnostic(|| compile(src.to_owned(), &filename_owned, false)))?;
+        let out: CompileOutput = self.macros.scope(|| {
+            collect_diagnostic(|| {
+                let mut out = compile(src.to_owned(), &filename_owned, false);
+                // Compiling every entry point here is what makes `compile` a
+                // check step: a body error in a function `main` never calls is
+                // reported now, not on the first `Program::call` that reaches
+                // it. It also leaves those specialisations warm for that call.
+                let _ = compile_entry_points(&mut out);
+                out
+            })
+        })?;
 
         // Bind each declared host function to a registered closure, validating
         // arity + types against the closure's derived signature.
@@ -237,21 +268,9 @@ impl Engine {
                 code: e.code().to_owned(),
             })?;
 
-        // Register 0 is candela's void-return / null sink: a call whose result is
-        // discarded writes `null` there. A normal program always has register 0
-        // occupied by a constant, but an empty `main` can leave it free, which
-        // would let a `Program::call` trampoline allocate a function parameter to
-        // it and then have a void host call clobber that parameter. Reserve it.
-        let mut registers = out.registers;
-        let mut const_registers = out.const_registers;
-        if registers.is_empty() {
-            registers.push(NULL);
-            const_registers.entry(NULL).or_insert(0);
-        }
-
         let mut program = Program {
             instructions: out.instructions,
-            registers,
+            registers: out.registers,
             pools: out.pools,
             instr_src: out.instr_src,
             fn_registers: out.fn_registers,
@@ -266,7 +285,7 @@ impl Engine {
             functions: out.functions,
             dyn_libs: out.dyn_libs,
             namespace: out.namespace,
-            const_registers,
+            const_registers: out.const_registers,
             free_registers: out.free_registers,
             generics: out.generics,
         };

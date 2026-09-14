@@ -197,6 +197,57 @@ fn unknown_script_fn_is_a_diagnostic() {
     assert!(!err.message.is_empty());
 }
 
+/// `compile` compiles every fully annotated function at its declared parameter
+/// types, so a body error in one `main` never calls is reported by `compile`.
+#[test]
+fn an_annotated_function_is_checked_at_compile() {
+    let engine = Engine::new();
+    let err = engine
+        .compile(
+            "fn on_click(id: string) { nope(); }\nfn main() {}\n",
+            "main.cdl",
+        )
+        .err()
+        .expect("a body that does not compile must fail the compile");
+    assert!(err.message.contains("nope"), "{}", err.message);
+
+    // A struct-typed parameter is an annotation the compiler can specialise on
+    // even though no host `Value` fits it, so it is checked too.
+    let err = engine
+        .compile(
+            "struct Point { x: int, y: int }\nfn draw(p: Point) { nope(); }\nfn main() {}\n",
+            "main.cdl",
+        )
+        .err()
+        .expect("a struct-typed parameter is checked even though it is not exported");
+    assert!(err.message.contains("nope"), "{}", err.message);
+
+    let mut program = engine
+        .compile(
+            "fn double(x: int) -> int { return x * 2; }\nfn main() {}\n",
+            "main.cdl",
+        )
+        .expect("a sound annotated function compiles");
+    assert_eq!(
+        program.call("double", &[Value::Int(21)]).unwrap(),
+        Value::Int(42)
+    );
+}
+
+/// A bare parameter has no declared type to compile against, so such a function
+/// stays lazy and is first checked by the call that reaches it.
+#[test]
+fn a_bare_parameter_function_is_checked_at_the_call() {
+    let engine = Engine::new();
+    let mut program = engine
+        .compile("fn on_click(id) { nope(); }\nfn main() {}\n", "main.cdl")
+        .expect("nothing to check without a call site");
+    let err = program
+        .call("on_click", &[Value::String("x".to_owned())])
+        .unwrap_err();
+    assert!(err.message.contains("nope"), "{}", err.message);
+}
+
 /// A runtime error inside a called function surfaces as a `Diagnostic` and does
 /// not corrupt the program for subsequent successful calls.
 #[test]
@@ -229,6 +280,10 @@ fn main() {}
 /// (here: a call into a host function no `host` block declares) must not
 /// corrupt the resident compiler/VM state. A prior successful call into the
 /// same program must still work after it.
+///
+/// `a` and `b` take a bare parameter so `Engine::compile` leaves them for the
+/// call to specialize; a fully annotated function is compiled up front and the
+/// diagnostic would come out of `compile` instead.
 #[test]
 fn a_diagnostic_mid_call_does_not_corrupt_a_later_call() {
     let mut engine = Engine::new();
@@ -246,7 +301,7 @@ fn helper(item) {
     return item.title;
 }
 
-fn a() {
+fn a(lazy) {
     let items = [];
     items.push(Item { title: "one" });
     items.push(Item { title: "two" });
@@ -255,7 +310,7 @@ fn a() {
     return t;
 }
 
-fn b() {
+fn b(lazy) {
     let items = [];
     items.push(Item { title: "three" });
     items.push(Item { title: "four" });
@@ -271,7 +326,7 @@ fn main() {}
 "#;
     let mut program = engine.compile(src, "main.cdl").unwrap();
 
-    let err = program.call("a", &[]);
+    let err = program.call("a", &[Value::Null]);
     assert!(
         err.is_err(),
         "expected a diagnostic from the undeclared call"
@@ -280,7 +335,7 @@ fn main() {}
     // The program must remain usable for a later call, even one that reuses a
     // function specialization ("helper") the aborted call compiled partway.
     assert_eq!(
-        program.call("b", &[]).unwrap(),
+        program.call("b", &[Value::Null]).unwrap(),
         Value::String("threefourthree".to_owned())
     );
 }
@@ -293,7 +348,8 @@ fn main() {}
 /// self.is_enum())` in `as_struct()`: the second call's `CallFunc` jumped to
 /// the address the aborted call's compile recorded for `helper`, which
 /// `self.instructions` never actually held, and read whatever landed there as
-/// `helper`'s struct-typed parameter.
+/// `helper`'s struct-typed parameter. `a` and `b` take a bare parameter for the
+/// same reason as in that test.
 #[test]
 fn a_diagnostic_mid_call_does_not_leave_a_stale_specialization_address() {
     let mut engine = Engine::new();
@@ -311,14 +367,14 @@ fn helper(item) {
     return item.title;
 }
 
-fn a() {
+fn a(lazy) {
     let x = Item { title: "one" };
     let t = helper(x);
     lumen::no_such_builtin(0.7);
     return t;
 }
 
-fn b() {
+fn b(lazy) {
     let y = Item { title: "two" };
     return helper(y);
 }
@@ -327,14 +383,14 @@ fn main() {}
 "#;
     let mut program = engine.compile(src, "main.cdl").unwrap();
 
-    let err = program.call("a", &[]);
+    let err = program.call("a", &[Value::Null]);
     assert!(
         err.is_err(),
         "expected a diagnostic from the undeclared call"
     );
 
     assert_eq!(
-        program.call("b", &[]).unwrap(),
+        program.call("b", &[Value::Null]).unwrap(),
         Value::String("two".to_owned())
     );
 }
@@ -346,7 +402,9 @@ fn main() {}
 /// so the next call's own closure took a function id one past where its
 /// saved-register entry actually landed, and calling it panicked on
 /// `state.fn_registers.get_mut(fn_id).unwrap()` in
-/// `functions/user_functions.rs` instead of running.
+/// `functions/user_functions.rs` instead of running. `a` and `b` take a bare
+/// parameter for the same reason as in
+/// `a_diagnostic_mid_call_does_not_corrupt_a_later_call`.
 #[test]
 fn a_diagnostic_mid_call_does_not_desync_a_later_closure() {
     let mut engine = Engine::new();
@@ -356,14 +414,14 @@ host "lumen" {
     ping(int);
 }
 
-fn a() {
+fn a(lazy) {
     let f = fn(x) { return x + 1; };
     let t = f(1);
     lumen::no_such_builtin(0.7);
     return t;
 }
 
-fn b() {
+fn b(lazy) {
     let g = fn(y) { return y + 2; };
     return g(3);
 }
@@ -372,13 +430,13 @@ fn main() {}
 "#;
     let mut program = engine.compile(src, "main.cdl").unwrap();
 
-    let err = program.call("a", &[]);
+    let err = program.call("a", &[Value::Null]);
     assert!(
         err.is_err(),
         "expected a diagnostic from the undeclared call"
     );
 
-    assert_eq!(program.call("b", &[]).unwrap(), Value::Int(5));
+    assert_eq!(program.call("b", &[Value::Null]).unwrap(), Value::Int(5));
 }
 
 // ---------------------------------------------------------------------------

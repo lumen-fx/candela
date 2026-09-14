@@ -45,9 +45,12 @@ appended.
 file is an error, so `candela build game.cdl dist/game.cdlb` says what it wants
 instead of writing `dist/game.cdlb`.
 
-The program is compiled exactly as it is for a normal run, so every compile
-error listed in [errors](errors.md) can come out of this command. See
-[artifacts](artifacts.md) for what the file contains and how to run it.
+The program is compiled as it is for a normal run, so every compile error
+listed in [errors](errors.md) can come out of this command. The build checks
+more than a run does: every function whose parameters are all annotated is
+compiled at those declared types, so an error in the body of a function `main`
+never reaches fails the build here. See [artifacts](artifacts.md) for what the
+file contains and how to run it.
 
 ### candela --help
 
