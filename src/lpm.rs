@@ -996,8 +996,8 @@ mod tests {
             Some(format!("line\nbreak {accented} {wide}").as_str())
         );
 
-        // The same text as bytes rather than escapes, which is how a report
-        // from the client actually arrives.
+        // The same text as bytes rather than escapes, which is the shape a
+        // report from the client arrives in.
         let literal = json::parse(&format!("{{\"a\":\"{accented} {wide}\"}}")).unwrap();
         assert_eq!(
             literal.get("a").and_then(json::Value::as_str),

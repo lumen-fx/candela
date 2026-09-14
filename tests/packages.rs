@@ -368,6 +368,95 @@ fn a_program_reads_its_own_arguments_under_every_shape() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// `remove` takes the entry out, and a name the manifest does not list is an
+/// error rather than a quiet success.
+#[test]
+fn remove_drops_the_entry_it_names() {
+    let root = scratch_dir("remove");
+    let package = shapes_package(&root);
+    let stub = write_stub(&root, &report("shapes", "1.2.3", "candela", &package));
+
+    common::output_with_deadline(
+        candela(&root, Some(&stub)).arg("new").arg("demo"),
+        "candela new",
+    );
+    let project = root.join("demo");
+    std::fs::write(
+        project.join("candela.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n# what it needs\n[dependencies]\nshapes = \"^1.2\"\n",
+    )
+    .unwrap();
+
+    let removed = common::output_with_deadline(
+        candela(&project, Some(&stub)).arg("remove").arg("shapes"),
+        "candela remove",
+    );
+    assert!(
+        removed.status.success(),
+        "candela remove: {}",
+        stderr_of(&removed)
+    );
+    let manifest = std::fs::read_to_string(project.join("candela.toml")).unwrap();
+    assert!(!manifest.contains("shapes"), "{manifest}");
+    // The edit keeps the file the author's: the comment above the table is
+    // still there.
+    assert!(manifest.contains("# what it needs"), "{manifest}");
+
+    let again = common::output_with_deadline(
+        candela(&project, Some(&stub)).arg("remove").arg("shapes"),
+        "candela remove again",
+    );
+    assert!(!again.status.success(), "removing twice must be an error");
+    assert!(
+        stderr_of(&again).contains("shapes"),
+        "{}",
+        stderr_of(&again)
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// `update` re-resolves through the client and reports what it settled on.
+#[test]
+fn update_re_resolves_and_reports() {
+    let root = scratch_dir("update");
+    let package = shapes_package(&root);
+    let stub = write_stub(&root, &report("shapes", "1.2.3", "candela", &package));
+
+    common::output_with_deadline(
+        candela(&root, Some(&stub)).arg("new").arg("demo"),
+        "candela new",
+    );
+    let project = root.join("demo");
+    std::fs::write(
+        project.join("candela.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nshapes = \"^1.2\"\n",
+    )
+    .unwrap();
+
+    let updated = common::output_with_deadline(
+        candela(&project, Some(&stub)).arg("update").arg("shapes"),
+        "candela update",
+    );
+    assert!(
+        updated.status.success(),
+        "candela update: {}",
+        stderr_of(&updated)
+    );
+    assert!(
+        stdout_of(&updated).contains("shapes 1.2.3"),
+        "{}",
+        stdout_of(&updated)
+    );
+
+    // The verb and the package name both reach the client.
+    let args = std::fs::read_to_string(root.join("args.txt")).unwrap();
+    assert!(args.starts_with("update "), "{args}");
+    assert!(args.trim_end().ends_with("shapes"), "{args}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A candela project cannot depend on a Lumen package, and the refusal names
 /// the one it found.
 #[test]
