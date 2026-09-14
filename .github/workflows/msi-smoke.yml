@@ -17,6 +17,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# The smoke run only reads the checkout.
+permissions:
+  contents: read
+
 jobs:
   smoke:
     name: Install, upgrade, uninstall

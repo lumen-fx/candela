@@ -13,6 +13,11 @@ on:
       - "docs/**"
       - "install.sh"
 
+# The dispatch goes out on SITE_BUILD_TOKEN, so the run's own token needs
+# nothing beyond reading this repository.
+permissions:
+  contents: read
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest
