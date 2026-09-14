@@ -270,10 +270,14 @@ lpm_current_version() {
 install_lpm() {
   [ "$WANT_LPM" -eq 1 ] || return 0
 
+  # The /latest redirect ends at the tag page, so its last path segment is the
+  # tag. Anything that is not a version number means the redirect went
+  # somewhere else: no releases yet, or a request that did not get through.
   lpm_latest="$(final_url "$LPM_URL/releases/latest" || true)"
   lpm_tag="${lpm_latest##*/}"
-  case "$lpm_tag" in
-    ''|latest|releases)
+  case "${lpm_tag#v}" in
+    [0-9]*) ;;
+    *)
       say "Could not resolve the newest lpm release; candela will fetch it when a project needs one."
       return 0
       ;;
