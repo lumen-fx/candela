@@ -19,9 +19,11 @@ The path decides where candela looks.
 - A path ending in `.cdl` is a file import. It resolves next to the file doing
   the importing, so `"./helpers.cdl"` and `"./util/format.cdl"` mean what they
   look like.
-- A path with no extension is a library import. It resolves against the library
-  directory shipped with the toolchain, so `"std/string"` loads that module
-  wherever you run the program from.
+- A path with no extension is a library import. Its first segment names a
+  package the project depends on, when there is one by that name, and otherwise
+  it resolves against the library directory shipped with the toolchain. So
+  `"std/string"` loads that module wherever you run the program from, and
+  `"shapes/circle"` loads a file out of the `shapes` package.
 
 Any other extension is an error. Imports go at the top level of a file, among
 the other declarations, and are conventionally written first.
@@ -122,3 +124,20 @@ define their helpers as methods in `impl` blocks, so importing them is enough;
 the methods then resolve on the receiver's type. The `list` module goes one step
 further and loads automatically, so `xs.map(f)` works in a file with no imports
 at all.
+
+## Packages
+
+A package a project depends on is another place a library import reads from.
+The first segment names the package; the rest is the path inside it.
+
+```rust
+import "shapes" as shapes;        // the package's own shapes.cdl
+import "shapes/circle" as circle; // circle.cdl inside the package
+```
+
+Nothing else changes: the same one import form, the same `as`, the same
+collision rules on a bare import. A package is a directory that a library path
+can resolve against, not a new kind of import.
+
+Packages are listed in `candela.toml` and fetched by `candela add`. See
+[projects and packages](../getting-started/packages.md).

@@ -2,7 +2,8 @@
 
 candela installs as two programs: `candela`, the compiler that also runs source
 files and hosts the REPL, and `candela-vm`, the runtime that runs compiled
-artifacts. Both land together, along with the standard library.
+artifacts. Both land together, along with the standard library and `lpm`, the
+client that fetches the packages a project depends on.
 
 ## Linux and macOS
 
@@ -28,6 +29,12 @@ The standard library ships as `.cdl` sources in a `libs` directory beside the
 binary, and `import "std/..."` resolves relative to the binary's own location.
 Keep the two together; moving the binary on its own breaks those imports.
 
+`lpm` goes to `~/.local/bin/lpm`, not under the prefix: it is shared with every
+other tool that talks to the registry. It is in no receipt, so `--uninstall`
+leaves it where it is, and `--no-lpm` skips installing it. candela downloads it
+itself the first time a project needs one and finds none, so skipping it costs
+nothing but the wait.
+
 Check the install:
 
 ```sh
@@ -42,8 +49,9 @@ candela --version
 | `--version VERSION` | Install a pinned release instead of the current one. |
 | `--no-confirm` | Run without prompting. |
 | `--no-modify-path` | Never write a `PATH` line to a shell rc file. |
+| `--no-lpm` | Do not install the registry client. |
 | `--force` | Reinstall even when that release is already installed. |
-| `--uninstall` | Remove every file the installer put under the prefix. |
+| `--uninstall` | Remove every file the installer put under the prefix. `lpm` is shared and is left alone. |
 | `-h`, `--help` | Show the options. |
 
 Options go after `--` when the script is piped into a shell:

@@ -45,7 +45,8 @@ The rest of the tree:
   modules.
 - `examples/` holds demo and benchmark programs, most of them alongside Python
   and Lua versions of the same thing. They double as the training corpus for
-  profile-guided builds.
+  profile-guided builds. `examples/package/` is a project rather than a loose
+  file, and it is what the package-workflow self-test packs.
 - `tests/` holds the Rust integration suites.
 - `pgo/` holds the workloads and the small C library used to train a
   profile-guided release build.

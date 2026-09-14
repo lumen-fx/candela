@@ -28,6 +28,7 @@ nav = [
      "getting-started/install.md",
      "getting-started/hello-world.md",
      "getting-started/running.md",
+     "getting-started/packages.md",
   ]},
   {"Language" = [
      "language/variables.md",
@@ -62,6 +63,7 @@ nav = [
      "reference/operators.md",
      "reference/errors.md",
      "reference/cli.md",
+     "reference/candela-toml.md",
      "reference/artifacts.md",
   ]},
   {"Integration" = [
