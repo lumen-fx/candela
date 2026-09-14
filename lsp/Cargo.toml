@@ -11,17 +11,12 @@ publish = false
 # `candela` interpreter binary never sees tower-lsp/tokio/lsp-types in its
 # dependency graph or build. See the root Cargo.toml's [workspace] comment.
 #
-# BUILD NOTE: the workspace's [profile.release] (defined by the candela
-# package, which doubles as the workspace root) sets `panic = "abort"` to
-# keep the interpreter binary small. candela::collect_diagnostic (which this
-# crate's diagnostics pass relies on) catches an internal unwind via
-# `catch_unwind`, which does not work under `panic = "abort"`: a release
-# build of candela-lsp would abort the whole LSP process on the first
-# parse/type error instead of returning a Diagnostic. Build this crate with
-# the default `dev` profile (`cargo build -p candela-lsp`) or the repo's
-# existing `embed` profile (`cargo build -p candela-lsp --profile embed`),
-# both of which use `panic = "unwind"`. Do NOT build/ship a `--release`
-# candela-lsp binary as-is.
+# BUILD NOTE: this crate's diagnostics pass goes through
+# candela::collect_diagnostic, which recovers an error by catching an internal
+# unwind. Every profile in the workspace unwinds, `release` included, so any of
+# them builds a server that reports. A profile that set `panic = "abort"` would
+# turn the first parse or type error in a user's buffer into a dead LSP
+# process.
 
 [dependencies]
 # `package = "candela-lang"` is the crates.io name; the import stays `candela`.

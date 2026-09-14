@@ -12,12 +12,11 @@ so its analysis always matches the compiler.
 cargo build -p candela-lsp
 ```
 
-Build with the default `dev` profile or the repo's `embed` profile
-(`cargo build -p candela-lsp --profile embed`). Do not build it with `--release`
-or `--profile debugrelease`. Both set `panic = "abort"`, which would turn the
-first compile error in a user's buffer into a full server crash rather than a
-published diagnostic: the server catches the compiler's panic to recover the
-diagnostic, and `catch_unwind` does nothing when panics abort.
+Any profile in the repo builds a working server, `--release` included. The
+server recovers a compile error in a user's buffer by catching the compiler's
+unwind, so the one thing a profile must not do is set `panic = "abort"`: that
+turns the first error a user types into a dead server rather than a published
+diagnostic.
 
 ## Run
 
