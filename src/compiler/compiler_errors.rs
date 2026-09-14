@@ -18,6 +18,8 @@ use ariadne::Label;
 use ariadne::Report;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
+use std::fmt::Write as _;
+use std::path::PathBuf;
 
 #[inline(never)]
 #[cold]
@@ -298,9 +300,26 @@ pub fn error_conditional_expression_without_else(
     );
 }
 
+/// Reports an import that reaches no file, listing the paths that were tried.
+///
+/// An import resolves against the standard library, a package root, or the
+/// importing file's own directory, so the name alone does not say where the
+/// compiler looked. `tried` is those places, in the order they were tried.
 #[inline(never)]
 #[cold]
-pub fn error_cannot_read_file(span: Span, file_idx: u16, sources: &[Source]) -> ! {
+pub fn error_cannot_read_file(
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    tried: &[PathBuf],
+) -> ! {
+    let mut note = String::from("Tried:");
+    for path in tried {
+        let _ = write!(note, "\n  {}", path.display());
+    }
+    if tried.is_empty() {
+        note.push_str("\n  nowhere: no library directory and no package root is set");
+    }
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -314,12 +333,13 @@ pub fn error_cannot_read_file(span: Span, file_idx: u16, sources: &[Source]) -> 
                     .with_message(format_args!("This file cannot be found."))
                     .with_color(ariadne::Color::Red),
             )
+            .with_note(&note)
             .finish()
         },
         sources,
         file_idx,
         span,
-        "Cannot read file: this file cannot be found",
+        &format!("Cannot read file: this file cannot be found. {note}"),
         "cannot_read_file",
     );
 }

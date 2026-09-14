@@ -323,7 +323,10 @@ fn parse_latest_tag(headers: &str) -> Option<String> {
 
 /// Compares two versions by their numeric parts. A trailing pre-release label
 /// is ignored, so `0.3.0-rc1` never counts as newer than `0.3.0`.
-fn is_newer(latest: &str, current: &str) -> bool {
+///
+/// The registry client is version-checked the same way, so this is the one
+/// comparison the toolchain makes.
+pub fn is_newer(latest: &str, current: &str) -> bool {
     version_parts(latest) > version_parts(current)
 }
 

@@ -1825,7 +1825,7 @@ pub fn execute(
                     gc,
                 );
                 obj_pool[array_id as usize] = std::env::args()
-                    .skip(2)
+                    .skip(crate::rt::argv_skip())
                     .map(|s| string!(s))
                     .collect::<Vec<Data>>();
                 r[dest] = Data::array(array_id);

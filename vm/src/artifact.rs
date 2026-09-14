@@ -605,10 +605,10 @@ impl RuntimeProgram {
 /// Libraries are opened once and shared across their symbols. The logical name
 /// is mapped to this platform's filename convention via
 /// [`resolve_library_filename`], so an artifact built on one OS resolves the
-/// right file on another. The directory a host named with
-/// [`set_dylib_dir`](crate::rt::set_dylib_dir) is searched before the loader's
-/// own paths, which is how an application ships its libraries in a directory of
-/// its own.
+/// right file on another. The directories a host named with
+/// [`set_dylib_dirs`](crate::rt::set_dylib_dirs) are searched before the
+/// loader's own paths, which is how an application ships its libraries in a
+/// directory of its own.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_dyn_lib_fns(
     recipes: &[DynLibFnImage],

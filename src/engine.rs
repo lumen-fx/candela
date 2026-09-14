@@ -31,6 +31,7 @@ use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::compiler::imports::ImportResolver;
 use crate::compiler::type_system::Generics;
 use crate::compiler::type_system::GenericsCheckpoint;
 use crate::macros::MacroEnv;
@@ -63,6 +64,7 @@ use candela_vm::vm;
 use candela_vm::vm::RegisterFile;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
+use std::path::PathBuf;
 
 // `Engine::compile` and `Program::call` recover from a compile error by
 // catching the unwind the error funnel raises, so this API exists only under an
@@ -88,12 +90,46 @@ const _: () = assert!(
 pub struct Engine {
     registry: HostRegistry,
     macros: MacroEnv,
+    resolver: ImportResolver,
 }
 
 impl Engine {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Points library imports at `dir` instead of the directory the toolchain
+    /// installed.
+    ///
+    /// `dir` is the one that holds `std/`, so `import "std/string";` reads
+    /// `dir/std/string.cdl`. A host that ships the standard library inside its
+    /// own application directory names it here, and the scripts it compiles
+    /// find it wherever the application was installed.
+    ///
+    /// ```no_run
+    /// let engine = candela::Engine::new().with_lib_dir("/opt/myapp/libs");
+    /// ```
+    #[must_use]
+    pub fn with_lib_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.resolver.set_lib_dir(dir.into());
+        self
+    }
+
+    /// Makes `dir` the root of the package a script imports as `name`.
+    ///
+    /// `import "shapes";` then reads `dir/shapes.cdl`, and
+    /// `import "shapes/circle";` reads `dir/circle.cdl`. `dir` is searched for
+    /// native libraries too, so a package that ships a shared library beside
+    /// its sources binds a `dylib` import with no further setup.
+    ///
+    /// ```no_run
+    /// let engine = candela::Engine::new().with_import_root("shapes", "/cache/shapes/1.2.3");
+    /// ```
+    #[must_use]
+    pub fn with_import_root(mut self, name: &str, dir: impl Into<PathBuf>) -> Self {
+        self.resolver.add_root(name, dir.into());
+        self
     }
 
     /// Registers a typed host function under `namespace::name`.
@@ -246,9 +282,10 @@ impl Engine {
     /// running `main` raises a runtime error.
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
+        let resolver = &self.resolver;
         let out: CompileOutput = self.macros.scope(|| {
             collect_diagnostic(|| {
-                let mut out = compile(src.to_owned(), &filename_owned, false);
+                let mut out = compile(src.to_owned(), &filename_owned, false, resolver);
                 // Compiling every entry point here is what makes `compile` a
                 // check step: a body error in a function `main` never calls is
                 // reported now, not on the first `Program::call` that reaches

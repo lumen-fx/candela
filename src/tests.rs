@@ -1,5 +1,5 @@
 use crate::RegisterFile;
-use crate::compile;
+use crate::compiler::compile;
 use crate::compiler::compiler_data::Source;
 use crate::data::Data;
 use crate::instr::Instr;
@@ -7,7 +7,12 @@ use crate::instr::Instr;
 macro_rules! run_and_check_registers {
     ($contents:expr, $expected:expr) => {
         let filename = "test.kl";
-        let out = compile(String::from($contents), filename, true);
+        let out = compile(
+            String::from($contents),
+            filename,
+            true,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
         let instructions = out.instructions;
         let mut arrays = out.pools;
         let mut reg = RegisterFile(out.registers);
@@ -45,7 +50,12 @@ macro_rules! run_and_check_registers {
 macro_rules! run {
     ($contents:expr) => {
         let filename = "test.kl";
-        let out = compile(String::from($contents), filename, true);
+        let out = compile(
+            String::from($contents),
+            filename,
+            true,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
         let mut arrays = out.pools;
         crate::vm::execute(
             &out.instructions,
@@ -3637,7 +3647,12 @@ use crate::errors::collect_diagnostic;
 /// embedder would write against the public `collect_diagnostic` surface.
 fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
-        let _ = compile(String::from(src), filename, false);
+        let _ = compile(
+            String::from(src),
+            filename,
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
     })
 }
 
@@ -3645,7 +3660,12 @@ fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
 /// compiler and runtime errors as structured `Diagnostic`s.
 fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
-        let out = compile(String::from(src), filename, false);
+        let out = compile(
+            String::from(src),
+            filename,
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
         let mut arrays = out.pools;
         crate::vm::execute(
             &out.instructions,
@@ -4705,7 +4725,12 @@ pub fn gc_state_persists_across_runs() {
             }
         }
     ";
-    let out = compile(String::from(contents), filename, true);
+    let out = compile(
+        String::from(contents),
+        filename,
+        true,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
     let mut pools = out.pools;
     let mut reg = RegisterFile(out.registers);
     let err_ctx = crate::errors::ErrorCtx {
@@ -6614,7 +6639,12 @@ pub fn generic_declared_in_an_imported_module() {
     )
     .unwrap();
     let src = std::fs::read_to_string(&main).unwrap();
-    let out = compile(src, main.to_str().unwrap(), false);
+    let out = compile(
+        src,
+        main.to_str().unwrap(),
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
     let mut arrays = out.pools;
     let mut reg = RegisterFile(out.registers);
     crate::vm::execute(

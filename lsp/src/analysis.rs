@@ -27,6 +27,7 @@
 use candela::compiler::compile;
 use candela::compiler::compiler_data::{Function, Struct};
 use candela::compiler::expr::{Expr, Span};
+use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::DataType;
 use candela::macros::MacroEnv;
 use candela::{Diagnostic, collect_diagnostic};
@@ -121,7 +122,13 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // errors.
     let mut macros = MacroEnv::new();
     macros.allow_unknown(true);
-    match macros.scope(move || collect_diagnostic(move || compile(owned, &path, false))) {
+    // Library imports resolve against the standard library beside the
+    // toolchain, which is what a fresh resolver points at. The server reads no
+    // project manifest, so an import of a package the project depends on is
+    // reported as a file it cannot find.
+    let resolver = ImportResolver::new();
+    match macros.scope(move || collect_diagnostic(move || compile(owned, &path, false, &resolver)))
+    {
         Err(diagnostic) => AnalysisOutcome {
             diagnostic: Some(diagnostic),
             summary: None,

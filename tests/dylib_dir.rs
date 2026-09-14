@@ -2,8 +2,8 @@
 //!
 //! A library is looked for beside the importing file, which is wrong for an
 //! application that keeps its sources in one directory and its native libraries
-//! in another. Such a host names the library directory with `set_dylib_dir`,
-//! and both a compile and a `.cdlb` load look there first.
+//! in another. Such a host names the library directories with
+//! `set_dylib_dirs`, and both a compile and a `.cdlb` load look there first.
 //!
 //! The library under test is a copy of the system zlib, renamed so that nothing
 //! but a searched directory can turn it up. Where no zlib file can be copied
@@ -14,7 +14,7 @@ use candela::HostRegistry;
 use candela::LoadError;
 use candela::build_bytecode;
 use candela::load_program;
-use candela::set_dylib_dir;
+use candela::set_dylib_dirs;
 use candela_vm::rt::TargetOs;
 use candela_vm::rt::resolve_library_filename;
 use std::path::Path;
@@ -139,9 +139,9 @@ fn a_named_directory_is_searched() {
     assert_eq!(error.code, "cannot_load_dynlib");
 
     // Named, the directory is where the library is found.
-    let previous = set_dylib_dir(Some(lib));
+    let previous = set_dylib_dirs(vec![lib]);
     let compiled = engine.compile(PROGRAM, filename);
-    set_dylib_dir(previous);
+    set_dylib_dirs(previous);
     assert!(
         compiled.is_ok(),
         "the named directory must satisfy the import: {:?}",
@@ -209,9 +209,9 @@ fn main() {
         "cannot_load_dynlib"
     );
 
-    let previous = set_dylib_dir(Some(root.join("lib")));
+    let previous = set_dylib_dirs(vec![root.join("lib")]);
     let compiled = engine.compile(program, filename);
-    set_dylib_dir(previous);
+    set_dylib_dirs(previous);
     assert!(
         compiled.is_ok(),
         "the path must resolve under the named directory: {:?}",
@@ -236,10 +236,15 @@ fn an_artifact_load_searches_the_named_directory() {
     let script = root.join("src").join("app.cdl");
     let filename = script.to_str().expect("scratch path is utf-8").to_owned();
 
-    let previous = set_dylib_dir(Some(lib));
-    let bytes = build_bytecode(PROGRAM.to_owned(), &filename).expect("builds to bytecode");
+    let previous = set_dylib_dirs(vec![lib]);
+    let bytes = build_bytecode(
+        PROGRAM.to_owned(),
+        &filename,
+        &candela::ImportResolver::new(),
+    )
+    .expect("builds to bytecode");
     let loaded = load_program(&bytes, &HostRegistry::new());
-    set_dylib_dir(previous);
+    set_dylib_dirs(previous);
     assert!(
         loaded.is_ok(),
         "the artifact must re-open the library from the named directory"

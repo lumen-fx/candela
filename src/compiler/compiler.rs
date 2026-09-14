@@ -16,6 +16,7 @@ use crate::compiler::compiler_errors::error_range_invalid_type;
 use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_namespace;
+use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
 use crate::errors::BLUE;
 use crate::errors::BOLD;
@@ -24,8 +25,6 @@ use crate::errors::RESET;
 use crate::instr::LibFunc;
 use crate::parser;
 use crate::rt::TargetOs;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::rt::dylib_dir;
 use crate::rt::resolve_library_filename;
 use crate::vm::Pool;
 use crate::{data::Data, instr::Instr};
@@ -78,6 +77,7 @@ use libloading::Library;
 use crate::errors::wasm_error;
 pub mod compiler_data;
 mod compiler_errors;
+pub mod imports;
 pub mod type_system;
 
 pub mod expr;
@@ -3512,11 +3512,26 @@ impl Namespace {
     }
 }
 
+/// The places an import was looked for, for the error that says it was found in
+/// none of them.
+///
+/// `chosen` is where resolution settled and `library` is the library or package
+/// path, which is the same file when the import is a library one and a second
+/// place to name when it is a file import that fell back.
+fn tried_paths(chosen: &Path, library: Option<&Path>) -> Vec<PathBuf> {
+    let mut tried = vec![chosen.to_path_buf()];
+    if let Some(library) = library
+        && library != chosen
+    {
+        tried.push(library.to_path_buf());
+    }
+    tried
+}
+
 /// Loads the `std/list` module implicitly so its `impl list` methods
 /// (`arr.map(f)`, `arr.sum()`, ...) work with no explicit import. Resolution
-/// mirrors the library-import path (`CANDELA_LIB_PATH` or `libs/` beside the
-/// executable); a missing library directory is not an error, the prelude is
-/// absent.
+/// goes through the same resolver every other library import uses; a missing
+/// library directory is not an error, the prelude is absent.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_auto_prelude(
     fns: &mut Vec<Function>,
@@ -3547,6 +3562,7 @@ fn load_auto_prelude(
         Span,
     )>,
     generics: &mut Generics,
+    resolver: &ImportResolver,
 ) {
     const PRELUDE_REL: &str = "std/list.cdl";
     const PRELUDE_CHILD: &str = "list";
@@ -3559,16 +3575,7 @@ fn load_auto_prelude(
         return;
     }
 
-    let path = if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
-        PathBuf::from(base).join(PRELUDE_REL)
-    } else if let Ok(exe) = std::env::current_exe() {
-        exe.canonicalize()
-            .unwrap_or(exe)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("libs")
-            .join(PRELUDE_REL)
-    } else {
+    let Some(path) = resolver.library_path(PRELUDE_REL) else {
         return;
     };
 
@@ -3615,6 +3622,7 @@ fn load_auto_prelude(
         pending_dylibs,
         pending_host,
         generics,
+        resolver,
     );
     files.insert(path, child_namespace.clone());
     namespace
@@ -3760,6 +3768,7 @@ fn parse_toplevel(
         Span,
     )>,
     generics: &mut Generics,
+    resolver: &ImportResolver,
 ) {
     let mut imports = Vec::new();
     for expr in code {
@@ -3879,6 +3888,7 @@ fn parse_toplevel(
             pending_dylibs,
             pending_host,
             generics,
+            resolver,
         );
     }
 
@@ -3903,16 +3913,18 @@ fn parse_toplevel(
                     && Path::new(spec.as_str()).extension().is_none();
 
                 // Where a relative library reference is looked for, in order:
-                // the directory the embedding host named, then the importing
-                // file's own. A host whose libraries sit apart from its sources
+                // the directories the embedding host named, the root of every
+                // package this program depends on, then the importing file's
+                // own. A host whose libraries sit apart from its sources
                 // (`lib/` beside `src/`) names that directory and both forms
-                // find it.
-                let host_dir = dylib_dir();
+                // find it; a package that ships a native library beside its
+                // `.cdl` sources is found the same way.
+                let host_dirs = crate::rt::dylib_dirs();
+                let package_dirs = resolver.root_dirs();
                 let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
-                let mut dirs: Vec<&Path> = Vec::with_capacity(2);
-                if let Some(dir) = host_dir.as_deref() {
-                    dirs.push(dir);
-                }
+                let mut dirs: Vec<&Path> = Vec::with_capacity(host_dirs.len() + 2);
+                dirs.extend(host_dirs.iter().map(PathBuf::as_path));
+                dirs.extend(package_dirs.iter().map(PathBuf::as_path));
                 dirs.push(file_dir);
 
                 let (lib, dylib_name) = if is_logical {
@@ -3955,53 +3967,46 @@ fn parse_toplevel(
                 });
             }
             Expr::ImportFile(path, alias, is_logical, span) => {
-                // The shipped library directory: `CANDELA_LIB_PATH` overrides its
-                // location (it names the `libs/` dir that holds `std/` and, for the
-                // C-backed modules, `std_src/`); otherwise it is `libs/` beside the
-                // running executable, which is where the toolchain installs it. This
-                // is the single source of truth for the default std location.
-                let shipped_lib = |path: &SmolStr| -> Option<PathBuf> {
-                    if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
-                        return Some(PathBuf::from(base).join(path.as_str()));
-                    }
-                    std::env::current_exe().ok().map(|p| {
-                        p.canonicalize()
-                            .unwrap_or(p)
-                            .parent()
-                            .unwrap_or_else(|| Path::new("."))
-                            .join("libs")
-                            .join(path.as_str())
-                    })
-                };
-
+                // Where the import reads from, and, for the error when it reads
+                // from nowhere, every place that was tried.
+                let library_path = resolver.library_path(path.as_str());
                 let file_path = if is_logical {
                     // A library import (`import "std/string";`, extensionless)
-                    // resolves against the shipped library directory only, never
-                    // source-relative, so it works from any working directory
-                    // with nothing set.
-                    shipped_lib(&path).unwrap_or_else(|| {
-                        error_cannot_read_file(span, src_file_idx, sources);
+                    // resolves against a package root or the shipped library
+                    // directory, never source-relative, so it works from any
+                    // working directory with nothing set.
+                    library_path.clone().unwrap_or_else(|| {
+                        error_cannot_read_file(span, src_file_idx, sources, &[]);
                     })
                 } else {
                     // A `.cdl` file import resolves next to the importing file first,
                     // then falls back to the shipped library directory.
-                    file_path
+                    let beside = file_path
                         .parent()
                         .unwrap_or_else(|| Path::new("."))
-                        .join(path.as_str())
-                        .canonicalize()
-                        .unwrap_or_else(|_| {
-                            shipped_lib(&path).unwrap_or_else(|| {
-                                error_cannot_read_file(span, src_file_idx, sources);
-                            })
+                        .join(path.as_str());
+                    beside.canonicalize().unwrap_or_else(|_| {
+                        library_path.clone().unwrap_or_else(|| {
+                            error_cannot_read_file(
+                                span,
+                                src_file_idx,
+                                sources,
+                                std::slice::from_ref(&beside),
+                            );
                         })
+                    })
                 };
 
                 let child_namespace = if let Some(cached) = files.get(&file_path) {
                     cached.clone()
                 } else {
                     let file_contents = std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
-                        error_cannot_read_file(span, src_file_idx, sources);
+                        error_cannot_read_file(
+                            span,
+                            src_file_idx,
+                            sources,
+                            &tried_paths(&file_path, library_path.as_deref()),
+                        );
                     });
                     let file_name: SmolStr = file_path.to_str().unwrap_or(path.as_str()).into();
 
@@ -4042,6 +4047,7 @@ fn parse_toplevel(
                         pending_dylibs,
                         pending_host,
                         generics,
+                        resolver,
                     );
                     files.insert(file_path.clone(), child_namespace.clone());
                     child_namespace
@@ -4417,8 +4423,17 @@ pub struct CompileOutput {
     pub generics: Generics,
 }
 
+/// Compiles `contents` and everything it imports into one program.
+///
+/// `resolver` says where a library import reads from: the standard library, and
+/// the root of every package the program depends on.
 #[must_use]
-pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
+pub fn compile(
+    contents: String,
+    filename: &str,
+    debug: bool,
+    resolver: &ImportResolver,
+) -> CompileOutput {
     #[cfg(not(target_arch = "wasm32"))]
     let now = std::time::Instant::now();
 
@@ -4508,6 +4523,7 @@ pub fn compile(contents: String, filename: &str, debug: bool) -> CompileOutput {
         &mut pending_dylibs,
         &mut pending_host,
         &mut generics,
+        resolver,
     );
     // Every file's scope is known once the whole import tree is parsed; an
     // instantiation resolves a template against the scope it was declared in.

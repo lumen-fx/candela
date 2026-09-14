@@ -60,5 +60,8 @@ pub use artifact::RuntimeProgram;
 pub use artifact::load_program;
 
 // Where a `dylib` import looks for its library file.
-pub use rt::dylib_dir;
-pub use rt::set_dylib_dir;
+pub use rt::dylib_dirs;
+pub use rt::set_dylib_dirs;
+// How many leading command-line arguments `argv()` steps over.
+pub use rt::argv_skip;
+pub use rt::set_argv_skip;

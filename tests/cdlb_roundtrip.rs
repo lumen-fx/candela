@@ -51,8 +51,12 @@ fn main() {
 
 #[test]
 fn bytecode_round_trips_through_load() {
-    let bytes = candela::build_bytecode(STRUCT_PROGRAM.to_owned(), "struct_program.cdl")
-        .expect("program with structs/arrays/strings should compile to bytecode");
+    let bytes = candela::build_bytecode(
+        STRUCT_PROGRAM.to_owned(),
+        "struct_program.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("program with structs/arrays/strings should compile to bytecode");
 
     // Header: 4-byte magic + 1 version byte.
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
@@ -94,8 +98,12 @@ fn main() {
 #[test]
 fn method_program_round_trips_and_runs() {
     // Build the artifact with the full `candela` toolchain (compiler + VM).
-    let bytes = candela::build_bytecode(METHOD_PROGRAM.to_owned(), "methods.cdl")
-        .expect("a program using impl methods should compile to bytecode");
+    let bytes = candela::build_bytecode(
+        METHOD_PROGRAM.to_owned(),
+        "methods.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("a program using impl methods should compile to bytecode");
 
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
 
@@ -136,8 +144,12 @@ fn main() {
 
 #[test]
 fn generic_program_round_trips_and_runs() {
-    let bytes = candela::build_bytecode(GENERIC_PROGRAM.to_owned(), "generics.cdl")
-        .expect("a program using type parameters should compile to bytecode");
+    let bytes = candela::build_bytecode(
+        GENERIC_PROGRAM.to_owned(),
+        "generics.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("a program using type parameters should compile to bytecode");
 
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
 
@@ -148,7 +160,12 @@ fn generic_program_round_trips_and_runs() {
 
 #[test]
 fn empty_main_round_trips() {
-    let bytes = candela::build_bytecode("fn main() {}".to_owned(), "empty.cdl").expect("compiles");
+    let bytes = candela::build_bytecode(
+        "fn main() {}".to_owned(),
+        "empty.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("compiles");
     assert!(
         load_program(&bytes, &HostRegistry::new()).is_ok(),
         "empty program must load"
@@ -184,7 +201,12 @@ fn unknown_version_is_rejected() {
 fn current_format_version_is_five_and_v2_is_rejected() {
     // The version byte was bumped to 5 when the export table was added. A
     // freshly built artifact must carry version 5.
-    let bytes = candela::build_bytecode("fn main() {}".to_owned(), "v.cdl").expect("compiles");
+    let bytes = candela::build_bytecode(
+        "fn main() {}".to_owned(),
+        "v.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("compiles");
     assert_eq!(bytes[4], 5, "current .cdlb format version must be 5");
 
     // A well-formed magic but a previous version must fail cleanly, not
@@ -213,7 +235,9 @@ fn enum_values_roundtrip_through_cdlb() {
             print(a);
         }
     ";
-    let bytes = candela::build_bytecode(src.to_owned(), "enums.cdl").expect("compiles");
+    let bytes =
+        candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
+            .expect("compiles");
     assert_eq!(bytes[4], 5);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
@@ -238,8 +262,12 @@ fn multi_file_program_is_captured_whole() {
     // Build with the imported module present; the artifact must fold util.cdl's
     // bytecode in.
     let source = std::fs::read_to_string(&app).unwrap();
-    let bytes = candela::build_bytecode(source, app.to_str().unwrap())
-        .expect("multi-file program compiles to a whole-program artifact");
+    let bytes = candela::build_bytecode(
+        source,
+        app.to_str().unwrap(),
+        &candela::ImportResolver::new(),
+    )
+    .expect("multi-file program compiles to a whole-program artifact");
 
     // Delete both source files: nothing on disk to fall back to.
     std::fs::remove_file(&app).unwrap();
@@ -276,8 +304,9 @@ fn dyn_lib_program_round_trips_and_rebinds() {
 
         let src =
             "dylib \"z\" { string zlibVersion(); }\n\nfn main() { print(z::zlibVersion()); }\n";
-        let bytes = candela::build_bytecode(src.to_owned(), "zt.cdl")
-            .expect("dyn-lib program must now build to a .cdlb artifact");
+        let bytes =
+            candela::build_bytecode(src.to_owned(), "zt.cdl", &candela::ImportResolver::new())
+                .expect("dyn-lib program must now build to a .cdlb artifact");
 
         // The artifact stores only the recipe (name `z`, symbol `zlibVersion`,
         // signature), never the shared object's bytes.
@@ -305,7 +334,7 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 #[test]
 fn host_block_program_builds_but_load_names_missing_host_fn() {
     let src = "host \"app\" { int rows(string); }\n\nfn main() { print(\"start\"); }\n";
-    let bytes = candela::build_bytecode(src.to_owned(), "h.cdl")
+    let bytes = candela::build_bytecode(src.to_owned(), "h.cdl", &candela::ImportResolver::new())
         .expect("host-block program must now build to a .cdlb artifact");
 
     match load_program(&bytes, &HostRegistry::new()) {

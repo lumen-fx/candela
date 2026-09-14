@@ -6,9 +6,9 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 /// Live long and prosper
-#[cfg(feature = "compiler")]
-fn main() {
-    candela::main();
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+fn main() -> std::process::ExitCode {
+    candela::main()
 }
 
 /// The full `candela` binary (compiler + VM) is the compiler front-end; it is
@@ -18,4 +18,11 @@ fn main() {
 fn main() {
     eprintln!("this candela binary was built without the `compiler` feature");
     std::process::exit(1);
+}
+
+/// The wasm build is the library the playground calls into. There is no command
+/// line to read there: no files, no project, no processes to run `lpm` in.
+#[cfg(all(feature = "compiler", target_arch = "wasm32"))]
+fn main() {
+    eprintln!("the wasm build of candela has no command line; call run() from the page");
 }
