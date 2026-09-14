@@ -15,12 +15,14 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Struct;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::error_instantiation_depth;
+use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_op;
 use crate::compiler::compiler_errors::error_struct_unknown_field;
 use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_args_on_plain_function;
 use crate::compiler::compiler_errors::error_type_args_on_plain_type;
+use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_function;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::compiler::compiler_errors::error_unknown_struct;
@@ -1398,7 +1400,7 @@ fn track_return_flow(
                 extend_return_types!(&mut return_types, flow.types);
                 v.truncate(v_len);
             }
-            Expr::ForLoop(var_name, array_expr, array_code, _) => {
+            Expr::ForLoop(var_name, array_expr, array_code, span) => {
                 let inferred_collection_type = array_expr.infer_type(v, ctx, state);
                 let elem_type = match inferred_collection_type {
                     DataType::Array(inner) => inner.map_or(DataType::Unknown, |t| *t),
@@ -1406,7 +1408,11 @@ fn track_return_flow(
                     DataType::Unknown => DataType::Unknown,
                     // A map iterates its keys.
                     DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
-                    _ => unsafe { unreachable_unchecked() },
+                    // A function whose return type is inferred has its body
+                    // walked before the loop is compiled, so a loop over a
+                    // value nothing can iterate arrives here first and reports
+                    // what the compile stage would have.
+                    t => error_type_not_indexable(&t, *span, true, ctx.file_idx, state.sources),
                 };
                 let v_len = v.len();
                 if var_name.as_str() != "_" {
@@ -1622,6 +1628,29 @@ pub fn fn_bindings(
     frame.into_boxed_slice()
 }
 
+/// The type a builtin method returns for a receiver, applied across a union
+/// the way the compile-time receiver check does: a union is accepted only when
+/// every member is, so the answer is the union of the per-member answers.
+///
+/// `rule` gives the return type for one receiver type and `None` for a receiver
+/// the method does not take, which is the set `builtin_methods` rejects.
+fn builtin_method_return(
+    obj_type: &DataType,
+    rule: fn(&DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    let DataType::Union(members) = obj_type else {
+        return rule(obj_type);
+    };
+    let mut types: Vec<DataType> = Vec::with_capacity(members.len());
+    for member in members {
+        let member_type = rule(member)?;
+        if !types.contains(&member_type) {
+            types.push(member_type);
+        }
+    }
+    Some(DataType::Union(types.into_boxed_slice()).check_poly())
+}
+
 impl Expr {
     /// Infers this expression's static [`DataType`] without emitting code.
     ///
@@ -1783,11 +1812,11 @@ impl Expr {
                     state.sources,
                 ),
             },
-            Self::ArrayGetIndex(array, _, _) => match array.infer_type(v, ctx, state) {
+            Self::ArrayGetIndex(array, _, span) => match array.infer_type(v, ctx, state) {
                 DataType::Array(array_type) => array_type.map_or(DataType::Null, |t| *t),
                 DataType::String => DataType::String,
                 DataType::Unknown => DataType::Unknown,
-                _ => unsafe { unreachable_unchecked() },
+                t => error_type_not_indexable(&t, *span, false, ctx.file_idx, state.sources),
             },
             Self::GetStructField(s, field, struct_span, field_span) => {
                 let s = s.infer_type(v, ctx, state);
@@ -1821,11 +1850,11 @@ impl Expr {
                     );
                 }
             }
-            Self::ArrayGetSlice(array, _, _, _) => match array.infer_type(v, ctx, state) {
+            Self::ArrayGetSlice(array, _, _, span) => match array.infer_type(v, ctx, state) {
                 DataType::Array(array_type) => DataType::Array(array_type),
                 DataType::String => DataType::String,
                 DataType::Unknown => DataType::Unknown,
-                _ => unsafe { unreachable_unchecked() },
+                t => error_type_not_indexable(&t, *span, false, ctx.file_idx, state.sources),
             },
             Self::FunctionCall(args, namespace, span, _, type_args) => {
                 // A call written with type arguments names either a variant of a
@@ -1975,7 +2004,7 @@ impl Expr {
                     }
                 }
             }
-            Self::ObjFunctionCall(obj, args, namespace, _, fn_span, _, type_args) => {
+            Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, _, type_args) => {
                 let method = namespace.last().unwrap().as_str();
                 let obj_type = obj.infer_type(v, ctx, state);
                 // A user-defined impl method resolves by the receiver's static
@@ -2077,6 +2106,25 @@ impl Expr {
                         state,
                     );
                 }
+                // Each arm below answers for a receiver the compile stage
+                // accepts. A call whose value is used reaches inference before
+                // anything compiles it, so a receiver or a name the compile
+                // stage would reject has to be rejected here, with the same
+                // diagnostic it would have raised.
+                macro_rules! receiver_type {
+                    ($rule:expr, $expected:expr) => {
+                        builtin_method_return(&obj_type, $rule).unwrap_or_else(|| {
+                            error_invalid_obj_type(
+                                $expected,
+                                &obj_type,
+                                method,
+                                *obj_span,
+                                state.sources,
+                                ctx.file_idx,
+                            )
+                        })
+                    };
+                }
                 match method {
                     "uppercase"
                     | "lowercase"
@@ -2092,62 +2140,67 @@ impl Expr {
                         DataType::Bool
                     }
                     "len" | "find" => DataType::Int,
-                    "repeat" | "reverse" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if obj_type == DataType::String {
-                            DataType::String
-                        } else if let DataType::Array(array_type) = obj_type {
-                            DataType::Array(array_type)
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
+                    "repeat" | "reverse" => receiver_type!(
+                        |t| match t {
+                            DataType::String => Some(DataType::String),
+                            DataType::Array(element) => Some(DataType::Array(element.clone())),
+                            _ => None,
+                        },
+                        &[DataType::String, DataType::Array(None)]
+                    ),
                     "push" | "sort" | "remove" | "insert" => DataType::Null,
                     "sqrt" | "round" | "floor" => DataType::Float,
-                    "abs" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if obj_type == DataType::Float {
-                            DataType::Float
-                        } else if obj_type == DataType::Int {
-                            DataType::Int
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
+                    "abs" => receiver_type!(
+                        |t| match t {
+                            DataType::Float => Some(DataType::Float),
+                            DataType::Int => Some(DataType::Int),
+                            _ => None,
+                        },
+                        &[DataType::Int, DataType::Float]
+                    ),
                     "split" => DataType::Array(Some(Box::from(DataType::String))),
-                    "partition" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if let DataType::Array(array_type) = obj_type {
-                            DataType::Array(Some(Box::from(DataType::Array(array_type))))
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
-                    "get" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if let DataType::Map(m) = obj_type {
-                            m.1.unwrap_or(DataType::Unknown)
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
-                    "keys" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if let DataType::Map(m) = obj_type {
-                            DataType::Array(m.0.map(Box::new))
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
-                    "values" => {
-                        let obj_type = obj.infer_type(v, ctx, state);
-                        if let DataType::Map(m) = obj_type {
-                            DataType::Array(m.1.map(Box::new))
-                        } else {
-                            unsafe { unreachable_unchecked() }
-                        }
-                    }
-                    _ => unsafe { unreachable_unchecked() },
+                    "partition" => receiver_type!(
+                        |t| match t {
+                            DataType::Array(element) => Some(DataType::Array(Some(Box::from(
+                                DataType::Array(element.clone())
+                            )))),
+                            _ => None,
+                        },
+                        &[DataType::Array(None)]
+                    ),
+                    "get" => receiver_type!(
+                        |t| match t {
+                            DataType::Map(m) => Some(m.1.clone().unwrap_or(DataType::Unknown)),
+                            _ => None,
+                        },
+                        &[DataType::Map(Box::from((None, None)))]
+                    ),
+                    "keys" => receiver_type!(
+                        |t| match t {
+                            DataType::Map(m) => Some(DataType::Array(m.0.clone().map(Box::new))),
+                            _ => None,
+                        },
+                        &[DataType::Map(Box::from((None, None)))]
+                    ),
+                    "values" => receiver_type!(
+                        |t| match t {
+                            DataType::Map(m) => Some(DataType::Array(m.1.clone().map(Box::new))),
+                            _ => None,
+                        },
+                        &[DataType::Map(Box::from((None, None)))]
+                    ),
+                    // No builtin takes this name, and the impl-method and
+                    // struct/enum lookups above already missed, so the call
+                    // names nothing. `libs/std` documents methods that only
+                    // exist once their module is imported, which is the common
+                    // way to land here.
+                    _ => error_unknown_function(
+                        method,
+                        *fn_span,
+                        &Namespace::default(),
+                        ctx.file_idx,
+                        state.sources,
+                    ),
                 }
             }
             Self::InlineCondition(_, code, _) => {
