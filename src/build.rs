@@ -41,6 +41,10 @@ use smol_strc::SmolStr;
 // an unwinding panic strategy. Built with `panic = "abort"` it would not skip
 // the export, it would abort the process on the first function it could not
 // give an entry point, printing nothing.
+//
+// wasm32 aborts on panic whatever the profile says, and nothing there builds
+// artifacts, so the check is for the profiles that build the toolchain.
+#[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(
     cfg!(panic = "unwind"),
     "`candela build` needs an unwinding panic strategy; see [profile.release]"
