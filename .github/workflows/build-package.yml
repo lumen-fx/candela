@@ -1,0 +1,371 @@
+name: build package
+
+# Packs a candela package, publishes it to a GitHub release, and tells the
+# registry where the release is. A package repository calls this instead of
+# writing the same three steps itself:
+#
+#   jobs:
+#     release:
+#       uses: lumen-fx/candela/.github/workflows/build-package.yml@main
+#       with:
+#         candela-version: latest
+#       secrets:
+#         lpm-token: ${{ secrets.LPM_TOKEN }}
+#
+# A pure-candela package needs nothing else. One that ships native libraries
+# names the command that builds them, and the pack runs once per desktop target
+# so each archive carries the libraries for the machine that will run it.
+#
+# The publish half runs only for a tag. Called from a pull request, this builds
+# and packs and stops, which is what the self-test does.
+
+on:
+  workflow_call:
+    inputs:
+      candela-version:
+        description: The candela release to build against, or `latest`.
+        required: true
+        type: string
+      native-build:
+        description: >-
+          A command run in the package root on each target, leaving the native
+          libraries it builds in `dist/`. Setting it makes the pack run once
+          per desktop target instead of once for `any`.
+        required: false
+        type: string
+        default: ""
+      targets:
+        description: >-
+          The targets to pack for, space or comma separated. Defaults to `any`,
+          or to the five desktop targets when `native-build` is set.
+        required: false
+        type: string
+        default: ""
+      manifest-path:
+        description: The package manifest, relative to the repository root.
+        required: false
+        type: string
+        default: candela.toml
+    secrets:
+      lpm-token:
+        description: A registry token with permission to release this package.
+        required: false
+
+# Write access belongs to the one job that creates a release. The rest read the
+# checkout, so a caller that grants no more than read (a self-test on a pull
+# request, say) runs everything up to the publish.
+permissions:
+  contents: read
+
+jobs:
+  # What to build, and where. The matrix is data rather than a literal list so
+  # a pure-candela package costs one runner and a native one costs five.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      name: ${{ steps.read.outputs.name }}
+      version: ${{ steps.read.outputs.version }}
+      description: ${{ steps.read.outputs.description }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the manifest
+        id: read
+        shell: bash
+        env:
+          MANIFEST: ${{ inputs.manifest-path }}
+        run: |
+          set -euo pipefail
+          [ -f "$MANIFEST" ] || { echo "no manifest at $MANIFEST" >&2; exit 1; }
+          read_key() {
+            awk -v key="$1" '
+              /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*$/); next }
+              inside && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+                sub(/^[^=]*=[[:space:]]*/, "")
+                sub(/^"/, ""); sub(/"[[:space:]]*$/, "")
+                print
+                exit
+              }' "$MANIFEST"
+          }
+          name="$(read_key name)"
+          version="$(read_key version)"
+          [ -n "$name" ] || { echo "$MANIFEST has no name in [package]" >&2; exit 1; }
+          [ -n "$version" ] || { echo "$MANIFEST has no version in [package]" >&2; exit 1; }
+          {
+            echo "name=$name"
+            echo "version=$version"
+            echo "description=$(read_key description)"
+          } >> "$GITHUB_OUTPUT"
+          echo "$name $version"
+
+      - name: Work out the targets
+        id: plan
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.targets }}
+          NATIVE: ${{ inputs.native-build }}
+        run: |
+          set -euo pipefail
+          targets="$TARGETS"
+          if [ -z "$targets" ]; then
+            if [ -n "$NATIVE" ]; then
+              targets="linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64"
+            else
+              targets="any"
+            fi
+          fi
+          entries=""
+          for target in $(printf '%s' "$targets" | tr ',' ' '); do
+            case "$target" in
+              any|linux-x86_64) runner=ubuntu-latest ;;
+              linux-aarch64) runner=ubuntu-24.04-arm ;;
+              macos-x86_64) runner=macos-26-intel ;;
+              macos-aarch64) runner=macos-latest ;;
+              windows-x86_64) runner=windows-latest ;;
+              *)
+                echo "unknown target $target. Known: any, linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64" >&2
+                exit 1
+                ;;
+            esac
+            entries="$entries{\"target\":\"$target\",\"runner\":\"$runner\"},"
+          done
+          echo "matrix={\"include\":[${entries%,}]}" >> "$GITHUB_OUTPUT"
+          echo "targets: $targets"
+
+  pack:
+    name: pack (${{ matrix.target }})
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # The installer covers Linux and macOS; Windows installs from the package
+      # the same release publishes. Either way the toolchain comes from a
+      # release, so the package is checked against a candela a user can have.
+      - name: Install candela
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.candela-version }}
+        run: |
+          set -euo pipefail
+          if [ "$VERSION" = latest ]; then
+            curl -fsSL https://candela.lumenfx.dev/install.sh |
+              sh -s -- --no-confirm --no-modify-path
+          else
+            curl -fsSL https://candela.lumenfx.dev/install.sh |
+              sh -s -- --version "$VERSION" --no-confirm --no-modify-path
+          fi
+          echo "$HOME/.candela" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install candela
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.candela-version }}
+        run: |
+          $release = if ($env:VERSION -eq 'latest') { 'latest/download' }
+                     else { "download/v$($env:VERSION -replace '^v', '')" }
+          $url = "https://github.com/lumen-fx/candela/releases/$release/candela-windows-x86_64.msi"
+          Invoke-WebRequest -Uri $url -OutFile "$PWD\candela.msi"
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\candela.msi", '/qn', '/l*v', "$PWD\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content "$PWD\install.log"
+            throw "msiexec exited with $($p.ExitCode)."
+          }
+          "$env:LOCALAPPDATA\Programs\Candela" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Report the toolchain
+        shell: bash
+        run: candela --version
+
+      - name: Build the native libraries
+        if: inputs.native-build != ''
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          NATIVE: ${{ inputs.native-build }}
+          MANIFEST: ${{ inputs.manifest-path }}
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$MANIFEST")"
+          eval "$NATIVE"
+          ls -l dist
+
+      # Compiling the package is the check that it is shippable at all: every
+      # import resolves, every type holds, and any dependency it lists is
+      # reachable through the registry.
+      - name: Check the package
+        shell: bash
+        env:
+          MANIFEST: ${{ inputs.manifest-path }}
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$MANIFEST")"
+          candela check
+
+      - name: Pack
+        shell: bash
+        env:
+          MANIFEST: ${{ inputs.manifest-path }}
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ needs.plan.outputs.name }}
+        run: |
+          set -euo pipefail
+          root="$(dirname "$MANIFEST")"
+          archive="$PWD/$NAME-$TARGET.tar.gz"
+          # The package root sits at the root of the archive, so unpacking it
+          # gives a directory with candela.toml at the top, which is what the
+          # registry client expects to find.
+          members="candela.toml src"
+          if [ -d "$root/dist" ]; then
+            members="$members dist"
+          fi
+          # shellcheck disable=SC2086
+          tar -czf "$archive" -C "$root" $members
+          tar -tzf "$archive"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: ${{ needs.plan.outputs.name }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  # Only a tag publishes. A pull request stops after the pack above, which is
+  # the whole of the self-test.
+  release:
+    name: release
+    needs: [plan, pack]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: package-*
+          merge-multiple: true
+
+      - name: Check the tag against the manifest
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          tagged="${TAG#v}"
+          case "$tagged" in
+            [0-9]*)
+              if [ "$tagged" != "$VERSION" ]; then
+                echo "tag $TAG does not match the manifest version $VERSION" >&2
+                exit 1
+              fi
+              ;;
+            *) echo "tag $TAG is not a version; releasing $VERSION from the manifest" ;;
+          esac
+
+      - name: Checksum the archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum ./*.tar.gz | sed 's| \./| |' > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ needs.plan.outputs.name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --title "$NAME $VERSION" \
+            --notes "Install with: candela add $NAME" \
+            artifacts/*
+
+      # The client comes from the toolchain installer, which resolves and
+      # verifies it exactly as candela itself does. Nothing here repeats that.
+      - name: Install candela and the registry client
+        shell: bash
+        env:
+          VERSION: ${{ inputs.candela-version }}
+        run: |
+          set -euo pipefail
+          if [ "$VERSION" = latest ]; then
+            curl -fsSL https://candela.lumenfx.dev/install.sh |
+              sh -s -- --no-confirm --no-modify-path
+          else
+            curl -fsSL https://candela.lumenfx.dev/install.sh |
+              sh -s -- --version "$VERSION" --no-confirm --no-modify-path
+          fi
+          echo "$HOME/.candela" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Tell the registry where the release is
+        shell: bash
+        env:
+          LPM_TOKEN: ${{ secrets.lpm-token }}
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ needs.plan.outputs.name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          DESCRIPTION: ${{ needs.plan.outputs.description }}
+          MANIFEST: ${{ inputs.manifest-path }}
+          CANDELA_VERSION: ${{ inputs.candela-version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LPM_TOKEN:-}" ]; then
+            echo "no lpm-token secret; the release is published but the registry was not told" >&2
+            exit 1
+          fi
+
+          # A package the registry has never heard of is registered first. One
+          # it already knows answers 409, which is the answer this wanted.
+          if ! lpm publish "$NAME" --platform candela --description "$DESCRIPTION" 2> publish.err; then
+            if ! grep -qiE '409|already exists' publish.err; then
+              cat publish.err >&2
+              exit 1
+            fi
+          fi
+
+          args=""
+          for archive in artifacts/*.tar.gz; do
+            asset="$(basename "$archive")"
+            target="${asset#"$NAME"-}"
+            target="${target%.tar.gz}"
+            args="$args --artifact $target=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$asset"
+          done
+
+          # Every dependency the manifest lists travels with the release, so the
+          # registry can resolve this package for whoever depends on it.
+          deps="$(awk '
+            /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[dependencies\][[:space:]]*$/); next }
+            inside && /=/ {
+              name = $0; sub(/[[:space:]]*=.*/, "", name); gsub(/[[:space:]]/, "", name)
+              req = $0; sub(/^[^=]*=[[:space:]]*/, "", req)
+              if (req ~ /^\{/) { sub(/^.*version[[:space:]]*=[[:space:]]*/, "", req) }
+              sub(/^"/, "", req); sub(/".*$/, "", req)
+              if (name != "" && req != "") printf " --dep %s@%s", name, req
+            }' "$MANIFEST")"
+
+          host="candela@>=${CANDELA_VERSION#v}"
+          if [ "$CANDELA_VERSION" = latest ]; then
+            host="candela@>=$(candela --version | awk '{ print $2 }')"
+          fi
+
+          # shellcheck disable=SC2086
+          lpm release "$NAME" "$VERSION" $args $deps --requires "$host" -d "$DESCRIPTION"

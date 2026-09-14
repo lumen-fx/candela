@@ -1,0 +1,11 @@
+// A package is a project with something worth importing in it. `greet` is
+// reachable from another project as `greeter::greet` once it depends on this
+// package; `main` runs when you run the project yourself.
+
+fn greet(name: string) -> string {
+    return "Hello, " + name + "!";
+}
+
+fn main() {
+    print(greet("world"));
+}
