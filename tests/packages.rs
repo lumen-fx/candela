@@ -589,12 +589,8 @@ fn a_missing_client_is_downloaded_and_verified() {
         .env("CANDELA_LPM_TAG", "v9.9.9");
     let fetched = common::output_with_deadline(&mut command, "candela fetch");
 
-    assert!(
-        fetched.status.success(),
-        "candela fetch: {}\n{}",
-        stderr_of(&fetched),
-        stdout_of(&fetched)
-    );
+    // Resolving the tag, fetching the checksums and the archive, verifying it,
+    // unpacking it and installing it to the shared path all happen everywhere.
     let installed = if cfg!(windows) {
         home.join("Programs").join("lpm").join("lpm.exe")
     } else {
@@ -602,19 +598,34 @@ fn a_missing_client_is_downloaded_and_verified() {
     };
     assert!(
         installed.is_file(),
-        "the client must land at the shared path: {}",
-        installed.display()
+        "the client must land at the shared path: {}\n{}",
+        installed.display(),
+        stderr_of(&fetched)
     );
     assert!(
         stderr_of(&fetched).contains("Installed lpm 9.9.9"),
         "the install must say where it went: {}",
         stderr_of(&fetched)
     );
-    assert!(
-        stdout_of(&fetched).contains("shapes"),
-        "{}",
-        stdout_of(&fetched)
-    );
+
+    // Running what was installed is the one step this fixture cannot reach on
+    // Windows: the stand-in is a batch file, and Windows refuses to execute one
+    // named `.exe`. The resolution it would have driven is covered by every
+    // other test here, each of which reaches the same stand-in through LPM_BIN.
+    #[cfg(not(windows))]
+    {
+        assert!(
+            fetched.status.success(),
+            "candela fetch: {}\n{}",
+            stderr_of(&fetched),
+            stdout_of(&fetched)
+        );
+        assert!(
+            stdout_of(&fetched).contains("shapes"),
+            "{}",
+            stdout_of(&fetched)
+        );
+    }
 
     std::fs::remove_dir_all(&root).ok();
 }
