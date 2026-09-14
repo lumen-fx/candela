@@ -6951,3 +6951,118 @@ pub fn a_macro_expansion_nests_at_its_invocation_depth() {
     // Reported against the invocation the reader wrote.
     assert_eq!(err.span.start, src.find("deep!").unwrap());
 }
+
+// ---------------------------------------------------------------------------
+// INFERENCE SEES A MISTAKE FIRST
+//
+// A call whose value is used is inferred before anything compiles it, so type
+// inference is the first place to meet a receiver, a name, or a collection the
+// compile stage would reject. Each program below used to reach an
+// `unreachable_unchecked` there: a release build segfaulted and a debug build
+// aborted, with no diagnostic either way.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn inference_rejects_an_unknown_method_name() {
+    let src = "fn to_x(s: string) -> int { return 1; }\nfn main() { let s = \"1\"; let n = s.to_x(); print(n); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.message, "Cannot find function to_x in this scope");
+    assert_eq!(d.code, "unknown_function");
+}
+
+#[test]
+pub fn inference_rejects_a_receiver_a_builtin_does_not_take() {
+    // (source, method, receiver type as the diagnostic renders it)
+    let cases = [
+        (
+            "fn main() { let a = \"x\"; let b = a.abs(); print(b); }",
+            "abs",
+            "string",
+        ),
+        (
+            "fn main() { let a = 5; let b = a.get(0); print(b); }",
+            "get",
+            "int",
+        ),
+        (
+            "fn main() { let a = 5; let b = a.keys(); print(b); }",
+            "keys",
+            "int",
+        ),
+        (
+            "fn main() { let a = 5; let b = a.values(); print(b); }",
+            "values",
+            "int",
+        ),
+        (
+            "fn main() { let a = 5; let b = a.partition(2); print(b); }",
+            "partition",
+            "int",
+        ),
+        (
+            "fn main() { let a = 5; let b = a.repeat(2); print(b); }",
+            "repeat",
+            "int",
+        ),
+    ];
+    for (src, method, received) in cases {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "invalid_object_type", "{src}");
+        assert!(
+            d.message.starts_with(&format!("Function {method} expects")),
+            "{src}: {d:?}"
+        );
+        assert!(
+            d.message
+                .ends_with(&format!("but here its type is {received}")),
+            "{src}: {d:?}"
+        );
+    }
+}
+
+/// A union receiver is accepted only when every member is, which is the rule
+/// the compile stage applies. `int|float` takes neither half of `repeat`.
+#[test]
+pub fn inference_rejects_a_union_receiver_no_member_takes() {
+    let src = "fn main() { let c = true; let s = if c { 1 } else { 2.0 }; let r = s.repeat(2); print(r); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_object_type");
+    assert!(
+        d.message.ends_with("but here its type is int|float"),
+        "{d:?}"
+    );
+}
+
+/// The mirror of the case above: every member is accepted, so the call stands.
+#[test]
+pub fn inference_accepts_a_union_receiver_every_member_takes() {
+    let src = "fn main() { let c = true; let s = if c { \"ab\" } else { [\"a\"] }; let r = s.repeat(2); print(r); }";
+    assert!(compile_diag(src, "diag.kl").is_ok());
+}
+
+#[test]
+pub fn inference_rejects_indexing_a_value_that_has_no_elements() {
+    for src in [
+        "fn main() { let a = 5; let b = a[0]; print(b); }",
+        "fn main() { let a = 5; let b = a[0..1]; print(b); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "type_not_indexable", "{src}");
+        assert!(d.message.contains("int"), "{src}: {d:?}");
+    }
+}
+
+/// A function's return type is inferred from its body before anything compiles
+/// the body, so a loop over a value nothing can iterate is met here.
+#[test]
+pub fn inference_rejects_a_loop_over_a_value_that_cannot_be_iterated() {
+    let src = "fn f() { for x in 5 { print(x); } }\nfn main() { f(); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "type_not_iterable");
+    assert_eq!(&src[d.span], "5");
+}
