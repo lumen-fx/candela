@@ -1,0 +1,28 @@
+name: build-package self-test
+
+# Runs the reusable package workflow against the example package in this
+# repository, so a change to build-package.yml is exercised before anyone
+# else's release depends on it.
+#
+# There is no tag here, so the publish half of that workflow skips itself and
+# what runs is the install, the check, and the pack.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-package.yml"
+      - ".github/workflows/build-package-selftest.yml"
+      - "examples/package/**"
+      - "install.sh"
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    uses: ./.github/workflows/build-package.yml
+    with:
+      candela-version: latest
+      manifest-path: examples/package/candela.toml

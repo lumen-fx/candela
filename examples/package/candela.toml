@@ -1,0 +1,7 @@
+[package]
+name = "greeter"
+version = "0.1.0"
+description = "A candela package with one function in it"
+entry = "src/main.cdl"
+
+[dependencies]

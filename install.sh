@@ -61,6 +61,14 @@
 # quiet about newer releases: a pinned install is a deliberate choice, not
 # something to nag about. Installing without --version rewrites the receipt
 # without the line, which is how a pin is lifted.
+#
+# The registry client, lpm, is installed too, unless --no-lpm says otherwise.
+# It comes from its own repository's releases, resolved and verified the same
+# way (the /latest redirect, then a checksums.txt beside the asset), and it
+# lands at ~/.local/bin/lpm, which is the one path every client of the registry
+# looks in. It is deliberately not a candela file: it goes in no receipt, it is
+# not replaced by a --force reinstall of candela, and --uninstall leaves it
+# where it is, because other tools share it.
 
 set -eu
 
@@ -68,11 +76,18 @@ GH_REPO="${CANDELA_GH_REPO:-lumen-fx/candela}"
 GH_URL="https://github.com/$GH_REPO"
 PREFIX="${CANDELA_PREFIX:-$HOME/.candela}"
 
+# The registry client and where it goes. The path is shared: candela, lumenc
+# and lpm itself all look here, so it is not under the candela prefix.
+LPM_URL="https://github.com/lumen-fx/registry"
+LPM_DIR="$HOME/.local/bin"
+LPM_BIN="$LPM_DIR/lpm"
+
 PIN_VERSION=""
 NO_CONFIRM=0
 MODIFY_PATH=1
 FORCE=0
 UNINSTALL=0
+WANT_LPM=1
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
@@ -87,6 +102,8 @@ Usage:
 Installs the candela compiler, the candela-vm runtime, and the standard
 library, under a per-user prefix. Never uses sudo.
 
+The registry client, lpm, is installed alongside, at ~/.local/bin/lpm.
+
 Options:
   --prefix DIR         Install root. Default: ~/.candela
   --version VERSION    Install a pinned release instead of the current one.
@@ -95,8 +112,11 @@ Options:
   --no-confirm         Run without prompting; still writes a PATH line to a
                        shell rc file unless --no-modify-path is also given.
   --no-modify-path     Never write a PATH line to a shell rc file.
+  --no-lpm             Do not install the registry client. candela downloads
+                       it on its own the first time a project needs it.
   --force              Reinstall even if already at the target version.
   --uninstall          Remove every file this installer put under the prefix.
+                       lpm is shared with other tools and is left alone.
   -h, --help           Show this help.
 
 Environment:
@@ -124,6 +144,7 @@ while [ "$#" -gt 0 ]; do
     --version=*) PIN_VERSION="${1#--version=}"; shift ;;
     --no-confirm) NO_CONFIRM=1; shift ;;
     --no-modify-path) MODIFY_PATH=0; shift ;;
+    --no-lpm) WANT_LPM=0; shift ;;
     --force) FORCE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -201,6 +222,124 @@ final_url() {
       ;;
     *) fail "need curl or wget" ;;
   esac
+}
+
+# --- the registry client -----------------------------------------------------
+#
+# lpm resolves the packages a candela project depends on. It lives in its own
+# repository and publishes Go-style archives, `lpm_<version>_<os>_<arch>`, with
+# a checksums.txt beside them, so it is resolved and verified the same way the
+# toolchain is but from its own release.
+#
+# Nothing here is fatal except a checksum that does not match. A release that
+# cannot be reached leaves lpm uninstalled and says so; candela downloads it
+# itself the first time a project needs it.
+
+LPM_INSTALLED=""
+
+lpm_asset_name() {
+  # lpm_asset_name VERSION -> the archive this platform takes
+  case "$OS" in
+    macos) lpm_os=darwin ;;
+    *) lpm_os=linux ;;
+  esac
+  case "$ARCH" in
+    aarch64) lpm_arch=arm64 ;;
+    *) lpm_arch=amd64 ;;
+  esac
+  printf 'lpm_%s_%s_%s.tar.gz\n' "$1" "$lpm_os" "$lpm_arch"
+}
+
+lpm_recorded_sha() {
+  # lpm_recorded_sha FILE NAME -> the sha256 recorded for NAME, empty if absent
+  awk -v want="$2" '
+    NF >= 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (name == want) { print $1; exit }
+    }' "$1"
+}
+
+lpm_current_version() {
+  # lpm_current_version -> the version of the lpm already installed, if any
+  [ -x "$LPM_BIN" ] || return 0
+  "$LPM_BIN" --version 2>/dev/null |
+    awk '$1 == "lpm" && $2 == "version" { sub(/^v/, "", $3); print $3; exit }'
+}
+
+install_lpm() {
+  [ "$WANT_LPM" -eq 1 ] || return 0
+
+  lpm_latest="$(final_url "$LPM_URL/releases/latest" || true)"
+  lpm_tag="${lpm_latest##*/}"
+  case "$lpm_tag" in
+    ''|latest|releases)
+      say "Could not resolve the newest lpm release; candela will fetch it when a project needs one."
+      return 0
+      ;;
+  esac
+  lpm_version="${lpm_tag#v}"
+
+  if [ "$(lpm_current_version)" = "$lpm_version" ]; then
+    LPM_INSTALLED="$lpm_version"
+    return 0
+  fi
+
+  lpm_asset="$(lpm_asset_name "$lpm_version")"
+  lpm_tmp="$TMP/lpm"
+  mkdir -p "$lpm_tmp"
+
+  if ! fetch_quiet "$LPM_URL/releases/download/$lpm_tag/checksums.txt" "$lpm_tmp/checksums.txt"; then
+    say "Release $lpm_tag of lpm has no checksums.txt; candela will fetch lpm when a project needs one."
+    return 0
+  fi
+  lpm_want="$(lpm_recorded_sha "$lpm_tmp/checksums.txt" "$lpm_asset")"
+  if [ -z "$lpm_want" ]; then
+    say "Release $lpm_tag of lpm publishes no $lpm_asset; candela will fetch lpm when a project needs one."
+    return 0
+  fi
+
+  say "Downloading lpm"
+  if ! fetch_shown "$LPM_URL/releases/download/$lpm_tag/$lpm_asset" "$lpm_tmp/$lpm_asset"; then
+    say "Could not download lpm; candela will fetch it when a project needs one."
+    return 0
+  fi
+
+  lpm_got="$(sha256_of "$lpm_tmp/$lpm_asset")"
+  if [ "$lpm_got" != "$lpm_want" ]; then
+    printf 'install.sh: checksum mismatch for %s\n  expected %s\n  got      %s\nlpm was not installed. The download was corrupted, or the asset does not match the checksum published with %s.\n' \
+      "$lpm_asset" "$lpm_want" "$lpm_got" "$lpm_tag" >&2
+    return 0
+  fi
+
+  if ! tar -xzf "$lpm_tmp/$lpm_asset" -C "$lpm_tmp"; then
+    say "Could not unpack lpm; candela will fetch it when a project needs one."
+    return 0
+  fi
+  lpm_src="$lpm_tmp/lpm"
+  if [ ! -f "$lpm_src" ]; then
+    lpm_src="$(find "$lpm_tmp" -type f -name lpm -print 2>/dev/null | head -n 1)"
+  fi
+  if [ -z "$lpm_src" ] || [ ! -f "$lpm_src" ]; then
+    say "The lpm archive holds no lpm binary; candela will fetch it when a project needs one."
+    return 0
+  fi
+
+  mkdir -p "$LPM_DIR"
+  rm -f "$LPM_BIN"
+  cp -p "$lpm_src" "$LPM_BIN"
+  chmod 755 "$LPM_BIN"
+  LPM_INSTALLED="$lpm_version"
+}
+
+lpm_note() {
+  # Says where lpm went, and how to reach it when its directory is not on PATH.
+  [ -n "$LPM_INSTALLED" ] || return 0
+  say "  lpm $LPM_INSTALLED at $LPM_BIN"
+  case ":$PATH:" in
+    *":$LPM_DIR:"*) return 0 ;;
+  esac
+  say "  $LPM_DIR is not on your PATH. candela finds lpm there anyway; add it to run lpm yourself."
 }
 
 # --- prompts -----------------------------------------------------------------
@@ -331,6 +470,9 @@ do_uninstall() {
   rm -f "$RECEIPT"
   prune_dirs
   say "Removed. If a PATH line for $BIN_DIR is still in a shell rc file, delete it by hand."
+  if [ -x "$LPM_BIN" ]; then
+    say "lpm is left at $LPM_BIN; other tools share it. Delete it yourself if nothing else wants it."
+  fi
   exit 0
 }
 
@@ -456,6 +598,10 @@ if [ "$FORCE" -eq 0 ] && [ "$INSTALLED" = "$RELEASE" ]; then
   if [ -n "$PIN_VERSION" ]; then
     say "Pinned to $RELEASE. candela will not offer newer releases."
   fi
+  # The client follows its own release, so a candela that needs no update can
+  # still be missing it or carrying an older one.
+  install_lpm
+  lpm_note
   say ""
   say "Use --force to reinstall."
   exit 0
@@ -557,6 +703,10 @@ chmod 755 "$PREFIX/candela" "$PREFIX/candela-vm"
 
 prune_dirs
 
+# The client goes outside the prefix and into no receipt, because it is shared:
+# every tool that talks to the registry looks for it at the same path.
+install_lpm
+
 # --- PATH --------------------------------------------------------------------
 
 # The rc line keeps $PATH unexpanded on purpose: it is written to the file
@@ -620,6 +770,7 @@ say ""
 say "Installed under $PREFIX:"
 say "  candela $(receipt_version)"
 say "  candela-vm, and the standard library in libs/"
+lpm_note
 if [ -n "$PIN_VERSION" ]; then
   say ""
   say "Pinned to $RELEASE. candela will not offer newer releases; re-run this"
