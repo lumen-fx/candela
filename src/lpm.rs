@@ -750,7 +750,7 @@ mod json {
         Ok(value)
     }
 
-    fn skip_space(bytes: &[u8], at: &mut usize) {
+    const fn skip_space(bytes: &[u8], at: &mut usize) {
         while *at < bytes.len() && bytes[*at].is_ascii_whitespace() {
             *at += 1;
         }
