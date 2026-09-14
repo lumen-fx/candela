@@ -36,6 +36,16 @@ use candela_vm::rt::Span;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 
+// `compile_export` recovers from a trampoline that cannot be compiled by
+// catching the unwind the error funnel raises, so this path exists only under
+// an unwinding panic strategy. Built with `panic = "abort"` it would not skip
+// the export, it would abort the process on the first function it could not
+// give an entry point, printing nothing.
+const _: () = assert!(
+    cfg!(panic = "unwind"),
+    "`candela build` needs an unwinding panic strategy; see [profile.release]"
+);
+
 /// Compiles a `.cdl` source string to a `.cdlb` bytecode artifact.
 ///
 /// The artifact captures the whole program: every imported workspace `.cdl`

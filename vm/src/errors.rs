@@ -146,12 +146,11 @@ pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code
 ///
 /// **An unwinding panic strategy (`panic = "unwind"`).** This function catches
 /// the internal unwind used to carry a diagnostic out of the error funnels via
-/// [`std::panic::catch_unwind`]. Under `panic = "abort"`, which is candela's own
-/// `[profile.release]` default, that unwind cannot be caught: the process
-/// aborts on the first error instead of this returning `Err`. Embedders that
-/// rely on `collect_diagnostic` therefore **must** build with `panic = "unwind"`
-/// (see the `embed` profile in candela's `Cargo.toml`). The CLI never calls this,
-/// so its behavior is unaffected either way.
+/// [`std::panic::catch_unwind`]. Under `panic = "abort"` that unwind cannot be
+/// caught: the process aborts on the first error instead of this returning
+/// `Err`. Every profile candela ships unwinds, `[profile.release]` included,
+/// because `candela build` recovers this way too; an embedder that picks its
+/// own profile has to keep `panic = "unwind"` to use this.
 ///
 /// While a collection is active this installs a process-global panic hook that
 /// silences only the internal diagnostic unwind and forwards every other panic
