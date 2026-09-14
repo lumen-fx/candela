@@ -91,13 +91,14 @@ cargo build --target wasm32-unknown-unknown
 - `dev` is a lightly optimised debug profile with debug information off. Debug
   builds here are not stock Cargo debug builds.
 - `release` is the shipping profile: full optimisation, fat link-time
-  optimisation, one code generation unit, stripped, and aborting on panic.
+  optimisation, one code generation unit, stripped, and unwinding on panic. The
+  unwinding is required. The compiler turns an error into a diagnostic by
+  catching an unwind, `candela build` and `candela-lsp` both depend on that, and
+  a profile that aborts instead kills the process on the first error.
 - `debugrelease` is `release` with debug information kept and nothing stripped.
   Use it to profile or debug optimised code.
-- `embed` is `release` with unwinding on panic. It is the profile to pair with
-  the `embed` feature, and it is also the one to use for an optimised
-  `candela-lsp`: the language server catches unwinds to turn errors into
-  diagnostics, so it cannot run under a profile that aborts.
+- `embed` is `release` under a name of its own, so the library artifact built
+  with the `embed` feature keeps its own output directory.
 
 ## Tests
 

@@ -240,6 +240,35 @@ fn calling_a_name_the_artifact_does_not_export() {
     );
 }
 
+/// A function the build cannot give an entry point is left out of the export
+/// table, and the rest of the program still builds. The build finds that out by
+/// compiling the trampoline and recovering from the error, which is an unwind:
+/// under `panic = "abort"` both programs below aborted the process instead,
+/// printing nothing.
+#[test]
+fn a_function_with_no_compilable_entry_point_is_left_out() {
+    // `any` is a host-callable parameter type, but nothing concrete can be read
+    // off it, so the `len` in the body has no receiver type to compile against.
+    // A candela caller specialises the body per call site, which is why the
+    // program itself runs.
+    let src = "fn f(x: any) { print(x.len()); }\nfn main() { f(\"hi\"); }\n";
+    let mut program = load(src, "anyparam.cdl", &HostRegistry::new());
+    assert!(
+        program.exports().next().is_none(),
+        "a body that needs a concrete receiver has no entry point"
+    );
+    assert!(matches!(
+        program.call("f", &[Value::String(String::from("hi"))]),
+        Err(CallError::UnknownFunction(_))
+    ));
+
+    // The same recovery covers a body that names a function that does not
+    // exist, which is how this was first found.
+    let src = "fn handle(id: string) { nope(); }\nfn main() {}\n";
+    let program = load(src, "handle.cdl", &HostRegistry::new());
+    assert!(program.exports().next().is_none());
+}
+
 /// Arguments are checked against the declared parameter types before the
 /// trampoline runs.
 #[test]

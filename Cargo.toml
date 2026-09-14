@@ -141,11 +141,17 @@ opt-level = 1
 debug = false
 strip = true
 
+# `panic = "unwind"` is required, not a preference: the compiler recovers from a
+# compile error by catching the unwind its error funnel raises, and `candela
+# build` relies on that recovery to leave a function it cannot give a host entry
+# point out of the export table instead of failing the whole build. Under
+# `panic = "abort"` that recovery is impossible and the CLI aborts with no
+# output. Owner ruling 2026-09-14, issue #69.
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = 'abort'
+panic = 'unwind'
 debug = false
 rpath = false
 strip = true
@@ -160,8 +166,8 @@ incremental = false
 strip = true
 
 # The VM-only `candela-vm` binary is tuned for size by the workspace `release`
-# profile's whole-artifact levers (panic = "abort", lto = "fat",
-# codegen-units = 1, strip = true) and by building only the self-contained
+# profile's whole-artifact levers (lto = "fat", codegen-units = 1,
+# strip = true) and by building only the self-contained
 # `candela-vm` crate (no parser/compiler/REPL, no `logos`/`mimalloc`). That
 # already lands it well under 1 MiB. A per-package `opt-level = "z"` override was
 # measured and made the binary LARGER, so no override is applied. The `candela`
@@ -176,7 +182,6 @@ codegen-units = 1
 opt-level = 3
 debug = 2
 debug-assertions = false
-panic = "abort"
 rpath = true
 incremental = false
 
@@ -185,6 +190,8 @@ opt-level = 3
 debug = 2
 codegen-units = 1
 
+# The embedding library. It inherits the unwinding strategy the release profile
+# already sets; the line is kept so this artifact cannot lose it by accident.
 [profile.embed]
 inherits = "release"
 panic = "unwind"
