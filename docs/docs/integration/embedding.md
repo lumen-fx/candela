@@ -391,23 +391,54 @@ Errors come back as a `CallError`: the name is not exported, the argument count
 or an argument type disagrees with the declaration, or the call raised a runtime
 error, which arrives as the `Diagnostic` it produced.
 
+## Where an import looks
+
+A script's imports resolve against two things the host can name: the standard
+library, and the packages it should be able to reach.
+
+```rust
+let engine = candela::Engine::new()
+    .with_lib_dir(app_root.join("libs"))
+    .with_import_root("shapes", cache.join("shapes/1.2.3"));
+```
+
+`with_lib_dir` names the directory holding `std/`, so `import "std/string";`
+reads `libs/std/string.cdl`. It is what an application that ships the standard
+library inside its own installation uses instead of setting
+`CANDELA_LIB_PATH`. Without it, the default applies: `CANDELA_LIB_PATH` when
+set, and `libs/` beside the running executable otherwise.
+
+`with_import_root` makes a directory the root of a package, so
+`import "shapes";` reads `shapes.cdl` there and `import "shapes/circle";` reads
+`circle.cdl`. This is how a host offers a script code it did not ship with, and
+it is the same mechanism the `candela` command uses for the packages a project
+depends on.
+
+Both are builders, so they chain, and both take effect on every script the
+engine compiles. `Engine::compile` is unchanged.
+
 ## Where a dylib import looks
 
 ```rust
-candela::set_dylib_dir(Some(app_root.join("lib")));
+candela::set_dylib_dirs(vec![app_root.join("lib")]);
 ```
 
 A script's `dylib` import is looked for beside the script itself, which is the
 wrong place for an application that keeps its sources in one directory and its
-native libraries in another. Name that directory and it is searched first, by a
-compile and by an artifact load alike, so `dylib "md"` in `src/main.cdl` finds
-`lib/libmd.so`.
+native libraries in another. Name those directories and they are searched
+first, in order, by a compile and by an artifact load alike, so `dylib "md"` in
+`src/main.cdl` finds `lib/libmd.so`.
 
-The call returns the directory that was in effect, so a host that changes it for
-one script can put the previous one back, and `None` goes back to looking beside
-the script alone. It is a per-thread setting, read while a script compiles and
-while an artifact loads, so set it before either. `candela_vm::set_dylib_dir` is
-the same function, for a program that links only the runtime.
+The call returns the list that was in effect, so a host that changes it for one
+script can put the previous one back, and an empty list goes back to looking
+beside the script alone. It is a per-thread setting, read while a script
+compiles and while an artifact loads, so set it before either.
+`candela_vm::set_dylib_dirs` is the same function, for a program that links
+only the runtime.
+
+Every directory named with `with_import_root` is searched for native libraries
+too, after the ones set here, so a package that ships a shared library beside
+its sources binds without further setup.
 
 See [C libraries](c-libraries.md) for what a `dylib` import resolves to before
 any directory is searched.

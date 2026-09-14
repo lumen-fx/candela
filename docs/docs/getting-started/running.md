@@ -1,8 +1,8 @@
 # Running programs
 
-There are three ways to run candela code: straight from source, a line at a
-time in the REPL, or from a compiled artifact. This page covers all three and
-the command line around them.
+There are four ways to run candela code: straight from source, as a project, a
+line at a time in the REPL, or from a compiled artifact. This page covers all
+four and the command line around them.
 
 ## Run a source file
 
@@ -12,10 +12,10 @@ Name the file:
 candela hello.cdl
 ```
 
-There is no `run` subcommand; the first argument is the path to the program.
-The compiler lexes, parses and type-checks the file and everything it imports,
-then runs `main`. Anything you put after the file name reaches the program
-through `argv()`:
+The first argument is the path to the program; one file needs no verb in front
+of it. The compiler lexes, parses and type-checks the file and everything it
+imports, then runs `main`. Anything you put after the file name reaches the
+program through `argv()`:
 
 ```rust
 fn main() {
@@ -70,6 +70,25 @@ Press Ctrl+D to leave, or Ctrl+Z then enter on Windows. Ctrl+C also works. The
 REPL stops as soon as its input runs out, so a file of statements piped into
 `candela` runs to the end and exits.
 
+## Run a project
+
+Once a program is more than one file, or depends on a package somebody else
+wrote, it becomes a project: a directory with a `candela.toml` in it.
+
+```sh
+candela new hello
+cd hello
+candela run
+```
+
+`candela run` compiles the entry point the manifest names and runs it, with the
+packages the project depends on resolved first. `candela check` does the same
+and stops before running. Both take a file if you want a different one, and
+both work from anywhere inside the project.
+
+[Projects and packages](packages.md) covers the manifest, dependencies and
+publishing.
+
 ## Build an artifact
 
 `candela build` compiles a source file to a `.cdlb` bytecode artifact:
@@ -115,6 +134,7 @@ candela-vm greet.cdlb Ada
 ## Which to use
 
 - **Source** while you write. One command, no build step, errors as you go.
+- **A project** once there is more than one file, or a dependency to pull in.
 - **The REPL** to try an expression or check what a standard library function
   returns.
 - **An artifact** when you ship. Build once, then distribute the `.cdlb`
@@ -126,7 +146,12 @@ candela-vm greet.cdlb Ada
 
 - `candela <file.cdl> [args...]` runs a source file.
 - `candela` with no arguments starts the REPL.
-- `candela build <file.cdl> [-o out.cdlb]` compiles to an artifact.
+- `candela new <name>` starts a project.
+- `candela run [file.cdl] [args...]` runs the project.
+- `candela check [file.cdl]` compiles without running.
+- `candela build [file.cdl] [-o out.cdlb]` compiles to an artifact.
+- `candela add`, `remove`, `fetch`, `update` and `publish` work on the
+  project's dependencies.
 - `candela --help` or `-h` prints usage.
 - `candela --version` or `-v` prints the version.
 

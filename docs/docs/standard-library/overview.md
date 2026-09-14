@@ -17,7 +17,9 @@ beside the `candela` executable:
 
 Set `CANDELA_LIB_PATH` to point at a different `libs` directory. The variable
 names the directory that contains `std/` and `std_src/`, and it overrides the
-default location for both library imports and the automatic list prelude.
+default location for both library imports and the automatic list prelude. A
+Rust host that embeds candela names it with `Engine::with_lib_dir` instead; see
+[embedding](../integration/embedding.md).
 
 Because the modules are ordinary source files, the compiler links the ones you
 import into your program. A `.cdlb` artifact built from a program that imports
@@ -30,8 +32,8 @@ present when the artifact runs. See
 ## Importing a module
 
 A library import is a quoted path with no file extension. The resolver appends
-`.cdl` and looks the file up in the shipped library directory only, so it works
-from any working directory:
+`.cdl` and looks the file up in the shipped library directory, never next to
+the importing file, so it works from any working directory:
 
 ```rust
 import "std/string";
@@ -48,6 +50,11 @@ importing; the methods then resolve on the receiver's type. Two bare imports
 that export the same free-function name are a compile error; use `as` to keep
 them apart. The import form is covered in full in
 [modules](../language/modules.md).
+
+A library import's first segment is looked up among the packages the project
+depends on before the library directory, so a dependency named `std` would
+shadow the standard library. Nothing else about `std` is special: it is the
+directory a library path falls back to.
 
 ## Built-ins and modules
 

@@ -59,6 +59,10 @@ Run `candela` with no arguments for a REPL.
   `import "std/option";` to bring the module's symbols into scope.
 - **A standard library written in candela.** The `.cdl` sources ship beside the
   toolchain, so you can read any of it.
+- **Projects and packages.** `candela new` starts a project, `candela add`
+  pulls a package in from the registry, and `candela run` compiles and runs it
+  against what the manifest lists. A package is another place an import
+  resolves from, so nothing about importing changes.
 - **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
   bytecode artifact, and `candela-vm` runs it. The runtime binary links no
   parser, compiler or REPL.

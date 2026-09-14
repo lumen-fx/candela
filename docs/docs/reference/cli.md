@@ -7,8 +7,8 @@ The toolchain installs two commands. `candela` compiles and runs source, and
 
 ### candela &lt;file.cdl&gt; [arguments]
 
-Compiles the file and everything it imports, then runs `main`. There is no
-`run` subcommand; the first argument is the path.
+Compiles the file and everything it imports, then runs `main`. The first
+argument is the path; one file needs no verb in front of it.
 
 ```sh
 candela hello.cdl
@@ -16,6 +16,9 @@ candela hello.cdl
 
 Arguments after the path are passed to the program, which reads them with
 `argv()`.
+
+This form reads no manifest and resolves no dependencies. A file that imports a
+package the project depends on runs under `candela run`.
 
 ### candela
 
@@ -27,30 +30,109 @@ and a line that fails to compile is dropped so the session stays usable. Leave
 with Ctrl+D, Ctrl+Z then enter on Windows, or Ctrl+C. The REPL also exits when
 its input ends, so a file of statements can be piped in.
 
-### candela build &lt;file.cdl&gt; [-o out.cdlb]
+### candela new &lt;name&gt;
 
-Compiles the file to a `.cdlb` bytecode artifact and writes it out, reporting
-the path and the size. `compile` is accepted as the same command.
+Creates `name/candela.toml` and `name/src/main.cdl`, a project that prints
+`Hello, world!`. A directory that is already there is an error; nothing is
+overwritten.
+
+### candela run [file.cdl] [arguments]
+
+Compiles and runs the project. With no file, the entry point comes from the
+manifest ([`[package] entry`](candela-toml.md), `src/main.cdl` by default);
+with one, that file runs instead. Arguments after either reach the program
+through `argv()`.
 
 ```sh
+candela run
+candela run Ada
+candela run tools/report.cdl --verbose
+```
+
+An argument ending in `.cdl` is the file; anything else is the program's. To
+pass an argument that looks like a source path, name the entry point yourself.
+
+Dependencies are resolved first, so the packages the manifest lists are
+downloaded and their import roots are handed to the compiler.
+
+### candela check [file.cdl]
+
+Compiles the same program `run` would and stops before running it, reporting
+the path when it holds and the compile error when it does not. Dependencies are
+resolved first, so this also proves the manifest is satisfiable.
+
+### candela build [file.cdl] [-o out.cdlb]
+
+Compiles to a `.cdlb` bytecode artifact and writes it out, reporting the path
+and the size. `compile` is accepted as the same command.
+
+```sh
+candela build
 candela build game.cdl
 candela build game.cdl -o dist/game.cdlb
 ```
 
-Without `-o` (or its long form `--output`), the output name is the input with
-`.cdl` replaced by `.cdlb`. A path that does not end in `.cdl` gets `.cdlb`
-appended.
+With no file, the entry point comes from the manifest. Without `-o` (or its
+long form `--output`), the output name is the input with `.cdl` replaced by
+`.cdlb`; a path that does not end in `.cdl` gets `.cdlb` appended.
 
-`-o` is the only way to name the output. Any other argument after the source
-file is an error, so `candela build game.cdl dist/game.cdlb` says what it wants
-instead of writing `dist/game.cdlb`.
+`-o` is the only way to name the output. Any other argument is an error, so
+`candela build game.cdl dist/game.cdlb` says what it wants instead of writing
+`dist/game.cdlb`.
 
 The program is compiled as it is for a normal run, so every compile error
 listed in [errors](errors.md) can come out of this command. The build checks
 more than a run does: every function whose parameters are all annotated is
 compiled at those declared types, so an error in the body of a function `main`
-never reaches fails the build here. See [artifacts](artifacts.md) for what the
-file contains and how to run it.
+never reaches fails the build here. A package a project depends on is compiled
+into the artifact like any other import, so the `.cdlb` runs with neither the
+source tree nor the package cache present. See [artifacts](artifacts.md) for
+what the file contains and how to run it.
+
+### candela add &lt;name&gt;[@requirement]
+
+Resolves the package, downloads it, records it in `[dependencies]`, and updates
+the lock file. Without a requirement, what is recorded is the version that was
+resolved, at its major and minor (`1.2.3` becomes `^1.2`). With one, the
+requirement is recorded as written.
+
+```sh
+candela add shapes
+candela add shapes@^2
+candela add shapes@1.2.3
+```
+
+The manifest is edited in place: comments, key order, and the table form of an
+existing entry all survive.
+
+### candela remove &lt;name&gt;
+
+Drops the entry from `[dependencies]` and resolves what is left, so the lock
+file follows. A name the manifest does not list is an error.
+
+### candela fetch [--locked] [--offline]
+
+Resolves everything the manifest lists and reports each package with its
+version, target, and where it unpacked to.
+
+`--locked` refuses to change `candela.lock`: a lock file that disagrees with
+the manifest is an error rather than a rewrite. This is the form for a build
+machine.
+
+### candela update [name...]
+
+Moves dependencies to newer versions the manifest still allows and rewrites the
+lock file. With names, only those move; with none, all of them do.
+
+### candela publish --url &lt;url&gt;
+
+Publishes the manifest's version to the registry, pointing it at the archive at
+`url`. The package name is registered first if the registry has not seen it,
+and the release carries the manifest's dependencies.
+
+Without `--url` the command prints the reusable workflow that builds and
+uploads the archive for you, and exits 2. See
+[projects and packages](../getting-started/packages.md).
 
 ### candela --help
 
@@ -75,7 +157,47 @@ present in a released build.
 
 `candela` exits with zero when the program finishes and non-zero when anything
 fails: a file it cannot read, a compile error, an uncaught runtime error. A
-program can choose its own status with `exit()`.
+command line that does not say what to do exits two, as does `candela publish`
+with no `--url`. A program can choose its own status with `exit()`.
+
+## Resolving dependencies
+
+`run`, `check`, `build`, `add`, `remove`, `fetch` and `update` resolve the
+packages `candela.toml` lists. The work is done by `lpm`, the registry client:
+candela hands it the requirements and reads back where each package unpacked.
+It does not resolve versions, write the lock file, or manage the cache itself.
+
+A project with no `[dependencies]` never reaches for the client at all.
+
+### Finding the client
+
+candela looks in three places, in order:
+
+1. `LPM_BIN`, when it names a file.
+2. `PATH`.
+3. `~/.local/bin/lpm`, or `%LOCALAPPDATA%\Programs\lpm\lpm.exe` on Windows.
+
+The third is the shared path every client of the registry installs to, which is
+why it is a fixed location rather than something under the candela prefix.
+
+When none of the three holds a client, or the one found is older than candela
+needs, candela downloads the newest release from the registry's own repository,
+checks it against the checksums published beside it, unpacks it to the shared
+path, and says on standard error where it went. A download that does not match
+its checksum installs nothing.
+
+The oldest client candela works with is fixed at build time. `candela --version`
+does not report it; an older one on the machine is replaced without being asked
+about.
+
+### Offline and locked
+
+`--offline` on `run`, `check`, `build` or `fetch` resolves from the packages
+already downloaded and never reaches the network. A package that is not there
+is an error naming it.
+
+`--locked` on `fetch` refuses to change `candela.lock`. A lock file that
+disagrees with the manifest is an error rather than a rewrite.
 
 ## candela-vm
 
@@ -118,6 +240,7 @@ process the same way it does under `candela`.
 | Variable | Effect |
 | --- | --- |
 | `CANDELA_LIB_PATH` | Names the directory holding the shipped `std/` and `std_src/` library directories, overriding the default location beside the executable |
+| `LPM_BIN` | Names the registry client to resolve dependencies with, ahead of `PATH` and the shared path |
 | `CANDELA_NO_UPDATE_CHECK` | Set to any non-empty value to silence the update check |
 | `CI` | Silences the update check, so build machines never reach the network |
 

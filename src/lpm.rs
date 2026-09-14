@@ -982,17 +982,26 @@ mod tests {
         assert!(parse_packages("").is_err());
     }
 
+    /// Escapes and multi-byte text both survive a round trip. A package
+    /// directory can sit under a path in any script, and JSON spells anything
+    /// past the basic plane as a surrogate pair.
     #[test]
     fn strings_carry_escapes_and_wide_characters() {
-        let value = json::parse(r#"{"a":"line\nbreak é 😀 A café"}"#).unwrap();
+        let accented = "caf\u{e9}";
+        let wide = "\u{1f600}";
+
+        let escaped = json::parse(r#"{"a":"line\nbreak caf\u00e9 \ud83d\ude00"}"#).unwrap();
         assert_eq!(
-            value.get("a").and_then(json::Value::as_str),
-            Some("line\nbreak é 😀 A café")
+            escaped.get("a").and_then(json::Value::as_str),
+            Some(format!("line\nbreak {accented} {wide}").as_str())
         );
-        let direct = json::parse("{\"a\":\"café 😀\"}").unwrap();
+
+        // The same text as bytes rather than escapes, which is how a report
+        // from the client actually arrives.
+        let literal = json::parse(&format!("{{\"a\":\"{accented} {wide}\"}}")).unwrap();
         assert_eq!(
-            direct.get("a").and_then(json::Value::as_str),
-            Some("café 😀")
+            literal.get("a").and_then(json::Value::as_str),
+            Some(format!("{accented} {wide}").as_str())
         );
     }
 

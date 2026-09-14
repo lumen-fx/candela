@@ -62,7 +62,8 @@ artifact. `candela-vm` is the runtime alone, which runs an artifact and links
 no parser, compiler or REPL.
 
 The standard library ships beside them as candela source, so every function in
-it is readable.
+it is readable. `lpm`, the registry client, installs alongside and fetches the
+packages a project depends on.
 
 Editor support comes from `candela-lsp`, the language server, which runs the
 same compiler your build does and reports what it finds as you type. Two
@@ -82,6 +83,8 @@ the repository; neither is published to a marketplace yet.
   line.
 - [Running programs](getting-started/running.md): source, the REPL, artifacts
   and the command line.
+- [Projects and packages](getting-started/packages.md): `candela.toml`,
+  dependencies, the lock file and publishing.
 
 **Language** is the tour, meant to be read in order.
 
@@ -99,7 +102,8 @@ import it, the [built-in functions](standard-library/builtins.md) that need no
 import, and a page for each module.
 
 **Reference** covers the [operators](reference/operators.md), the
-[error catalogue](reference/errors.md), the [CLI](reference/cli.md), and the
+[error catalogue](reference/errors.md), the [CLI](reference/cli.md), the
+[manifest](reference/candela-toml.md), and the
 [`.cdlb` artifact format](reference/artifacts.md).
 
 **Integration** is for host applications:
