@@ -17,6 +17,7 @@ use libloading::Library;
 use serde::Deserialize;
 use serde::Serialize;
 use smol_strc::SmolStr;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
 use std::path::PathBuf;
@@ -317,43 +318,71 @@ pub fn resolve_library_filename(spec: &str, os: TargetOs) -> String {
 }
 
 thread_local! {
-    static DYLIB_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static DYLIB_DIRS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    static ARGV_SKIP: Cell<usize> = const { Cell::new(DEFAULT_ARGV_SKIP) };
 }
 
-/// Sets the directory a `dylib` import's library is looked for in on this
-/// thread, and returns the one that was in effect, so a caller can put it back.
+/// Sets the directories a `dylib` import's library is looked for in on this
+/// thread, and returns the ones that were in effect, so a caller can put them
+/// back.
 ///
 /// A host whose native libraries do not sit beside the script names their
-/// directory here: an application that keeps its candela sources in `src/` and
-/// its shared libraries in `lib/` points this at `lib/`, and `dylib "md"` finds
-/// `libmd.so` there. Passing `None` goes back to searching beside the importing
-/// file only.
+/// directories here: an application that keeps its candela sources in `src/`
+/// and its shared libraries in `lib/` points this at `lib/`, and `dylib "md"`
+/// finds `libmd.so` there. A project that pulls packages in adds one entry per
+/// package root, so a package's own native libraries load the same way. An
+/// empty list goes back to searching beside the importing file only.
 ///
-/// The directory is searched first; whatever the library name resolved to
-/// before is still tried after it, so a program that names a system library
-/// keeps working. The setting is read when a program is compiled and when a
-/// `.cdlb` artifact is loaded, so set it before either.
-pub fn set_dylib_dir(dir: Option<PathBuf>) -> Option<PathBuf> {
-    DYLIB_DIR.replace(dir)
+/// The directories are searched in order, ahead of everything else; whatever
+/// the library name resolved to before is still tried after them, so a program
+/// that names a system library keeps working. The setting is read when a
+/// program is compiled and when a `.cdlb` artifact is loaded, so set it before
+/// either.
+pub fn set_dylib_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    DYLIB_DIRS.replace(dirs)
 }
 
-/// The directory [`set_dylib_dir`] put in effect on this thread, if any.
+/// The directories [`set_dylib_dirs`] put in effect on this thread.
 #[must_use]
-pub fn dylib_dir() -> Option<PathBuf> {
-    DYLIB_DIR.with(|dir| dir.borrow().clone())
+pub fn dylib_dirs() -> Vec<PathBuf> {
+    DYLIB_DIRS.with(|dirs| dirs.borrow().clone())
 }
 
-/// Opens `filename` under the [`dylib_dir`] directory when one is set and the
-/// file is there, and hands the name to the OS loader otherwise.
+/// How many leading command-line arguments belong to the command rather than to
+/// the program. `argv()` steps over them.
+///
+/// Two is the shape both runners have always had: the binary, then the file it
+/// was pointed at.
+const DEFAULT_ARGV_SKIP: usize = 2;
+
+/// Says how many leading command-line arguments are the command's own, and
+/// returns the count that was in effect.
+///
+/// `candela-vm game.cdlb a b` and `candela game.cdl a b` both put the program's
+/// first argument third, which is the default. A command that spells a verb out
+/// first, as `candela run game.cdl a b` does, has one more of its own to step
+/// over and says so here.
+pub fn set_argv_skip(count: usize) -> usize {
+    ARGV_SKIP.replace(count)
+}
+
+/// The count [`set_argv_skip`] put in effect on this thread.
+#[must_use]
+pub fn argv_skip() -> usize {
+    ARGV_SKIP.get()
+}
+
+/// Opens `filename` under each [`dylib_dirs`] directory in turn, and hands the
+/// name to the OS loader when it is under none of them.
 ///
 /// The loader's own error comes back, so a caller reports the same message it
 /// did before a directory was ever set.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_library(filename: &str) -> Result<Library, libloading::Error> {
-    if let Some(dir) = dylib_dir()
-        && let Ok(lib) = unsafe { Library::new(dir.join(filename)) }
-    {
-        return Ok(lib);
+    for dir in dylib_dirs() {
+        if let Ok(lib) = unsafe { Library::new(dir.join(filename)) } {
+            return Ok(lib);
+        }
     }
     unsafe { Library::new(filename) }
 }

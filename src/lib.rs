@@ -9,8 +9,11 @@
 //! its `crate::data` / `crate::instr` / `crate::rt` / `crate::errors` /
 //! `crate::vm` paths.
 
-#[cfg(feature = "compiler")]
+#[cfg(all(feature = "compiler", any(target_arch = "wasm32", feature = "embed")))]
 use crate::compiler::compile;
+// The colour constants and the cold-path hint are named through `crate::` by
+// the parser, the compiler, and the macro scanner, which are descendants of
+// this module.
 #[cfg(feature = "compiler")]
 use crate::errors::BOLD;
 #[cfg(feature = "compiler")]
@@ -19,12 +22,9 @@ use crate::errors::ErrorCtx;
 use crate::errors::RED;
 #[cfg(feature = "compiler")]
 use crate::errors::RESET;
-#[cfg(feature = "compiler")]
-use crate::repl::repl;
 use crate::vm::RegisterFile;
 #[cfg(all(feature = "embed", feature = "compiler"))]
 use std::ffi::{CStr, CString, c_char};
-use std::fs;
 #[cfg(feature = "compiler")]
 use std::hint::cold_path;
 #[cfg(all(feature = "embed", feature = "compiler"))]
@@ -54,6 +54,15 @@ mod engine;
 // The `candela build` path: compile a `.cdl` source into a `.cdlb` artifact.
 #[cfg(feature = "compiler")]
 mod build;
+// The command line: the verbs, and the project they read.
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+mod cli;
+// Talking to `lpm`, the registry client that resolves dependencies.
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+mod lpm;
+// `candela.toml`, the project manifest.
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+mod manifest;
 // Macro registration and the region scanner. `pub` because both sides of a
 // macro are the embedder's: it registers the expanders, and it can scan a file
 // for regions without compiling it.
@@ -94,6 +103,10 @@ pub use candela_vm::Value;
 pub use engine::Engine;
 #[cfg(feature = "compiler")]
 pub use engine::Program;
+// Where an import reads from: the standard library, and the root of every
+// package a program depends on.
+#[cfg(feature = "compiler")]
+pub use compiler::imports::ImportResolver;
 
 // The VM-only surface: load a pre-compiled `.cdlb`, run it, and call into it.
 pub use candela_vm::CallError;
@@ -103,10 +116,10 @@ pub use candela_vm::LoadError;
 pub use candela_vm::RuntimeProgram;
 pub use candela_vm::load_program;
 // Where a `dylib` import looks for its library file. Read by a compile and by
-// an artifact load alike, so a host that keeps its libraries in a directory of
-// its own sets it once.
-pub use candela_vm::dylib_dir;
-pub use candela_vm::set_dylib_dir;
+// an artifact load alike, so a host that keeps its libraries in directories of
+// its own sets them once.
+pub use candela_vm::dylib_dirs;
+pub use candela_vm::set_dylib_dirs;
 // Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
@@ -116,7 +129,7 @@ pub use build::build_bytecode;
 /// The embedding API (`Engine`/`Program`) drives the VM directly instead, with
 /// the host-function tables the CLI never has.
 #[cfg(feature = "compiler")]
-fn execute_compiled(out: compiler::CompileOutput) {
+pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
     let compiler::CompileOutput {
         instructions,
         registers,
@@ -158,7 +171,12 @@ pub fn get_output() -> String {
 #[wasm_bindgen]
 pub fn run(code: String) {
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
-    execute_compiled(compile(code, "playground.cdl", false));
+    execute_compiled(compile(
+        code,
+        "playground.cdl",
+        false,
+        &ImportResolver::new(),
+    ));
 }
 
 #[cfg(all(feature = "embed", feature = "compiler"))]
@@ -174,7 +192,7 @@ pub unsafe extern "C" fn candela_run(code: *const c_char) -> *mut c_char {
     // returned string, so redirect both for the duration of the run.
     let was_capturing = candela_vm::captured_output::set_capturing(true);
     let _ = catch_unwind(|| {
-        execute_compiled(compile(code, "embedded.cdl", false));
+        execute_compiled(compile(code, "embedded.cdl", false, &ImportResolver::new()));
     });
     candela_vm::captured_output::set_capturing(was_capturing);
     let output = candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take());
@@ -193,158 +211,14 @@ pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
     }
 }
 
-/// Compiles a `.cdl` source file to a `.cdlb` bytecode artifact.
-///
-/// `candela build <file.cdl> [-o out.cdlb]`. The emitted artifact is run by the
-/// VM-only `candela-vm` binary, which links no parser/compiler/REPL.
-#[cfg(feature = "compiler")]
-fn build_subcommand(args: &mut impl Iterator<Item = String>) {
-    let Some(input) = args.next() else {
-        eprintln!("{RED}CANDELA ERROR{RESET}\nUsage:\n  candela build <file.cdl> [-o out.cdlb]");
-        std::process::exit(1);
-    };
-
-    // The output path is only ever named by `-o`/`--output`. A second bare
-    // path is rejected instead of taken as the output, so a mistyped
-    // `candela build a.cdl b.cdlb` says so rather than quietly writing
-    // `b.cdlb`.
-    let mut output: Option<String> = None;
-    while let Some(a) = args.next() {
-        if a == "-o" || a == "--output" {
-            let Some(path) = args.next() else {
-                eprintln!(
-                    "{RED}CANDELA ERROR{RESET}\n{a} needs an output path\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
-                );
-                std::process::exit(1);
-            };
-            output = Some(path);
-        } else {
-            eprintln!(
-                "{RED}CANDELA ERROR{RESET}\nUnexpected argument {RED}{BOLD}{a}{RESET}\nName the output file with -o or --output\nUsage:\n  candela build <file.cdl> [-o out.cdlb]"
-            );
-            std::process::exit(1);
-        }
-    }
-    // A `-o`/`--output` argument is honored verbatim. Otherwise the default
-    // output name replaces the `.cdl` extension with `.cdlb` (so
-    // `program.cdl` -> `program.cdlb`); it never appends a second extension
-    // (never `program.cdl.cdlb`). A path without a `.cdl` suffix just gets
-    // `.cdlb` added.
-    let output = output.unwrap_or_else(|| {
-        let stem = input.strip_suffix(".cdl").unwrap_or(&input);
-        format!("{stem}.cdlb")
-    });
-
-    let contents = fs::read_to_string(&input).unwrap_or_else(|_| {
-        cold_path();
-        eprintln!(
-            "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot read {RED}{BOLD}{input}{RESET}\n--------------",
-        );
-        std::process::exit(1);
-    });
-
-    let bytes = match build::build_bytecode(contents, &input) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("{RED}CANDELA ERROR{RESET}\nCannot build bytecode: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = fs::write(&output, &bytes) {
-        eprintln!("{RED}CANDELA ERROR{RESET}\nCannot write {output}: {e}");
-        std::process::exit(1);
-    }
-    println!("Wrote {} ({} bytes)", output, bytes.len());
-}
-
-/// Rejects anything trailing `--help` or `--version`.
-///
-/// Both flags answer a question that takes no further input, so a trailing
-/// argument is a mistake; saying so beats printing the answer to a question
-/// nobody asked.
-#[cfg(feature = "compiler")]
-fn reject_extra_args(args: &mut impl Iterator<Item = String>, flag: &str) {
-    if let Some(extra) = args.next() {
-        cold_path();
-        eprintln!(
-            "{RED}CANDELA ERROR{RESET}\n{flag} takes no other arguments, got {RED}{BOLD}{extra}{RESET}\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]\n  candela [-h | --help]\n  candela [-v | --version]"
-        );
-        std::process::exit(1);
-    }
-}
-
-#[cfg(feature = "compiler")]
-pub fn main() {
+/// The `candela` command. The command line itself is read in [`cli`].
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+#[must_use]
+pub fn main() -> std::process::ExitCode {
     #[cfg(not(debug_assertions))]
     std::panic::set_hook(Box::new(|info| {
         eprintln!("{RED}CANDELA ERROR{RESET}\n{info}");
     }));
 
-    let mut args = std::env::args().skip(1);
-
-    if args.len() == 0 {
-        cold_path();
-        repl();
-        return;
-    }
-
-    let next_arg = unsafe { args.next().unwrap_unchecked() };
-
-    if next_arg == "build" || next_arg == "compile" {
-        cold_path();
-        build_subcommand(&mut args);
-        return;
-    }
-
-    if next_arg == "--help" || next_arg == "-h" {
-        cold_path();
-        reject_extra_args(&mut args, &next_arg);
-        let update = update::start();
-        println!(
-            "{}\nCandela is a fast, statically-typed interpreted language that aims to combine Rust-like syntax with Python's ease-of-use.\n\nUsage:\n  candela myfile.cdl\n  candela build <file.cdl> [-o out.cdlb]   (compile to bytecode; run with candela-vm)\n  candela [-v | --version]",
-            util::CANDELA_LOGO
-        );
-        update::finish(update);
-        return;
-    }
-
-    if next_arg == "--version" || next_arg == "-v" {
-        cold_path();
-        reject_extra_args(&mut args, &next_arg);
-        println!("Candela {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
-
-    let filename = &next_arg;
-
-    let contents = fs::read_to_string(filename).unwrap_or_else(|_| {
-        cold_path();
-        eprintln!(
-            "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot read {RED}{BOLD}{filename}{RESET}\n--------------",
-        );
-        std::process::exit(1);
-    });
-
-    #[cfg(debug_assertions)]
-    {
-        let next = args.next();
-        if next == Some(String::from("--debug")) {
-            let now = std::time::Instant::now();
-            let out = compile(contents, filename, true);
-            println!("COMPILATION TIME: {:.2?}", now.elapsed());
-            let now = std::time::Instant::now();
-            execute_compiled(out);
-            println!(
-                "EXECUTION TIME: {:.3}ms",
-                now.elapsed().as_nanos() / 1_000_000
-            );
-            return;
-        } else if next == Some(String::from("--debug-parser")) {
-            let _ = compile(contents, filename, false);
-            return;
-        }
-    }
-
-    execute_compiled(compile(contents, filename, false));
+    cli::main()
 }

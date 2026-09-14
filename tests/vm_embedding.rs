@@ -23,7 +23,8 @@ use std::rc::Rc;
 
 /// Builds `src` to an artifact and loads it against `hosts`.
 fn load(src: &str, filename: &str, hosts: &HostRegistry) -> RuntimeProgram {
-    let bytes = build_bytecode(src.to_owned(), filename).expect("source must build to an artifact");
+    let bytes = build_bytecode(src.to_owned(), filename, &candela::ImportResolver::new())
+        .expect("source must build to an artifact");
     load_program(&bytes, hosts).expect("artifact must load against the registry")
 }
 
@@ -173,7 +174,12 @@ fn a_partly_covered_registry_names_what_is_missing() {
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn("app", "width", |name: &str| name.len() as i64);
 
-    let bytes = build_bytecode(HOST_PROGRAM.to_owned(), "banner.cdl").expect("builds");
+    let bytes = build_bytecode(
+        HOST_PROGRAM.to_owned(),
+        "banner.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("builds");
     match load_program(&bytes, &hosts) {
         Err(LoadError::HostBinding(HostBindError::Unregistered(names))) => {
             assert_eq!(names, ["app::log"]);
@@ -188,7 +194,8 @@ fn a_partly_covered_registry_names_what_is_missing() {
 #[test]
 fn a_closure_of_the_wrong_shape_is_refused_at_load() {
     let src = "host \"app\" { int width(string); }\n\nfn main() {}\n";
-    let bytes = build_bytecode(src.to_owned(), "shape.cdl").expect("builds");
+    let bytes = build_bytecode(src.to_owned(), "shape.cdl", &candela::ImportResolver::new())
+        .expect("builds");
 
     let mut wrong_return = HostRegistry::new();
     wrong_return.register_host_fn("app", "width", |name: &str| name.to_owned());
@@ -252,8 +259,14 @@ fn a_broken_annotated_function_fails_the_build() {
         fn on_click(id: string) { nope(); }
         fn main() {}
     ";
-    let diagnostic = collect_diagnostic(|| build_bytecode(src.to_owned(), "broken.cdl"))
-        .expect_err("a body that does not compile must fail the build");
+    let diagnostic = collect_diagnostic(|| {
+        build_bytecode(
+            src.to_owned(),
+            "broken.cdl",
+            &candela::ImportResolver::new(),
+        )
+    })
+    .expect_err("a body that does not compile must fail the build");
     assert!(
         diagnostic.message.contains("nope"),
         "the diagnostic must name the call it could not resolve: {}",
@@ -264,8 +277,14 @@ fn a_broken_annotated_function_fails_the_build() {
     // `len` has no receiver type to compile against there. A candela caller
     // specialises the body per call site, which is why `f("hi")` is fine.
     let src = "fn f(x: any) { print(x.len()); }\nfn main() { f(\"hi\"); }\n";
-    let diagnostic = collect_diagnostic(|| build_bytecode(src.to_owned(), "anyparam.cdl"))
-        .expect_err("`any` is an annotation, so the body is checked at it");
+    let diagnostic = collect_diagnostic(|| {
+        build_bytecode(
+            src.to_owned(),
+            "anyparam.cdl",
+            &candela::ImportResolver::new(),
+        )
+    })
+    .expect_err("`any` is an annotation, so the body is checked at it");
     assert!(
         diagnostic.message.contains("len"),
         "the diagnostic must name the call it could not resolve: {}",
@@ -353,7 +372,8 @@ fn a_signature_given_as_data_binds_at_load() {
 
         fn main() {}
     ";
-    let bytes = build_bytecode(src.to_owned(), "gpio.cdl").expect("builds");
+    let bytes = build_bytecode(src.to_owned(), "gpio.cdl", &candela::ImportResolver::new())
+        .expect("builds");
 
     let mut wrong = HostRegistry::new();
     wrong.register_host_fn_typed(

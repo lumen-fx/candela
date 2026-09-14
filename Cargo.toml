@@ -109,6 +109,11 @@ rustc-hash = "2.1.3"
 libloading = "0.9.0"
 libffi = "5.1.1"
 mimalloc = { version = "0.1.52", optional = true }
+# `candela.toml` is read and written through this. Format-preserving, because
+# `candela add` edits a file a person wrote, and a rewrite from scratch would
+# drop their comments and ordering. The VM never sees a manifest, so this stays
+# out of `candela-vm`.
+toml_edit = "0.25.15"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Pinned to the locked version rather than `*`: crates.io rejects a wildcard

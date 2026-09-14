@@ -125,7 +125,8 @@ fn main() {
         .join("option_result_probe.cdl")
         .to_string_lossy()
         .into_owned();
-    let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
+    let bytes = build_bytecode(src.to_owned(), &filename, &candela::ImportResolver::new())
+        .expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB");
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("artifact with inlined option/result must load");
@@ -213,7 +214,8 @@ fn main() {
         .join("json_map_set_probe.cdl")
         .to_string_lossy()
         .into_owned();
-    let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
+    let bytes = build_bytecode(src.to_owned(), &filename, &candela::ImportResolver::new())
+        .expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB");
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("artifact with inlined json/map/set must load");
@@ -243,7 +245,8 @@ fn main() {
         .join("std_cdlb_probe.cdl")
         .to_string_lossy()
         .into_owned();
-    let bytes = build_bytecode(src.to_owned(), &filename).expect("builds to bytecode");
+    let bytes = build_bytecode(src.to_owned(), &filename, &candela::ImportResolver::new())
+        .expect("builds to bytecode");
     assert_eq!(&bytes[0..4], b"CDLB", "artifact must start with the magic");
     assert!(
         load_program(&bytes, &HostRegistry::new()).is_ok(),

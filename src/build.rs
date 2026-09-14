@@ -11,6 +11,7 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::compile;
+use crate::compiler::imports::ImportResolver;
 use crate::trampoline::compile_entry_points;
 use candela_vm::artifact::DynLibFnImage;
 use candela_vm::artifact::EnumImage;
@@ -36,12 +37,20 @@ use candela_vm::artifact::serialize_image;
 /// before the image is built, so a body error fails the build even in a
 /// function `main` never calls, instead of dropping that function silently.
 ///
+/// `resolver` says where a library import reads from, the same as it does for a
+/// run from source, so a program that depends on packages builds into an
+/// artifact that carries them.
+///
 /// # Errors
 ///
 /// Returns an error string if serialization fails. A compile diagnostic
 /// travels by the error funnel, not through this `Result`.
-pub fn build_bytecode(source: String, filename: &str) -> Result<Vec<u8>, String> {
-    let mut out = compile(source, filename, false);
+pub fn build_bytecode(
+    source: String,
+    filename: &str,
+    resolver: &ImportResolver,
+) -> Result<Vec<u8>, String> {
+    let mut out = compile(source, filename, false, resolver);
     let exports = compile_entry_points(&mut out);
     let image = image_from_output(out, exports);
     serialize_image(&image)
