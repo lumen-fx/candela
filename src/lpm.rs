@@ -20,7 +20,10 @@ use std::process::Stdio;
 
 /// The oldest `lpm` candela works with. An older one on the machine is
 /// replaced.
-pub const LPM_MIN_VERSION: &str = "0.1.0";
+///
+/// 0.2.0 is the first release carrying the `install` verb candela resolves
+/// through; 0.1.0 predates it and cannot answer.
+pub const LPM_MIN_VERSION: &str = "0.2.0";
 
 /// Where `lpm` releases come from. The newest tag is the last path segment of
 /// the URL `<this>/latest` redirects to, the same resolution candela's own
