@@ -124,6 +124,105 @@ fn collections_cross_the_boundary() {
     assert_eq!(program.call("pick", &[map]).unwrap(), Value::Int(2));
 }
 
+/// An enum a function returns reaches the host as the variant it holds, with
+/// the payload in declaration order and nested values read back recursively.
+#[test]
+fn an_enum_return_names_its_variant() {
+    let src = "
+        enum Shape {
+            Dot,
+            Line(int, int),
+            Group(Shape[]),
+        }
+
+        fn dot() -> Shape { return Shape::Dot; }
+        fn line(a: int, b: int) -> Shape { return Shape::Line(a, b); }
+        fn pair() -> Shape { return Shape::Group([Shape::Dot, Shape::Line(1, 2)]); }
+
+        fn main() {}
+    ";
+    let mut program = load(src, "enums.cdl", &HostRegistry::new());
+    program.run();
+
+    assert_eq!(
+        program.call("dot", &[]).unwrap(),
+        Value::Enum {
+            variant: String::from("Dot"),
+            payload: Vec::new(),
+        }
+    );
+    assert_eq!(
+        program
+            .call("line", &[Value::Int(3), Value::Int(4)])
+            .unwrap(),
+        Value::Enum {
+            variant: String::from("Line"),
+            payload: vec![Value::Int(3), Value::Int(4)],
+        }
+    );
+    assert_eq!(
+        program.call("pair", &[]).unwrap(),
+        Value::Enum {
+            variant: String::from("Group"),
+            payload: vec![Value::Array(vec![
+                Value::Enum {
+                    variant: String::from("Dot"),
+                    payload: Vec::new(),
+                },
+                Value::Enum {
+                    variant: String::from("Line"),
+                    payload: vec![Value::Int(1), Value::Int(2)],
+                },
+            ])],
+        }
+    );
+}
+
+/// An enum goes outward only. The artifact refuses one as an argument whatever
+/// the parameter declares, an `any` parameter included, and the failure names
+/// the variant it was handed.
+#[test]
+fn an_enum_argument_is_refused() {
+    let src = "
+        enum Shape {
+            Dot,
+            Line(int, int),
+        }
+
+        fn line(a: int, b: int) -> Shape { return Shape::Line(a, b); }
+        fn echo(x: any) -> string { return str(x); }
+        fn width(n: int) -> int { return n; }
+
+        fn main() {}
+    ";
+    let mut program = load(src, "enums.cdl", &HostRegistry::new());
+    program.run();
+
+    let line = program
+        .call("line", &[Value::Int(3), Value::Int(4)])
+        .unwrap();
+
+    match program.call("echo", std::slice::from_ref(&line)) {
+        Err(CallError::ArgType { found, .. }) => assert_eq!(found, "enum variant Line"),
+        other => panic!("expected an argument-type failure, got: {other:?}"),
+    }
+
+    match program.call("width", &[line]) {
+        Err(CallError::ArgType {
+            expected, found, ..
+        }) => {
+            assert_eq!(expected, "int");
+            assert_eq!(found, "enum variant Line");
+        }
+        other => panic!("expected an argument-type failure, got: {other:?}"),
+    }
+
+    assert_eq!(
+        program.call("width", &[Value::Int(7)]).unwrap(),
+        Value::Int(7)
+    );
+}
+
 /// A variadic `host` declaration binds to a variadic closure through the
 /// artifact exactly as it does through `Engine`.
 #[test]

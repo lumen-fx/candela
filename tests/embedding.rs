@@ -593,6 +593,103 @@ fn main() {}
     );
 }
 
+/// An enum a script function returns reaches the host as the variant it holds,
+/// payload included, through the resident compiler path.
+#[test]
+fn enum_return_names_its_variant() {
+    let engine = Engine::new();
+
+    let src = r"
+enum Shape {
+    Dot,
+    Line(int, int),
+    Group(Shape[]),
+}
+
+fn dot() -> Shape { return Shape::Dot; }
+fn line(a: int, b: int) -> Shape { return Shape::Line(a, b); }
+fn pair() -> Shape { return Shape::Group([Shape::Dot, Shape::Line(1, 2)]); }
+
+fn main() {}
+";
+    let mut program = engine.compile(src, "enums.cdl").unwrap();
+
+    assert_eq!(
+        program.call("dot", &[]).unwrap(),
+        Value::Enum {
+            variant: "Dot".to_owned(),
+            payload: Vec::new(),
+        }
+    );
+    assert_eq!(
+        program.call("line", &[5.into(), 6.into()]).unwrap(),
+        Value::Enum {
+            variant: "Line".to_owned(),
+            payload: vec![Value::Int(5), Value::Int(6)],
+        }
+    );
+    assert_eq!(
+        program.call("pair", &[]).unwrap(),
+        Value::Enum {
+            variant: "Group".to_owned(),
+            payload: vec![Value::Array(vec![
+                Value::Enum {
+                    variant: "Dot".to_owned(),
+                    payload: Vec::new(),
+                },
+                Value::Enum {
+                    variant: "Line".to_owned(),
+                    payload: vec![Value::Int(1), Value::Int(2)],
+                },
+            ])],
+        }
+    );
+}
+
+/// An enum goes outward only. Handed back as an argument it is refused, in
+/// every position: an `any` parameter that accepts every other value, and
+/// inside a list whose element type was never pinned. The report names the
+/// variant, and the program stays callable afterwards.
+#[test]
+fn an_enum_argument_is_refused() {
+    let engine = Engine::new();
+
+    let src = r"
+enum Shape {
+    Dot,
+    Line(int, int),
+}
+
+fn line(a: int, b: int) -> Shape { return Shape::Line(a, b); }
+fn echo(x: any) -> string { return str(x); }
+fn first(xs: any[]) -> string { return str(xs[0]); }
+
+fn main() {}
+";
+    let mut program = engine.compile(src, "enums.cdl").unwrap();
+    let line = program.call("line", &[5.into(), 6.into()]).unwrap();
+
+    let err = program
+        .call("echo", std::slice::from_ref(&line))
+        .expect_err("an enum is no argument, `any` included");
+    assert_eq!(err.code, "argument_type_mismatch");
+    assert!(
+        err.message.contains("enum variant Line"),
+        "the report names the variant: {}",
+        err.message
+    );
+
+    let err = program
+        .call("first", &[Value::Array(vec![line])])
+        .expect_err("an enum inside a list is refused too");
+    assert_eq!(err.code, "argument_type_mismatch");
+
+    assert_eq!(
+        program.call("echo", &["ok".into()]).unwrap(),
+        Value::String(String::from("ok"))
+    );
+}
+
 /// A string-keyed map round-trips both directions.
 #[test]
 fn map_roundtrip_both_directions() {

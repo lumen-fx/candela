@@ -6,10 +6,10 @@
 //! script-defined functions by name with marshalled arguments, all while
 //! keeping interpreter state (registers + heap pools) alive between calls.
 //!
-//! ```no_run
+//! ```
 //! let mut engine = candela::Engine::new();
 //! engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
-//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id) { return app.rows(id); }\nfn main() {}", "main.cdl")?;
+//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id: string) { return app.rows(id); }\nfn main() {}", "main.cdl")?;
 //! let rows = program.call("count", &["board".into()])?;
 //! assert_eq!(rows, candela::Value::Int(5));
 //! # Ok::<(), candela::Diagnostic>(())
@@ -49,6 +49,8 @@ use candela_vm::embed::HostRegistry;
 use candela_vm::embed::HostType;
 use candela_vm::embed::IntoHostFn;
 use candela_vm::embed::Value;
+use candela_vm::embed::describe_value;
+use candela_vm::embed::holds_enum;
 use candela_vm::embed::marshal_value;
 use candela_vm::embed::unmarshal_value;
 use candela_vm::errors::Diagnostic;
@@ -443,6 +445,27 @@ impl Program {
     /// Returns a [`Diagnostic`] if `fn_name` is unknown, if the arguments don't
     /// type-check against its signature, or if the call raises a runtime error.
     pub fn call(&mut self, fn_name: &str, args: &[Value]) -> Result<Value, Diagnostic> {
+        // An enum travels outward only, and no parameter accepts one, not even
+        // an `any` one that accepts everything else. Refusing it here, before
+        // anything is marshalled, is what keeps the script from reading a null
+        // the host never passed.
+        if let Some((index, value)) = args.iter().enumerate().find(|(_, v)| holds_enum(v)) {
+            return Err(Diagnostic {
+                filename: self
+                    .sources
+                    .first()
+                    .map(|source| source.filename.to_string())
+                    .unwrap_or_default(),
+                span: 0..0,
+                message: format!(
+                    "argument {} of '{fn_name}' cannot be a {}: an enum value crosses the boundary outward only",
+                    index + 1,
+                    describe_value(value)
+                ),
+                code: String::from("argument_type_mismatch"),
+            });
+        }
+
         // Every table a trampoline compile can grow is snapshotted up front, so
         // a diagnostic raised while compiling it can be undone rather than
         // leaving a half-compiled specialization for a later call to trip on.
@@ -511,6 +534,7 @@ impl Program {
             &self.pools.maps,
             &self.pools.strings,
             &self.structs,
+            &self.enums,
         ))
     }
 
@@ -686,7 +710,7 @@ fn value_to_expr(v: &Value) -> Option<Expr> {
         Value::Float(f) => Expr::Float(*f),
         Value::Bool(b) => Expr::Bool(*b),
         Value::String(s) => Expr::String(SmolStr::from(s.as_str())),
-        Value::Array(_) | Value::Map(_) => return None,
+        Value::Array(_) | Value::Map(_) | Value::Enum { .. } => return None,
     })
 }
 
@@ -694,9 +718,12 @@ fn value_to_expr(v: &Value) -> Option<Expr> {
 /// argument can be given a type the call site type-checks against. Homogeneous
 /// element/value types are assumed (matching candela's static collection typing);
 /// the first element is sampled, empty collections yield an unknown element type.
+/// An enum only travels outward, and [`Program::call`] refuses an argument
+/// holding one before it gets here, so that arm is what keeps the match
+/// exhaustive rather than a type anything is given.
 fn value_datatype(v: &Value) -> DataType {
     match v {
-        Value::Null => DataType::Null,
+        Value::Null | Value::Enum { .. } => DataType::Null,
         Value::Int(_) => DataType::Int,
         Value::Float(_) => DataType::Float,
         Value::Bool(_) => DataType::Bool,

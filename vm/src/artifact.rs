@@ -28,6 +28,7 @@ use crate::embed::HostBindError;
 use crate::embed::HostDispatch;
 use crate::embed::HostRegistry;
 use crate::embed::Value;
+use crate::embed::describe_value;
 use crate::embed::marshal_value;
 use crate::embed::unmarshal_value;
 use crate::embed::value_matches_type;
@@ -329,6 +330,7 @@ impl RuntimeProgram {
             &self.pools.maps,
             &self.pools.strings,
             &self.structs,
+            &self.enums,
         ))
     }
 
@@ -393,19 +395,6 @@ impl RuntimeProgram {
                 })
                 .collect(),
         }
-    }
-}
-
-/// Names the shape of a host [`Value`] for an argument-mismatch report.
-fn describe_value(value: &Value) -> String {
-    match value {
-        Value::Null => String::from("null"),
-        Value::Int(_) => String::from("int"),
-        Value::Float(_) => String::from("float"),
-        Value::Bool(_) => String::from("bool"),
-        Value::String(_) => String::from("string"),
-        Value::Array(_) => String::from("array"),
-        Value::Map(_) => String::from("map"),
     }
 }
 
