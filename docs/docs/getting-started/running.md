@@ -82,9 +82,12 @@ candela run
 ```
 
 `candela run` compiles the entry point the manifest names and runs it, with the
-packages the project depends on resolved first. `candela check` does the same
-and stops before running. Both take a file if you want a different one, and
-both work from anywhere inside the project.
+packages the project depends on resolved first. `candela check` compiles the
+same program and stops before running, the body of every fully annotated
+function in that file included, so a mistake in a function `main` never calls is
+reported. A function an import brought in is compiled by the call that reaches
+it, as it is on a run. Both take a file if you want a different one, and both
+work from anywhere inside the project.
 
 [Projects and packages](packages.md) covers the manifest, dependencies and
 publishing.

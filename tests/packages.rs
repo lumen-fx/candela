@@ -253,6 +253,62 @@ fn check_compiles_without_running_and_passes_offline_through() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// `check` compiles what `build` compiles: a body error in a function `main`
+/// never calls fails it here, rather than waiting for the build to meet it.
+#[test]
+fn check_refuses_the_body_a_build_refuses() {
+    let root = scratch_dir("checkbody");
+    std::fs::write(
+        root.join("broken.cdl"),
+        "fn handle(id: string) {\n    nope();\n}\n\nfn main() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("sound.cdl"),
+        "fn handle(id: string) {\n    print(id);\n}\n\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let checked = common::output_with_deadline(
+        candela(&root, None).arg("check").arg("broken.cdl"),
+        "candela check",
+    );
+    assert!(
+        !checked.status.success(),
+        "check must refuse a body that does not compile: {}",
+        stdout_of(&checked)
+    );
+    let message = stderr_of(&checked);
+    assert!(message.contains("nope"), "{message}");
+    assert!(!stdout_of(&checked).contains("compiles"), "{message}");
+
+    // The same file, through the build the check stands in for.
+    let built = common::output_with_deadline(
+        candela(&root, None).arg("build").arg("broken.cdl"),
+        "candela build",
+    );
+    assert!(!built.status.success(), "{}", stdout_of(&built));
+    assert!(stderr_of(&built).contains("nope"), "{}", stderr_of(&built));
+
+    // A function whose body does compile still checks clean.
+    let checked = common::output_with_deadline(
+        candela(&root, None).arg("check").arg("sound.cdl"),
+        "candela check",
+    );
+    assert!(
+        checked.status.success(),
+        "candela check: {}",
+        stderr_of(&checked)
+    );
+    assert!(
+        stdout_of(&checked).contains("compiles"),
+        "{}",
+        stdout_of(&checked)
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// An artifact built from a project carries the package, so it runs under the
 /// VM-only binary with no source tree and no client.
 #[test]

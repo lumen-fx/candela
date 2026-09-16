@@ -19,10 +19,12 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::SymbolKind;
+use crate::compiler::compile;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::compiler::imports::ImportResolver;
 use crate::instr::Instr;
 use candela_vm::artifact::ExportImage;
 use candela_vm::data::NULL;
@@ -63,6 +65,24 @@ pub fn compile_trampoline(
     let mut output = Vec::new();
     let ret = call_expr.compile(&mut variables, ctx, state, &mut output, None, false, true);
     (output, ret)
+}
+
+/// Compiles `source` the way `candela build` does: the whole program, and then
+/// an entry point for every fully annotated function in it.
+///
+/// `candela check` and [`Engine::compile`](crate::Engine::compile) are check
+/// steps for that build, so they compile through here too and refuse what the
+/// build would refuse. The export table comes back with the compile result for
+/// the caller that writes an artifact; a caller that only wanted the check
+/// drops both.
+pub fn compile_checked(
+    source: String,
+    filename: &str,
+    resolver: &ImportResolver,
+) -> (CompileOutput, Vec<ExportImage>) {
+    let mut out = compile(source, filename, false, resolver);
+    let exports = compile_entry_points(&mut out);
+    (out, exports)
 }
 
 /// Compiles the entry point of every fully annotated function in the file being
