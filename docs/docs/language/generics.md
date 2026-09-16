@@ -86,7 +86,9 @@ the field declared with it, so `Pair{ key: "width", value: 40 }` is the same
 type as the one above. A parameter that no field pins is `any`.
 
 Type arguments nest, and a generic type is an ordinary type anywhere a type
-goes: a field, a parameter, a return annotation.
+goes: a field, a parameter, a return annotation. A type that comes from a
+[module](modules.md) bound with `as` keeps the alias in front of the name:
+`g::Cell<int>`.
 
 ```rust
 struct Cell<T> {
@@ -263,8 +265,7 @@ Parenthesise the comparisons to keep them: `f((a < b), (c > (d)))`.
 Type parameters have no bounds: a parameter accepts any type, and a body that
 does not work for the type it is given is reported against the instantiation
 that produced it, not against the declaration. Choosing an `impl` block by an
-exact type argument is the only form of specialisation. A generic type is named
-by its own name, without a module path in front of the type arguments.
+exact type argument is the only form of specialisation.
 
 Each distinct type argument produces its own instantiation, so a type whose
 fields name a deeper instantiation of itself (`struct L<T> { next: L<L<T>> }`)

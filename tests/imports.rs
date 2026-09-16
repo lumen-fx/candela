@@ -476,6 +476,136 @@ fn aliased_path_before_a_comparison_stays_a_comparison() {
     assert_eq!(stdout.trim(), "true\ntrue\nfalse", "{stdout}");
 }
 
+/// A generic type an aliased module declares is named through the alias
+/// wherever a type is written: a parameter, a struct field, an array of them, a
+/// return annotation, and a type argument of another generic type.
+#[test]
+fn aliased_generic_type_is_named_in_every_type_position() {
+    let output = run_program(
+        "aliased_generic_type_position",
+        &[
+            (
+                "shapes.cdl",
+                "enum Slot<T> { Filled(T), Empty }\n\
+                 struct Cell<T> { value: T }\n\
+                 impl Cell<T> { fn get(self) -> T { return self.value; } }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as g;\n\
+                 struct Holder { one: g::Slot<int>, many: g::Slot<int>[] }\n\
+                 fn wrap(n: int) -> g::Slot<int> { return g::Slot<int>::Filled(n); }\n\
+                 fn peek(s: g::Slot<int>) -> int {\n\
+                     match s {\n\
+                         g::Slot<int>::Filled(v) => { return v; }\n\
+                         g::Slot<int>::Empty => { return -1; }\n\
+                     }\n\
+                     return -1;\n\
+                 }\n\
+                 fn total(all: g::Slot<int>[]) -> int {\n\
+                     let sum = 0;\n\
+                     for s in all { sum = sum + peek(s); }\n\
+                     return sum;\n\
+                 }\n\
+                 fn inner(c: g::Cell<g::Slot<int>>) -> int { return peek(c.get()); }\n\
+                 fn main() {\n\
+                     let h = Holder { one: wrap(9), many: [wrap(1), wrap(2)] };\n\
+                     print(peek(h.one));\n\
+                     print(total(h.many));\n\
+                     print(inner(g::Cell<g::Slot<int>>{ value: wrap(7) }));\n\
+                     print(peek(g::Slot<int>::Empty));\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "9\n3\n7\n-1", "{stdout}");
+}
+
+/// Two modules can each declare a generic type by the same name. The alias in
+/// front of the name says which one is meant, in a type position, in a literal
+/// and in a method call, and a value of one is not a value of the other.
+#[test]
+fn two_modules_can_each_declare_the_same_generic_name() {
+    let output = run_program(
+        "same_generic_name_two_modules",
+        &[
+            (
+                "left.cdl",
+                "struct Slot<T> { tag: string, held: T }\n                 impl Slot<T> { fn label(self) -> string { return self.tag; } }\n",
+            ),
+            (
+                "right.cdl",
+                "struct Slot<T> { held: T }\n                 impl Slot<T> { fn label(self) -> string { return \"right\"; } }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"left.cdl\" as a;\n                 import \"right.cdl\" as b;\n                 fn takeA(s: a::Slot<int>) -> string { return s.tag; }\n                 fn takeB(s: b::Slot<int>) -> int { return s.held; }\n                 fn main() {\n                     let left = a::Slot<int>{ tag: \"left\", held: 1 };\n                     let right = b::Slot<int>{ held: 2 };\n                     print(takeA(left));\n                     print(takeB(right));\n                     print(left.label());\n                     print(right.label());\n                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "left\n2\nleft\nright", "{stdout}");
+}
+
+/// One module's generic type is not the other's, so a function declared to
+/// return `a::Slot<int>` cannot return `b::Slot<int>`. The two are told apart
+/// by the module they come from.
+#[test]
+fn one_modules_generic_type_is_not_the_others() {
+    let output = check_program(
+        "same_generic_name_not_interchangeable",
+        &[
+            ("left.cdl", "struct Slot<T> { tag: string, held: T }\n"),
+            ("right.cdl", "struct Slot<T> { held: T }\n"),
+            (
+                "prog.cdl",
+                "import \"left.cdl\" as a;\n                 import \"right.cdl\" as b;\n                 fn mkB() -> a::Slot<int> { return b::Slot<int>{ held: 7 }; }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("left::Slot<int>") && stderr.contains("right::Slot<int>"),
+        "stderr: {stderr}"
+    );
+}
+
+/// The module path in front of a generic type has to name a module the file
+/// imported; one that names nothing is reported instead of resolving to
+/// whatever declared the name.
+#[test]
+fn aliased_generic_type_needs_a_module_that_exists() {
+    let output = check_program(
+        "aliased_generic_type_unknown_module",
+        &[
+            ("shapes.cdl", "enum Slot<T> { Filled(T), Empty }\n"),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as g;\n\
+                 fn peek(s: h::Slot<int>) -> int { return 0; }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown namespace") && stderr.contains('h'),
+        "stderr: {stderr}"
+    );
+}
+
 /// A variant belongs to its enum, so the alias alone does not name one: the
 /// two-segment path is a function call, and there is no such function.
 #[test]

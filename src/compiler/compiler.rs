@@ -707,12 +707,16 @@ fn compile_enum_definition(
     state: &mut State<'_>,
 ) {
     if !type_params.is_empty() {
-        state.generics.add_enum_template(
+        let template = state.generics.add_enum_template(
             name.clone(),
             type_params.clone(),
             ctx.file_idx,
             Box::from(variants),
         );
+        state
+            .scope_mut(ctx.file_idx)
+            .symbols
+            .push((name.clone(), SymbolKind::Template(template)));
         return;
     }
     let enum_id = state.enums.len() as u16;
@@ -2582,12 +2586,16 @@ fn compile_struct_definition(
     _output: &mut Vec<Instr>,
 ) {
     if !type_params.is_empty() {
-        state.generics.add_struct_template(
+        let template = state.generics.add_struct_template(
             name.clone(),
             type_params.clone(),
             ctx.file_idx,
             Box::from(fields),
         );
+        state
+            .scope_mut(ctx.file_idx)
+            .symbols
+            .push((name.clone(), SymbolKind::Template(template)));
         return;
     }
     let struct_id = state.structs.len() as u16;
@@ -3472,15 +3480,22 @@ pub enum SymbolKind {
     Fn(u16),
     Struct(u16),
     Enum(u16),
+    /// A generic `struct` or `enum` declaration, by its index in
+    /// `Generics::templates`. It names no type of its own: each set of type
+    /// arguments it is applied to becomes an ordinary struct or enum. The
+    /// symbol is what makes `g::Slot<int>` reach the `Slot` the module behind
+    /// `g` declares rather than whichever module declared that name last.
+    Template(u32),
 }
 
 /// Whether two symbols are the same underlying definition (same kind, same
-/// id in the global fn/struct/enum tables).
+/// id in the global fn/struct/enum/template tables).
 const fn symbol_ids_equal(a: SymbolKind, b: SymbolKind) -> bool {
     match (a, b) {
         (SymbolKind::Fn(x), SymbolKind::Fn(y))
         | (SymbolKind::Struct(x), SymbolKind::Struct(y))
         | (SymbolKind::Enum(x), SymbolKind::Enum(y)) => x == y,
+        (SymbolKind::Template(x), SymbolKind::Template(y)) => x == y,
         _ => false,
     }
 }
@@ -3634,6 +3649,23 @@ impl Namespace {
                 && let SymbolKind::Enum(enum_id) = kind
             {
                 Some(*enum_id as usize)
+            } else {
+                None
+            }
+        })
+    }
+    /// Resolves a generic declaration by name (with an optional module path)
+    /// to its index in `Generics::templates`. Returns `None` when the path
+    /// names no namespace or the namespace it names declares no generic type
+    /// by that name; the caller decides whether another resolution can still
+    /// match.
+    #[must_use]
+    pub fn find_template(&self, path: &[SmolStr], type_name: &str) -> Option<usize> {
+        self.resolve(path)?.symbols.iter().find_map(|(name, kind)| {
+            if name.as_str() == type_name
+                && let SymbolKind::Template(idx) = kind
+            {
+                Some(*idx as usize)
             } else {
                 None
             }
@@ -3998,7 +4030,15 @@ fn parse_toplevel(
                 // A generic declaration registers no type of its own: each
                 // instantiation of it becomes an ordinary struct.
                 if !type_params.is_empty() {
-                    generics.add_struct_template(name, type_params, src_file_idx, fields);
+                    let template = generics.add_struct_template(
+                        name.clone(),
+                        type_params,
+                        src_file_idx,
+                        fields,
+                    );
+                    namespace
+                        .symbols
+                        .push((name, SymbolKind::Template(template)));
                     continue;
                 }
                 let struct_id = structs.len() as u16;
@@ -4015,7 +4055,15 @@ fn parse_toplevel(
             }
             Expr::EnumDeclare(name, variants, span, type_params) => {
                 if !type_params.is_empty() {
-                    generics.add_enum_template(name, type_params, src_file_idx, variants);
+                    let template = generics.add_enum_template(
+                        name.clone(),
+                        type_params,
+                        src_file_idx,
+                        variants,
+                    );
+                    namespace
+                        .symbols
+                        .push((name, SymbolKind::Template(template)));
                     continue;
                 }
                 let enum_id = enums.len() as u16;

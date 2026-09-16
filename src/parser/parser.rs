@@ -906,14 +906,31 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
     } else if let Token::Identifier(i) = next_token {
         if parser.peek_token() == Token::DoubleColon {
             parser.next_token();
-            let (namespace, end) = parse_namespace(parser, SmolStr::new(i));
-            TypeExpr::NamespacedIdentifier(namespace, (span.start, end).into())
+            let (path, end) = parse_namespace(parser, SmolStr::new(i));
+            // A generic type a module declares carries its arguments on the
+            // name at the end of the path, `g::Slot<int>`, the same place a
+            // name written on its own carries them. What is left of the path
+            // is the module it comes from.
+            if parser.peek_token() == Token::OpInf {
+                let mut path = path.into_vec();
+                let name = path.pop().unwrap_or_else(|| SmolStr::new(i));
+                let args = parse_type_args(parser);
+                TypeExpr::Generic(Box::new(GenericType {
+                    namespace: Box::from(path),
+                    name,
+                    args,
+                    span: (span.start, parser.last_token_end as u32).into(),
+                }))
+            } else {
+                TypeExpr::NamespacedIdentifier(path, (span.start, end).into())
+            }
         } else if parser.peek_token() == Token::OpInf {
             // A generic type applied to its arguments. A type position is never
             // ambiguous, so this needs no lookahead: `<` here can only open a
             // type-argument list.
             let args = parse_type_args(parser);
             TypeExpr::Generic(Box::new(GenericType {
+                namespace: Box::from([]),
                 name: SmolStr::new(i),
                 args,
                 span: (span.start, parser.last_token_end as u32).into(),
