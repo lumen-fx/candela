@@ -239,9 +239,26 @@ pub fn builtin_functions(
                 0
             } else {
                 check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
-                args[0]
+                let status = args[0]
                     .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id()
+                    .unwrap_id();
+                // `Halt(0)` is the program reaching its end, which leaves with
+                // no status of its own, so the status `exit` was given cannot
+                // live in register 0: there it reads as no status at all and
+                // the program leaves with zero however it was called. Where the
+                // argument landed there, it is moved somewhere else first.
+                if status == 0 {
+                    let dest = loop {
+                        let reg = state.alloc_reg();
+                        if reg != 0 {
+                            break reg;
+                        }
+                    };
+                    output.push(Instr::Mov(status, dest));
+                    dest
+                } else {
+                    status
+                }
             };
             output.push(Instr::Halt(halt_code));
             None
