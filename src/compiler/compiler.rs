@@ -3596,6 +3596,20 @@ impl Namespace {
     }
 }
 
+/// The key a loaded module is remembered under, so a module two files reach is
+/// parsed once and its functions, structs and enums are registered once.
+///
+/// Two imports of one file can spell its path differently: a library or package
+/// import resolves through the library directory (`import "strutil";`) while a
+/// source-relative one resolves next to the importing file (`import
+/// "../src/main.cdl";`), and either can arrive through a symbolic link or a
+/// `..`. Resolving both to the same real path is what makes the two spellings
+/// one module. A path with no real file behind it is kept as written, so the
+/// error that follows names the place that was tried.
+fn loaded_file_key(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
 /// The places an import was looked for, for the error that says it was found in
 /// none of them.
 ///
@@ -3659,7 +3673,7 @@ fn load_auto_prelude(
         return;
     }
 
-    let Some(path) = resolver.library_path(PRELUDE_REL) else {
+    let Some(path) = resolver.library_path(PRELUDE_REL).map(loaded_file_key) else {
         return;
     };
 
@@ -4060,7 +4074,7 @@ fn parse_toplevel(
             Expr::ImportFile(path, alias, is_logical, span) => {
                 // Where the import reads from, and, for the error when it reads
                 // from nowhere, every place that was tried.
-                let library_path = resolver.library_path(path.as_str());
+                let library_path = resolver.library_path(path.as_str()).map(loaded_file_key);
                 let file_path = if is_logical {
                     // A library import (`import "std/string";`, extensionless)
                     // resolves against a package root or the shipped library
@@ -4590,9 +4604,7 @@ pub fn compile(
     let mut free_registers = Vec::new();
 
     let mut sources: Vec<Source> = vec![main_src];
-    let main_path = PathBuf::from(filename)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(filename));
+    let main_path = loaded_file_key(PathBuf::from(filename));
     let mut namespace = Namespace::default();
 
     let mut files: FxHashMap<PathBuf, Namespace> = FxHashMap::default();

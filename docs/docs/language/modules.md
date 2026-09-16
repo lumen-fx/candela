@@ -120,6 +120,12 @@ same bare-imported and behind an alias. Names travel one way: a module does not
 see the importing file's declarations or imports, so it needs an import of its
 own for anything it uses.
 
+A module that several files import is loaded once: it is read and its
+declarations registered a single time, however many files reach it and whether
+they spell its path as a library import or as a path beside them. Every one of
+those files still binds it in its own form, merged into scope by a bare import
+and behind an alias by an `as` one.
+
 ## The standard library
 
 Standard library modules are library imports: `import "std/string";`,
