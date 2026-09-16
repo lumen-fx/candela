@@ -76,8 +76,9 @@ that is not a literal.
 
 **Enum and match errors.** An unknown variant, a variant pattern with the wrong
 number of payload bindings, a pattern that is not a variant when the scrutinee
-is an enum, and a `match` that does not cover every variant. The
-non-exhaustive report lists the variants you left out.
+is an enum, variant patterns on a value that is not one, and a `match` that does
+not cover every variant. The non-exhaustive report lists the variants you left
+out.
 
 **Declaration errors.** Defining a function name twice. The report shows both
 definitions. Two `impl` blocks that define one method for the same instantiated

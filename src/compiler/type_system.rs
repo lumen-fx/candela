@@ -1412,6 +1412,16 @@ fn track_return_flow(
             Expr::Match(scrutinee, arms, wildcard, span) => {
                 let scrut_type = scrutinee.infer_type(v, ctx, state);
                 let is_enum = matches!(scrut_type, DataType::Enum(_));
+                if !is_enum {
+                    crate::compiler::check_match_scrutinee_is_enum(
+                        &scrut_type,
+                        arms,
+                        *span,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
                 let mut all_return = true;
                 for (pat, body) in arms {
                     let v_len = v.len();

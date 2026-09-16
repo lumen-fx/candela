@@ -71,6 +71,12 @@ A payload binding introduces a variable for the arm's block. Use `_` in a
 payload position to ignore it, and `_` as a whole arm for everything not listed.
 A wildcard arm comes last.
 
+candela matches variant arms only when it knows which enum the value is. A
+parameter takes the type its call site passes it, so matching a parameter works
+when the caller hands it an enum value. An element read out of an empty array
+literal has no type, and matching one against variants is a compile error rather
+than an arm that never fits.
+
 ```rust
 enum Event {
     Click(int, int),
