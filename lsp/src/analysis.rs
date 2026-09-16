@@ -33,11 +33,12 @@
 
 use candela::compile_checked;
 use candela::compiler::compiler_data::{Function, Struct};
+use candela::compiler::expr::METHOD_SEP;
 use candela::compiler::expr::{Expr, Span};
 use candela::compiler::imports::ImportResolver;
-use candela::compiler::type_system::DataType;
+use candela::compiler::type_system::ANON_FN_PREFIX;
 use candela::macros::MacroEnv;
-use candela::{Diagnostic, collect_diagnostic};
+use candela::{Diagnostic, TypeNames, collect_diagnostic};
 
 /// A function or struct declaration, with enough information to render a
 /// document symbol / hover / go-to-definition target.
@@ -157,16 +158,23 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
 fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> ProgramSummary {
     let source_files = out.sources.iter().map(|s| s.filename.to_string()).collect();
 
+    // The compiler's own renderer, with the tables this compile produced. A
+    // type shows up in a tooltip named the way a diagnostic names it.
+    let types = TypeNames {
+        structs: &out.structs,
+        enums: &out.enums,
+    };
+
     let functions = out
         .functions
         .iter()
-        .map(|f| function_symbol(f, &out.structs))
+        .map(|f| function_symbol(f, types))
         .collect();
 
     let structs = out
         .structs
         .iter()
-        .map(|s| struct_symbol(s, &out.structs, buffer_text))
+        .map(|s| struct_symbol(s, types, buffer_text))
         .collect();
 
     let refs = out.functions.iter().flat_map(collect_refs).collect();
@@ -179,12 +187,12 @@ fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> P
     }
 }
 
-fn function_symbol(f: &Function, structs: &[Struct]) -> FunctionSymbol {
+fn function_symbol(f: &Function, types: TypeNames<'_>) -> FunctionSymbol {
     let params = f
         .args
         .iter()
         .map(|(name, ty)| match ty {
-            Some(t) => format!("{name}: {}", format_datatype(t, structs)),
+            Some(t) => format!("{name}: {}", types.of(t)),
             None => name.to_string(),
         })
         .collect();
@@ -195,10 +203,10 @@ fn function_symbol(f: &Function, structs: &[Struct]) -> FunctionSymbol {
         .map(|(args, ret)| {
             let args_s = args
                 .iter()
-                .map(|t| format_datatype(t, structs))
+                .map(|t| types.of(t).to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("({args_s}) -> {}", format_datatype(ret, structs))
+            format!("({args_s}) -> {}", types.of(ret))
         })
         .collect();
 
@@ -224,11 +232,11 @@ fn struct_is_in_buffer(s: &Struct, buffer_text: &str) -> bool {
     buffer_text.get(start..end) == Some(s.name.as_str())
 }
 
-fn struct_symbol(s: &Struct, structs: &[Struct], buffer_text: &str) -> StructSymbol {
+fn struct_symbol(s: &Struct, types: TypeNames<'_>, buffer_text: &str) -> StructSymbol {
     let fields = s
         .fields
         .iter()
-        .map(|(name, ty, _span)| (name.to_string(), format_datatype(ty, structs)))
+        .map(|(name, ty, _span)| (name.to_string(), types.of(ty).to_string()))
         .collect();
 
     StructSymbol {
@@ -236,39 +244,6 @@ fn struct_symbol(s: &Struct, structs: &[Struct], buffer_text: &str) -> StructSym
         name_span: s.name_span,
         fields,
         src_file: struct_is_in_buffer(s, buffer_text).then_some(0),
-    }
-}
-
-/// Renders a `DataType` for humans, resolving `DataType::Struct(id)` to its
-/// declared name (plain `Display` on `DataType` only ever prints the literal
-/// word "struct", since it has no access to the struct table).
-fn format_datatype(dt: &DataType, structs: &[Struct]) -> String {
-    match dt {
-        DataType::Float => "float".to_owned(),
-        DataType::Int => "int".to_owned(),
-        DataType::Bool => "bool".to_owned(),
-        DataType::String => "string".to_owned(),
-        DataType::Null => "null".to_owned(),
-        DataType::Unknown => "unknown".to_owned(),
-        DataType::Fn(_) => "function".to_owned(),
-        DataType::Array(Some(inner)) => format!("{}[]", format_datatype(inner, structs)),
-        DataType::Array(None) => "unknown[]".to_owned(),
-        DataType::Union(types) => types
-            .iter()
-            .map(|t| format_datatype(t, structs))
-            .collect::<Vec<_>>()
-            .join(" | "),
-        DataType::Struct(id) => structs
-            .get(*id as usize)
-            .map_or_else(|| "struct".to_owned(), |s| s.name.to_string()),
-        DataType::Enum(_) => "enum".to_owned(),
-        DataType::Map(kv) => format!(
-            "{{{}: {}}}",
-            kv.0.as_ref()
-                .map_or_else(|| "unknown".to_owned(), |t| format_datatype(t, structs)),
-            kv.1.as_ref()
-                .map_or_else(|| "unknown".to_owned(), |t| format_datatype(t, structs)),
-        ),
     }
 }
 
@@ -463,11 +438,26 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
     }
 }
 
+/// Whether `name` is one the buffer wrote, as opposed to one the compiler made
+/// for itself.
+///
+/// The function table holds both: a closure is hoisted to a synthetic
+/// top-level function, and a method is lowered to the mangled free function
+/// its call sites resolve through. Neither is a name a person can write, so
+/// neither belongs in an outline, in a completion list, or under a cursor.
+#[must_use]
+pub fn is_a_written_name(name: &str) -> bool {
+    !name.starts_with(ANON_FN_PREFIX) && !name.contains(METHOD_SEP)
+}
+
 impl ProgramSummary {
     /// Document symbols: top-level fn/struct declarations that live in the
-    /// buffer itself (`src_file == 0`), not ones pulled in via `import`.
+    /// buffer itself (`src_file == 0`), not ones pulled in via `import`, and
+    /// not the ones the compiler made for itself (see [`is_a_written_name`]).
     pub fn own_functions(&self) -> impl Iterator<Item = &FunctionSymbol> {
-        self.functions.iter().filter(|f| f.src_file == 0)
+        self.functions
+            .iter()
+            .filter(|f| f.src_file == 0 && is_a_written_name(&f.name))
     }
     pub fn own_structs(&self) -> impl Iterator<Item = &StructSymbol> {
         self.structs.iter().filter(|s| s.src_file == Some(0))
@@ -518,6 +508,8 @@ impl ProgramSummary {
 
 #[cfg(test)]
 mod tests {
+    use super::ANON_FN_PREFIX;
+    use super::METHOD_SEP;
     use super::analyze;
 
     /// A buffer using a macro of the host it is written for still analyzes:
@@ -561,6 +553,115 @@ mod tests {
         );
         // The error is placed in the buffer, on the offending expression.
         assert!(source.get(diagnostic.span.clone()).is_some());
+    }
+
+    /// A type in a tooltip is named the way the compiler names it in a
+    /// diagnostic: a user enum reads by the name it was declared under, at the
+    /// top level and inside a list or a map. The server used to render every
+    /// enum as the bare word `enum`, because it had a renderer of its own.
+    #[test]
+    fn hover_names_an_enum_typed_parameter() {
+        let source = "enum Value { Num(int), Text(string) }\n\
+                      fn width(v: Value, xs: Value[], m: {string: Value}) -> int {\n\
+                      \x20   return xs.len();\n\
+                      }\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let width = summary
+            .own_functions()
+            .find(|f| f.name == "width")
+            .expect("the function is in the outline");
+        assert_eq!(
+            width.params,
+            vec![
+                String::from("v: Value"),
+                String::from("xs: Value[]"),
+                String::from("m: {string: Value}"),
+            ]
+        );
+        assert_eq!(
+            width.signatures,
+            vec![String::from("(Value, Value[], {string: Value}) -> int")]
+        );
+    }
+
+    /// A struct's fields are rendered through the same renderer, so an
+    /// enum-typed field in the outline and in a struct tooltip is named too.
+    #[test]
+    fn a_struct_field_of_an_enum_type_is_named() {
+        let source = "enum Value { Num(int), Text(string) }\n\
+                      struct Holder { first: Value, rest: Value[] }\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let holder = summary
+            .own_structs()
+            .find(|s| s.name == "Holder")
+            .expect("the struct is in the outline");
+        assert_eq!(
+            holder.fields,
+            vec![
+                (String::from("first"), String::from("Value")),
+                (String::from("rest"), String::from("Value[]")),
+            ]
+        );
+    }
+
+    /// The renderer's spellings are the compiler's, so a dynamic slot reads
+    /// `any`, the way the program writes it, and a union is written with `|`,
+    /// as in a diagnostic.
+    #[test]
+    fn a_dynamic_slot_is_spelled_the_way_the_compiler_spells_it() {
+        let source = "fn pick(a: any) -> int {\n    return 1;\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let pick = summary
+            .own_functions()
+            .find(|f| f.name == "pick")
+            .expect("the function is in the outline");
+        assert_eq!(pick.params, vec![String::from("a: any")]);
+    }
+
+    /// The outline lists what the buffer declares. A closure the type checker
+    /// hoists and a method lowered to its mangled free function are entries
+    /// the compiler made, under names no one can write, and neither shows up.
+    #[test]
+    fn the_outline_leaves_out_the_names_the_compiler_made() {
+        let source = "struct Point { x: int }\n                      impl Point { fn twice(self) -> int { return self.x * 2; } }\n                      fn apply(f, n) { return f(n); }\n                      fn main() {\n                          print(apply(fn(v) { return v + 1; }, Point{ x: 1 }.twice()));\n                      }\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let names: Vec<&str> = summary.own_functions().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"apply") && names.contains(&"main"),
+            "the functions the buffer declares are there, got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name.starts_with(ANON_FN_PREFIX)),
+            "the hoisted closure is not, got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name.contains(METHOD_SEP)),
+            "the mangled method is not, got {names:?}"
+        );
     }
 
     /// `check` compiles a file with no `main`, and so does the server: a

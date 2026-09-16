@@ -344,7 +344,11 @@ impl LanguageServer for Backend {
                 items.push(completion_item(name, CompletionItemKind::FUNCTION, doc));
             }
             if let Some(summary) = self.current_or_cached_summary(&uri) {
-                for f in &summary.functions {
+                for f in summary
+                    .functions
+                    .iter()
+                    .filter(|f| analysis::is_a_written_name(&f.name))
+                {
                     let doc = format!("fn {}({})", f.name, f.params.join(", "));
                     items.push(completion_item(&f.name, CompletionItemKind::FUNCTION, &doc));
                 }
