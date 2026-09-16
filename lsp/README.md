@@ -2,7 +2,7 @@
 
 A language server for [candela](../README.md) (`.cdl` files), speaking LSP over
 stdio. It reuses candela's own lexer, parser, and type checker
-(`candela::compiler::compile`) instead of reimplementing the language frontend,
+(`candela::compile_checked`) instead of reimplementing the language frontend,
 so its analysis always matches the compiler.
 
 ## Build
@@ -35,6 +35,11 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
 - **Diagnostics.** Parse and type errors are pushed as
   `textDocument/publishDiagnostics`. candela reports one error per compile, so
   fix the first and re-type to see the next, the same flow as the `candela` CLI.
+  The compile is the one `candela check` runs, so a buffer that fails on the
+  command line fails in the editor: an error in the body of a function `main`
+  never calls is reported here too, as long as that function annotates every
+  parameter. A `main` is not required, so a library buffer analyses like any
+  other.
 
 - **Document sync.** Full-document sync (`didOpen`/`didChange`/`didClose`); each
   change replaces the whole buffer.
@@ -42,10 +47,12 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
 - **Hover.** On a struct, shows its fields with their declared types. On a
   function, shows its parameters with the concrete `(arg types) -> return type`
   signatures it has been specialised for; candela infers a function's return
-  type per call site, so a function nothing calls yet shows no return type. On a
-  built-in function or method, shows its documentation. Hover works on a use
-  site as well as a declaration. Hovering a local variable shows nothing:
-  candela does not retain per-variable inferred types after compilation.
+  type per call site, so a function nothing calls yet shows no return type
+  unless it annotates every parameter, in which case the entry point compiled
+  for it stands in for the missing call. On a built-in function or method,
+  shows its documentation. Hover works on a use site as well as a declaration.
+  Hovering a local variable shows nothing: candela does not retain
+  per-variable inferred types after compilation.
 
 - **Completion.** Completes keywords, built-in functions, and user-defined
   function and struct names from the compiled program, including symbols pulled
@@ -80,6 +87,10 @@ These are deliberate, and the source refers here for them.
 
 ## Testing
 
+- `src/analysis.rs` unit-tests `analyze` on the buffers whose handling is easy
+  to get wrong: one using a macro the server has no expander for, one with an
+  error beside such a macro, one whose only error is in the body of a function
+  nothing calls, and one with no `main`.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
