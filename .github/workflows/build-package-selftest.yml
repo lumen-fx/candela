@@ -27,4 +27,9 @@ jobs:
       # The self-test checks the workflow against the toolchain built from
       # main, which is what the nightly channel is.
       candela-version: nightly
+      # A pure-candela package packs for `any`, and one runner would never
+      # reach the Windows install, which is the leg that installs from the
+      # release rather than through install.sh. Packing for Windows as well
+      # costs one more runner and exercises it.
+      targets: any windows-x86_64
       manifest-path: examples/package/candela.toml
