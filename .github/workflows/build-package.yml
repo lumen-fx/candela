@@ -4,6 +4,9 @@ name: build package
 # registry where the release is. A package repository calls this instead of
 # writing the same three steps itself:
 #
+#   permissions:
+#     contents: write
+#
 #   jobs:
 #     release:
 #       uses: lumen-fx/candela/.github/workflows/build-package.yml@main
@@ -51,11 +54,10 @@ on:
         description: A registry token with permission to release this package.
         required: false
 
-# Write access belongs to the one job that creates a release. The rest read the
-# checkout, so a caller that grants no more than read (a self-test on a pull
-# request, say) runs everything up to the publish.
-permissions:
-  contents: read
+# Permissions come from the caller: a called workflow cannot ask for more than
+# it was granted, so nothing is declared here. A release caller grants
+# `contents: write` for the release it creates; a self-test on a pull request
+# grants read and runs everything up to the publish.
 
 jobs:
   # What to build, and where. The matrix is data rather than a literal list so
@@ -247,8 +249,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v6
 
