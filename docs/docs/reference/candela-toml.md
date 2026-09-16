@@ -38,10 +38,12 @@ what is wrong with it.
 | `name` | string | yes | The package name. This is what another project writes in its `[dependencies]`, and what its imports resolve under. |
 | `version` | string | yes | The package version. `candela publish` releases this version, and a workflow release checks it against the tag. |
 | `description` | string | no | One line about the package, sent to the registry when it is published. |
-| `entry` | string | no | The file `run`, `check` and `build` compile when no file is named. Defaults to `src/main.cdl`. |
+| `entry` | string | no | The file `run`, `check` and `build` compile when no file is named, and the file another project reads when it imports this package by name. Defaults to `src/main.cdl`. |
 
-A library with nothing to run needs no entry: nothing reads it until a verb is
-used without a file, and that verb says the entry is missing.
+The entry is the package's front door twice over: the verbs start there, and
+`import "name"` in a project that depends on the package reads it. A library
+keeps a `main` in it so `candela check` has something to compile; a `main` in
+an imported module is ignored.
 
 ## [dependencies]
 
@@ -91,15 +93,20 @@ root at the root of the archive. A package that ships native libraries carries
 
 ## Imports into a package
 
-A package root is where a library import resolves from when its first segment
-is the package name:
+A library import whose first segment is the package name resolves against the
+package's entry: the name alone reads the entry file, and a path reads from the
+entry's directory. With the default entry:
 
 | Import | Reads |
 | --- | --- |
-| `import "shapes";` | `<package root>/shapes.cdl` |
-| `import "shapes/circle";` | `<package root>/circle.cdl` |
-| `import "shapes/geo/arc";` | `<package root>/geo/arc.cdl` |
+| `import "shapes";` | `<package root>/src/main.cdl` |
+| `import "shapes/circle";` | `<package root>/src/circle.cdl` |
+| `import "shapes/geo/arc";` | `<package root>/src/geo/arc.cdl` |
 
-The package root is also searched for native libraries, so a `dylib` import in
-a package finds a library shipped beside its sources. See
+A manifest that sets `entry = "lib/shapes.cdl"` moves both: the name reads
+`lib/shapes.cdl` and `shapes/circle` reads `lib/circle.cdl`.
+
+The package root is also searched for native libraries, so a `dylib` import
+with a plain name finds a library shipped at the root of the package. A library
+under `dist/` is reached from `src/` with a path: `dylib "../dist/mylib"`. See
 [C libraries](../integration/c-libraries.md).

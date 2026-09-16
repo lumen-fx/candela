@@ -31,11 +31,16 @@ use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
+use crate::compiler::imports::DEFAULT_PACKAGE_ENTRY;
 use crate::compiler::imports::ImportResolver;
 use crate::compiler::type_system::Generics;
 use crate::compiler::type_system::GenericsCheckpoint;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::manifest::MANIFEST_NAME;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::manifest::Manifest;
 use crate::trampoline::compile_entry_points;
 use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
@@ -64,6 +69,7 @@ use candela_vm::vm;
 use candela_vm::vm::RegisterFile;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
+use std::path::Path;
 use std::path::PathBuf;
 
 // `Engine::compile` and `Program::call` recover from a compile error by
@@ -118,17 +124,22 @@ impl Engine {
 
     /// Makes `dir` the root of the package a script imports as `name`.
     ///
-    /// `import "shapes";` then reads `dir/shapes.cdl`, and
-    /// `import "shapes/circle";` reads `dir/circle.cdl`. `dir` is searched for
-    /// native libraries too, so a package that ships a shared library beside
-    /// its sources binds a `dylib` import with no further setup.
+    /// The package is entered through the file its `candela.toml` names as
+    /// `entry`, or `src/main.cdl` when the manifest names none or there is no
+    /// manifest. `import "shapes";` then reads that file, and
+    /// `import "shapes/circle";` reads `circle.cdl` from the entry's
+    /// directory. `dir` is searched for native libraries too, so a package
+    /// that ships a shared library under its root binds a `dylib` import with
+    /// no further setup.
     ///
     /// ```no_run
     /// let engine = candela::Engine::new().with_import_root("shapes", "/cache/shapes/1.2.3");
     /// ```
     #[must_use]
     pub fn with_import_root(mut self, name: &str, dir: impl Into<PathBuf>) -> Self {
-        self.resolver.add_root(name, dir.into());
+        let dir = dir.into();
+        let entry = package_entry(&dir);
+        self.resolver.add_root(name, dir, entry);
         self
     }
 
@@ -691,4 +702,23 @@ fn value_datatype(v: &Value) -> DataType {
             DataType::Map(Box::new((Some(DataType::String), value)))
         }
     }
+}
+
+/// The entry a package at `dir` is imported through, relative to `dir`: what
+/// its manifest names, or the default when there is no manifest to ask or it
+/// cannot be read. A manifest the `candela` command would refuse is not this
+/// API's to judge; the import simply lands on the default.
+#[cfg(not(target_arch = "wasm32"))]
+fn package_entry(dir: &Path) -> String {
+    Manifest::load(&dir.join(MANIFEST_NAME)).map_or_else(
+        |_| String::from(DEFAULT_PACKAGE_ENTRY),
+        |m| m.entry().to_owned(),
+    )
+}
+
+/// The wasm build carries no manifest reader, so every package enters at the
+/// default.
+#[cfg(target_arch = "wasm32")]
+fn package_entry(_dir: &Path) -> String {
+    String::from(DEFAULT_PACKAGE_ENTRY)
 }

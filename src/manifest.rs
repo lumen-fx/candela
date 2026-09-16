@@ -24,7 +24,7 @@ pub const MANIFEST_NAME: &str = "candela.toml";
 pub const LOCK_NAME: &str = "candela.lock";
 
 /// The entry point a package uses when it names none.
-pub const DEFAULT_ENTRY: &str = "src/main.cdl";
+pub use crate::compiler::imports::DEFAULT_PACKAGE_ENTRY as DEFAULT_ENTRY;
 
 /// Anything wrong with a manifest: it is not there, it does not parse, or it
 /// says something candela does not understand.

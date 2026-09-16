@@ -1,6 +1,7 @@
-// A package is a project with something worth importing in it. `greet` is
-// reachable from another project as `greeter::greet` once it depends on this
-// package; `main` runs when you run the project yourself.
+// A package is a project with something worth importing in it. This file is
+// the entry, so `import "greeter"` in a project that depends on the package
+// reads it and `greet` is reachable there as `greeter::greet`; `main` runs
+// when you run the project yourself and is ignored by an import.
 
 fn greet(name: string) -> string {
     return "Hello, " + name + "!";

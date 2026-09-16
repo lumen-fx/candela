@@ -33,27 +33,35 @@ fn scratch_dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// A package on disk: one `.cdl` file that exports `area`.
+/// A package on disk, laid out the way the release workflow packs one: the
+/// manifest at the root and the sources under `src/`, entered through
+/// `src/main.cdl`, with a second module beside it.
 fn shapes_package(root: &Path) -> PathBuf {
     let dir = root.join("cache").join("shapes").join("1.2.3");
-    std::fs::create_dir_all(&dir).expect("create package dir");
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("create package dir");
     std::fs::write(
         dir.join("candela.toml"),
         "[package]\nname = \"shapes\"\nversion = \"1.2.3\"\n",
     )
     .expect("write package manifest");
     std::fs::write(
-        dir.join("shapes.cdl"),
+        src.join("main.cdl"),
         "fn area(w, h) {\n    return w * h;\n}\n",
     )
     .expect("write package source");
+    std::fs::write(
+        src.join("circle.cdl"),
+        "fn circumference(r) {\n    return 2 * 3 * r;\n}\n",
+    )
+    .expect("write package module");
     dir
 }
 
 /// The report the stub answers with: one package, on the platform given.
 fn report(name: &str, version: &str, platform: &str, dir: &Path) -> String {
     format!(
-        "{{\"schema\":1,\"lock\":\"{}\",\"packages\":[{{\"name\":\"{name}\",\"version\":\"{version}\",\"platform\":\"{platform}\",\"target\":\"any\",\"dir\":\"{}\",\"files\":[\"candela.toml\",\"{name}.cdl\"],\"dependencies\":{{}}}}]}}",
+        "{{\"schema\":1,\"lock\":\"{}\",\"packages\":[{{\"name\":\"{name}\",\"version\":\"{version}\",\"platform\":\"{platform}\",\"target\":\"any\",\"dir\":\"{}\",\"files\":[\"candela.toml\",\"src\"],\"dependencies\":{{}}}}]}}",
         json_path(&dir.join("candela.lock")),
         json_path(dir)
     )
@@ -177,16 +185,18 @@ fn a_project_runs_against_the_package_it_depends_on() {
 
     std::fs::write(
         project.join("src").join("main.cdl"),
-        "import \"shapes\" as shapes;\n\nfn main() {\n    print(shapes::area(3, 4));\n}\n",
+        "import \"shapes\" as shapes;\nimport \"shapes/circle\" as circle;\n\nfn main() {\n    print(shapes::area(3, 4));\n    print(circle::circumference(2));\n}\n",
     )
     .unwrap();
 
+    // The package's own name reaches its entry, and a path inside it reaches a
+    // module beside the entry.
     let run = common::output_with_deadline(
         candela(&project, Some(&stub)).arg("run"),
         "candela run shapes",
     );
     assert!(run.status.success(), "candela run: {}", stderr_of(&run));
-    assert_eq!(stdout_of(&run).trim(), "12");
+    assert_eq!(stdout_of(&run).trim(), "12\n12");
 
     // The command the client was handed carries the requirement, the host, and
     // the target, and never the manifest itself.
