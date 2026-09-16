@@ -137,6 +137,15 @@ and the release carries the manifest's dependencies. It carries the toolchain
 requirement `[package] candela` names too, or the version of the candela doing
 the publishing when the manifest names none, and prints which one it recorded.
 
+A name the registry already holds is the one refusal the command carries on
+past, since it means the name is there to release against; who holds it makes
+no difference to the answer. Any other refusal stops it, and the release is not
+published; the registry's own message is what you see.
+
+A release that fails after the name went in leaves the name registered, so
+running the command again carries past the registration and retries the
+release.
+
 Without `--url` the command prints the reusable workflow that builds and
 uploads the archive for you, and exits 2. See
 [projects and packages](../getting-started/packages.md).
