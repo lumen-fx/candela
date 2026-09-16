@@ -94,3 +94,50 @@ fn a_session_prints_its_prompts_output_and_errors() {
         "the line that would not compile says why, got:\n{err}"
     );
 }
+
+/// Every declaration a file accepts is accepted at the prompt as well. The
+/// line goes above the synthesised `main` rather than inside it, which is what
+/// gives a method block a type to attach to and keeps a function declaration
+/// out of a block.
+#[test]
+fn a_line_declares_everything_a_file_can() {
+    let (out, err) = session(concat!(
+        "struct Point { x: int }\n",
+        "impl Point { fn twice(self) -> int { return self.x * 2; } }\n",
+        "enum Colour { Red, Green }\n",
+        "fn add(a: int, b: int) -> int { return a + b; }\n",
+        "let p = Point{x: 21};\n",
+        "print(p.twice());\n",
+        "print(Colour::Red);\n",
+        "print(add(2, 3));\n",
+    ));
+
+    assert!(
+        out.contains("42"),
+        "the method block declared a method to call, got:\n{out}\n{err}"
+    );
+    assert!(
+        out.contains("Red"),
+        "the enum declared a variant to name, got:\n{out}\n{err}"
+    );
+    assert!(
+        out.contains('5'),
+        "the function declared is callable, got:\n{out}\n{err}"
+    );
+}
+
+/// A line the parser cannot read reports what it expected and is dropped, and
+/// the prompt takes the next line as it would any other.
+#[test]
+fn a_line_the_parser_rejects_is_reported_and_dropped() {
+    let (out, err) = session("impl {\nprint(\"still here\");\n");
+
+    assert!(
+        err.contains("Error"),
+        "the line that would not parse says why, got:\n{err}"
+    );
+    assert!(
+        out.contains("still here"),
+        "the line after it runs, got:\n{out}"
+    );
+}
