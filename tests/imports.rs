@@ -15,6 +15,15 @@ mod common;
 /// Creates a fresh scratch directory, writes the given files into it, runs
 /// `prog.cdl` through the `candela` binary, and cleans up.
 fn run_program(test_name: &str, files: &[(&str, &str)]) -> Output {
+    program_output(test_name, files, &[])
+}
+
+/// The same, stopping at `candela check`, for a program with no `main` to run.
+fn check_program(test_name: &str, files: &[(&str, &str)]) -> Output {
+    program_output(test_name, files, &["check"])
+}
+
+fn program_output(test_name: &str, files: &[(&str, &str)], verb: &[&str]) -> Output {
     let dir = std::env::temp_dir().join(format!(
         "candela_imports_{test_name}_{}",
         std::process::id()
@@ -25,6 +34,7 @@ fn run_program(test_name: &str, files: &[(&str, &str)]) -> Output {
     }
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
     command
+        .args(verb)
         .arg(dir.join("prog.cdl"))
         .env_remove("CANDELA_LIB_PATH");
     let output = common::output_with_deadline(&mut command, "import run");
@@ -310,4 +320,61 @@ fn aliased_module_keeps_its_own_imports() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("12"));
+}
+
+/// A module that declares `main` can be bare-imported: only the entry file's
+/// `main` runs, so the module's is not one of the names the merge brings in.
+#[test]
+fn bare_import_of_a_module_with_main_keeps_the_importers_main() {
+    let output = run_program(
+        "bare_module_main",
+        &[
+            (
+                "helper.cdl",
+                "fn ping() { return 5; }\nfn main() { print(ping()); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"helper.cdl\";\nfn main() { print(ping() + 1); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The importer's `main` ran, and the module's did not.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "6", "stdout: {stdout}");
+}
+
+/// A bare import holds back only the module's `main` function. A struct that
+/// happens to carry the same name is a separate symbol and merges like any
+/// other; it used to be dropped with the function, leaving the importer with
+/// "Unknown struct main".
+///
+/// Checked rather than run: functions and types share one namespace, so a
+/// module's `struct main` still collides with the importing file's own `fn
+/// main`. A library entry, which has none, is where the struct is reachable.
+#[test]
+fn bare_import_keeps_a_struct_named_main() {
+    let output = check_program(
+        "bare_module_main_struct",
+        &[
+            (
+                "helper.cdl",
+                "struct main { a: int }\nfn ping() { return 5; }\nfn main() { print(ping()); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"helper.cdl\";\nfn build() { let m = main { a: 7 }; return m.a + ping(); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
