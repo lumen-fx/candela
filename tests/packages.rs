@@ -194,6 +194,74 @@ fn write_answering_stub(dir: &Path, name: &str, line: &str, status: i32) -> Path
     }
 }
 
+/// Writes a stub that records its arguments and turns `publish` down with
+/// `message` on standard error. Every other verb succeeds.
+///
+/// It is for the tests about which refusal `candela publish` carries on past.
+fn write_refusing_publish_stub(dir: &Path, message: &str) -> PathBuf {
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join("lpm-refusing");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\n\
+                 here=$(dirname \"$0\")\n\
+                 if [ \"$1\" = \"--version\" ]; then\n\
+                 \x20 echo \"lpm version 9.9.9 (stub)\"\n\
+                 \x20 exit 0\n\
+                 fi\n\
+                 printf '%s\\n' \"$*\" >> \"$here/args.txt\"\n\
+                 if [ \"$1\" = \"publish\" ]; then\n\
+                 \x20 printf '%s\\n' '{message}' >&2\n\
+                 \x20 exit 1\n\
+                 fi\n\
+                 echo done\n"
+            ),
+        )
+        .expect("write the stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stub executable");
+        path
+    }
+
+    #[cfg(windows)]
+    {
+        let path = dir.join("lpm-refusing.cmd");
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\n\
+                 if \"%1\"==\"--version\" (\r\n\
+                 echo lpm version 9.9.9 ^(stub^)\r\n\
+                 exit /b 0\r\n\
+                 )\r\n\
+                 set \"VERB=%~1\"\r\n\
+                 setlocal EnableDelayedExpansion\r\n\
+                 set \"OUT=%~dp0args.txt\"\r\n\
+                 set \"LINE=\"\r\n\
+                 :next\r\n\
+                 if \"%~1\"==\"\" goto done\r\n\
+                 set \"ARG=%~1\"\r\n\
+                 set \"LINE=!LINE!!ARG! \"\r\n\
+                 shift\r\n\
+                 goto next\r\n\
+                 :done\r\n\
+                 echo(!LINE!>>\"!OUT!\"\r\n\
+                 endlocal\r\n\
+                 if \"%VERB%\"==\"publish\" (\r\n\
+                 echo {message} 1>&2\r\n\
+                 exit /b 1\r\n\
+                 )\r\n\
+                 echo done\r\n"
+            ),
+        )
+        .expect("write the stub");
+        path
+    }
+}
+
 /// A `candela` command in `dir`, with the stub and the checkout's library
 /// directory in place.
 fn candela(dir: &Path, stub: Option<&Path>) -> Command {
@@ -649,6 +717,62 @@ fn publish_records_the_candela_a_release_needs() {
     }
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// Only a taken name lets `candela publish` carry on to the release. Any other
+/// refusal stops it, so nothing is released against a package the registry
+/// never registered.
+#[test]
+fn publish_carries_on_past_a_taken_name_and_stops_at_anything_else() {
+    for (refusal, carries_on) in [
+        ("the registry answered 500", false),
+        ("connection reset by peer", false),
+        ("package name is already taken", true),
+        ("the registry answered 409", true),
+    ] {
+        let root = scratch_dir("publishrefused");
+        let stub = write_refusing_publish_stub(&root, refusal);
+        let project = root.join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("candela.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.4.0\"\n",
+        )
+        .unwrap();
+
+        let published = common::output_with_deadline(
+            candela(&project, Some(&stub))
+                .arg("publish")
+                .arg("--url")
+                .arg("https://example.com/demo-0.4.0.tar.gz"),
+            "candela publish",
+        );
+        let message = stderr_of(&published);
+        let args = std::fs::read_to_string(root.join("args.txt")).unwrap_or_default();
+
+        assert!(
+            args.lines().any(|line| line.starts_with("publish ")),
+            "{refusal}: the name must be registered first: {args}"
+        );
+        assert_eq!(
+            args.lines().any(|line| line.starts_with("release ")),
+            carries_on,
+            "{refusal}: {args}"
+        );
+        assert_eq!(
+            published.status.success(),
+            carries_on,
+            "{refusal}: {message}"
+        );
+        if !carries_on {
+            assert!(
+                message.contains(refusal),
+                "{refusal}: the registry's own message must show: {message}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
 
 /// A candela project cannot depend on a Lumen package, and the refusal names

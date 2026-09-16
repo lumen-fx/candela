@@ -444,9 +444,14 @@ jobs:
           export LPM_CONFIG_DIR="$config_dir"
 
           # A package the registry has never heard of is registered first. One
-          # it already knows answers 409, which is the answer this wanted.
+          # it already knows is refused, which is the answer this wanted. The
+          # two phrases below are the only ones that mean a taken name: the
+          # registry's own message, and what lpm says instead when the refusal
+          # arrives without the JSON body it expects. Anything wider swallows a
+          # real failure and releases against a package nobody registered.
+          # `already_registered` in src/cli.rs matches the same two.
           if ! lpm publish "$NAME" --platform candela --description "$DESCRIPTION" 2> publish.err; then
-            if ! grep -qiE '409|already exists' publish.err; then
+            if ! grep -qiE 'package name is already taken|the registry answered 409' publish.err; then
               cat publish.err >&2
               exit 1
             fi

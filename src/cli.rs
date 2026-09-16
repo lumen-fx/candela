@@ -579,8 +579,8 @@ fn publish_verb(args: &mut impl Iterator<Item = String>) {
         std::process::exit(2);
     };
 
-    // A name nobody has claimed is registered first. One that is already
-    // registered answers 409, which is the answer this wanted.
+    // A name nobody has claimed is registered first. A name that is already
+    // taken is refused, which is the answer this wanted, whoever holds it.
     if let Err(e) = lpm::publish(manifest.name(), manifest.description())
         && !already_registered(&e.to_string())
     {
@@ -618,10 +618,23 @@ fn publish_verb(args: &mut impl Iterator<Item = String>) {
 }
 
 /// Whether the registry turned a `publish` down because the name is already
-/// registered, which is the one refusal that is not a problem.
+/// taken, which is the one refusal that is not a problem. The registry answers
+/// the same way whoever holds the name.
+///
+/// The registry answers a taken name with `package name is already taken`, and
+/// `lpm` prints that message as its own. When the body is not the JSON `lpm`
+/// expects, it falls back to naming the status, which for this refusal is `the
+/// registry answered 409`. Those two lines are the whole of it.
+///
+/// The test has to be this narrow, because anything wider swallows a real
+/// failure and publishes a release against a package that was never
+/// registered. The same two phrases are what the reusable workflow greps for in
+/// `.github/workflows/build-package.yml`, so both agree on what a taken name
+/// looks like.
 fn already_registered(message: &str) -> bool {
     let lowered = message.to_ascii_lowercase();
-    lowered.contains("409") || lowered.contains("already exists") || lowered.contains("exists")
+    lowered.contains("package name is already taken")
+        || lowered.contains("the registry answered 409")
 }
 
 fn open_manifest() -> Manifest {
@@ -694,9 +707,31 @@ mod tests {
 
     #[test]
     fn a_taken_name_is_read_out_of_the_refusal() {
-        assert!(already_registered("registry said 409 Conflict"));
-        assert!(already_registered("package shapes already exists"));
-        assert!(!already_registered("network unreachable"));
-        assert!(!already_registered("401 unauthorized"));
+        // What lpm prints when the registry refuses a name somebody owns.
+        assert!(already_registered("lpm: package name is already taken"));
+        // And when the refusal arrives without the JSON body lpm expects.
+        assert!(already_registered("lpm: the registry answered 409"));
+    }
+
+    #[test]
+    fn any_other_refusal_is_a_refusal() {
+        for message in [
+            "network unreachable",
+            "lpm: 401 unauthorized",
+            // A real failure that happens to carry the word this used to look
+            // for. Swallowing one of these publishes a release against a
+            // package that was never registered.
+            "lpm: open candela.toml: the file does not exist",
+            "lpm: the signing token no longer exists",
+            "lpm: package shapes already exists",
+            // A different conflict. It is not this one, and a publish that
+            // hits it has not registered anything.
+            "lpm: release version is already taken",
+            "lpm: user already exists",
+            // The status named, but not the one this is about.
+            "lpm: the registry answered 403",
+        ] {
+            assert!(!already_registered(message), "{message} was swallowed");
+        }
     }
 }
