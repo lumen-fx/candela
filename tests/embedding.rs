@@ -51,6 +51,96 @@ fn main() {}
     assert_eq!(result, Value::Int(1));
 }
 
+/// A host namespace is reached with a dot as well as with `::`, including for a
+/// function that returns nothing and is called as a statement.
+#[test]
+fn host_fn_reached_through_a_dot() {
+    let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&seen);
+
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
+    engine.register_host_fn("app", "note", move |line: &str| {
+        recorder.borrow_mut().push(line.to_owned());
+    });
+
+    let src = r#"
+host "app" {
+    int rows(string);
+    note(string);
+}
+
+fn count(id: string) -> int {
+    app.note(id);
+    return app.rows(id);
+}
+
+fn both(id: string) -> bool {
+    return app.rows(id) == app::rows(id);
+}
+
+fn main() {}
+"#;
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(
+        program.call("count", &["board".into()]).expect("call ok"),
+        Value::Int(5)
+    );
+    assert_eq!(
+        program.call("both", &["board".into()]).expect("call ok"),
+        Value::Bool(true)
+    );
+    assert_eq!(seen.borrow().as_slice(), ["board".to_owned()]);
+}
+
+/// A variable takes the name back: with `app` bound to a value, `app.rows(id)`
+/// is that value's own method and the host block is reachable only through
+/// `::`.
+#[test]
+fn variable_shadows_the_host_block() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
+
+    let src = r#"
+host "app" {
+    int rows(string);
+}
+
+struct Board { offset: int }
+
+impl Board {
+    fn rows(self, id: string) -> int {
+        return self.offset + id.len();
+    }
+}
+
+fn count(id: string) -> int {
+    let app = Board { offset: 42 };
+    return app.rows(id);
+}
+
+fn host_count(id: string) -> int {
+    let app = Board { offset: 42 };
+    return app::rows(id);
+}
+
+fn main() {}
+"#;
+
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(
+        program.call("count", &["board".into()]).expect("call ok"),
+        Value::Int(47)
+    );
+    assert_eq!(
+        program
+            .call("host_count", &["board".into()])
+            .expect("call ok"),
+        Value::Int(5)
+    );
+}
+
 /// State established by one call must be visible to the next. Here the state
 /// lives on the Rust side (a shared map two host functions read/write), which
 /// is the canonical embedding pattern; the `Program` keeps the dispatch table
