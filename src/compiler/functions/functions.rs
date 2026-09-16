@@ -4,6 +4,7 @@ use super::type_system::DataType;
 use super::type_system::TypeExpr;
 use super::type_system::resolve_generic_call;
 use super::type_system::resolve_generic_variant;
+use super::type_system::type_args_name_a_variant;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
@@ -134,11 +135,12 @@ pub fn handle_functions(
     type_args: &[TypeExpr],
 ) -> Option<u16> {
     // A call written with type arguments names either a variant of a generic
-    // enum (`Slot<int>::Filled(x)`) or a generic function. Both resolve against
-    // the instantiation the arguments give, so neither reaches the built-in and
+    // enum (`Slot<int>::Filled(x)`) or a generic function, which may itself sit
+    // behind a module alias (`m::first<int>(xs)`). Both resolve against the
+    // instantiation the arguments give, so neither reaches the built-in and
     // dynamic-library paths below.
     if !type_args.is_empty() {
-        if namespace.len() >= 2 {
+        if type_args_name_a_variant(namespace, ctx, state) {
             let (enum_id, variant_idx) =
                 resolve_generic_variant(namespace, type_args, span, ctx, state);
             return Some(crate::compiler::compile_enum_construction(
@@ -153,8 +155,10 @@ pub fn handle_functions(
                 output,
             ));
         }
-        let fn_name = namespace[namespace.len() - 1].clone();
-        let (fn_id, call_type_args) = resolve_generic_call(&fn_name, type_args, span, ctx, state);
+        let len = namespace.len() - 1;
+        let fn_name = namespace[len].clone();
+        let (fn_id, call_type_args) =
+            resolve_generic_call(&namespace[..len], &fn_name, type_args, span, ctx, state);
         return handle_user_function(
             &fn_name,
             fn_id,

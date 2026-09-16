@@ -67,6 +67,9 @@ since the variant belongs to the enum and not to the module:
 `shapes::Shape::Circle(1)`, both where a value is built and in a `match` arm.
 The type itself is `shapes::Shape`. See [enums](enums.md).
 
+A [generic](generics.md) function keeps its type arguments on its own name,
+behind the alias: `shapes::first<int>(xs)`.
+
 ## Name collisions
 
 Merging a symbol that already exists in the importing file is a compile error

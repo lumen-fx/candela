@@ -842,6 +842,28 @@ pub fn resolve_type_args(type_args: &[TypeExpr], ctx: Ctx, state: &mut State<'_>
         .collect()
 }
 
+/// Whether a call path written with type arguments names an enum variant
+/// rather than a generic function.
+///
+/// The list is written on the segment before the variant
+/// (`Slot<int>::Filled`, `g::Slot<int>::Filled`) and on the last segment for a
+/// function (`first<int>`, `m::first<int>`), so whether that earlier segment
+/// names a type is what tells the two apart. A non-generic enum counts too, so
+/// `Color::Red<int>(1)` still reports type arguments on a plain type instead of
+/// looking for a function in a namespace called `Color`.
+#[must_use]
+pub fn type_args_name_a_variant(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -> bool {
+    let Some(base_idx) = path.len().checked_sub(2) else {
+        return false;
+    };
+    let base = &path[base_idx];
+    state.generics.is_template(base)
+        || state
+            .scope(ctx.file_idx)
+            .find_enum(&path[..base_idx], base)
+            .is_some()
+}
+
 /// Resolves a variant of a generic enum named with its arguments
 /// (`Slot<int>::Empty`) to the instantiated enum and the variant's index.
 pub fn resolve_generic_variant(
@@ -881,16 +903,24 @@ pub fn resolve_generic_variant(
     (enum_id, variant_idx as u16)
 }
 
-/// Resolves a call written with type arguments (`first<int>(nums)`) to the
-/// function it names and the arguments bound to its type parameters.
+/// Resolves a call written with type arguments to the function it names and
+/// the arguments bound to its type parameters.
+///
+/// `namespace` is the path in front of the name, empty for a call the file
+/// writes unqualified (`first<int>(nums)`) and the module alias for one it
+/// reaches through an import (`m::first<int>(nums)`).
 pub fn resolve_generic_call(
+    namespace: &[SmolStr],
     fn_name: &SmolStr,
     type_args: &[TypeExpr],
     span: Span,
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> (usize, Vec<DataType>) {
-    let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) else {
+    let Some(fn_id) = state.scope(ctx.file_idx).find_function(namespace, fn_name) else {
+        if !namespace.is_empty() {
+            error_unknown_function_in_namespace(fn_name, namespace, span, ctx.file_idx, state);
+        }
         error_unknown_function(
             fn_name,
             span,
@@ -1997,16 +2027,25 @@ impl Expr {
             },
             Self::FunctionCall(args, namespace, span, _, type_args) => {
                 // A call written with type arguments names either a variant of a
-                // generic enum (`Slot<int>::Filled(x)`) or a generic function.
+                // generic enum (`Slot<int>::Filled(x)`) or a generic function,
+                // which may itself sit behind a module alias
+                // (`m::first<int>(xs)`).
                 if !type_args.is_empty() {
-                    if namespace.len() >= 2 {
+                    if type_args_name_a_variant(namespace, ctx, state) {
                         let (enum_id, _) =
                             resolve_generic_variant(namespace, type_args, *span, ctx, state);
                         return DataType::Enum(enum_id);
                     }
-                    let fn_name = namespace.last().unwrap().clone();
-                    let (fn_id, call_type_args) =
-                        resolve_generic_call(&fn_name, type_args, *span, ctx, state);
+                    let len = namespace.len() - 1;
+                    let fn_name = namespace[len].clone();
+                    let (fn_id, call_type_args) = resolve_generic_call(
+                        &namespace[..len],
+                        &fn_name,
+                        type_args,
+                        *span,
+                        ctx,
+                        state,
+                    );
                     let infered_arg_types = args
                         .iter()
                         .map(|x| x.infer_type(v, ctx, state))
