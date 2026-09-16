@@ -42,6 +42,20 @@ fn program_output(test_name: &str, files: &[(&str, &str)], verb: &[&str]) -> Out
     output
 }
 
+/// A module with a function, an enum and a struct with a method, so a test can
+/// check that every kind of name a module declares reaches the file that
+/// imported it.
+const BASE_MODULE: &str = "enum Tag { A(int), B }\n\
+                           struct Cell { n: int }\n\
+                           impl Cell { fn doubled(self) { return self.n * 2; } }\n\
+                           fn tag(n: int) -> Tag { return Tag::A(n); }\n\
+                           fn cell(n: int) -> Cell { return Cell { n: n }; }\n\
+                           fn unwrap(t: Tag) -> int {\n\
+                               let out = -1;\n\
+                               match t { A(n) => { out = n; } B => { out = 0; } }\n\
+                               return out;\n\
+                           }\n";
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -377,4 +391,153 @@ fn bare_import_keeps_a_struct_named_main() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The files a program reaches a module through each bind it in their own
+/// form. `base.cdl` here is reached twice, once behind an alias in the entry
+/// file and once by `mid.cdl`'s bare import, and both routes work: the entry
+/// calls into `base::`, and `mid`'s own bodies call the names it merged.
+#[test]
+fn a_module_reached_by_two_files_binds_in_both() {
+    let output = run_program(
+        "two_routes_alias",
+        &[
+            ("base.cdl", BASE_MODULE),
+            (
+                "mid.cdl",
+                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"base.cdl\" as base;\n\
+                 import \"mid.cdl\" as mid;\n\
+                 fn main() { print(base::unwrap(mid::from_mid(4)) + base::cell(2).doubled()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+/// Which of the two routes the entry file writes first makes no difference.
+#[test]
+fn the_order_of_the_two_routes_to_a_module_does_not_matter() {
+    let output = run_program(
+        "two_routes_order",
+        &[
+            ("base.cdl", BASE_MODULE),
+            (
+                "mid.cdl",
+                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"mid.cdl\" as mid;\n\
+                 import \"base.cdl\" as base;\n\
+                 fn main() { print(base::unwrap(mid::from_mid(4)) + base::cell(2).doubled()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+/// A bare import of a module another import already reached merges it into the
+/// importing file's own scope, so its function, its enum and its struct's
+/// method are all written unqualified.
+#[test]
+fn a_module_reached_bare_and_through_another_merges_into_scope() {
+    let output = run_program(
+        "two_routes_bare",
+        &[
+            ("base.cdl", BASE_MODULE),
+            (
+                "mid.cdl",
+                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"base.cdl\";\n\
+                 import \"mid.cdl\" as mid;\n\
+                 fn main() { print(unwrap(mid::from_mid(4)) + cell(2).doubled() + unwrap(tag(1))); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+/// A module bare-imported directly and bare-imported again through another
+/// module brings its names in twice, and the same underlying symbol arriving
+/// twice is not a collision.
+#[test]
+fn bare_imports_of_a_module_and_of_its_importer_are_not_a_collision() {
+    let output = run_program(
+        "two_routes_both_bare",
+        &[
+            ("base.cdl", BASE_MODULE),
+            (
+                "mid.cdl",
+                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"base.cdl\";\n\
+                 import \"mid.cdl\";\n\
+                 fn main() { print(unwrap(from_mid(4)) + cell(3).doubled()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "11");
+}
+
+/// One file reached through two spellings is one module. A library import
+/// resolves through the library directory and a source-relative one next to
+/// the importing file; when both land on the same file it is parsed once and
+/// registers its functions, structs and enums once, so the second route brings
+/// in the symbols the first one already did rather than a second copy of them.
+#[test]
+fn a_module_spelled_two_ways_is_loaded_once() {
+    let dir = std::env::temp_dir().join(format!("candela_imports_one_load_{}", std::process::id()));
+    let libs = dir.join("libs");
+    std::fs::create_dir_all(&libs).expect("create scratch dir");
+    std::fs::write(libs.join("shared.cdl"), BASE_MODULE).expect("write module");
+    std::fs::write(
+        dir.join("prog.cdl"),
+        "import \"shared\";\n\
+         import \"./libs/shared.cdl\";\n\
+         fn main() { print(unwrap(tag(4)) + cell(1).doubled()); }\n",
+    )
+    .expect("write test file");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
+        .arg(dir.join("prog.cdl"))
+        // Spelled with a `..` the source-relative route does not take, so the
+        // two imports meet only if each is resolved to the file behind it.
+        .env("CANDELA_LIB_PATH", libs.join("..").join("libs"));
+    let output = common::output_with_deadline(&mut command, "one load run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
 }
