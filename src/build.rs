@@ -3,16 +3,16 @@
 //!
 //! The artifact format and its load/run half live in the VM-only `candela-vm`
 //! crate ([`candela_vm::artifact`]); this module is the compiler-side half that
-//! turns a fresh [`compile`] result into a [`ProgramImage`] and serializes it.
+//! turns a fresh [`compile_checked`] result into a [`ProgramImage`] and
+//! serializes it.
 //!
 //! The VM carries no compiler, so it cannot build a call trampoline when a host
 //! asks for a function by name. The trampolines are compiled ahead of time by
-//! [`compile_entry_points`] and recorded in the artifact's export table.
+//! [`compile_checked`] and recorded in the artifact's export table.
 
 use crate::compiler::CompileOutput;
-use crate::compiler::compile;
 use crate::compiler::imports::ImportResolver;
-use crate::trampoline::compile_entry_points;
+use crate::trampoline::compile_checked;
 use candela_vm::artifact::DynLibFnImage;
 use candela_vm::artifact::EnumImage;
 use candela_vm::artifact::EnumVariantImage;
@@ -50,11 +50,10 @@ pub fn build_bytecode(
     filename: &str,
     resolver: &ImportResolver,
 ) -> Result<Vec<u8>, String> {
-    let mut out = compile(source, filename, false, resolver);
+    let (out, exports) = compile_checked(source, filename, resolver);
     // An artifact runs from `main`, so packaging a file without one would write
     // a program that cannot start.
     out.require_main();
-    let exports = compile_entry_points(&mut out);
     let image = image_from_output(out, exports);
     serialize_image(&image)
 }

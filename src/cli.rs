@@ -20,6 +20,7 @@ use crate::manifest::MANIFEST_NAME;
 use crate::manifest::Manifest;
 use crate::manifest::new_manifest_text;
 use crate::repl::repl;
+use crate::trampoline::compile_checked;
 use crate::update;
 use crate::util;
 use candela_vm::set_argv_skip;
@@ -170,11 +171,15 @@ fn run_verb(args: &mut impl Iterator<Item = String>) -> ExitCode {
 }
 
 /// `candela check [file.cdl]`: compile and stop.
+///
+/// The compile is the one `candela build` does, entry points included, so a
+/// body error in a function `main` never calls is reported here instead of
+/// waiting for the build.
 fn check_verb(args: &mut impl Iterator<Item = String>) {
     let (file, offline) = one_file_and_flags(args, "check");
     let (path, resolver) = target(file.as_deref(), offline);
     let contents = read_source(&path);
-    let _ = compile(contents, &path.to_string_lossy(), false, &resolver);
+    let _ = compile_checked(contents, &path.to_string_lossy(), &resolver);
     println!("{} compiles", path.display());
 }
 

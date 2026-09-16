@@ -57,11 +57,14 @@ downloaded and their import roots are handed to the compiler.
 
 ### candela check [file.cdl]
 
-Compiles the same program `run` would and stops before running it, reporting
-the path when it holds and the compile error when it does not. Dependencies are
-resolved first, so this also proves the manifest is satisfiable. A `main` is
-not required here, the way it is for a run: a library whose entry only declares
-functions for other projects to import checks like any other file.
+Compiles the program and stops before running it, reporting the path when it
+holds and the compile error when it does not. The compile is the one `build`
+does, so an error in the body of a function `main` never calls fails the check
+too, as long as that function is in the file being checked and annotates every
+parameter. Dependencies are resolved first, so this also proves the manifest is
+satisfiable. A `main` is not required here, the way it is for a run or a build:
+a library whose entry only declares functions for other projects to import
+checks like any other file.
 
 ### candela build [file.cdl] [-o out.cdlb]
 
@@ -84,9 +87,9 @@ long form `--output`), the output name is the input with `.cdl` replaced by
 
 The program is compiled as it is for a normal run, so every compile error
 listed in [errors](errors.md) can come out of this command. The build checks
-more than a run does: every function whose parameters are all annotated is
-compiled at those declared types, so an error in the body of a function `main`
-never reaches fails the build here. A package a project depends on is compiled
+more than a run does: every function in the file being built whose parameters
+are all annotated is compiled at those declared types, so an error in the body
+of a function `main` never calls fails the build here. A package a project depends on is compiled
 into the artifact like any other import, so the `.cdlb` runs with neither the
 source tree nor the package cache present. See [artifacts](artifacts.md) for
 what the file contains and how to run it.

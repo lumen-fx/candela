@@ -25,7 +25,6 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::FileNamespaces;
-use crate::compiler::compile;
 use crate::compiler::compiler_data::Dynamiclib;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::State;
@@ -41,7 +40,7 @@ use crate::macros::MacroError;
 use crate::manifest::MANIFEST_NAME;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::manifest::Manifest;
-use crate::trampoline::compile_entry_points;
+use crate::trampoline::compile_checked;
 use crate::trampoline::compile_trampoline;
 use candela_vm::data::Data;
 use candela_vm::embed::HostDispatch;
@@ -298,15 +297,15 @@ impl Engine {
         let resolver = &self.resolver;
         let out: CompileOutput = self.macros.scope(|| {
             collect_diagnostic(|| {
-                let mut out = compile(src.to_owned(), &filename_owned, false, resolver);
+                // `compile_checked` compiles an entry point for every
+                // annotated function, which is what makes this a check step: a
+                // body error in a function `main` never calls is reported now,
+                // not on the first `Program::call` that reaches it. It also
+                // leaves those specialisations warm for that call.
+                let (out, _) = compile_checked(src.to_owned(), &filename_owned, resolver);
                 // A `Program` runs `main` as soon as it is built, so an
                 // embedded program needs one the way a run from the CLI does.
                 out.require_main();
-                // Compiling every entry point here is what makes `compile` a
-                // check step: a body error in a function `main` never calls is
-                // reported now, not on the first `Program::call` that reaches
-                // it. It also leaves those specialisations warm for that call.
-                let _ = compile_entry_points(&mut out);
                 out
             })
         })?;
