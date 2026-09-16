@@ -187,6 +187,10 @@ print(name.capitalize());
 let c = Colour::Red;
 ```
 
+A `host` or `dylib` block's name takes either one, so `app.rows(id)` and
+`app::rows(id)` are the same call, and a variable of that name takes the dot
+back for its own methods. See [C libraries](../integration/c-libraries.md).
+
 See [methods](../language/methods.md), [enums](../language/enums.md) and
 [modules](../language/modules.md).
 

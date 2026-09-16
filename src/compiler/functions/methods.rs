@@ -5,6 +5,7 @@ use crate::compiler::compiler_data::{Ctx, State};
 use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
 use crate::compiler::expr::mangle_method;
+use crate::compiler::functions::handle_functions;
 use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
 use crate::compiler::type_system::TypeExpr;
@@ -50,12 +51,7 @@ fn builtin_receiver_name(obj_type: &DataType) -> Option<&'static str> {
 /// the predicate form only exists as the `std/list` method. Returns `None`
 /// when the receiver is not a builtin type, the name belongs to the builtin
 /// table, or no impl method with the mangled name is loaded.
-//
-// `pub(crate)` (not private) so the sibling `type_system` module can reuse the
-// routing decision for return-type inference; clippy's `redundant_pub_crate`
-// does not account for that cross-module access.
-#[allow(clippy::redundant_pub_crate)]
-pub(crate) fn impl_method_on_builtin(
+pub fn impl_method_on_builtin(
     name: &str,
     obj_type: &DataType,
     args: &[Expr],
@@ -75,6 +71,31 @@ pub(crate) fn impl_method_on_builtin(
     state.fns.iter().position(|f| f.name == mangled)
 }
 
+/// The `host` or `dylib` block a dot call's receiver names, when that receiver
+/// is a namespace rather than a value: `app.rows(id)` with a `host "app"` block
+/// in scope and no variable called `app`.
+///
+/// Both spellings of such a call mean the same thing, so the dot form routes to
+/// the path `app::rows(id)` already takes. A variable wins: once `app` names a
+/// value in scope, the dot is that value's method call and the block is
+/// reachable only through `::`.
+pub fn dyn_lib_receiver<'a>(
+    obj: &'a Expr,
+    v: &[Variable],
+    state: &State<'_>,
+) -> Option<&'a SmolStr> {
+    let Expr::Var(name, _) = obj else {
+        return None;
+    };
+    // The block table is checked before the locals because it is empty in a
+    // program that declares no `host` or `dylib` block, so an ordinary method
+    // call pays one emptiness check here and nothing else.
+    if !state.dyn_libs.iter().any(|lib| lib.name == *name) {
+        return None;
+    }
+    (!v.iter().any(|var| var.name == *name)).then_some(name)
+}
+
 pub fn handle_method_calls(
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
@@ -90,6 +111,28 @@ pub fn handle_method_calls(
     type_args: &[TypeExpr],
 ) -> Option<u16> {
     let name = namespace[namespace.len() - 1].as_str();
+
+    // A dot call whose receiver names a `host` or `dylib` block is the
+    // namespaced call written with a dot. Prepend the block's name and hand it
+    // to the path `app::rows(id)` takes. This comes before the receiver is
+    // typed as a value, where a block's name resolves to no variable.
+    if namespace.len() == 1
+        && let Some(lib_name) = dyn_lib_receiver(obj, v, state)
+    {
+        let path = [lib_name.clone(), namespace[0].clone()];
+        return handle_functions(
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            args,
+            &path,
+            fn_span,
+            args_indexes,
+            type_args,
+        );
+    }
 
     let obj_type = obj.infer_type(v, ctx, state);
 

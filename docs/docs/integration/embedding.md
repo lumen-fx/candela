@@ -98,6 +98,11 @@ A namespace is a namespace, so a host function may take a name a built-in
 already has: `gpio::read` is the `int` its block declares, not the `read` that
 returns a string.
 
+A script calls a host function as `app::rows(id)` or as `app.rows(id)`; both
+spellings name the same function. A variable takes the name back: where `app`
+holds a value, `app.rows(id)` is that value's own method and the block is
+reachable only through `app::`.
+
 A closure that can fail returns `Result<T, HostError>` in place of `T`:
 
 ```rust

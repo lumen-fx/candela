@@ -9,7 +9,6 @@ use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::EnumType;
 use crate::compiler::compiler_data::EnumVariant;
 use crate::compiler::compiler_data::FnGenerics;
-use crate::compiler::compiler_data::FnSignature;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_data::State;
@@ -31,6 +30,7 @@ use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
+use crate::compiler::methods::dyn_lib_receiver;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -38,6 +38,7 @@ use std::cell::RefCell;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
 use std::rc::Rc;
+use std::slice;
 
 pub use crate::rt::DataType;
 
@@ -1576,6 +1577,18 @@ fn infer_user_fn_return_type(
     to_return
 }
 
+/// The declared return type of `function` in the `host` or `dylib` block named
+/// `block`, when such a block declares such a function. Both spellings of the
+/// call, `app::rows(id)` and `app.rows(id)`, read the signature through here.
+fn dyn_lib_return_type(block: &str, function: &str, state: &State<'_>) -> Option<DataType> {
+    state
+        .dyn_libs
+        .iter()
+        .find(|lib| lib.name == block)
+        .and_then(|lib| lib.fns.iter().find(|sig| sig.name == function))
+        .map(|sig| sig.return_type.clone())
+}
+
 /// The key one specialisation of a function is found by: the type arguments the
 /// call named, then the argument types it passed.
 #[must_use]
@@ -1920,13 +1933,10 @@ impl Expr {
                                 state,
                             );
                         }
-                        if let Some(lib) = state.dyn_libs.iter().find(|l| l.name == namespace[0])
-                            && let Some(FnSignature {
-                                return_type: fn_return_type,
-                                ..
-                            }) = lib.fns.iter().find(|x| x.name == function_name)
+                        if let Some(return_type) =
+                            dyn_lib_return_type(&namespace[0], function_name, state)
                         {
-                            return fn_return_type.clone();
+                            return return_type;
                         }
                         let infered_arg_types = args
                             .iter()
@@ -1981,6 +1991,26 @@ impl Expr {
             }
             Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, _, type_args) => {
                 let method = namespace.last().unwrap().as_str();
+                // `app.rows(id)` on a `host`/`dylib` block is the namespaced
+                // call written with a dot, so its type is the declared return
+                // type, exactly as for `app::rows(id)`. This has to come before
+                // the receiver is typed, which would report the block's name as
+                // an unknown variable. See `methods::dyn_lib_receiver`.
+                if namespace.len() == 1
+                    && let Some(lib_name) = dyn_lib_receiver(obj, v, state)
+                {
+                    let lib_name = lib_name.clone();
+                    if let Some(return_type) = dyn_lib_return_type(&lib_name, method, state) {
+                        return return_type;
+                    }
+                    error_unknown_function_in_namespace(
+                        method,
+                        slice::from_ref(&lib_name),
+                        *fn_span,
+                        ctx.file_idx,
+                        state,
+                    );
+                }
                 let obj_type = obj.infer_type(v, ctx, state);
                 // A user-defined impl method resolves by the receiver's static
                 // struct type to the mangled free function `Type#method`; its

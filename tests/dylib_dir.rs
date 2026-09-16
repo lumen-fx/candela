@@ -12,6 +12,7 @@
 use candela::Engine;
 use candela::HostRegistry;
 use candela::LoadError;
+use candela::Value;
 use candela::build_bytecode;
 use candela::load_program;
 use candela::set_dylib_dirs;
@@ -217,6 +218,46 @@ fn main() {
         "the path must resolve under the named directory: {:?}",
         compiled.err()
     );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A `dylib` block's name takes a dot as well as `::`, and both spellings reach
+/// the same function: in `main`, which `Engine::compile` runs, and in a
+/// function that declares its return type.
+#[test]
+fn a_dot_reaches_the_library_namespace() {
+    let root = scratch_dir("dot");
+    let Some(_fixture) = install_fixture(&root) else {
+        std::fs::remove_dir_all(&root).ok();
+        return;
+    };
+
+    let source = "dylib \"fixture\" {
+    string zlibVersion();
+}
+
+fn dot() -> string { return fixture.zlibVersion(); }
+fn path() -> string { return fixture::zlibVersion(); }
+
+fn main() { print(fixture.zlibVersion()); }
+";
+    let script = root.join("app.cdl");
+    let engine = Engine::new();
+    let mut program = engine
+        .compile(source, script.to_str().expect("scratch path is utf-8"))
+        .expect("compiles and runs main");
+
+    let dotted = program.call("dot", &[]).expect("the dot form runs");
+    assert_eq!(
+        dotted,
+        program.call("path", &[]).expect("the `::` form runs"),
+        "both spellings name the same function"
+    );
+    match dotted {
+        Value::String(version) => assert!(!version.is_empty(), "the library answered a version"),
+        other => panic!("expected the version string, got {other:?}"),
+    }
 
     std::fs::remove_dir_all(&root).ok();
 }

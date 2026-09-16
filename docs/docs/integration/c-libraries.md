@@ -32,8 +32,11 @@ dylib "mylib" {
 ```
 
 The functions live in a namespace named after the library, so you call them as
-`z::zlibVersion()`. Wrapping each one in an ordinary candela function is the
-usual way to give callers a tidier surface.
+`z::zlibVersion()` or `z.zlibVersion()`; both spellings name the same function.
+A variable takes the name back: where `z` holds a value, `z.zlibVersion()` is
+that value's own method and the library is reachable only through `z::`.
+Wrapping each function in an ordinary candela function is the usual way to give
+callers a tidier surface.
 
 ## Finding the library
 
