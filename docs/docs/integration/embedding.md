@@ -408,11 +408,12 @@ library inside its own installation uses instead of setting
 `CANDELA_LIB_PATH`. Without it, the default applies: `CANDELA_LIB_PATH` when
 set, and `libs/` beside the running executable otherwise.
 
-`with_import_root` makes a directory the root of a package, so
-`import "shapes";` reads `shapes.cdl` there and `import "shapes/circle";` reads
-`circle.cdl`. This is how a host offers a script code it did not ship with, and
-it is the same mechanism the `candela` command uses for the packages a project
-depends on.
+`with_import_root` makes a directory the root of a package. The package is
+entered through the file its `candela.toml` names as `entry`, `src/main.cdl`
+when it names none or there is no manifest, so `import "shapes";` reads that
+file and `import "shapes/circle";` reads `circle.cdl` beside it. This is how a
+host offers a script code it did not ship with, and it is the same mechanism
+the `candela` command uses for the packages a project depends on.
 
 Both are builders, so they chain, and both take effect on every script the
 engine compiles. `Engine::compile` is unchanged.
@@ -437,8 +438,8 @@ compiles and while an artifact loads, so set it before either.
 only the runtime.
 
 Every directory named with `with_import_root` is searched for native libraries
-too, after the ones set here, so a package that ships a shared library beside
-its sources binds without further setup.
+too, after the ones set here, so a package that ships a shared library at its
+root binds without further setup.
 
 See [C libraries](c-libraries.md) for what a `dylib` import resolves to before
 any directory is searched.

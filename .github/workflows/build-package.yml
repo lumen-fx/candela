@@ -325,7 +325,6 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
           DESCRIPTION: ${{ needs.plan.outputs.description }}
           MANIFEST: ${{ inputs.manifest-path }}
-          CANDELA_VERSION: ${{ inputs.candela-version }}
         run: |
           set -euo pipefail
           if [ -z "${LPM_TOKEN:-}" ]; then
@@ -362,10 +361,10 @@ jobs:
               if (name != "" && req != "") printf " --dep %s@%s", name, req
             }' "$MANIFEST")"
 
-          host="candela@>=${CANDELA_VERSION#v}"
-          if [ "$CANDELA_VERSION" = latest ]; then
-            host="candela@>=$(candela --version | awk '{ print $2 }')"
-          fi
+          # The requirement names the candela the package was checked with,
+          # read from the binary rather than the input: `latest` and `nightly`
+          # are channels, not versions.
+          host="candela@>=$(candela --version | awk '{ print $2 }')"
 
           # shellcheck disable=SC2086
           lpm release "$NAME" "$VERSION" $args $deps --requires "$host" -d "$DESCRIPTION"

@@ -11,24 +11,51 @@ use smol_strc::SmolStr;
 use std::path::Path;
 use std::path::PathBuf;
 
+/// The entry a package uses when its manifest names none, relative to the
+/// package root. The same default `candela new` writes.
+pub const DEFAULT_PACKAGE_ENTRY: &str = "src/main.cdl";
+
 /// The directories a library import is looked up in.
 ///
 /// `lib_dir` is the standard library, which every program can reach.
-/// `roots` are the packages this program depends on, each under the name the
-/// program imports it by. A package root shadows the standard library for the
+/// `packages` are the packages this program depends on, each under the name
+/// the program imports it by. A package shadows the standard library for the
 /// name it claims, so `import "shapes/circle";` reaches the `shapes` package
 /// whether or not the toolchain ships a module by that name.
 #[derive(Clone, Debug)]
 pub struct ImportResolver {
     lib_dir: Option<PathBuf>,
-    roots: Vec<(SmolStr, PathBuf)>,
+    packages: Vec<PackageRoot>,
+}
+
+/// One package a program can import from.
+///
+/// `dir` is the package root, the directory its `candela.toml` sits in, and
+/// `entry` is the file the package is imported by under its own name, relative
+/// to that root. Imports of a path inside the package read from the entry's
+/// directory.
+#[derive(Clone, Debug)]
+struct PackageRoot {
+    name: SmolStr,
+    dir: PathBuf,
+    entry: PathBuf,
+}
+
+impl PackageRoot {
+    /// The directory a path inside the package is read from.
+    fn source_dir(&self) -> PathBuf {
+        match self.entry.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => self.dir.join(parent),
+            _ => self.dir.clone(),
+        }
+    }
 }
 
 impl Default for ImportResolver {
     fn default() -> Self {
         Self {
             lib_dir: default_lib_dir(),
-            roots: Vec::new(),
+            packages: Vec::new(),
         }
     }
 }
@@ -48,15 +75,26 @@ impl ImportResolver {
         self.lib_dir = Some(dir);
     }
 
-    /// Makes `dir` the root of the package imported as `name`.
+    /// Makes `dir` the root of the package imported as `name`, entered
+    /// through `entry`.
     ///
-    /// Adding a name twice keeps the last directory given for it.
-    pub fn add_root(&mut self, name: &str, dir: PathBuf) {
-        if let Some(existing) = self.roots.iter_mut().find(|(n, _)| n == name) {
-            existing.1 = dir;
+    /// `entry` is the package's entry file relative to `dir`, the one its
+    /// manifest names or [`DEFAULT_PACKAGE_ENTRY`] when it names none.
+    /// `import "name";` reads that file, and `import "name/x";` reads `x.cdl`
+    /// from the entry's directory. Adding a name twice keeps the last
+    /// directory and entry given for it.
+    pub fn add_root(&mut self, name: &str, dir: PathBuf, entry: impl Into<PathBuf>) {
+        let entry = entry.into();
+        if let Some(existing) = self.packages.iter_mut().find(|p| p.name == name) {
+            existing.dir = dir;
+            existing.entry = entry;
             return;
         }
-        self.roots.push((SmolStr::from(name), dir));
+        self.packages.push(PackageRoot {
+            name: SmolStr::from(name),
+            dir,
+            entry,
+        });
     }
 
     /// The standard library directory in effect.
@@ -65,18 +103,21 @@ impl ImportResolver {
         self.lib_dir.as_deref()
     }
 
-    /// The package roots, in the order they were added.
+    /// The package names and root directories, in the order they were added.
     #[must_use]
-    pub fn roots(&self) -> &[(SmolStr, PathBuf)] {
-        &self.roots
+    pub fn roots(&self) -> Vec<(SmolStr, PathBuf)> {
+        self.packages
+            .iter()
+            .map(|p| (p.name.clone(), p.dir.clone()))
+            .collect()
     }
 
     /// The package root directories on their own, which is what a native
-    /// library search wants: a package that ships a `.so` beside its `.cdl`
-    /// sources has it found there.
+    /// library search wants: a package that ships a `.so` under its root has
+    /// it found there.
     #[must_use]
     pub fn root_dirs(&self) -> Vec<PathBuf> {
-        self.roots.iter().map(|(_, dir)| dir.clone()).collect()
+        self.packages.iter().map(|p| p.dir.clone()).collect()
     }
 
     /// Where the library import `path` reads from, or `None` when there is
@@ -85,27 +126,30 @@ impl ImportResolver {
     /// `path` carries the `.cdl` the parser appended, so `import "shapes";`
     /// arrives as `shapes.cdl` and `import "shapes/circle";` as
     /// `shapes/circle.cdl`. The leading segment names the package; the rest is
-    /// the path inside it, and a package with no rest reads the file named
-    /// after the package itself.
+    /// the path inside it, read from the directory of the package's entry, and
+    /// a package with no rest reads the entry itself.
     #[must_use]
     pub fn library_path(&self, path: &str) -> Option<PathBuf> {
         let (head, rest) = split_first_segment(path);
-        if let Some((_, root)) = self.roots.iter().find(|(name, _)| name == head) {
-            return Some(root.join(rest));
+        if let Some(package) = self.packages.iter().find(|p| p.name == head) {
+            return Some(match rest {
+                Some(rest) => package.source_dir().join(rest),
+                None => package.dir.join(&package.entry),
+            });
         }
         self.lib_dir.as_ref().map(|dir| dir.join(path))
     }
 }
 
 /// Splits an import path into the package it might name and the path inside
-/// that package.
+/// that package, when there is one.
 ///
 /// `shapes/circle.cdl` is the `shapes` package's `circle.cdl`;
-/// `shapes.cdl` is the `shapes` package's own `shapes.cdl`.
-fn split_first_segment(path: &str) -> (&str, &str) {
+/// `shapes.cdl` is the `shapes` package itself.
+fn split_first_segment(path: &str) -> (&str, Option<&str>) {
     match path.find(['/', '\\']) {
-        Some(sep) => (&path[..sep], &path[sep + 1..]),
-        None => (path.strip_suffix(".cdl").unwrap_or(path), path),
+        Some(sep) => (&path[..sep], Some(&path[sep + 1..])),
+        None => (path.strip_suffix(".cdl").unwrap_or(path), None),
     }
 }
 
@@ -127,6 +171,7 @@ fn default_lib_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::DEFAULT_PACKAGE_ENTRY;
     use super::ImportResolver;
     use std::path::Path;
     use std::path::PathBuf;
@@ -134,9 +179,13 @@ mod tests {
     fn resolver() -> ImportResolver {
         let mut resolver = ImportResolver {
             lib_dir: Some(PathBuf::from("/toolchain/libs")),
-            roots: Vec::new(),
+            packages: Vec::new(),
         };
-        resolver.add_root("shapes", PathBuf::from("/cache/shapes/1.2.3"));
+        resolver.add_root(
+            "shapes",
+            PathBuf::from("/cache/shapes/1.2.3"),
+            DEFAULT_PACKAGE_ENTRY,
+        );
         resolver
     }
 
@@ -149,39 +198,71 @@ mod tests {
     }
 
     #[test]
-    fn a_package_by_its_own_name_reads_the_file_named_after_it() {
+    fn a_package_by_its_own_name_reads_its_entry() {
         assert_eq!(
             resolver().library_path("shapes.cdl").as_deref(),
-            Some(Path::new("/cache/shapes/1.2.3/shapes.cdl"))
+            Some(Path::new("/cache/shapes/1.2.3/src/main.cdl"))
         );
     }
 
     #[test]
-    fn a_path_inside_a_package_drops_the_package_segment() {
+    fn a_path_inside_a_package_reads_from_the_entry_directory() {
         assert_eq!(
             resolver().library_path("shapes/circle.cdl").as_deref(),
-            Some(Path::new("/cache/shapes/1.2.3/circle.cdl"))
+            Some(Path::new("/cache/shapes/1.2.3/src/circle.cdl"))
         );
         assert_eq!(
             resolver().library_path("shapes/two/deep.cdl").as_deref(),
-            Some(Path::new("/cache/shapes/1.2.3/two/deep.cdl"))
+            Some(Path::new("/cache/shapes/1.2.3/src/two/deep.cdl"))
+        );
+    }
+
+    #[test]
+    fn a_manifest_entry_moves_both_forms() {
+        let mut resolver = resolver();
+        resolver.add_root("geom", PathBuf::from("/cache/geom/0.3.1"), "lib/geom.cdl");
+        assert_eq!(
+            resolver.library_path("geom.cdl").as_deref(),
+            Some(Path::new("/cache/geom/0.3.1/lib/geom.cdl"))
+        );
+        assert_eq!(
+            resolver.library_path("geom/arc.cdl").as_deref(),
+            Some(Path::new("/cache/geom/0.3.1/lib/arc.cdl"))
+        );
+    }
+
+    #[test]
+    fn an_entry_at_the_root_reads_paths_from_the_root() {
+        let mut resolver = resolver();
+        resolver.add_root("flat", PathBuf::from("/cache/flat/1.0.0"), "flat.cdl");
+        assert_eq!(
+            resolver.library_path("flat.cdl").as_deref(),
+            Some(Path::new("/cache/flat/1.0.0/flat.cdl"))
+        );
+        assert_eq!(
+            resolver.library_path("flat/more.cdl").as_deref(),
+            Some(Path::new("/cache/flat/1.0.0/more.cdl"))
         );
     }
 
     #[test]
     fn a_package_root_shadows_the_library_directory() {
         let mut resolver = resolver();
-        resolver.add_root("std", PathBuf::from("/cache/std/9.9.9"));
+        resolver.add_root(
+            "std",
+            PathBuf::from("/cache/std/9.9.9"),
+            DEFAULT_PACKAGE_ENTRY,
+        );
         assert_eq!(
             resolver.library_path("std/string.cdl").as_deref(),
-            Some(Path::new("/cache/std/9.9.9/string.cdl"))
+            Some(Path::new("/cache/std/9.9.9/src/string.cdl"))
         );
     }
 
     #[test]
     fn a_root_added_twice_keeps_the_last_directory() {
         let mut resolver = resolver();
-        resolver.add_root("shapes", PathBuf::from("/cache/shapes/2.0.0"));
+        resolver.add_root("shapes", PathBuf::from("/cache/shapes/2.0.0"), "shapes.cdl");
         assert_eq!(resolver.roots().len(), 1);
         assert_eq!(
             resolver.library_path("shapes.cdl").as_deref(),
@@ -193,20 +274,28 @@ mod tests {
     fn without_a_library_directory_only_packages_resolve() {
         let mut resolver = ImportResolver {
             lib_dir: None,
-            roots: Vec::new(),
+            packages: Vec::new(),
         };
         assert_eq!(resolver.library_path("std/string.cdl"), None);
-        resolver.add_root("shapes", PathBuf::from("/cache/shapes/1.2.3"));
+        resolver.add_root(
+            "shapes",
+            PathBuf::from("/cache/shapes/1.2.3"),
+            DEFAULT_PACKAGE_ENTRY,
+        );
         assert_eq!(
             resolver.library_path("shapes.cdl").as_deref(),
-            Some(Path::new("/cache/shapes/1.2.3/shapes.cdl"))
+            Some(Path::new("/cache/shapes/1.2.3/src/main.cdl"))
         );
     }
 
     #[test]
     fn the_root_directories_come_back_in_the_order_they_went_in() {
         let mut resolver = resolver();
-        resolver.add_root("geom", PathBuf::from("/cache/geom/0.3.1"));
+        resolver.add_root(
+            "geom",
+            PathBuf::from("/cache/geom/0.3.1"),
+            DEFAULT_PACKAGE_ENTRY,
+        );
         assert_eq!(
             resolver.root_dirs(),
             vec![

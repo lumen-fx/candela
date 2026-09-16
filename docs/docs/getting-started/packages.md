@@ -90,11 +90,12 @@ candela add shapes@1.2.3
 ## Import from a package
 
 A package is another place a library import reads from. Its own name reaches
-the file named after it, and a path inside it reaches the rest:
+its entry point, the file its manifest names (`src/main.cdl` unless it says
+otherwise), and a path inside it reaches the files beside that entry:
 
 ```rust
-import "shapes" as shapes;        // the package's shapes.cdl
-import "shapes/circle" as circle; // circle.cdl inside the package
+import "shapes" as shapes;        // the package's src/main.cdl
+import "shapes/circle" as circle; // src/circle.cdl inside the package
 
 fn main() {
     print(shapes::area(3, 4));
@@ -135,8 +136,9 @@ have to run it by hand. To point candela at one of your own, set `LPM_BIN`.
 ## Publish a package
 
 A package is a project with something worth importing in it. Give it a
-description, and make sure the entry point is the file whose functions you want
-reachable.
+description, and put the functions you want reachable in the entry point: that
+file is what `import "name"` reads, and the files beside it are what
+`import "name/file"` reads.
 
 The archive a release serves has to live somewhere. The reusable workflow builds
 it, uploads it to a GitHub release, and tells the registry where it is, so

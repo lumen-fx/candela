@@ -289,9 +289,26 @@ fn resolve(
     let packages = lpm::install(&request).unwrap_or_else(|e| fail(&e.to_string()));
     for package in &packages {
         check_platform(package);
-        resolver.add_root(&package.name, package.dir.clone());
+        resolver.add_root(&package.name, package.dir.clone(), package_entry(package));
     }
     (resolver, packages)
+}
+
+/// The file `package` is imported by under its own name: the entry its
+/// manifest names, relative to the package root.
+///
+/// A package with no manifest enters at the default; one whose manifest cannot
+/// be read is refused, since a manifest that says something wrong is not one
+/// to guess around.
+fn package_entry(package: &lpm::Package) -> String {
+    let path = package.dir.join(MANIFEST_NAME);
+    if !path.is_file() {
+        return String::from(DEFAULT_ENTRY);
+    }
+    match Manifest::load(&path) {
+        Ok(manifest) => manifest.entry().to_owned(),
+        Err(e) => fail(&format!("{} {}: {e}", package.name, package.version)),
+    }
 }
 
 /// Refuses a package built for something other than candela.

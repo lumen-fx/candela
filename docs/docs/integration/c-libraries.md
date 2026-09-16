@@ -65,9 +65,10 @@ import looks](embedding.md#where-a-dylib-import-looks).
 
 The root of every package the project depends on is searched too, after the
 directories the host named and before the importing file's own. A package that
-ships a shared library beside its `.cdl` sources therefore binds with nothing to
-configure, and a `dylib` import inside that package finds its own library rather
-than one from the program that pulled it in.
+ships a shared library at its root therefore binds with nothing to configure,
+and a `dylib` import inside that package finds its own library rather than one
+from the program that pulled it in. A library the package keeps under `dist/`
+is named by path from `src/`: `dylib "../dist/mylib"`.
 
 For a path form with no extension, an architecture-suffixed build is preferred
 when one sits beside it, so `"../native/mylib"` picks up `mylib-x86_64.so` or

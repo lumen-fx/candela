@@ -128,11 +128,12 @@ at all.
 ## Packages
 
 A package a project depends on is another place a library import reads from.
-The first segment names the package; the rest is the path inside it.
+The first segment names the package, which on its own reads the package's
+entry point; the rest is a path beside that entry.
 
 ```rust
-import "shapes" as shapes;        // the package's own shapes.cdl
-import "shapes/circle" as circle; // circle.cdl inside the package
+import "shapes" as shapes;        // the package's entry, src/main.cdl
+import "shapes/circle" as circle; // src/circle.cdl inside the package
 ```
 
 Nothing else changes: the same one import form, the same `as`, the same
