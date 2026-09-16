@@ -13,11 +13,12 @@
     { "include": "#function-declaration" },
     { "include": "#keywords" },
     { "include": "#constants" },
-    { "include": "#types" },
     { "include": "#struct-literal" },
     { "include": "#function-call" },
+    { "include": "#types" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#type-arguments" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -174,7 +175,7 @@
     "struct-literal": {
       "patterns": [
         {
-          "match": "\\b([A-Z][A-Za-z0-9_]*)\\s*(?=\\{)",
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\s*(?=(?:<(?:[\\w,:\\[\\]{}<>\\s]|\\|(?!\\|))*>\\s*)?\\{)",
           "captures": {
             "1": { "name": "entity.name.type.struct.candela" }
           }
@@ -184,7 +185,7 @@
     "function-call": {
       "patterns": [
         {
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(?:<(?:[\\w,:\\[\\]{}<>\\s]|\\|(?!\\|))*>\\s*)?\\()",
           "captures": {
             "1": { "name": "entity.name.function.candela" }
           }
@@ -197,7 +198,7 @@
           }
         },
         {
-          "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(?:<(?:[\\w,:\\[\\]{}<>\\s]|\\|(?!\\|))*>\\s*)?\\()",
           "captures": {
             "1": { "name": "punctuation.accessor.candela" },
             "2": { "name": "entity.name.function.member.candela" }
@@ -245,11 +246,50 @@
         }
       ]
     },
+    "type-arguments": {
+      "patterns": [
+        {
+          "begin": "<(?=(?:[\\w,:\\[\\]{}<>\\s]|\\|(?!\\|))*>(?!=)\\s*(?:::|[({,;)\\]\\[}>|]|$))",
+          "end": ">",
+          "beginCaptures": {
+            "0": { "name": "punctuation.bracket.candela" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.bracket.candela" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#types" },
+            { "include": "#type-arguments" },
+            {
+              "name": "punctuation.accessor.namespace.candela",
+              "match": "::"
+            },
+            {
+              "name": "keyword.operator.pipe.candela",
+              "match": "\\|"
+            },
+            {
+              "name": "punctuation.separator.candela",
+              "match": "[,:]"
+            },
+            {
+              "name": "punctuation.bracket.candela",
+              "match": "[\\[\\]{}]"
+            }
+          ]
+        }
+      ]
+    },
     "operators": {
       "patterns": [
         {
           "name": "keyword.operator.variadic.candela",
           "match": "\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.arrow.candela",
+          "match": "(->|=>)"
         },
         {
           "name": "keyword.operator.assignment.compound.candela",
@@ -278,10 +318,6 @@
         {
           "name": "keyword.operator.pipe.candela",
           "match": "\\|"
-        },
-        {
-          "name": "keyword.operator.arrow.candela",
-          "match": "(->|=>)"
         }
       ]
     },
