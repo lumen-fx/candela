@@ -173,6 +173,38 @@ fn main() {
 
 Repeating a key in a literal is a compile error.
 
+### The empty map
+
+`{}` names neither a key type nor a value type, the same way `[]` names no
+element type. Where a declaration says what the map holds, that declaration
+decides it: a parameter annotated `{K: V}` compiles the function body with keys
+of `K` and values of `V` however the call site writes the map, and a
+`-> {K: V}` return annotation hands the caller the same. So a function that
+matches on what a key holds still works when it is called with an empty map:
+
+```rust
+enum Cell { Num(int), Text(string) }
+
+fn width(cells: {string: Cell}) -> int {
+    let w = 0;
+    for name in cells {
+        match cells.get(name) {
+            Cell::Num(n) => { w = w + 1; }
+            Cell::Text(t) => { w = w + t.len(); }
+        }
+    }
+    return w;
+}
+
+fn main() {
+    print(width({}), width({"a": Cell::Text("ab")}));
+}
+```
+
+A map that does name its types is still checked against the annotation, so
+`width({"a": 1})` does not compile. A `let` takes no annotation, so a local that
+starts empty and is never inserted into keeps keys and values of no type.
+
 ### Reading and writing
 
 ```rust
