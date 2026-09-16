@@ -381,8 +381,17 @@ fn compile_array_literal(
                 state.registers.push(Data::array(array_id as u32));
                 (state.registers.len() - 1) as u16
             };
+            // `CloneArray` gives the destination its own pool entry and
+            // overwrites the register, so what sits there until then is only a
+            // placeholder. It names this literal's own template entry rather
+            // than pool slot 0, which belongs to whatever object the program
+            // built first: a placeholder aimed at slot 0 makes anything that
+            // reads the register file before execution, the debug register
+            // dump included, show that object's contents in a register about
+            // to hold this array, and keeps slot 0 reachable from the register
+            // file for as long as the register is unwritten.
             let dest_reg = {
-                state.registers.push(Data::array(0)); // 0 is a placeholder that's overwritten by EmptyArray
+                state.registers.push(Data::array(array_id as u32));
                 (state.registers.len() - 1) as u16
             };
             output.push(Instr::CloneArray(
@@ -392,8 +401,14 @@ fn compile_array_literal(
             ));
             dest_reg
         } else {
+            // `EmptyArray` allocates the destination's entry, so the same
+            // placeholder rule applies. This branch emits no template
+            // instruction, but the literal still owns the pool entry reserved
+            // for it above, which holds its constant elements and a null per
+            // dynamic one: the closest value of the right shape it has, and no
+            // root the literal was not already holding.
             let dest_reg = {
-                state.registers.push(Data::array(0)); // 0 is a placeholder that's overwritten by EmptyArray
+                state.registers.push(Data::array(array_id as u32));
                 (state.registers.len() - 1) as u16
             };
             output.push(Instr::EmptyArray(dest_reg));
@@ -565,8 +580,15 @@ fn compile_struct_literal(
                 .push(Data::struct_instance(type_id, struct_id as u32));
             (state.registers.len() - 1) as u16
         };
+        // `CloneStruct` writes the destination register, so until it runs the
+        // register holds a placeholder. It names this literal's own template
+        // entry, not pool slot 0, so a read of the register file before
+        // execution sees this struct's fields instead of the first object the
+        // program built dressed up as one.
         let dest_reg = {
-            state.registers.push(Data::struct_instance(type_id, 0));
+            state
+                .registers
+                .push(Data::struct_instance(type_id, struct_id as u32));
             (state.registers.len() - 1) as u16
         };
         output.push(Instr::CloneStruct(template_reg, dest_reg));
@@ -1272,8 +1294,12 @@ fn compile_map_literal(
             state.registers.push(Data::map(map_id as u32));
             (state.registers.len() - 1) as u16
         };
+        // `CloneMap` writes the destination register, so until it runs the
+        // register holds a placeholder. It names this literal's own template
+        // entry, not map-pool slot 0, which belongs to the first map the
+        // program built.
         let dest_reg = {
-            state.registers.push(Data::map(0));
+            state.registers.push(Data::map(map_id as u32));
             (state.registers.len() - 1) as u16
         };
         output.push(Instr::CloneMap(template_reg, dest_reg));
