@@ -2828,7 +2828,7 @@ fn compile_function_definition(
         compiler_errors::error_function_already_defined(func, span, ctx.file_idx, state.sources);
     }
     let mut callees = Vec::new();
-    collect_direct_fn_calls(fn_code, &mut callees);
+    collect_direct_fn_calls(fn_code, self_type_of(fn_name), &mut callees);
     let fn_symbol = SymbolKind::Fn(state.fns.len() as u16);
     state
         .scope_mut(ctx.file_idx)
@@ -2937,6 +2937,15 @@ fn compile_eval_block(
         ctx.set_offset(output.len() as u16),
         state,
     ));
+}
+
+/// The type a function's body compiles against, read from its own name: a
+/// method is registered under the mangled `Type#method`, and an ordinary
+/// function's name holds no separator.
+fn self_type_of(fn_name: &str) -> Option<&str> {
+    fn_name
+        .split_once(METHOD_SEP)
+        .map(|(type_name, _)| type_name)
 }
 
 pub fn compile_expr(
@@ -4192,7 +4201,7 @@ fn parse_toplevel(
                 fn_registers.push(Vec::new());
                 let returns_void = check_if_returns_void(&fn_code);
                 let mut callees = Vec::new();
-                collect_direct_fn_calls(&fn_code, &mut callees);
+                collect_direct_fn_calls(&fn_code, self_type_of(&fn_name), &mut callees);
 
                 let fn_id = fns.len() as u16;
                 fns.push(Function {

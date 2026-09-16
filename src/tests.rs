@@ -4245,6 +4245,97 @@ pub fn method_chaining() {
     );
 }
 
+/// A method that calls itself through `self` is a recursive function, and is
+/// compiled as one. Whether a body can reach itself is read from the calls it
+/// makes, and a call on `self` names the method the receiver's own type
+/// resolves it to.
+#[test]
+pub fn a_method_calls_itself() {
+    run_and_check_registers!(
+        "
+        struct Box { n: int }
+        impl Box {
+            fn down(self, n) {
+                if n <= 0 { return 0; }
+                return n + self.down(n - 1);
+            }
+        }
+        fn main() {
+            print(Box { n: 1 }.down(4));
+        }
+        ",
+        10.into()
+    );
+}
+
+/// Two methods of one type that call each other are recursive together, the
+/// way two free functions are.
+#[test]
+pub fn two_methods_call_each_other() {
+    run_and_check_registers!(
+        "
+        struct Ping { n: int }
+        impl Ping {
+            fn even(self, n) {
+                if n <= 0 { return 1; }
+                return self.odd(n - 1);
+            }
+            fn odd(self, n) {
+                if n <= 0 { return 2; }
+                return self.even(n - 1);
+            }
+        }
+        fn main() {
+            print(Ping { n: 0 }.even(3));
+        }
+        ",
+        2.into()
+    );
+}
+
+/// A method of an instantiated generic type calls itself the same way: the
+/// method is lowered against the instantiation, and the call on `self` names
+/// that instantiation's method.
+#[test]
+pub fn a_generic_types_method_calls_itself() {
+    run_and_check_registers!(
+        "
+        struct Cell<T> { value: T }
+        impl Cell<T> {
+            fn sum(self, n) {
+                if n <= 0 { return 0; }
+                return n + self.sum(n - 1);
+            }
+        }
+        fn main() {
+            print(Cell<int> { value: 1 }.sum(4));
+        }
+        ",
+        10.into()
+    );
+}
+
+/// An enum's method recurses through `self` too, dispatching the same way a
+/// struct's does.
+#[test]
+pub fn an_enums_method_calls_itself() {
+    run_and_check_registers!(
+        "
+        enum Tag { A, B }
+        impl Tag {
+            fn count(self, n) {
+                if n <= 0 { return 0; }
+                return 1 + self.count(n - 1);
+            }
+        }
+        fn main() {
+            print(Tag::A.count(3));
+        }
+        ",
+        3.into()
+    );
+}
+
 #[test]
 pub fn method_vs_field_disambiguation() {
     // `b.val` (field access, no parens) and `b.val()` (method call, parens) name

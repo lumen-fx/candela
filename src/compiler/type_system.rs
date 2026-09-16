@@ -947,7 +947,7 @@ fn lower_method(
     ctx.generics.pop_bindings();
 
     let mut callees = Vec::new();
-    collect_direct_fn_calls(code, &mut callees);
+    collect_direct_fn_calls(code, Some(type_name.as_str()), &mut callees);
     ctx.fns.push(Function {
         name: mangled,
         args: resolved_args,
@@ -1405,13 +1405,28 @@ pub fn arg_types_specialize_equal(a: &[DataType], b: &[DataType]) -> bool {
         })
 }
 
-/// Collect all the function calls in the given code
+/// Collects the functions the given code calls by name.
+///
+/// `self_type` is the type a method's body is compiled against, so a call the
+/// body makes on its own receiver (`self.down(n - 1)`) is recorded under the
+/// mangled name that method resolves to (`Box#down`). It is `None` for an
+/// ordinary function, whose `self` names no receiver. A call on any other
+/// receiver is left out: which function it reaches depends on the receiver's
+/// type, which only the call site knows.
+///
+/// What this list is for is recursion: a function that can reach itself
+/// through it is compiled as a call rather than inlined, so a method that
+/// calls itself is compiled the way a recursive function is.
 ///
 /// # Panics
 ///
 /// Panics when a `FunctionCall` node carries an empty namespace path, which
 /// the parser never produces.
-pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
+pub fn collect_direct_fn_calls(
+    content: &[Expr],
+    self_type: Option<&str>,
+    calls: &mut Vec<SmolStr>,
+) {
     let mut expr_stack: Vec<&Expr> = content.iter().collect();
     while let Some(expression) = expr_stack.pop() {
         match expression {
@@ -1422,10 +1437,19 @@ pub fn collect_direct_fn_calls(content: &[Expr], calls: &mut Vec<SmolStr>) {
             Expr::Condition(x, y, _)
             | Expr::InlineCondition(x, y, _)
             | Expr::ElseIfBlock(x, y)
-            | Expr::WhileBlock(x, y)
-            | Expr::ObjFunctionCall(x, y, _, _, _, _, _) => {
+            | Expr::WhileBlock(x, y) => {
                 expr_stack.push(x);
                 expr_stack.extend(y.iter());
+            }
+            Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _) => {
+                if let Some(type_name) = self_type
+                    && matches!(&**obj, Expr::Var(name, _) if name == "self")
+                    && let Some(method) = namespace.last()
+                {
+                    calls.push(mangle_method(type_name, method));
+                }
+                expr_stack.push(obj);
+                expr_stack.extend(args.iter());
             }
             Expr::ElseBlock(x) | Expr::EvalBlock(x) | Expr::LoopBlock(x) => {
                 expr_stack.extend(x.iter());
@@ -2798,7 +2822,7 @@ impl Expr {
                 }
                 let returns_null = check_if_returns_void(code);
                 let mut callees = Vec::new();
-                collect_direct_fn_calls(code, &mut callees);
+                collect_direct_fn_calls(code, None, &mut callees);
                 let id = state.fns.len() as u16;
                 state.fns.push(Function {
                     name: fn_name,
