@@ -466,14 +466,23 @@ jobs:
           done
 
           # Every dependency the manifest lists travels with the release, so the
-          # registry can resolve this package for whoever depends on it.
+          # registry can resolve this package for whoever depends on it. Either
+          # quote character comes off and whatever follows the closing one goes
+          # with it, the same way a [package] key is read, so a literal string
+          # and a trailing comment both reach the registry as the requirement
+          # alone. The table form is read down to its version first, which
+          # leaves the closing brace on the tail.
           deps="$(awk '
             /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[dependencies\][[:space:]]*$/); next }
             inside && /=/ {
               name = $0; sub(/[[:space:]]*=.*/, "", name); gsub(/[[:space:]]/, "", name)
               req = $0; sub(/^[^=]*=[[:space:]]*/, "", req)
               if (req ~ /^\{/) { sub(/^.*version[[:space:]]*=[[:space:]]*/, "", req) }
-              sub(/^"/, "", req); sub(/".*$/, "", req)
+              quote = substr(req, 1, 1)
+              if (quote == "\"" || quote == "'"'"'") {
+                sub("^" quote, "", req)
+                sub(quote ".*$", "", req)
+              }
               if (name != "" && req != "") printf " --dep %s@%s", name, req
             }' "$MANIFEST")"
 
