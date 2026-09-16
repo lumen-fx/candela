@@ -1180,15 +1180,37 @@ pub fn error_unknown_namespace(
 #[inline(never)]
 pub fn error_unknown_function_in_namespace(
     fn_name: &str,
-    namespace: &Namespace,
     path: &[SmolStr],
     span: Span,
     file_idx: u16,
-    sources: &[Source],
+    state: &State,
 ) -> ! {
     let namespace_str = path.join("::");
-    let namespace = namespace.walk_to_namespace(path, span, file_idx, sources);
-    let similar_fn = find_closest_str(fn_name, namespace.fns().map(|s| s.0.as_str()));
+    let sources = &*state.sources;
+    // A namespace is declared either by the source being compiled, where it is
+    // a node of the namespace tree, or by a `host`/`dylib` block, where it is a
+    // dynamic-library entry with no node of its own. Both kinds declare the
+    // functions this call could have meant, and a path that neither kind
+    // declares is not a namespace at all.
+    let declared = state.namespace.resolve(path);
+    let library = match path {
+        [name] => state.dyn_libs.iter().find(|lib| lib.name == *name),
+        _ => None,
+    };
+    if declared.is_none() && library.is_none() {
+        error_unknown_namespace(path, span, file_idx, sources);
+    }
+    let similar_fn = find_closest_str(
+        fn_name,
+        declared
+            .into_iter()
+            .flat_map(|namespace| namespace.fns().map(|s| s.0.as_str()))
+            .chain(
+                library
+                    .into_iter()
+                    .flat_map(|lib| lib.fns.iter().map(|f| f.name.as_str())),
+            ),
+    );
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];

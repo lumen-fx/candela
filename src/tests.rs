@@ -3641,6 +3641,9 @@ pub fn map_loop() {
 
 use crate::Diagnostic;
 use crate::errors::collect_diagnostic;
+use crate::errors::strip_ansi;
+use candela_vm::captured_output::CAPTURED_OUTPUT;
+use candela_vm::captured_output::set_capturing;
 
 /// Compiles `src` under a diagnostic sink, returning the first structured error
 /// (parser or compiler) instead of printing + exiting. This is exactly what an
@@ -3689,6 +3692,29 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
             0,
         );
     })
+}
+
+/// Compiles `src` with output redirected into this thread's capture buffer and
+/// hands back the error report as a terminal would receive it, escape codes
+/// and all.
+///
+/// `compile_diag` cannot answer for that: under a diagnostic sink the error
+/// funnel records the plain message and unwinds before the coloured report is
+/// built. The compile ends in that unwind either way, so it is caught here and
+/// the buffer read afterwards.
+fn compile_report(src: &str, filename: &str) -> String {
+    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    let was_capturing = set_capturing(true);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = compile(
+            String::from(src),
+            filename,
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
+    }));
+    set_capturing(was_capturing);
+    CAPTURED_OUTPUT.with(|o| o.take())
 }
 
 /// Every diagnostic must carry a plain-text (ANSI-free) message, a non-empty
@@ -7095,4 +7121,48 @@ pub fn inference_rejects_a_loop_over_a_value_that_cannot_be_iterated() {
     assert_wellformed(&d, src);
     assert_eq!(d.code, "type_not_iterable");
     assert_eq!(&src[d.span], "5");
+}
+
+// ---------------------------------------------------------------------------
+// WHAT THE TERMINAL SHOWS
+//
+// A structured diagnostic carries the plain message; the report written to the
+// terminal is built separately and colours parts of it. The two have to say
+// the same thing, and the colouring has to reach the terminal as colour.
+// ---------------------------------------------------------------------------
+
+/// A `host` block declares a namespace that has no node in the namespace tree,
+/// so resolving a call into it used to fail as an unknown namespace before the
+/// unknown-function report could name the callee.
+#[test]
+pub fn a_call_into_a_host_namespace_names_the_function_it_cannot_find() {
+    for src in [
+        "host \"lumen\" { int set_title(); }\nfn main() { lumen::set_titel(); }",
+        "host \"lumen\" { int set_title(); }\nfn main() { let t = lumen::set_titel(); print(t); }",
+    ] {
+        let d = compile_diag(src, "diag.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "unknown_function_in_namespace", "{src}");
+        assert_eq!(
+            d.message, "Cannot find function set_titel in namespace lumen",
+            "{src}"
+        );
+        // The declared name is offered as well, which only the report carries.
+        let report = strip_ansi(&compile_report(src, "diag.cdl"));
+        assert!(
+            report.contains("A function with a similar name exists: lumen::set_title"),
+            "{report}"
+        );
+    }
+}
+
+/// A path that neither the source nor a `host` block declares is still not a
+/// namespace, and says so.
+#[test]
+pub fn a_call_into_a_namespace_nothing_declares_reports_the_namespace() {
+    let src = "fn main() { nope::bar(); }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unknown_namespace");
+    assert_eq!(d.message, "nope is not a valid namespace");
 }

@@ -78,6 +78,32 @@ fn aliased_import_stays_namespaced() {
     assert!(String::from_utf8_lossy(&output.stdout).contains('3'));
 }
 
+/// A call into an aliased module's namespace names the function it cannot find
+/// and offers the closest one the module declares. The same report serves a
+/// `host` namespace, whose functions are declared outside the namespace tree.
+#[test]
+fn unknown_function_in_an_aliased_namespace_suggests_the_declared_one() {
+    let output = run_program(
+        "unknown_in_namespace",
+        &[
+            ("helper.cdl", "fn compute() { return 5; }\n"),
+            (
+                "prog.cdl",
+                "import \"helper.cdl\" as h;\nfn main() { print(h::computee()); }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cannot find function")
+            && stderr.contains("computee")
+            && stderr.contains("in namespace")
+            && stderr.contains("h::compute"),
+        "stderr: {stderr}"
+    );
+}
+
 #[test]
 fn bare_import_collision_with_local_definition_errors() {
     let output = run_program(
