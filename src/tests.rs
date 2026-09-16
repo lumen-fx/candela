@@ -4522,6 +4522,73 @@ pub fn enum_match_wildcard() {
     );
 }
 
+/// A bare parameter takes the type its call site passes, so a call that hands
+/// it an enum value gets the variant-matching lowering with its payload bound.
+#[test]
+pub fn enum_match_through_an_untyped_parameter() {
+    run_and_check_registers!(
+        "
+        enum Value { Int(int), Null }
+        fn pick(v) {
+            let rc = 0;
+            match v {
+                Int(n) => { rc = n; }
+                Null => { rc = -1; }
+            }
+            return rc;
+        }
+        fn main() {
+            print(pick(Value::Int(3)));
+        }
+        ",
+        3.into()
+    );
+}
+
+/// An empty array literal has no element type, so an element read from one is
+/// null and the arms have no enum to dispatch on. The equality lowering used to
+/// take this silently and compile `Int(n)` as a variant construction, which
+/// left `n` unbound in the arm body.
+#[test]
+pub fn variant_patterns_need_an_enum_scrutinee() {
+    let src = "enum Value { Int(int), Null }
+fn pick(v) {
+    let rc = 0;
+    match v { Int(n) => { rc = n; } Null => { rc = -1; } }
+    return rc;
+}
+fn main() { let xs = []; print(pick(xs[0])); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "match_not_enum");
+    assert!(d.message.contains("variants of enum Value"));
+    assert!(d.message.contains("the matched value is null"));
+}
+
+/// Literal arms stay an equality chain whatever the scrutinee's type is, so a
+/// match on a value the compiler cannot type still compiles and runs.
+#[test]
+pub fn literal_arms_match_an_untyped_value() {
+    run_and_check_registers!(
+        "
+        fn pick(v) {
+            let rc = 0;
+            match v {
+                1 => { rc = 10; }
+                2 => { rc = 20; }
+                _ => { rc = -1; }
+            }
+            return rc;
+        }
+        fn main() {
+            let xs = [];
+            print(pick(2) + pick(xs.len()));
+        }
+        ",
+        19.into()
+    );
+}
+
 #[test]
 pub fn enum_equality() {
     run_and_check_registers!(
