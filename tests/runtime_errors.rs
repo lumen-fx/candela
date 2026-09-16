@@ -985,3 +985,52 @@ fn main() {
     );
     assert_eq!(out, ["while 0", "while 1"]);
 }
+
+/// `exit(n)` leaves with `n` wherever the call stands: as the whole of `main`,
+/// with statements after it, and inside a function `main` calls. The status
+/// travels in a register, and register 0 is the one a program reaching its end
+/// leaves through, so a status compiled into that register used to read as no
+/// status and the run left with zero.
+#[test]
+fn exit_leaves_with_the_status_it_was_given() {
+    let only = finish("exit_only_statement", "fn main() { exit(2); }\n", "");
+    assert_eq!(
+        only.code,
+        Some(2),
+        "stdout: {}\nstderr: {}",
+        only.stdout,
+        only.stderr
+    );
+
+    let before = finish(
+        "exit_before_more_code",
+        "fn main() {\n    exit(3);\n    print(\"after\");\n}\n",
+        "",
+    );
+    assert_eq!(before.code, Some(3), "stderr: {}", before.stderr);
+    assert!(
+        before.stdout.is_empty(),
+        "the statements after it never run, got: {}",
+        before.stdout
+    );
+
+    let nested = finish(
+        "exit_inside_a_call",
+        "fn go() {\n    exit(4);\n}\nfn main() {\n    go();\n    print(\"after\");\n}\n",
+        "",
+    );
+    assert_eq!(nested.code, Some(4), "stderr: {}", nested.stderr);
+    assert!(
+        nested.stdout.is_empty(),
+        "the caller never gets on with it, got: {}",
+        nested.stdout
+    );
+
+    let none = finish(
+        "exit_with_no_status",
+        "fn main() {\n    print(\"done\");\n    exit();\n}\n",
+        "",
+    );
+    assert_eq!(none.code, Some(0), "stderr: {}", none.stderr);
+    assert_eq!(none.stdout.trim(), "done");
+}
