@@ -1867,3 +1867,37 @@ fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `Engine::compile` compiles an entry point for every fully annotated function
+/// in the file, which is the same pass `candela check` runs. A generic function
+/// whose type parameter no argument pins is checked there with no type argument
+/// named, so it has to compile with that parameter standing for `any` rather
+/// than reporting a type it cannot resolve.
+#[test]
+fn a_generic_function_with_an_unnamed_type_parameter_passes_the_check() {
+    let src = r"
+struct Signal<T> {
+    name: string,
+}
+
+fn signal<T>(name: string) -> Signal<T> {
+    return Signal<T>{ name: name };
+}
+
+impl Signal<any> {
+    fn width(self) -> int {
+        return self.name.len();
+    }
+}
+
+fn read(id: string) -> int {
+    return signal(id).width();
+}
+
+fn main() {}
+";
+
+    let engine = Engine::new();
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("read", &["abc".into()]), Ok(Value::Int(3)));
+}

@@ -7117,6 +7117,80 @@ pub fn a_method_type_argument_picks_the_specialisation() {
     );
 }
 
+/// A type parameter no argument pins and no type argument names is `any`, so a
+/// bare `signal("x")` builds a `Signal<any>` and the concrete `impl Signal<any>`
+/// applies. Leaving the type argument off is never an error, so the body has to
+/// resolve `T` somehow, and `any` is what an unpinned parameter means.
+#[test]
+pub fn a_type_parameter_no_argument_names_is_any() {
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        fn signal<T>(name: string) -> Signal<T> { return Signal<T>{ name: name }; }
+        impl Signal<any> { fn get(self) -> int { return self.name.len(); } }
+        fn main() {
+            print(signal(\"abc\").get() + signal<any>(\"de\").get());
+        }
+        ",
+        5.into()
+    );
+}
+
+/// The same for a method's own type parameter: `wrap` names `U` in its body but
+/// nothing at the call site pins it, so `b.wrap()` builds a `Tag<any>`.
+#[test]
+pub fn a_method_type_parameter_no_argument_names_is_any() {
+    run_and_check_registers!(
+        "
+        struct Holder<T> { value: T }
+        struct Tag<U> { label: string }
+        impl Holder<int> {
+            fn wrap<U>(self) -> Tag<U> { return Tag<U>{ label: \"nn\" }; }
+        }
+        impl Tag<any> { fn width(self) -> int { return self.label.len(); } }
+        fn main() {
+            let b = Holder{ value: 1 };
+            print(b.wrap().width() + b.wrap<any>().width());
+        }
+        ",
+        4.into()
+    );
+}
+
+/// A generic struct literal written without type arguments takes each parameter
+/// from the field declared with it, and a parameter no field declares is `any`,
+/// so `Signal{ name: \"x\" }` is a `Signal<any>` too.
+#[test]
+pub fn a_struct_literal_parameter_no_field_pins_is_any() {
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        impl Signal<any> { fn get(self) -> int { return self.name.len(); } }
+        fn main() {
+            print(Signal{ name: \"abcd\" }.get());
+        }
+        ",
+        4.into()
+    );
+}
+
+/// A declared return type that mentions a parameter the call did not name stays
+/// un-pinned: what the body hands back is inferred rather than checked against
+/// `any`, so `make()` is not refused for returning `int[]` where `T[]` reads as
+/// `any[]`.
+#[test]
+pub fn an_unnamed_parameter_leaves_a_return_annotation_unpinned() {
+    run_and_check_registers!(
+        "
+        fn make<T>() -> T[] { return [1, 2]; }
+        fn main() {
+            print(make().len() + make<int>().len());
+        }
+        ",
+        4.into()
+    );
+}
+
 #[test]
 pub fn generic_enum_variant_construction() {
     run_and_check_registers!(

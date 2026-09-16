@@ -345,7 +345,7 @@ fn compile_function(
         });
     state
         .generics
-        .push_bindings(fn_bindings(function_id, type_args, state));
+        .push_frame(fn_bindings(function_id, type_args, state));
     // The body's names resolve in the file the function was written in, the
     // same file its signature resolved in, not the one the call site sits in.
     let fn_ctx = Ctx {
