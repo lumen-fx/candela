@@ -15,6 +15,7 @@ use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::NULL;
 use crate::rt::DataType;
+use crate::rt::EnumType;
 use crate::rt::HostFnSig;
 use crate::rt::Struct;
 use crate::vm::MapPool;
@@ -46,6 +47,14 @@ pub enum Value {
     /// A candela string-keyed map `{string: V}` (or a struct read back as a record).
     /// Ordered so equality and iteration are deterministic on the host side.
     Map(BTreeMap<String, Self>),
+    /// A candela enum value: the variant it was built as, and that variant's
+    /// payload in declaration order. A nullary variant carries an empty
+    /// payload. The enum's own type name is not carried; a host reads the
+    /// variant, which is what it matches on.
+    Enum {
+        variant: String,
+        payload: Vec<Self>,
+    },
 }
 
 impl Value {
@@ -263,15 +272,53 @@ pub fn is_host_callable_type(ty: &DataType) -> bool {
     }
 }
 
+/// Whether a host [`Value`] is an enum, or carries one inside it.
+///
+/// An enum crosses the boundary outward only: a script hands one back, and no
+/// parameter accepts one on the way in. Asking the value rather than the
+/// declared type is what covers the positions a type check cannot refuse on its
+/// own: an `any` parameter, and an array or map whose element type was never
+/// pinned.
+#[must_use]
+pub fn holds_enum(value: &Value) -> bool {
+    match value {
+        Value::Enum { .. } => true,
+        Value::Array(items) => items.iter().any(holds_enum),
+        Value::Map(entries) => entries.values().any(holds_enum),
+        Value::Null | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) => false,
+    }
+}
+
+/// Names the shape of a host [`Value`] for an argument-mismatch report.
+#[must_use]
+pub fn describe_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::from("null"),
+        Value::Int(_) => String::from("int"),
+        Value::Float(_) => String::from("float"),
+        Value::Bool(_) => String::from("bool"),
+        Value::String(_) => String::from("string"),
+        Value::Array(_) => String::from("array"),
+        Value::Map(_) => String::from("map"),
+        Value::Enum { variant, .. } => format!("enum variant {variant}"),
+    }
+}
+
 /// Whether a host [`Value`] satisfies a declared parameter type.
 ///
-/// `any` (candela's [`DataType::Unknown`]) accepts every value; a union accepts
-/// a value any member accepts; an unparameterised array or map accepts any
-/// array or map, because the element type was never pinned. Paired with
-/// [`is_host_callable_type`], which decides which parameter types reach here at
-/// all.
+/// `any` (candela's [`DataType::Unknown`]) accepts every value except an enum;
+/// a union accepts a value any member accepts; an unparameterised array or map
+/// accepts any array or map, because the element type was never pinned. Paired
+/// with [`is_host_callable_type`], which decides which parameter types reach
+/// here at all.
 #[must_use]
 pub fn value_matches_type(value: &Value, ty: &DataType) -> bool {
+    // No parameter type accepts an enum, `any` and an unpinned collection
+    // included, so the value is asked first and every arm below answers for a
+    // value with no enum in it.
+    if holds_enum(value) {
+        return false;
+    }
     match ty {
         DataType::Unknown => true,
         DataType::Int => matches!(value, Value::Int(_)),
@@ -950,19 +997,26 @@ pub fn marshal_value(
             maps.push(map);
             Data::map(id)
         }
+        // Enums travel outward only: both embedding paths refuse an argument
+        // that holds one (see `holds_enum`) before anything is marshalled, so
+        // this arm is what keeps the match exhaustive rather than a conversion
+        // anything reaches.
+        Value::Enum { .. } => NULL,
     }
 }
 
 /// Reads a runtime [`Data`] back into a host [`Value`], recursively for arrays,
-/// maps and structs. Arrays and structs live in the shared object pool; structs
-/// are surfaced as string-keyed [`Value::Map`]s using their declared field
-/// names. Map keys that are not strings are skipped.
+/// maps, structs and enums. Arrays, structs and enums live in the shared object
+/// pool; structs are surfaced as string-keyed [`Value::Map`]s using their
+/// declared field names, and an enum becomes a [`Value::Enum`] naming the
+/// variant it holds. Map keys that are not strings are skipped.
 pub fn unmarshal_value(
     d: Data,
     objs: &ObjectPool,
     maps: &MapPool,
     strings: &StringPool,
     structs: &[Struct],
+    enums: &[EnumType],
 ) -> Value {
     if d.is_int() {
         Value::Int(i64::from(d.as_int()))
@@ -975,7 +1029,7 @@ pub fn unmarshal_value(
     } else if d.is_array() {
         let items = objs[d.as_array()]
             .iter()
-            .map(|e| unmarshal_value(*e, objs, maps, strings, structs))
+            .map(|e| unmarshal_value(*e, objs, maps, strings, structs, enums))
             .collect();
         Value::Array(items)
     } else if d.is_struct() {
@@ -987,11 +1041,24 @@ pub fn unmarshal_value(
             .map(|((name, _, _), val)| {
                 (
                     name.to_string(),
-                    unmarshal_value(*val, objs, maps, strings, structs),
+                    unmarshal_value(*val, objs, maps, strings, structs, enums),
                 )
             })
             .collect();
         Value::Map(record)
+    } else if d.is_enum() {
+        // An enum instance is `[tag, payload...]` in the object pool; the tag
+        // indexes the variant list of its declared type.
+        let variants = &enums[d.enum_type_id() as usize].variants;
+        let entry = &objs[d.as_enum()];
+        let tag = entry[0].as_int() as usize;
+        Value::Enum {
+            variant: variants[tag].name.to_string(),
+            payload: entry[1..]
+                .iter()
+                .map(|val| unmarshal_value(*val, objs, maps, strings, structs, enums))
+                .collect(),
+        }
     } else if d.is_map() {
         let record = maps[d.as_map()]
             .iter()
@@ -999,7 +1066,7 @@ pub fn unmarshal_value(
             .map(|(k, val)| {
                 (
                     k.as_str(strings).to_owned(),
-                    unmarshal_value(*val, objs, maps, strings, structs),
+                    unmarshal_value(*val, objs, maps, strings, structs, enums),
                 )
             })
             .collect();

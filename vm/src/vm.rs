@@ -650,7 +650,7 @@ pub fn execute(
                 for idx in 0..args.len() {
                     let data = r[unsafe { *args.get_unchecked(idx) }];
                     host_call_args.push(crate::embed::unmarshal_value(
-                        data, obj_pool, map_pool, str_pool, structs,
+                        data, obj_pool, map_pool, str_pool, structs, enums,
                     ));
                 }
                 args.clear();

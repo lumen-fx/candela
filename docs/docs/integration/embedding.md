@@ -472,6 +472,7 @@ pub enum Value {
     String(String),
     Array(Vec<Value>),
     Map(BTreeMap<String, Value>),
+    Enum { variant: String, payload: Vec<Value> },
 }
 ```
 
@@ -484,6 +485,26 @@ candela integers are 32-bit; `Value::Int` is an `i64` for convenience on the
 host side and narrows on the way in. Arrays are homogeneous and maps are
 string-keyed, matching how candela types them. A struct read back from a script
 arrives as a `Map` of its fields.
+
+An [enum](../language/enums.md) arrives as `Value::Enum`, naming the variant it
+holds and carrying that variant's payload in declaration order; a nullary
+variant has an empty payload. The enum's own type name is not carried, because
+the variant is what you match on:
+
+```rust
+match program.call("pick", &[Value::Int(1)])? {
+    Value::Enum { variant, payload } if variant == "Line" => {
+        println!("line {:?} to {:?}", payload[0], payload[1]);
+    }
+    other => println!("{other:?}"),
+}
+```
+
+Enums travel outward only. A `Value::Enum` is refused as an argument in any
+position, an `any` parameter and a list element included, and the call comes
+back as an `argument_type_mismatch` naming the variant it was handed. A
+parameter typed as an enum is not host-callable at all: an artifact gives such
+a function no export. Build the value inside the script and return it.
 
 A [generic](../language/generics.md) type is instantiated at compile time, so
 nothing generic reaches the host: `Cell<int>` crosses the boundary as the
