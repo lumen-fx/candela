@@ -673,8 +673,19 @@ pub(crate) fn compile_enum_construction(
             .push(Data::enum_instance(enum_id, pool_idx as u32));
         (state.registers.len() - 1) as u16
     };
+    // `CloneEnum` allocates the destination's own pool entry and overwrites the
+    // register, so what sits there until then is only a placeholder. It aims at
+    // the template's entry rather than at pool slot 0, which belongs to
+    // whatever object the program built first: a placeholder aimed at slot 0
+    // reads that object's first word as this enum's variant tag, which is how
+    // the debug register dump came to format an array element as a tag. Aiming
+    // at the template makes the placeholder a valid value of the right enum, so
+    // anything that reads the register file before execution sees the variant
+    // the register is about to hold.
     let dest_reg = {
-        state.registers.push(Data::enum_instance(enum_id, 0));
+        state
+            .registers
+            .push(Data::enum_instance(enum_id, pool_idx as u32));
         (state.registers.len() - 1) as u16
     };
     output.push(Instr::CloneEnum(template_reg, dest_reg));

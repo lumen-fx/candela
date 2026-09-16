@@ -154,9 +154,10 @@ rather than an argument the command quietly drops.
 ### Development flags
 
 A `candela` built with debug assertions accepts two extra flags after the file
-name. `--debug` prints the compilation and execution time around the run, and
-`--debug-parser` compiles the file and stops without running it. Neither is
-present in a released build.
+name. `--debug` dumps the compiled program: the array pool, every register with
+the value it starts on, and the instruction stream. It also reports what
+parsing, compiling and running each took. `--debug-parser` compiles the file and
+stops without running it. Neither flag is present in a released build.
 
 ### Exit status
 
