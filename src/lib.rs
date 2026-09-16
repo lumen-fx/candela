@@ -124,6 +124,12 @@ pub use candela_vm::set_dylib_dirs;
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
 pub use build::build_bytecode;
+// The compile `candela check` and `candela build` both run: the program, and
+// then an entry point for every fully annotated function in it. An out-of-tree
+// frontend that wants to report what the command line reports compiles through
+// here, not through `compiler::compile`, which stops at the program.
+#[cfg(feature = "compiler")]
+pub use trampoline::compile_checked;
 
 /// Runs a freshly compiled program's `main` to completion on the CLI/REPL path.
 /// The embedding API (`Engine`/`Program`) drives the VM directly instead, with

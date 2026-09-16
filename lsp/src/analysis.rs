@@ -1,14 +1,21 @@
 //! Static analysis over a candela buffer, built entirely on top of candela's
-//! own lexer/parser/type-checker (`candela::compiler::compile`). This module
-//! does not reimplement any language frontend logic: it calls `compile()`
-//! and `collect_diagnostic`, then walks the resulting AST/symbol tables
-//! (`CompileOutput`) to answer the position-based questions the LSP needs
-//! (hover, completion, go-to-definition, document symbols).
+//! own lexer/parser/type-checker (`candela::compile_checked`). This module
+//! does not reimplement any language frontend logic: it calls
+//! `compile_checked()` and `collect_diagnostic`, then walks the resulting
+//! AST/symbol tables (`CompileOutput`) to answer the position-based questions
+//! the LSP needs (hover, completion, go-to-definition, document symbols).
 //!
-//! `compile()` (as opposed to `candela::Engine::compile`) parses,
-//! type-checks, and code-generates a program without running `main`, so
-//! running this on every keystroke has no script side effects (no `print`
-//! output, no host calls, no infinite loops from the user's own code).
+//! `compile_checked()` is the compile `candela check` and `candela build`
+//! perform: the program, and then an entry point for every fully annotated
+//! function in the buffer, which is what type-checks the body of a function
+//! nothing in the program calls. Going through it is what keeps the editor and
+//! the command line reporting the same errors on the same file. Like
+//! `check`, it wants no `main`.
+//!
+//! Nothing here runs the program (as `candela::Engine::compile` would): it
+//! parses, type-checks and generates code, so running on every keystroke has
+//! no script side effects (no `print` output, no host calls, no infinite loops
+//! from the user's own code).
 //!
 //! candela's error funnel (parser + compiler + runtime) is fatal-on-first-
 //! error: `collect_diagnostic` yields at most one `Diagnostic` per call, not
@@ -24,7 +31,7 @@
 //! text. That is a heuristic (documented on `struct_is_in_buffer`), not a
 //! compiler-guaranteed invariant.
 
-use candela::compiler::compile;
+use candela::compile_checked;
 use candela::compiler::compiler_data::{Function, Struct};
 use candela::compiler::expr::{Expr, Span};
 use candela::compiler::imports::ImportResolver;
@@ -108,6 +115,9 @@ pub struct AnalysisOutcome {
 /// `text` as if it were the file at `path`, and extracts a `ProgramSummary`
 /// or the first `Diagnostic` produced.
 ///
+/// The compile is the one `candela check` runs, entry points included, so the
+/// editor reports the errors the command line reports and no others.
+///
 /// `path` should be the buffer's real filesystem path (from the LSP URI) so
 /// that any `import "..."` statements resolve relative to the right
 /// directory, exactly like the `candela` CLI would.
@@ -127,7 +137,11 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // project manifest, so an import of a package the project depends on is
     // reported as a file it cannot find.
     let resolver = ImportResolver::new();
-    match macros.scope(move || collect_diagnostic(move || compile(owned, &path, false, &resolver)))
+    // The export table `compile_checked` builds describes the functions a host
+    // could call into a `.cdlb` artifact. The server writes no artifact, so it
+    // takes the compile result and drops the table, as `candela check` does.
+    match macros
+        .scope(move || collect_diagnostic(move || compile_checked(owned, &path, &resolver).0))
     {
         Err(diagnostic) => AnalysisOutcome {
             diagnostic: Some(diagnostic),
@@ -528,5 +542,45 @@ mod tests {
         let source = "fn main() {\n    let markup = lmn!(<p/>);\n    let broken = 1 +\n}\n";
         let outcome = analyze(source, "buffer.cdl");
         assert!(outcome.diagnostic.is_some());
+    }
+
+    /// A fully annotated function nothing calls is compiled at its declared
+    /// parameter types, so an error in its body is a diagnostic in the editor
+    /// exactly as it is a failure on the command line.
+    #[test]
+    fn a_body_error_in_an_uncalled_function_is_reported() {
+        let source = "fn broken(a: int) -> int {\n    return a + \"nope\";\n}\n\nfn main() {\n    print(1);\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        let diagnostic = outcome
+            .diagnostic
+            .expect("the uncalled function's body is checked");
+        assert!(
+            diagnostic.message.contains("int") && diagnostic.message.contains("string"),
+            "{}",
+            diagnostic.message
+        );
+        // The error is placed in the buffer, on the offending expression.
+        assert!(source.get(diagnostic.span.clone()).is_some());
+    }
+
+    /// `check` compiles a file with no `main`, and so does the server: a
+    /// library buffer is analysed, not reported as missing an entry point.
+    #[test]
+    fn a_buffer_with_no_main_still_analyzes() {
+        let source = "fn double(a: int) -> int {\n    return a * 2;\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let double = summary
+            .own_functions()
+            .find(|f| f.name == "double")
+            .expect("the library's function is in the outline");
+        // The entry point compiled for it is a call site, so its return type
+        // is inferred and hover has a signature to show.
+        assert_eq!(double.signatures, vec![String::from("(int) -> int")]);
     }
 }

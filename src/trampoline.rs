@@ -75,6 +75,7 @@ pub fn compile_trampoline(
 /// build would refuse. The export table comes back with the compile result for
 /// the caller that writes an artifact; a caller that only wanted the check
 /// drops both.
+#[must_use]
 pub fn compile_checked(
     source: String,
     filename: &str,
