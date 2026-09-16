@@ -59,7 +59,9 @@ downloaded and their import roots are handed to the compiler.
 
 Compiles the same program `run` would and stops before running it, reporting
 the path when it holds and the compile error when it does not. Dependencies are
-resolved first, so this also proves the manifest is satisfiable.
+resolved first, so this also proves the manifest is satisfiable. A `main` is
+not required here, the way it is for a run: a library whose entry only declares
+functions for other projects to import checks like any other file.
 
 ### candela build [file.cdl] [-o out.cdlb]
 

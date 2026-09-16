@@ -62,6 +62,10 @@ They work from anywhere inside the project. candela looks for `candela.toml` in
 the current directory and then in each directory above it, so a command typed
 in `src/` finds the project it belongs to.
 
+A library needs no `main`. `run` and `build` want one, because both start the
+program there, and `check` compiles a file that has none, so a package whose
+entry only declares functions for other projects to import checks cleanly.
+
 ## Add a dependency
 
 ```sh

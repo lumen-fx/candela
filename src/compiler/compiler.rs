@@ -69,10 +69,6 @@ use type_system::struct_literal_id;
 #[cfg(not(target_arch = "wasm32"))]
 use libloading::Library;
 
-use crate::errors::BLUE;
-use crate::errors::BOLD;
-use crate::errors::RED;
-use crate::errors::RESET;
 #[cfg(target_arch = "wasm32")]
 use crate::errors::wasm_error;
 pub mod compiler_data;
@@ -4525,6 +4521,24 @@ pub struct CompileOutput {
     pub generics: Generics,
 }
 
+impl CompileOutput {
+    /// Reports that the program has no entry point, unless it has one.
+    ///
+    /// Only the entry file's `main` counts: an imported module's own `main` is
+    /// ignored. Compiling a file without one is not an error, which is what
+    /// lets `candela check` pass on a library whose entry has nothing to run;
+    /// running, building or embedding the program calls this first.
+    pub fn require_main(&self) {
+        if !self
+            .functions
+            .iter()
+            .any(|func| func.name == "main" && func.src_file == 0)
+        {
+            compiler_errors::error_no_main(&self.sources);
+        }
+    }
+}
+
 /// Compiles `contents` and everything it imports into one program.
 ///
 /// `resolver` says where a library import reads from: the standard library, and
@@ -4673,33 +4687,21 @@ pub fn compile(
         namespaces: &mut file_namespaces,
         generics: &mut generics,
     };
-    let mut instructions = compile_expr(
-        &state.fns
-            .iter()
-            .find(|func| func.name == "main" && func.src_file == 0)
-            .unwrap_or_else(|| {
-                #[cfg(target_arch = "wasm32")]
-                wasm_error("Cannot find main function");
-
-                if crate::errors::diagnostics_enabled() {
-                    crate::errors::emit_diagnostic(
-                        state.sources[0].filename.as_str(),
-                        0..0,
-                        String::from("Cannot find main function"),
-                        "no_main_function",
-                    );
-                }
-                eprintln!(
-                    "--------------\n{RED}CANDELA RUNTIME ERROR:{RESET}\nCannot find {BLUE}{BOLD}main{RESET} function\n--------------",
-                );
-                std::process::exit(1);
-            })
-            .code
-            .clone(),
-        &mut variables,
-        ctx,
-        &mut state,
-    );
+    // The entry file's `main` is the program's top level. A file that declares
+    // none compiles to nothing but the halt: its declarations and signatures are
+    // still resolved, which is what lets `candela check` pass on a library whose
+    // entry has nothing to run. Starting a program without one is reported where
+    // the program is run or packaged, not here.
+    let main_body = state
+        .fns
+        .iter()
+        .find(|func| func.name == "main" && func.src_file == 0)
+        .map(|func| func.code.clone());
+    let mut instructions = if let Some(code) = main_body {
+        compile_expr(&code, &mut variables, ctx, &mut state)
+    } else {
+        Vec::new()
+    };
     instructions.push(Instr::Halt(0));
 
     #[cfg(debug_assertions)]

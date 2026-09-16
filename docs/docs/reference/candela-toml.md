@@ -42,8 +42,8 @@ what is wrong with it.
 
 The entry is the package's front door twice over: the verbs start there, and
 `import "name"` in a project that depends on the package reads it. A library
-keeps a `main` in it so `candela check` has something to compile; a `main` in
-an imported module is ignored.
+entry needs no `main`: `check` compiles a file without one, and a `main` in an
+imported module is ignored either way.
 
 ## [dependencies]
 

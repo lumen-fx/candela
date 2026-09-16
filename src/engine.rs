@@ -273,11 +273,12 @@ impl Engine {
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
     /// it declares to the matching registered closure.
     ///
-    /// Every function whose parameters are all annotated is compiled at those
-    /// declared types, whether or not anything calls it, so an error in the
-    /// body of a function `main` never reaches comes back from here rather than
-    /// from the first [`Program::call`]. A function with a bare parameter has
-    /// no declared type to compile against and stays lazy.
+    /// Every function in `src` whose parameters are all annotated is compiled at
+    /// those declared types, whether or not anything calls it, so an error in
+    /// the body of a function `main` never calls comes back from here rather
+    /// than from the first [`Program::call`]. A function with a bare parameter
+    /// has no declared type to compile against and stays lazy, and so does a
+    /// function an import brought in.
     ///
     /// `main` is executed once here (module instantiation), so any top-level
     /// setup runs before the host makes its first [`Program::call`]. The
@@ -288,17 +289,19 @@ impl Engine {
     ///
     /// Returns a [`Diagnostic`] if the script fails to parse/type-check, if the
     /// body of an annotated function does not compile at its declared parameter
-    /// types, if a declared `host` function has no registered closure, if a
-    /// registered closure's arity/types disagree with the `host` block, or if
-    /// running `main` raises a runtime error.
+    /// types, if the script declares no `main`, if a declared `host` function
+    /// has no registered closure, if a registered closure's arity/types
+    /// disagree with the `host` block, or if running `main` raises a runtime
+    /// error.
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
         let resolver = &self.resolver;
         let out: CompileOutput = self.macros.scope(|| {
             collect_diagnostic(|| {
                 let mut out = compile(src.to_owned(), &filename_owned, false, resolver);
-                // A `Program` runs `main` as soon as it is built, so it needs
-                // one; only `candela check` compiles a file without.
+                // A `Program` runs `main` as soon as it is built, so an
+                // embedded program needs one the way a run from the CLI does.
+                out.require_main();
                 // Compiling every entry point here is what makes `compile` a
                 // check step: a body error in a function `main` never calls is
                 // reported now, not on the first `Program::call` that reaches

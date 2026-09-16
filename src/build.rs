@@ -51,6 +51,9 @@ pub fn build_bytecode(
     resolver: &ImportResolver,
 ) -> Result<Vec<u8>, String> {
     let mut out = compile(source, filename, false, resolver);
+    // An artifact runs from `main`, so packaging a file without one would write
+    // a program that cannot start.
+    out.require_main();
     let exports = compile_entry_points(&mut out);
     let image = image_from_output(out, exports);
     serialize_image(&image)
