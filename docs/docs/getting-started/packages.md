@@ -174,6 +174,10 @@ registry with the manifest's version and dependencies. The `contents: write`
 grant is what lets it create the release; a workflow that only wants the check
 and the pack, on a pull request, grants `contents: read` and stops there.
 
+`candela-version` takes `latest`, a version such as `0.0.6` or `v0.0.6`, or
+`nightly` for the rolling prerelease. Each of them installs on every target the
+workflow packs for, Windows included.
+
 A package that ships a native library builds one archive per desktop target.
 Name the command that builds them, leaving the results in `dist/`:
 

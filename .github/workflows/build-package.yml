@@ -26,7 +26,9 @@ on:
   workflow_call:
     inputs:
       candela-version:
-        description: The candela release to build against, or `latest`.
+        description: >-
+          The candela release to build against: a version, `latest`, or the
+          `nightly` channel.
         required: true
         type: string
       native-build:
@@ -148,9 +150,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # The installer covers Linux and macOS; Windows installs from the package
-      # the same release publishes. Either way the toolchain comes from a
-      # release, so the package is checked against a candela a user can have.
+      # The installer covers Linux and macOS, and knows a channel from a
+      # version. Windows installs from the release directly: a tagged release
+      # from its installer, a channel from its zip, since the rolling
+      # prerelease publishes no installer. Either way the toolchain comes from
+      # a release, so the package is checked against a candela a user can have.
       - name: Install candela
         if: runner.os != 'Windows'
         shell: bash
@@ -174,16 +178,44 @@ jobs:
         env:
           VERSION: ${{ inputs.candela-version }}
         run: |
-          $release = if ($env:VERSION -eq 'latest') { 'latest/download' }
-                     else { "download/v$($env:VERSION -replace '^v', '')" }
-          $url = "https://github.com/lumen-fx/candela/releases/$release/candela-windows-x86_64.msi"
-          Invoke-WebRequest -Uri $url -OutFile "$PWD\candela.msi"
-          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\candela.msi", '/qn', '/l*v', "$PWD\install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) {
-            Get-Content "$PWD\install.log"
-            throw "msiexec exited with $($p.ExitCode)."
+          $releases = 'https://github.com/lumen-fx/candela/releases'
+          # `latest` and a version name a tagged release, which carries the
+          # installer. Anything else is a channel: its tag is the name as
+          # given, without the `v` a version tag takes, and it carries a zip
+          # and no installer.
+          if ($env:VERSION -eq 'latest') {
+            $base = "$releases/latest/download"
+            $tagged = $true
+          } elseif ($env:VERSION -match '^v?[0-9]') {
+            $base = "$releases/download/v$($env:VERSION -replace '^v', '')"
+            $tagged = $true
+          } else {
+            $base = "$releases/download/$($env:VERSION)"
+            $tagged = $false
           }
-          "$env:LOCALAPPDATA\Programs\Candela" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          if ($tagged) {
+            $installer = Join-Path $env:RUNNER_TEMP 'candela.msi'
+            $log = Join-Path $env:RUNNER_TEMP 'install.log'
+            Invoke-WebRequest -Uri "$base/candela-windows-x86_64.msi" -OutFile $installer
+            $p = Start-Process msiexec -ArgumentList '/i', $installer, '/qn', '/l*v', $log -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              Get-Content $log
+              throw "msiexec exited with $($p.ExitCode)."
+            }
+            $dir = "$env:LOCALAPPDATA\Programs\Candela"
+          } else {
+            # The zip holds candela.exe and candela-vm.exe at its root, with
+            # the libs/ the compiler reads std from beside them, so unpacking
+            # it is the whole install.
+            $archive = Join-Path $env:RUNNER_TEMP 'candela.zip'
+            $dir = Join-Path $env:RUNNER_TEMP 'candela'
+            Invoke-WebRequest -Uri "$base/candela-windows-x86_64.zip" -OutFile $archive
+            Expand-Archive -LiteralPath $archive -DestinationPath $dir -Force
+            if (-not (Test-Path (Join-Path $dir 'candela.exe'))) {
+              throw "candela-windows-x86_64.zip from $($env:VERSION) holds no candela.exe."
+            }
+          }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Report the toolchain
         shell: bash
