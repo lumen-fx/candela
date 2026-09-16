@@ -81,7 +81,9 @@ that is not a literal.
 number of payload bindings, a pattern that is not a variant when the scrutinee
 is an enum, variant patterns on a value that is not one, and a `match` that does
 not cover every variant. The non-exhaustive report lists the variants you left
-out.
+out. A qualified pattern is also reported when its qualifier names an enum other
+than the matched value's, or names nothing at all; the report says which enum
+the pattern reaches and which one the match is on.
 
 **Declaration errors.** Defining a function name twice. The report shows both
 definitions. Two `impl` blocks that define one method for the same instantiated
