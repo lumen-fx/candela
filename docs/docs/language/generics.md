@@ -60,7 +60,9 @@ fn signal<T>(name: string) {
 
 `Signal<T>` never stores a `T`. An unused type parameter is legal, and here it
 is the whole point: `signal<int>("count")` and `signal<float>("ratio")` take the
-same argument and hand back different types.
+same argument and hand back different types. A function that comes from a
+[module](modules.md) bound with `as` takes its type arguments after the path:
+`m::signal<int>("count")`.
 
 ## Generic structs
 

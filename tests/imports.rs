@@ -379,6 +379,103 @@ fn aliased_generic_enum_variant_names_its_instantiation() {
     assert_eq!(stdout.trim(), "4\n0", "{stdout}");
 }
 
+/// A generic function an aliased module declares takes its type arguments on
+/// the name at the end of the path, `m::first<int>(nums)`, and still infers
+/// them from the arguments when none are written.
+#[test]
+fn aliased_generic_function_takes_explicit_type_arguments() {
+    let output = run_program(
+        "aliased_generic_call",
+        &[
+            ("lib.cdl", "fn first<T>(xs: T[]) -> T { return xs[0]; }\n"),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" as m;\n\
+                 fn main() {\n\
+                     let nums = [1, 2, 3];\n\
+                     print(m::first<int>(nums));\n\
+                     print(m::first(nums));\n\
+                     print(m::first<float>([1.5, 2.5]));\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "1\n1\n1.5", "{stdout}");
+}
+
+/// The type argument is what picks the specialisation when no argument
+/// mentions the type parameter, so this spelling is the only way to call such a
+/// function through an alias.
+#[test]
+fn aliased_generic_function_type_argument_picks_the_specialisation() {
+    let output = run_program(
+        "aliased_generic_call_unpinned",
+        &[
+            (
+                "lib.cdl",
+                "struct Signal<T> { name: string }\n\
+                 fn signal<T>(name: string) { return Signal<T>{ name: name }; }\n\
+                 impl Signal<int> { fn label(self) -> string { return \"int\"; } }\n\
+                 impl Signal<float> { fn label(self) -> string { return \"float\"; } }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" as m;\n\
+                 fn main() {\n\
+                     print(m::signal<int>(\"a\").label());\n\
+                     print(m::signal<float>(\"b\").label());\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "int\nfloat", "{stdout}");
+}
+
+/// The `<` after a namespaced path is still the comparison operator: a type
+/// argument list only opens when the whole list closes into a call.
+#[test]
+fn aliased_path_before_a_comparison_stays_a_comparison() {
+    let output = run_program(
+        "aliased_comparison",
+        &[
+            (
+                "lib.cdl",
+                "fn one() -> int { return 1; }\n\
+                 fn first<T>(xs: T[]) -> T { return xs[0]; }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" as m;\n\
+                 fn main() {\n\
+                     let hi = 9;\n\
+                     print(m::one() < hi);\n\
+                     print(m::first<int>([2, 3]) < hi);\n\
+                     print(hi < m::one() && hi > 0);\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "true\ntrue\nfalse", "{stdout}");
+}
+
 /// A variant belongs to its enum, so the alias alone does not name one: the
 /// two-segment path is a function call, and there is no such function.
 #[test]
