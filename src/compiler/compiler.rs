@@ -2946,7 +2946,6 @@ pub fn compile_expr(
     state: &mut State<'_>,
 ) -> Vec<Instr> {
     let v_len = v.len();
-    let fn_len = state.fns.len();
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let mut output: Vec<Instr> = Vec::with_capacity(input.len());
     for (idx, x) in input.iter().enumerate() {
@@ -2964,7 +2963,13 @@ pub fn compile_expr(
         }
     }
     v.truncate(v_len);
-    state.fns.truncate(fn_len);
+    // The block's variables and the names it declared go out of scope with it.
+    // The function table does not: an entry in it is named by index, by the
+    // bytecode that calls it and by the `DataType::Fn` a closure's type is, and
+    // an index nothing can hand back out is an index nothing else can be given.
+    // A closure is registered under its own source span, so the same body
+    // compiled again for a second specialisation finds the entry it made the
+    // first time instead of making a second one.
     state.scope_mut(ctx.file_idx).symbols.truncate(symbols_len);
     output
 }
