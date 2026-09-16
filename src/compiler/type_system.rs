@@ -25,6 +25,7 @@ use crate::compiler::compiler_errors::error_type_args_on_plain_type;
 use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_function;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
+use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::compiler::compiler_errors::error_unknown_struct;
 use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
@@ -74,7 +75,8 @@ pub type TypeParams = Box<[SmolStr]>;
 pub enum TypeExpr {
     Identifier(SmolStr, Span),
     NamespacedIdentifier(Box<[SmolStr]>, Span),
-    /// A generic type applied to its arguments, `Cell<int>`.
+    /// A generic type applied to its arguments, `Cell<int>`, with or without
+    /// a module path in front of the name (`g::Slot<int>`).
     Generic(Box<GenericType>),
     Array(Box<Self>),
     Map(Box<Self>, Box<Self>),
@@ -85,6 +87,10 @@ pub enum TypeExpr {
 /// [`TypeExpr`], which every declaration carries by value.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct GenericType {
+    /// The module path the name was written behind, empty for a name written
+    /// on its own. A module bound with `as` puts its alias here
+    /// (`g::Slot<int>`).
+    pub namespace: Box<[SmolStr]>,
     pub name: SmolStr,
     pub args: Box<[TypeExpr]>,
     pub span: Span,
@@ -102,7 +108,10 @@ impl TypeExpr {
             Self::Identifier(name, _) => params.contains(name),
             Self::NamespacedIdentifier(_, _) => false,
             Self::Generic(generic) => {
-                params.contains(&generic.name)
+                // A name written behind a module path names that module's
+                // generic type, never a type parameter of the body being
+                // compiled.
+                (generic.namespace.is_empty() && params.contains(&generic.name))
                     || generic.args.iter().any(|a| a.mentions_any(params))
             }
             Self::Array(inner) => inner.mentions_any(params),
@@ -134,7 +143,7 @@ impl TypeExpr {
                         DataType::Struct(struct_id as u16)
                     } else if let Some(enum_id) = ctx.scope().find_enum(&[], struct_name) {
                         DataType::Enum(enum_id as u16)
-                    } else if ctx.generics.is_template(struct_name) {
+                    } else if find_template(&[], struct_name, ctx.scope(), ctx.generics).is_some() {
                         // A generic type named without its arguments is the
                         // dynamic slot: candela never makes a missing type
                         // argument an error.
@@ -185,8 +194,22 @@ impl TypeExpr {
                 }
             }
             Self::Generic(generic) => {
+                // The path in front of the name says which module the type
+                // comes from, so a path that names no module is reported here
+                // rather than resolving to whatever declared the name.
+                if !generic.namespace.is_empty()
+                    && ctx.scope().resolve(&generic.namespace).is_none()
+                {
+                    cold_path();
+                    error_unknown_namespace(
+                        &generic.namespace,
+                        generic.span,
+                        ctx.file_idx,
+                        ctx.sources,
+                    );
+                }
                 let args: Vec<DataType> = generic.args.iter().map(|a| a.to_datatype(ctx)).collect();
-                instantiate(&generic.name, &args, generic.span, ctx)
+                instantiate(&generic.namespace, &generic.name, &args, generic.span, ctx)
             }
             Self::Array(inner_t) => DataType::Array(Some(Box::new(inner_t.to_datatype(ctx)))),
             Self::Map(k_t, v_t) => DataType::Map(Box::from((
@@ -247,10 +270,11 @@ pub struct ImplTemplate {
 pub struct Generics {
     templates: Vec<TypeTemplate>,
     impls: Vec<ImplTemplate>,
-    /// Instantiations by rendered name, so `Cell<int>` written twice is one
-    /// struct. `<` and `>` cannot occur in an identifier, so a rendered name
-    /// never collides with a user-written one.
-    instantiations: Vec<(SmolStr, DataType)>,
+    /// Instantiations by the declaration they came from and their rendered
+    /// name, so `Cell<int>` written twice is one struct and two modules each
+    /// declaring `Cell<T>` keep their own. `<` and `>` cannot occur in an
+    /// identifier, so a rendered name never collides with a user-written one.
+    instantiations: Vec<(usize, SmolStr, DataType)>,
     /// Type parameters bound for the body being compiled. Only the top frame is
     /// in scope: the parameters of a function never reach the body of a
     /// function it calls.
@@ -284,11 +308,10 @@ impl Generics {
             .unwrap_or_default()
     }
 
-    #[must_use]
-    pub fn is_template(&self, name: &str) -> bool {
-        self.templates.iter().any(|t| t.name == name)
-    }
-
+    /// The parameters of the generic declaration `name` names, for a caller
+    /// with no scope to resolve it in: a mangled method name
+    /// (`Cell<int>#get`) carries the type name and no module path. Takes the
+    /// declaration registered last when two modules declare the name.
     #[must_use]
     pub fn params_of(&self, name: &str) -> Option<&[SmolStr]> {
         self.templates
@@ -301,8 +324,8 @@ impl Generics {
     /// that parameter as its type. A literal written without type arguments
     /// takes each parameter from the value in that field.
     #[must_use]
-    pub fn param_fields(&self, name: &str) -> Vec<Option<SmolStr>> {
-        let Some(template) = self.templates.iter().rfind(|t| t.name == name) else {
+    pub fn param_fields(&self, template_idx: usize) -> Vec<Option<SmolStr>> {
+        let Some(template) = self.templates.get(template_idx) else {
             return Vec::new();
         };
         let TemplateBody::Struct(fields) = &template.body else {
@@ -322,34 +345,48 @@ impl Generics {
             .collect()
     }
 
+    /// The generic declaration the last-registered template under `name` is,
+    /// which is what an unqualified name falls back to when the scope it was
+    /// written in registers no template by that name.
+    fn last_template_named(&self, name: &str) -> Option<usize> {
+        self.templates.iter().rposition(|t| t.name == name)
+    }
+
+    /// Records a generic `struct` declaration and returns the index the
+    /// declaring scope registers it under, which is what a name written
+    /// behind a module path resolves to.
     pub fn add_struct_template(
         &mut self,
         name: SmolStr,
         params: TypeParams,
         file_idx: u16,
         fields: Box<[(SmolStr, TypeExpr, Span)]>,
-    ) {
+    ) -> u32 {
         self.templates.push(TypeTemplate {
             name,
             params,
             file_idx,
             body: TemplateBody::Struct(fields),
         });
+        (self.templates.len() - 1) as u32
     }
 
+    /// Records a generic `enum` declaration. Returns its index, as
+    /// [`Generics::add_struct_template`] does.
     pub fn add_enum_template(
         &mut self,
         name: SmolStr,
         params: TypeParams,
         file_idx: u16,
         variants: Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
-    ) {
+    ) -> u32 {
         self.templates.push(TypeTemplate {
             name,
             params,
             file_idx,
             body: TemplateBody::Enum(variants),
         });
+        (self.templates.len() - 1) as u32
     }
 
     /// Records the `impl` blocks a file declared against a generic type,
@@ -499,8 +536,15 @@ fn render_type(t: &DataType, structs: &[Struct], enums: &[EnumType]) -> SmolStr 
 }
 
 /// The name a generic type is registered under once its arguments are known.
+///
+/// `qualifier` is the module the declaration was written in, present only when
+/// another module declares a generic type by the same name. Two such types are
+/// separate types, and the name is what a diagnostic prints and what a method
+/// on the type is mangled under, so both have to say which module they came
+/// from.
 #[must_use]
 fn render_instantiation(
+    qualifier: Option<&str>,
     base: &str,
     args: &[DataType],
     structs: &[Struct],
@@ -511,7 +555,52 @@ fn render_instantiation(
         .map(|a| render_type(a, structs, enums))
         .collect::<Vec<SmolStr>>()
         .join(", ");
-    format_args!("{base}<{rendered}>").to_smolstr()
+    match qualifier {
+        Some(module) => format_args!("{module}::{base}<{rendered}>").to_smolstr(),
+        None => format_args!("{base}<{rendered}>").to_smolstr(),
+    }
+}
+
+/// The module name a file is known by: its path with the directories and the
+/// `.cdl` taken off, which is what an `import` writes.
+#[must_use]
+fn module_name(file_idx: u16, sources: &[Source]) -> SmolStr {
+    let Some(source) = sources.get(file_idx as usize) else {
+        return SmolStr::default();
+    };
+    let path: &str = &source.filename;
+    let stem = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .strip_suffix(".cdl")
+        .unwrap_or(path);
+    SmolStr::from(stem)
+}
+
+/// The generic declaration `namespace::name` names, as an index into
+/// `Generics::templates`.
+///
+/// A name written behind a module path resolves only to the declaration that
+/// module makes, so two modules each declaring `Slot<T>` stay apart. A name
+/// written on its own resolves in the scope it was written in, which holds the
+/// file's own declarations and the ones its bare imports merged in; when that
+/// scope has none it falls back to the last declaration of the name anywhere
+/// in the program, which is where a name reaches a template registered while a
+/// body was being compiled.
+#[must_use]
+pub fn find_template(
+    namespace: &[SmolStr],
+    name: &str,
+    scope: &Namespace,
+    generics: &Generics,
+) -> Option<usize> {
+    scope.find_template(namespace, name).or_else(|| {
+        namespace
+            .is_empty()
+            .then(|| generics.last_template_named(name))
+            .flatten()
+    })
 }
 
 /// Resolves `base<args>` to an ordinary struct or enum, registering it the
@@ -520,22 +609,53 @@ fn render_instantiation(
 /// Past this point nothing generic is left: the instantiation is a concrete
 /// type with concrete field types, and every later stage (field access, method
 /// dispatch, the artifact codec, the VM) treats it like any other.
-pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<'_>) -> DataType {
-    let name = render_instantiation(base, args, ctx.structs, ctx.enums);
-    if let Some((_, t)) = ctx.generics.instantiations.iter().find(|(n, _)| n == &name) {
-        return t.clone();
-    }
-    let Some(template_idx) = ctx.generics.templates.iter().rposition(|t| t.name == base) else {
+pub fn instantiate(
+    namespace: &[SmolStr],
+    base: &str,
+    args: &[DataType],
+    span: Span,
+    ctx: &mut TypeCtx<'_>,
+) -> DataType {
+    let Some(template_idx) = find_template(namespace, base, ctx.scope(), ctx.generics) else {
         if ctx
             .scope()
-            .find_struct(&[], base, span, ctx.file_idx, ctx.sources)
+            .find_struct(namespace, base, span, ctx.file_idx, ctx.sources)
             .is_some()
-            || ctx.scope().find_enum(&[], base).is_some()
+            || ctx.scope().find_enum(namespace, base).is_some()
         {
             error_type_args_on_plain_type(span, ctx.file_idx, base, ctx.sources);
         }
+        if !namespace.is_empty() {
+            error_unknown_type_with_namespace(
+                span,
+                ctx.file_idx,
+                base,
+                ctx.sources,
+                ctx.scope(),
+                namespace,
+            );
+        }
         error_unknown_type(span, ctx.file_idx, base, ctx.sources, ctx.scope());
     };
+    // Another module declaring the same name makes the two separate types, and
+    // the name has to say so; see `render_instantiation`.
+    let qualifier = (ctx
+        .generics
+        .templates
+        .iter()
+        .filter(|t| t.name == base)
+        .count()
+        > 1)
+    .then(|| module_name(ctx.generics.templates[template_idx].file_idx, ctx.sources));
+    let name = render_instantiation(qualifier.as_deref(), base, args, ctx.structs, ctx.enums);
+    if let Some((_, _, t)) = ctx
+        .generics
+        .instantiations
+        .iter()
+        .find(|(idx, n, _)| *idx == template_idx && n == &name)
+    {
+        return t.clone();
+    }
     if ctx.generics.templates[template_idx].params.len() != args.len() {
         error_type_arg_count(
             span,
@@ -586,7 +706,7 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
     };
     ctx.generics
         .instantiations
-        .push((name.clone(), instantiated.clone()));
+        .push((template_idx, name.clone(), instantiated.clone()));
 
     let body = ctx.generics.templates[template_idx].body.clone();
     ctx.generics.depth += 1;
@@ -626,7 +746,7 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
     }
     ctx.generics.pop_bindings();
 
-    lower_impls(base, args, &name, &frame, ctx);
+    lower_impls(template_idx, base, args, &name, &frame, ctx);
     ctx.generics.depth -= 1;
 
     instantiated
@@ -639,6 +759,7 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
 /// when the arguments match. Each method becomes an ordinary free function
 /// named `Cell<int>#get`, exactly as a method on a plain type does.
 fn lower_impls(
+    template_idx: usize,
     base: &str,
     args: &[DataType],
     type_name: &SmolStr,
@@ -655,6 +776,14 @@ fn lower_impls(
         .collect();
     for idx in applicable {
         let impl_file = ctx.generics.impls[idx].file_idx;
+        // The header names a type in the scope of the file the block was
+        // written in, so a block in one module never attaches to another
+        // module's declaration of the same name.
+        if find_template(&[], base, ctx.namespaces.get(impl_file), ctx.generics)
+            != Some(template_idx)
+        {
+            continue;
+        }
         let header = ctx.generics.impls[idx].args.clone();
         let mut frame: Vec<(SmolStr, DataType)> = Vec::with_capacity(header.len());
         let mut applies = true;
@@ -699,7 +828,7 @@ fn is_type_parameter(name: &SmolStr, file_idx: u16, ctx: &TypeCtx<'_>) -> bool {
     ) {
         return false;
     }
-    !ctx.generics.is_template(name)
+    find_template(&[], name, ctx.namespaces.get(file_idx), ctx.generics).is_none()
         && !ctx
             .namespaces
             .get(file_idx)
@@ -795,10 +924,12 @@ pub fn struct_literal_id(
     let path = &namespace[..namespace.len() - 1];
     if !type_args.is_empty() {
         let args = resolve_type_args(type_args, ctx, state);
-        return instantiated_struct_id(&name, &args, span, ctx, state);
+        return instantiated_struct_id(path, &name, &args, span, ctx, state);
     }
-    if path.is_empty() && state.generics.is_template(&name) {
-        let param_fields = state.generics.param_fields(&name);
+    if let Some(template_idx) =
+        find_template(path, &name, state.scope(ctx.file_idx), state.generics)
+    {
+        let param_fields = state.generics.param_fields(template_idx);
         let mut args: Vec<DataType> = Vec::with_capacity(param_fields.len());
         for field_name in param_fields {
             args.push(
@@ -809,7 +940,7 @@ pub fn struct_literal_id(
                     }),
             );
         }
-        return instantiated_struct_id(&name, &args, span, ctx, state);
+        return instantiated_struct_id(path, &name, &args, span, ctx, state);
     }
     state
         .scope(ctx.file_idx)
@@ -820,13 +951,20 @@ pub fn struct_literal_id(
 }
 
 fn instantiated_struct_id(
+    namespace: &[SmolStr],
     name: &SmolStr,
     args: &[DataType],
     span: Span,
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> u16 {
-    match instantiate(name, args, span, &mut state.type_ctx(ctx.file_idx)) {
+    match instantiate(
+        namespace,
+        name,
+        args,
+        span,
+        &mut state.type_ctx(ctx.file_idx),
+    ) {
         DataType::Struct(id) => id,
         _ => error_unknown_struct(name, span, state.sources, ctx.file_idx),
     }
@@ -857,7 +995,13 @@ pub fn type_args_name_a_variant(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -
         return false;
     };
     let base = &path[base_idx];
-    state.generics.is_template(base)
+    find_template(
+        &path[..base_idx],
+        base,
+        state.scope(ctx.file_idx),
+        state.generics,
+    )
+    .is_some()
         || state
             .scope(ctx.file_idx)
             .find_enum(&path[..base_idx], base)
@@ -875,10 +1019,15 @@ pub fn resolve_generic_variant(
 ) -> (u16, u16) {
     let variant = path[path.len() - 1].clone();
     let base = path[path.len() - 2].clone();
+    let namespace = &path[..path.len() - 2];
     let args = resolve_type_args(type_args, ctx, state);
-    let DataType::Enum(enum_id) =
-        instantiate(&base, &args, span, &mut state.type_ctx(ctx.file_idx))
-    else {
+    let DataType::Enum(enum_id) = instantiate(
+        namespace,
+        &base,
+        &args,
+        span,
+        &mut state.type_ctx(ctx.file_idx),
+    ) else {
         crate::compiler::compiler_errors::error_enum(
             "Unknown enum",
             &format!("{base} does not name an enum"),
