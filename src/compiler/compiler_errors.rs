@@ -1207,7 +1207,7 @@ pub fn error_unknown_function_in_namespace(
     // dynamic-library entry with no node of its own. Both kinds declare the
     // functions this call could have meant, and a path that neither kind
     // declares is not a namespace at all.
-    let declared = state.namespace.resolve(path);
+    let declared = state.scope(file_idx).resolve(path);
     let library = match path {
         [name] => state.dyn_libs.iter().find(|lib| lib.name == *name),
         _ => None,

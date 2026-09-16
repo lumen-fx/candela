@@ -109,7 +109,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
 fn annotated_functions(out: &CompileOutput) -> Vec<(SmolStr, Vec<DataType>)> {
     let mut seen: FxHashSet<SmolStr> = FxHashSet::default();
     let mut annotated = Vec::new();
-    for (name, kind) in out.namespace.fns() {
+    for (name, kind) in out.namespaces.root().fns() {
         let SymbolKind::Fn(fn_id) = kind else {
             continue;
         };
@@ -208,6 +208,6 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         generics: &mut out.generics,
         sources: &mut out.sources,
         reserved_registers: FxHashSet::default(),
-        namespace: &mut out.namespace,
+        namespaces: &mut out.namespaces,
     }
 }

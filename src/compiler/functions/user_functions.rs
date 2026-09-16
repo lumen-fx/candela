@@ -286,9 +286,8 @@ fn specialized_arg_types(
     let arg_types = generics.arg_types.clone();
     let file_idx = generics.file_idx;
     let frame = fn_bindings(fn_id, type_args, state);
-    let namespace = state.generics.file_namespace(file_idx);
     let mut base = state.type_ctx(ctx.file_idx);
-    let mut type_ctx = base.reborrow(file_idx, &namespace);
+    let mut type_ctx = base.reborrow(file_idx);
     type_ctx.generics.push_bindings(frame);
     let resolved = arg_types
         .iter()
@@ -325,9 +324,8 @@ fn specialized_return_type(
     }
     let (return_type, return_span) = annotation.clone();
     let file_idx = generics.file_idx;
-    let namespace = state.generics.file_namespace(file_idx);
     let mut base = state.type_ctx(ctx.file_idx);
-    let mut type_ctx = base.reborrow(file_idx, &namespace);
+    let mut type_ctx = base.reborrow(file_idx);
     Some((return_type.to_datatype(&mut type_ctx), return_span))
 }
 
@@ -376,16 +374,18 @@ fn compile_function(
     let loc = fn_start as u16 + ctx.offset;
 
     let v_len_before_args = v.len();
-    // let fn_len = state.namespace.symbols.len();
     let mut anon_fns: Vec<usize> = Vec::new();
     infered_arg_types
         .iter()
         .enumerate()
         .for_each(|(i, infered_type)| {
             if let DataType::Fn(fn_id) = infered_type {
-                anon_fns.push(state.namespace.symbols.len());
-                state
-                    .namespace
+                // The parameter is named in the body, so it is declared in the
+                // scope that body resolves in: the file the function was
+                // written in, not the one the call site sits in.
+                let scope = state.scope_mut(fn_file_idx);
+                anon_fns.push(scope.symbols.len());
+                scope
                     .symbols
                     .push((fn_args[i].clone(), SymbolKind::Fn(*fn_id)));
                 v.push(Variable {
@@ -405,7 +405,13 @@ fn compile_function(
     state
         .generics
         .push_bindings(fn_bindings(function_id, type_args, state));
-    let fn_type = track_returns(fn_code, v, ctx, state, fn_name);
+    // The body's names resolve in the file the function was written in, the
+    // same file its signature resolved in, not the one the call site sits in.
+    let fn_ctx = Ctx {
+        file_idx: fn_file_idx,
+        ..ctx
+    };
+    let fn_type = track_returns(fn_code, v, fn_ctx, state, fn_name);
     let return_type = if fn_type.is_empty() {
         // No tracked type means either no value is returned at all, or every
         // returned value was itself dynamic (return-type tracking records no
@@ -476,7 +482,7 @@ fn compile_function(
     );
     state.generics.pop_bindings();
     for i in anon_fns.into_iter().rev() {
-        state.namespace.symbols.remove(i);
+        state.scope_mut(fn_file_idx).symbols.remove(i);
     }
 
     let mut reserved_registers = get_tgt_ids(&parsed);

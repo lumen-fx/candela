@@ -214,3 +214,100 @@ fn bare_library_import_merges_enum_and_methods() {
         "stdout: {stdout}"
     );
 }
+
+/// A module bound behind an alias resolves the names in its own bodies: a
+/// sibling function, a struct literal, and a struct it declared.
+#[test]
+fn aliased_module_sees_its_own_declarations() {
+    let output = run_program(
+        "aliased_scope",
+        &[
+            (
+                "geom.cdl",
+                "struct Point { x: int, y: int }\n\
+                 impl Point { fn shifted(self) { return Point { x: self.x + 1, y: self.y }; } }\n\
+                 fn double(n) { return n * 2; }\n\
+                 fn origin() { return Point { x: 0, y: 0 }; }\n\
+                 fn scaled(n) { return double(n); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"geom.cdl\" as geom;\n\
+                 fn main() {\n\
+                 print(geom::scaled(4));\n\
+                 print(geom::origin().shifted().x);\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('8') && stdout.contains('1'), "{stdout}");
+}
+
+/// The same for an enum a module declares: a qualified variant path and a bare
+/// variant both resolve in the module's own scope, not the importer's.
+#[test]
+fn aliased_module_sees_its_own_enum() {
+    let output = run_program(
+        "aliased_enum",
+        &[
+            (
+                "shapes.cdl",
+                "enum Shape { Circle(int), Empty }\n\
+                 fn unit() { return Shape::Circle(1); }\n\
+                 fn nothing() { return Empty; }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as shapes;\n\
+                 fn main() { print(str(shapes::unit())); print(str(shapes::nothing())); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Circle(1)") && stdout.contains("Empty"),
+        "{stdout}"
+    );
+}
+
+/// An aliased module's own imports are its own: what it bare-imported and what
+/// it aliased are reachable from its bodies, and a closure it builds still
+/// resolves the function it calls.
+#[test]
+fn aliased_module_keeps_its_own_imports() {
+    let output = run_program(
+        "aliased_nested",
+        &[
+            ("base.cdl", "fn twice(n) { return n * 2; }\n"),
+            ("side.cdl", "fn triple(n) { return n * 3; }\n"),
+            (
+                "lib.cdl",
+                "import \"base.cdl\";\n\
+                 import \"side.cdl\" as side;\n\
+                 fn apply(f, n) { return f(n); }\n\
+                 fn compute(n) { let step = fn(x) { return twice(x); }; return apply(step, side::triple(n)); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" as lib;\nfn main() { print(lib::compute(2)); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("12"));
+}

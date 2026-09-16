@@ -1612,3 +1612,71 @@ fn main() {}
     let miss = program.call("current", &[list, 99i64.into()]).unwrap_err();
     assert_eq!(miss.code, "index_out_of_bounds");
 }
+
+/// A body compiled from an imported module declares into that module's scope,
+/// not the entry file's: a closure bound by `let` registers under its name
+/// there. An aborted `Program::call` used to leave that registration behind,
+/// because the rollback truncated the entry file's scope alone. A later call
+/// that passed the name to a higher-order function then took it for a function
+/// reference, and the id it carried had since been handed to an unrelated
+/// closure, so `probe` returned that closure's value instead of reporting a
+/// name nothing declares.
+#[test]
+fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
+    let dir =
+        std::env::temp_dir().join(format!("candela_embed_import_scope_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    std::fs::write(
+        dir.join("helper.cdl"),
+        "fn leak(lazy) {\n    \
+             let sneaky = fn(y) { return y; };\n    \
+             lumen::no_such_builtin(0.7);\n    \
+             return sneaky(1);\n\
+         }\n\
+         fn apply(f) {\n    \
+             return f(1);\n\
+         }\n\
+         fn probe() {\n    \
+             return apply(sneaky);\n\
+         }\n",
+    )
+    .expect("write module");
+    let entry = dir.join("prog.cdl");
+
+    let mut engine = Engine::new();
+    engine.register_host_fn("lumen", "ping", |_n: i64| {});
+    let mut program = engine
+        .compile(
+            "host \"lumen\" {\n    ping(int);\n}\n\n\
+             import \"helper.cdl\";\n\n\
+             fn refill(lazy) {\n    \
+                 let g = fn(z) { return 42; };\n    \
+                 return g(1);\n\
+             }\n\n\
+             fn main() {}\n",
+            entry.to_str().expect("utf-8 scratch path"),
+        )
+        .expect("the entry file compiles");
+
+    assert!(
+        program.call("leak", &[Value::Null]).is_err(),
+        "expected a diagnostic from the undeclared call"
+    );
+    // A call that succeeds now takes the function id the aborted one gave up,
+    // so a `sneaky` the module's scope kept no longer looks dangling: it names
+    // this closure.
+    assert_eq!(
+        program.call("refill", &[Value::Null]).unwrap(),
+        Value::Int(42)
+    );
+
+    // `sneaky` is a local of the aborted body, never a name the module
+    // declares, so looking it up has to fail rather than reach whichever
+    // function has landed on that id since.
+    assert!(
+        program.call("probe", &[]).is_err(),
+        "the aborted call left `sneaky` in the module's scope"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

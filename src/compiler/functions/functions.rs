@@ -174,7 +174,7 @@ pub fn handle_functions(
     // would otherwise treat the enum name as a module namespace and error.
     if namespace.len() >= 2
         && let Some((enum_id, variant_idx)) =
-            crate::compiler::resolve_enum_variant(namespace, state)
+            crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
     {
         return Some(crate::compiler::compile_enum_construction(
             enum_id,
@@ -285,7 +285,7 @@ pub fn handle_functions(
         } else {
             Some(register_id)
         }
-    } else if let Some(fn_id) = state.namespace.find_function(namespace, fn_name) {
+    } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(namespace, fn_name) {
         handle_user_function(
             fn_name,
             fn_id,

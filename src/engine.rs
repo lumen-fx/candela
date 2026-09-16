@@ -24,7 +24,7 @@
 //! [`HostType`], ...) live in the VM-only `candela-vm` crate.
 
 use crate::compiler::CompileOutput;
-use crate::compiler::Namespace;
+use crate::compiler::FileNamespaces;
 use crate::compiler::compile;
 use crate::compiler::compiler_data::Dynamiclib;
 use crate::compiler::compiler_data::Function;
@@ -297,6 +297,8 @@ impl Engine {
         let out: CompileOutput = self.macros.scope(|| {
             collect_diagnostic(|| {
                 let mut out = compile(src.to_owned(), &filename_owned, false, resolver);
+                // A `Program` runs `main` as soon as it is built, so it needs
+                // one; only `candela check` compiles a file without.
                 // Compiling every entry point here is what makes `compile` a
                 // check step: a body error in a function `main` never calls is
                 // reported now, not on the first `Program::call` that reaches
@@ -332,7 +334,7 @@ impl Engine {
             enums: out.enums,
             functions: out.functions,
             dyn_libs: out.dyn_libs,
-            namespace: out.namespace,
+            namespaces: out.namespaces,
             const_registers: out.const_registers,
             free_registers: out.free_registers,
             generics: out.generics,
@@ -371,7 +373,7 @@ pub struct Program {
     // ---- compiler state (drives on-demand call trampolines) ----
     functions: Vec<Function>,
     dyn_libs: Vec<Dynamiclib>,
-    namespace: Namespace,
+    namespaces: FileNamespaces,
     const_registers: FxHashMap<Data, u16>,
     free_registers: Vec<u16>,
     generics: Generics,
@@ -400,7 +402,9 @@ struct CompileCheckpoint {
     /// at checkpoint time, indexed the same way; a non-recursive call site
     /// extends its own function's entry in place.
     fn_registers_inner: Box<[usize]>,
-    namespace_symbols: usize,
+    /// Every file's scope length, not only the entry file's: a body compiled
+    /// from an imported module declares into that module's scope.
+    namespaces: crate::compiler::FileNamespacesCheckpoint,
     /// A generic type is instantiated (and, symmetrically, an enum's variants
     /// added) the first time a call site needs it, the same on-demand way a
     /// function is specialized; `structs`/`enums` cover that growth exactly as
@@ -525,7 +529,7 @@ impl Program {
             free_registers: &mut self.free_registers,
             sources: &mut self.sources,
             reserved_registers: rustc_hash::FxHashSet::default(),
-            namespace: &mut self.namespace,
+            namespaces: &mut self.namespaces,
             generics: &mut self.generics,
         }
     }
@@ -545,8 +549,9 @@ impl Program {
     /// reached, and the next call that reuses it jumps into whatever unrelated
     /// code, or none, later lands there.
     ///
-    /// This is a handful of lengths, not a copy of the tables themselves, so a
-    /// call that does not error pays for little more than reading them.
+    /// This is a handful of lengths, one per table plus one per file in the
+    /// program, not a copy of the tables themselves, so a call that does not
+    /// error pays for little more than reading them.
     fn checkpoint(&self) -> CompileCheckpoint {
         CompileCheckpoint {
             registers: self.registers.len(),
@@ -554,7 +559,7 @@ impl Program {
             fn_impls: self.functions.iter().map(|f| f.impls.len()).collect(),
             fn_registers: self.fn_registers.len(),
             fn_registers_inner: self.fn_registers.iter().map(Vec::len).collect(),
-            namespace_symbols: self.namespace.symbols.len(),
+            namespaces: self.namespaces.checkpoint(),
             structs: self.structs.len(),
             enums: self.enums.len(),
             instr_src: self.instr_src.len(),
@@ -601,9 +606,7 @@ impl Program {
         }
         self.fn_registers.truncate(checkpoint.fn_registers);
 
-        self.namespace
-            .symbols
-            .truncate(checkpoint.namespace_symbols);
+        self.namespaces.rollback_to(&checkpoint.namespaces);
 
         // A generic type instantiated during the attempt is cached in
         // `self.generics` by rendered name, pointing at the struct or enum

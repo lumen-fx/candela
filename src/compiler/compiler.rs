@@ -18,10 +18,6 @@ use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
-use crate::errors::BLUE;
-use crate::errors::BOLD;
-use crate::errors::RED;
-use crate::errors::RESET;
 use crate::instr::LibFunc;
 use crate::parser;
 use crate::rt::TargetOs;
@@ -73,6 +69,10 @@ use type_system::struct_literal_id;
 #[cfg(not(target_arch = "wasm32"))]
 use libloading::Library;
 
+use crate::errors::BLUE;
+use crate::errors::BOLD;
+use crate::errors::RED;
+use crate::errors::RESET;
 #[cfg(target_arch = "wasm32")]
 use crate::errors::wasm_error;
 pub mod compiler_data;
@@ -577,12 +577,16 @@ fn compile_struct_literal(
 /// name (`Some`, `None`) resolves by searching every registered enum for a
 /// variant with that name, first match winning. Never raises a compile error,
 /// so callers use it to intercept otherwise-unknown call/reference paths.
-pub(crate) fn resolve_enum_variant(path: &[SmolStr], state: &State<'_>) -> Option<(u16, u16)> {
+pub(crate) fn resolve_enum_variant(
+    path: &[SmolStr],
+    file_idx: u16,
+    state: &State<'_>,
+) -> Option<(u16, u16)> {
     if path.len() >= 2 {
         let variant = &path[path.len() - 1];
         let enum_name = &path[path.len() - 2];
         let module = &path[..path.len() - 2];
-        let eid = state.namespace.find_enum(module, enum_name)?;
+        let eid = state.scope(file_idx).find_enum(module, enum_name)?;
         let vidx = state.enums[eid]
             .variants
             .iter()
@@ -712,7 +716,7 @@ fn compile_enum_definition(
         name_span: span,
     });
     state
-        .namespace
+        .scope_mut(ctx.file_idx)
         .symbols
         .push((name.clone(), SymbolKind::Enum(enum_id)));
     let resolved = variants
@@ -2392,10 +2396,11 @@ fn compile_var_declaration(
     };
 
     if let DataType::Fn(fn_id) = &var_type {
+        let fn_symbol = SymbolKind::Fn(*fn_id);
         state
-            .namespace
+            .scope_mut(ctx.file_idx)
             .symbols
-            .push((name.clone(), SymbolKind::Fn(*fn_id)));
+            .push((name.clone(), fn_symbol));
     }
     v.push(Variable {
         name: name.clone(),
@@ -2526,10 +2531,11 @@ fn compile_struct_definition(
         id: struct_id,
         name_span: span,
     });
-    state.namespace.symbols.push((
-        name.clone(),
-        SymbolKind::Struct((state.structs.len() - 1) as u16),
-    ));
+    let struct_symbol = SymbolKind::Struct((state.structs.len() - 1) as u16);
+    state
+        .scope_mut(ctx.file_idx)
+        .symbols
+        .push((name.clone(), struct_symbol));
     let parsed_fields = fields
         .iter()
         .map(|(f, f_t, f_span)| {
@@ -2560,10 +2566,11 @@ fn compile_function_definition(
     }
     let mut callees = Vec::new();
     collect_direct_fn_calls(fn_code, &mut callees);
+    let fn_symbol = SymbolKind::Fn(state.fns.len() as u16);
     state
-        .namespace
+        .scope_mut(ctx.file_idx)
         .symbols
-        .push((fn_name.clone(), SymbolKind::Fn(state.fns.len() as u16)));
+        .push((fn_name.clone(), fn_symbol));
     // An annotation naming one of this function's own type parameters resolves
     // per call site, so it is left un-pinned here.
     let args: Box<[(SmolStr, Option<DataType>)]> = fn_args
@@ -2677,7 +2684,7 @@ pub fn compile_expr(
 ) -> Vec<Instr> {
     let v_len = v.len();
     let fn_len = state.fns.len();
-    let symbols_len = state.namespace.symbols.len();
+    let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let mut output: Vec<Instr> = Vec::with_capacity(input.len());
     for (idx, x) in input.iter().enumerate() {
         if let Some(id) = x.compile_with_code_context(
@@ -2695,7 +2702,7 @@ pub fn compile_expr(
     }
     v.truncate(v_len);
     state.fns.truncate(fn_len);
-    state.namespace.symbols.truncate(symbols_len);
+    state.scope_mut(ctx.file_idx).symbols.truncate(symbols_len);
     output
 }
 
@@ -2823,7 +2830,7 @@ impl Expr {
                 {
                     Some(*register_id)
                 } else if let Some((enum_id, variant_idx)) =
-                    resolve_enum_variant(std::slice::from_ref(name), state)
+                    resolve_enum_variant(std::slice::from_ref(name), ctx.file_idx, state)
                 {
                     Some(compile_enum_construction(
                         enum_id,
@@ -3241,7 +3248,9 @@ impl Expr {
                         output,
                     ));
                 }
-                if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, state) {
+                if let Some((enum_id, variant_idx)) =
+                    resolve_enum_variant(path, ctx.file_idx, state)
+                {
                     Some(compile_enum_construction(
                         enum_id,
                         variant_idx,
@@ -3415,6 +3424,86 @@ pub struct Namespace {
     pub children: Vec<(SmolStr, Self)>,
 }
 
+/// The scope of every file in the program, keyed by its index in `sources`.
+///
+/// A name written in a file resolves in that file's scope, whether it is
+/// written in a signature or in a function body: the file's own declarations,
+/// the symbols its bare imports merged in, and the modules it bound with `as`.
+/// A module imported under an alias therefore still sees its own declarations
+/// while its bodies compile, which the file that imported it does not.
+///
+/// File 0 is the entry file. Its scope is the program's outward surface: what
+/// an embedding host can call and what the artifact exporter writes entry
+/// points for.
+#[derive(Debug, Clone, Default)]
+pub struct FileNamespaces {
+    files: FxHashMap<u16, Namespace>,
+    /// Handed out for a file index no source was parsed for, so a lookup
+    /// against one reports an unknown name instead of panicking.
+    empty: Namespace,
+}
+
+impl FileNamespaces {
+    pub fn insert(&mut self, file_idx: u16, namespace: Namespace) {
+        self.files.insert(file_idx, namespace);
+    }
+    #[must_use]
+    pub fn get(&self, file_idx: u16) -> &Namespace {
+        self.files.get(&file_idx).unwrap_or(&self.empty)
+    }
+    pub fn get_mut(&mut self, file_idx: u16) -> &mut Namespace {
+        self.files.entry(file_idx).or_default()
+    }
+    /// The entry file's scope.
+    #[must_use]
+    pub fn root(&self) -> &Namespace {
+        self.get(0)
+    }
+    /// The symbol count of every file's scope, so a compile attempt that
+    /// declares into one can be undone with [`FileNamespaces::rollback_to`].
+    ///
+    /// Every file is captured, not only the entry one: a compile writes into
+    /// the scope of the file the body it is compiling was written in. A
+    /// parameter inferred to be a function is declared in the scope the callee
+    /// was written in, and a `let` bound to a function in the scope of the
+    /// file the `let` sits in, so a call that reaches into an imported module
+    /// grows that module's scope. Both declarations remove themselves once the
+    /// body they belong to is compiled, which is why only an attempt that
+    /// aborts partway leaves one behind.
+    ///
+    /// A namespace's children are not captured: one is pushed only where an
+    /// import is parsed, and that happens before any of this state can be
+    /// rolled back.
+    #[must_use]
+    pub fn checkpoint(&self) -> FileNamespacesCheckpoint {
+        FileNamespacesCheckpoint {
+            symbols: self
+                .files
+                .iter()
+                .map(|(file_idx, namespace)| (*file_idx, namespace.symbols.len()))
+                .collect(),
+        }
+    }
+    /// Truncates every file's scope back to `checkpoint`.
+    ///
+    /// A file the checkpoint does not name had no symbols of its own to keep:
+    /// a lookup against a file index nothing was parsed for creates its entry,
+    /// empty, on demand.
+    pub fn rollback_to(&mut self, checkpoint: &FileNamespacesCheckpoint) {
+        for (file_idx, namespace) in &mut self.files {
+            let len = checkpoint.symbols.get(file_idx).copied().unwrap_or(0);
+            namespace.symbols.truncate(len);
+        }
+    }
+}
+
+/// A checkpoint of the per-file scopes, taken by [`FileNamespaces::checkpoint`]
+/// and undone by [`FileNamespaces::rollback_to`].
+#[derive(Debug, Clone, Default)]
+pub struct FileNamespacesCheckpoint {
+    symbols: FxHashMap<u16, usize>,
+}
+
 impl Namespace {
     pub fn fns(&self) -> impl Iterator<Item = &(SmolStr, SymbolKind)> {
         self.symbols
@@ -3541,7 +3630,7 @@ fn load_auto_prelude(
     sources: &mut Vec<Source>,
     namespace: &mut Namespace,
     files: &mut FxHashMap<PathBuf, Namespace>,
-    file_namespaces: &mut FxHashMap<u16, Namespace>,
+    file_namespaces: &mut FileNamespaces,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
@@ -3623,6 +3712,7 @@ fn load_auto_prelude(
         generics,
         resolver,
     );
+    file_namespaces.insert(child_src_idx, child_namespace.clone());
     files.insert(path, child_namespace.clone());
     namespace
         .children
@@ -3733,6 +3823,12 @@ type PendingFns = Vec<(
     TypeParams,
 )>;
 
+/// Declares everything `code` defines into `namespace`, parsing each file it
+/// imports the same way.
+///
+/// Registering the finished scope in `file_namespaces` is the caller's: an
+/// imported file's scope is bound into the importer as well, while the entry
+/// file's is needed nowhere else and can be handed over whole.
 fn parse_toplevel(
     code: Vec<Expr>,
     file_path: &Path,
@@ -3745,7 +3841,7 @@ fn parse_toplevel(
     sources: &mut Vec<Source>,
     namespace: &mut Namespace,
     files: &mut FxHashMap<PathBuf, Namespace>,
-    file_namespaces: &mut FxHashMap<u16, Namespace>,
+    file_namespaces: &mut FileNamespaces,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
@@ -4048,6 +4144,7 @@ fn parse_toplevel(
                         generics,
                         resolver,
                     );
+                    file_namespaces.insert(child_src_idx, child_namespace.clone());
                     files.insert(file_path.clone(), child_namespace.clone());
                     child_namespace
                 };
@@ -4099,7 +4196,6 @@ fn parse_toplevel(
             _ => unsafe { unreachable_unchecked() },
         }
     }
-    file_namespaces.insert(src_file_idx, namespace.clone());
 }
 
 fn resolve_types(
@@ -4128,7 +4224,7 @@ fn resolve_types(
         SmolStr,
         Span,
     )>,
-    file_namespaces: &FxHashMap<u16, Namespace>,
+    file_namespaces: &FileNamespaces,
     dynamic_libs_fns: &mut Vec<DynamicLibFn>,
     host_fns: &mut Vec<HostFnSig>,
     dynamic_libs: &mut [Dynamiclib],
@@ -4152,7 +4248,6 @@ fn resolve_types(
         }
     }
     for (struct_id, src_file_idx, fields) in pending_structs {
-        let namespace = file_namespaces[&src_file_idx].clone();
         let resolved_fields = fields
             .iter()
             .map(|(field_name, field_type, field_span)| {
@@ -4160,7 +4255,7 @@ fn resolve_types(
                     field_name.clone(),
                     field_type.to_datatype(&mut TypeCtx {
                         file_idx: src_file_idx,
-                        namespace: &namespace,
+                        namespaces: file_namespaces,
                         sources,
                         structs,
                         enums,
@@ -4175,7 +4270,6 @@ fn resolve_types(
         structs[struct_id as usize].fields = resolved_fields;
     }
     for (enum_id, src_file_idx, variants) in pending_enums {
-        let namespace = file_namespaces[&src_file_idx].clone();
         let resolved_variants = variants
             .iter()
             .map(|(variant_name, payload, name_span)| EnumVariant {
@@ -4185,7 +4279,7 @@ fn resolve_types(
                     .map(|t| {
                         t.to_datatype(&mut TypeCtx {
                             file_idx: src_file_idx,
-                            namespace: &namespace,
+                            namespaces: file_namespaces,
                             sources,
                             structs,
                             enums,
@@ -4201,7 +4295,6 @@ fn resolve_types(
         enums[enum_id as usize].variants = resolved_variants;
     }
     for (fn_id, src_file_idx, args, return_type, type_params) in pending_fns {
-        let namespace = file_namespaces[&src_file_idx].clone();
         // An annotation naming one of the function's own type parameters is
         // left un-pinned: it resolves per call site, once the call names its
         // type arguments.
@@ -4216,7 +4309,7 @@ fn resolve_types(
                         .map(|t_e| {
                             t_e.to_datatype(&mut TypeCtx {
                                 file_idx: src_file_idx,
-                                namespace: &namespace,
+                                namespaces: file_namespaces,
                                 sources,
                                 structs,
                                 enums,
@@ -4236,7 +4329,7 @@ fn resolve_types(
                 (
                     t_e.to_datatype(&mut TypeCtx {
                         file_idx: src_file_idx,
-                        namespace: &namespace,
+                        namespaces: file_namespaces,
                         sources,
                         structs,
                         enums,
@@ -4250,7 +4343,6 @@ fn resolve_types(
     }
     #[cfg(not(target_arch = "wasm32"))]
     for (src_file_idx, dynlib_id, fn_signatures, lib, library_spec, span) in pending_dylibs {
-        let namespace = &file_namespaces[&src_file_idx];
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
@@ -4259,7 +4351,7 @@ fn resolve_types(
                     .map(|t| {
                         t.to_datatype(&mut TypeCtx {
                             file_idx: src_file_idx,
-                            namespace,
+                            namespaces: file_namespaces,
                             sources,
                             structs,
                             enums,
@@ -4272,7 +4364,7 @@ fn resolve_types(
                     .into_boxed_slice();
                 let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
                     file_idx: src_file_idx,
-                    namespace,
+                    namespaces: file_namespaces,
                     sources,
                     structs,
                     enums,
@@ -4329,7 +4421,6 @@ fn resolve_types(
     // recorded as a `HostFnSig` whose `id` the VM later uses to dispatch to the
     // Rust closure the embedding `Engine` bound to `(namespace, name)`.
     for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
-        let namespace = &file_namespaces[&src_file_idx];
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
@@ -4346,7 +4437,7 @@ fn resolve_types(
                         .map(|t| {
                             t.to_datatype(&mut TypeCtx {
                                 file_idx: src_file_idx,
-                                namespace,
+                                namespaces: file_namespaces,
                                 sources,
                                 structs,
                                 enums,
@@ -4360,7 +4451,7 @@ fn resolve_types(
                 };
                 let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
                     file_idx: src_file_idx,
-                    namespace,
+                    namespaces: file_namespaces,
                     sources,
                     structs,
                     enums,
@@ -4413,7 +4504,9 @@ pub struct CompileOutput {
     pub enums: Vec<EnumType>,
     pub functions: Vec<Function>,
     pub dyn_libs: Vec<Dynamiclib>,
-    pub namespace: Namespace,
+    /// Every file's scope, so a later compile against this program resolves a
+    /// name the way the file it is written in does.
+    pub namespaces: FileNamespaces,
     pub const_registers: FxHashMap<Data, u16>,
     pub free_registers: Vec<u16>,
     /// The generic declarations and the instantiations made from them, kept so
@@ -4479,7 +4572,7 @@ pub fn compile(
     let mut namespace = Namespace::default();
 
     let mut files: FxHashMap<PathBuf, Namespace> = FxHashMap::default();
-    let mut file_namespaces: FxHashMap<u16, Namespace> = FxHashMap::default();
+    let mut file_namespaces = FileNamespaces::default();
     let mut pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)> = Vec::new();
     let mut pending_enums: PendingEnums = Vec::new();
     let mut pending_fns: PendingFns = Vec::with_capacity(2);
@@ -4524,9 +4617,7 @@ pub fn compile(
         &mut generics,
         resolver,
     );
-    // Every file's scope is known once the whole import tree is parsed; an
-    // instantiation resolves a template against the scope it was declared in.
-    generics.set_file_namespaces(&file_namespaces);
+    file_namespaces.insert(0, namespace);
     resolve_types(
         &mut structs,
         &mut enums,
@@ -4569,7 +4660,7 @@ pub fn compile(
         free_registers: &mut free_registers,
         sources: &mut sources,
         reserved_registers: FxHashSet::default(),
-        namespace: &mut namespace,
+        namespaces: &mut file_namespaces,
         generics: &mut generics,
     };
     let mut instructions = compile_expr(
@@ -4648,7 +4739,7 @@ pub fn compile(
         enums,
         functions,
         dyn_libs,
-        namespace,
+        namespaces: file_namespaces,
         const_registers,
         free_registers,
         generics,
