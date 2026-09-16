@@ -305,6 +305,31 @@ fn a_broken_annotated_function_fails_the_build() {
     );
 }
 
+/// The other half of that rule. A parameter with no annotation has no declared
+/// type to compile the body against, so the body waits for the call that
+/// specialises it and the build stays quiet about it.
+///
+/// Compiling such a body anyway, at `any`, would refuse the program below: a
+/// method lookup on a receiver whose type is not known yet fails as an unknown
+/// function, the same diagnostic a real typo raises, so the two cannot be told
+/// apart from outside the call site.
+#[test]
+fn a_bare_parameter_leaves_its_body_to_the_call_that_reaches_it() {
+    let src = "
+        struct S { a: int }
+        impl S { fn m(self: S) -> int { return self.a; } }
+        fn handle(x) { print(x.m()); }
+        fn main() { handle(S { a: 41 }); }
+    ";
+    let mut program = load(src, "lazy.cdl", &HostRegistry::new());
+    assert!(
+        !program.exports().any(|name| name == "handle"),
+        "a bare parameter leaves nothing for a host argument to be checked against"
+    );
+    // The call inside `main` is where the body is compiled, and it works.
+    program.run();
+}
+
 /// Arguments are checked against the declared parameter types before the
 /// trampoline runs.
 #[test]
