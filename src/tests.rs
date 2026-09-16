@@ -4585,27 +4585,18 @@ pub fn enum_after_an_int_array_dumps_its_registers() {
     );
 }
 
-/// What the dump prints for an enum construction's destination register: the
-/// variant the register is about to hold, not the fallback `Data::format`
-/// gives an entry that carries no readable variant tag.
-#[test]
-pub fn an_enum_destination_register_dumps_its_variant() {
+/// Every register of `src`, formatted the way the debug dump formats it. A
+/// construction's destination register is a placeholder until the instruction
+/// that fills it runs, so this is what the dump prints for a register before
+/// the program has written it.
+fn dumped_registers(src: &str, filename: &str) -> Vec<String> {
     let out = compile(
-        String::from(
-            "
-        enum Value { Int(int), Null }
-        fn main() {
-            let xs = [Value::Int(3)];
-            print(7);
-        }
-        ",
-        ),
-        "enum_dump.cdl",
+        String::from(src),
+        filename,
         false,
         &crate::compiler::imports::ImportResolver::new(),
     );
-    let dumped: Vec<String> = out
-        .registers
+    out.registers
         .iter()
         .map(|data| {
             data.format(
@@ -4618,9 +4609,143 @@ pub fn an_enum_destination_register_dumps_its_variant() {
             )
             .to_string()
         })
-        .collect();
+        .collect()
+}
+
+/// A program that builds an array, a struct and a map inside a function called
+/// twice, after a program-first array and a program-first map in `main`. The
+/// three constructions in the function are the ones that go through a template
+/// register and a placeholder destination.
+const OBJECTS_AFTER_OTHER_OBJECTS: &str = "
+        struct Point { x: int, y: int }
+        fn build(n) {
+            let xs = [10, 20];
+            let p = Point{ x: n, y: 2 };
+            let m = { \"k\": 7 };
+            return xs.len() + p.x + m.get(\"k\");
+        }
+        fn main() {
+            let first = [\"alpha\", \"beta\"];
+            let earlier = { \"zz\": 99 };
+            print(first.len() + earlier.get(\"zz\") + build(1) + build(2));
+        }
+        ";
+
+/// What the dump prints for an enum construction's destination register: the
+/// variant the register is about to hold, not the fallback `Data::format`
+/// gives an entry that carries no readable variant tag.
+#[test]
+pub fn an_enum_destination_register_dumps_its_variant() {
+    let dumped = dumped_registers(
+        "
+        enum Value { Int(int), Null }
+        fn main() {
+            let xs = [Value::Int(3)];
+            print(7);
+        }
+        ",
+        "enum_dump.cdl",
+    );
     assert!(dumped.iter().any(|s| s == "Int(3)"), "{dumped:?}");
     assert!(!dumped.iter().any(|s| s == "enum"), "{dumped:?}");
+}
+
+/// An array literal's destination register is a placeholder until `CloneArray`
+/// or `EmptyArray` fills it. The placeholder used to name object-pool slot 0,
+/// which belongs to whatever object the program built first, so the dump
+/// showed that object's elements in a register about to hold this array. The
+/// template and the destination both name this literal's entry now, and the
+/// first array is named by the one register that holds it.
+#[test]
+pub fn an_array_destination_register_dumps_its_own_elements() {
+    let dumped = dumped_registers(OBJECTS_AFTER_OTHER_OBJECTS, "array_dump.cdl");
+    assert_eq!(
+        dumped.iter().filter(|s| s.as_str() == "[10,20]").count(),
+        2,
+        "{dumped:?}"
+    );
+    assert_eq!(
+        dumped
+            .iter()
+            .filter(|s| s.as_str() == "[\"alpha\",\"beta\"]")
+            .count(),
+        1,
+        "{dumped:?}"
+    );
+}
+
+/// The same for a struct literal, whose destination register `CloneStruct`
+/// fills. A field the literal sets from a value the compiler does not have is
+/// null in the template, which is what the register is about to hold before
+/// `SetFieldStruct` writes it.
+#[test]
+pub fn a_struct_destination_register_dumps_its_own_fields() {
+    let dumped = dumped_registers(OBJECTS_AFTER_OTHER_OBJECTS, "struct_dump.cdl");
+    assert_eq!(
+        dumped
+            .iter()
+            .filter(|s| s.as_str() == "Point {null,2}")
+            .count(),
+        2,
+        "{dumped:?}"
+    );
+}
+
+/// The same for a map literal, whose destination register `CloneMap` fills.
+/// The placeholder named map-pool slot 0, so the dump showed the first map the
+/// program built.
+#[test]
+pub fn a_map_destination_register_dumps_its_own_entries() {
+    let dumped = dumped_registers(OBJECTS_AFTER_OTHER_OBJECTS, "map_dump.cdl");
+    assert_eq!(
+        dumped.iter().filter(|s| s.as_str() == "{\"k\":7}").count(),
+        2,
+        "{dumped:?}"
+    );
+    assert_eq!(
+        dumped
+            .iter()
+            .filter(|s| s.as_str() == "{\"zz\":99}")
+            .count(),
+        1,
+        "{dumped:?}"
+    );
+}
+
+/// The array collector's root scan walks the whole register file and follows
+/// every register whose tag is an object, so a placeholder aimed at slot 0 kept
+/// the program's first object alive for as long as its register went unwritten.
+/// Reading the register file the same way, slot 0 of each pool is named by the
+/// single register that holds the object it belongs to. The scan itself is
+/// internal to the runtime, so this asserts the root set the compiler hands it
+/// rather than a collection.
+#[test]
+pub fn pool_slot_zero_is_named_by_one_register() {
+    let out = compile(
+        String::from(OBJECTS_AFTER_OTHER_OBJECTS),
+        "slot_zero.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let objects = out
+        .registers
+        .iter()
+        .filter(|d| (d.is_array() || d.is_struct() || d.is_enum()) && d.as_array() == 0)
+        .count();
+    let maps = out
+        .registers
+        .iter()
+        .filter(|d| d.is_map() && d.as_map() == 0)
+        .count();
+    assert_eq!(objects, 1, "object-pool slot 0 has {objects} roots");
+    assert_eq!(maps, 1, "map-pool slot 0 has {maps} roots");
+}
+
+/// The same program runs to the right answer with the dump on, which is how
+/// `run_and_check_registers!` compiles: 2 + 99 + (2 + 1 + 7) + (2 + 2 + 7).
+#[test]
+pub fn objects_built_after_other_objects_run() {
+    run_and_check_registers!(OBJECTS_AFTER_OTHER_OBJECTS, 122.into());
 }
 
 /// A bare parameter takes the type its call site passes, so a call that hands
