@@ -4790,6 +4790,172 @@ fn main() { print(total([1, 2, 3])); }";
     assert_eq!(d.code, "argument_type_mismatch");
 }
 
+/// A declared map parameter pins the value type an empty literal leaves open,
+/// so the body compiles at that value type and can match on what a key holds.
+/// The empty call comes first, which is the order that compiles the open
+/// specialisation.
+#[test]
+pub fn a_declared_map_parameter_pins_an_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn total(m: {string: Value}) -> int {
+            let sum = 0;
+            for k in m {
+                match m.get(k) {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+            }
+            return sum;
+        }
+        fn main() {
+            print(total({}) + total({\"a\": Value::Num(4), \"b\": Value::Text(\"ab\")}));
+        }
+        ",
+        6.into()
+    );
+}
+
+/// The key half of a map's type is pinned as well, so a body that matches on
+/// the keys of a declared `{Key: int}` compiles when the literal is empty. Map
+/// keys have to be literals, so an enum-keyed map is only ever written empty.
+#[test]
+pub fn a_declared_map_parameter_pins_an_empty_literal_key() {
+    run_and_check_registers!(
+        "
+        enum Key { Num(int), Text(string) }
+        fn total(m: {Key: int}) -> int {
+            let sum = 7;
+            for k in m {
+                match k {
+                    Key::Num(n) => { sum = sum + n; }
+                    Key::Text(t) => { sum = sum + t.len(); }
+                }
+            }
+            return sum;
+        }
+        fn main() {
+            print(total({}));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// The pinning reaches an empty map nested inside the argument: an array of
+/// maps fills in the inner value type from the declaration too.
+#[test]
+pub fn a_declared_map_parameter_pins_a_nested_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn total(m: {string: Value}) -> int {
+            let sum = 0;
+            for k in m {
+                match m.get(k) {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+            }
+            return sum;
+        }
+        fn deep(rows: {string: Value}[]) -> int {
+            let sum = 0;
+            let i = 0;
+            while i < rows.len() {
+                sum = sum + total(rows[i]);
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(deep([{}, {\"a\": Value::Num(7)}]));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A declared `-> {K: V}` says what a `return {}` hands back, so the call site
+/// keeps the value type. The consumer takes a bare parameter, which specialises
+/// on whatever the call passes: it can only match on variants if the declared
+/// return type reached it.
+#[test]
+pub fn a_declared_map_return_pins_an_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn empty() -> {string: Value} {
+            return {};
+        }
+        fn total(m) {
+            let sum = 5;
+            for k in m {
+                match m.get(k) {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+            }
+            return sum;
+        }
+        fn main() {
+            print(total(empty()));
+        }
+        ",
+        5.into()
+    );
+}
+
+/// Only an open position is filled. A map literal that does name its value type
+/// is still checked against the declaration, so the wrong one is refused.
+#[test]
+pub fn a_wrong_map_value_type_is_still_refused() {
+    let src = "enum Value { Num(int), Text(string) }
+fn total(m: {string: Value}) -> int { return m.len(); }
+fn main() { print(total({\"a\": 1})); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+}
+
+/// A struct field needs no pinning: reading a field takes the type the struct
+/// declares for it, not the type of the value that was stored, so an empty map
+/// in a `{string: Value}` field is read back as holding `Value`. Arrays behave
+/// the same way, which is why neither field case goes through the argument
+/// pinning.
+#[test]
+pub fn a_struct_field_declares_what_an_empty_literal_holds() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        struct Holder { rows: {string: Value}, names: Value[] }
+        fn total(h: Holder) -> int {
+            let sum = 3;
+            for k in h.rows {
+                match h.rows.get(k) {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+            }
+            let i = 0;
+            while i < h.names.len() {
+                match h.names[i] {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(total(Holder{ rows: {}, names: [] }));
+        }
+        ",
+        3.into()
+    );
+}
+
 /// Literal arms stay an equality chain whatever the scrutinee's type is, so a
 /// match on a value the compiler cannot type still compiles and runs.
 #[test]

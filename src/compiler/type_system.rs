@@ -1223,16 +1223,18 @@ pub fn param_type_matches(expected: &DataType, received: &DataType) -> bool {
     *expected == DataType::Unknown || *received == DataType::Unknown || expected == received
 }
 
-/// Fills in array element types a value left open, taking them from the type
-/// that was declared for it.
+/// Fills in element types a value left open, taking them from the type that was
+/// declared for it.
 ///
 /// An empty array literal has no element type: it is `Array(None)`, so indexing
 /// it yields `null` and a body specialised on it cannot match on its elements.
-/// Where the declaration says what the elements are, the declaration wins and
-/// the specialisation compiles at the declared element type. Only an open
-/// position is filled, so an array that does name its element type still has to
-/// match what was declared. The walk descends through arrays and map values, so
-/// an empty literal nested inside one is pinned too.
+/// An empty map literal is `Map(None, None)`, so reading a key out of it yields
+/// nothing the body can match on either. Where the declaration says what the
+/// collection holds, the declaration wins and the specialisation compiles at the
+/// declared types. Only an open position is filled, so a collection that does
+/// name what it holds still has to match what was declared. The walk descends
+/// through arrays and through both halves of a map, so an empty literal nested
+/// inside one is pinned too.
 fn pin_open_element_types(inferred: &mut DataType, declared: &DataType) {
     match (inferred, declared) {
         (DataType::Array(element), DataType::Array(Some(declared_element))) => match element {
@@ -1240,13 +1242,24 @@ fn pin_open_element_types(inferred: &mut DataType, declared: &DataType) {
             Some(element) => pin_open_element_types(element, declared_element),
         },
         (DataType::Map(entry), DataType::Map(declared_entry)) => {
-            if let Some(value) = entry.1.as_mut()
-                && let Some(declared_value) = declared_entry.1.as_ref()
-            {
-                pin_open_element_types(value, declared_value);
-            }
+            pin_open_slot(&mut entry.0, declared_entry.0.as_ref());
+            pin_open_slot(&mut entry.1, declared_entry.1.as_ref());
         }
         _ => {}
+    }
+}
+
+/// One half of a map's type: its keys or its values. An open slot takes the
+/// declared type, a slot that names a type is descended into so a nested empty
+/// literal is pinned as well, and a declaration that is itself open leaves the
+/// slot alone.
+fn pin_open_slot(inferred: &mut Option<DataType>, declared: Option<&DataType>) {
+    let Some(declared) = declared else {
+        return;
+    };
+    match inferred {
+        None => *inferred = Some(declared.clone()),
+        Some(inferred) => pin_open_element_types(inferred, declared),
     }
 }
 
@@ -1908,16 +1921,23 @@ pub(crate) fn pinned_arg_types(
     Some(pinned)
 }
 
-/// Whether this type leaves an array element type open, which is what an empty
-/// array literal produces.
+/// Whether this type leaves an element type open, which is what an empty array
+/// or map literal produces.
 #[must_use]
 fn has_open_element_type(ty: &DataType) -> bool {
     match ty {
         DataType::Array(None) => true,
         DataType::Array(Some(element)) => has_open_element_type(element),
-        DataType::Map(entry) => entry.1.as_ref().is_some_and(has_open_element_type),
+        DataType::Map(entry) => has_open_slot(entry.0.as_ref()) || has_open_slot(entry.1.as_ref()),
         _ => false,
     }
+}
+
+/// Whether one half of a map's type is open: either the map names no type there
+/// at all, or what it names holds an open element type itself.
+#[must_use]
+fn has_open_slot(slot: Option<&DataType>) -> bool {
+    slot.is_none_or(has_open_element_type)
 }
 
 /// The key one specialisation of a function is found by: the type arguments the

@@ -83,10 +83,11 @@ candela matches variant arms only when it knows which enum the value is. A
 parameter takes the type its call site passes it, so matching a parameter works
 when the caller hands it an enum value. An element read out of an empty array
 literal has no type, and matching one against variants is a compile error rather
-than an arm that never fits. A declaration says what the elements are where the
-literal does not: a parameter typed `Event[]`, or a `-> Event[]` return type,
-gives the body `Event` elements however empty the list it is handed. See [the
-empty list](collections.md#the-empty-list).
+than an arm that never fits. A declaration says what a collection holds where
+the literal does not: a parameter typed `Event[]` or `{string: Event}`, or the
+same as a return type, gives the body `Event` values however empty the list or
+map it is handed. See [the empty list](collections.md#the-empty-list) and [the
+empty map](collections.md#the-empty-map).
 
 ```rust
 enum Event {
