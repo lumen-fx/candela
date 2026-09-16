@@ -51,6 +51,8 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
   unless it annotates every parameter, in which case the entry point compiled
   for it stands in for the missing call. On a built-in function or method,
   shows its documentation. Hover works on a use site as well as a declaration.
+  A type is written the way a compiler error writes it, through the same
+  renderer, so your own struct or enum reads by the name you declared it under.
   Hovering a local variable shows nothing: candela does not retain
   per-variable inferred types after compilation.
 
@@ -78,9 +80,11 @@ These are deliberate, and the source refers here for them.
   structs declared in the open buffer.
 - Jumping into an imported file reads that file from disk synchronously, on the
   request.
-- The outline and completion list the functions the compiler produces, so a
-  `fn` nested inside another function body appears alongside top-level ones, and
-  a closure appears under the synthetic name the type checker hoists it to.
+- The outline lists the functions and structs the buffer declares, and
+  completion lists every function the compile produced, imported ones included.
+  Neither lists a method of an `impl` block: the compiler names it after the
+  type it attaches to (`Point#twice`), which is not a name to write, show, or
+  put a cursor on.
 - Enums are compiled but do not appear in the outline.
 - The server handles `didSave` but does not advertise it, so a client that sends
   only what is advertised never delivers one.
@@ -90,7 +94,8 @@ These are deliberate, and the source refers here for them.
 - `src/analysis.rs` unit-tests `analyze` on the buffers whose handling is easy
   to get wrong: one using a macro the server has no expander for, one with an
   error beside such a macro, one whose only error is in the body of a function
-  nothing calls, and one with no `main`.
+  nothing calls, and one with no `main`. It also covers how a type is written
+  out: a parameter and a struct field of a user enum, and the `any` slot.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
@@ -99,6 +104,8 @@ These are deliberate, and the source refers here for them.
   protocol (`initialize` -> `initialized` -> `didOpen` -> assert on
   `publishDiagnostics` -> `shutdown` -> `exit`), once with a broken `.cdl`
   snippet (expects a diagnostic) and once with a well-typed one (expects none).
-  No editor or window is involved.
+  A third case sends a `textDocument/hover` over a function whose parameter is
+  a user enum and asserts the reply names that enum. No editor or window is
+  involved.
 
 Run both with `cargo test -p candela-lsp`.

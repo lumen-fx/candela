@@ -47,7 +47,11 @@ pub use crate::rt::DataType;
 /// Name prefix for the synthetic top-level function an anonymous function is
 /// hoisted to. `<` is not a legal identifier character, so a hoisted name can
 /// never collide with a user-written function.
-const ANON_FN_PREFIX: &str = "<anon>";
+///
+/// Public because a frontend reading the function table has to tell the
+/// entries a person wrote from the ones the compiler made: an outline lists
+/// the first and leaves out the second.
+pub const ANON_FN_PREFIX: &str = "<anon>";
 
 // Tracks which user-defined functions are currently being analysed for their
 // return type. Used to break mutual-recursion cycles in type inference

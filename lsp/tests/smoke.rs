@@ -263,3 +263,99 @@ async fn well_typed_program_produces_no_diagnostics() {
 
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Hover over a function whose parameter is a user enum names that enum. This
+/// is the whole request path an editor takes, through the server's own
+/// rendering, and the type it shows is the one a compiler diagnostic would
+/// print.
+#[tokio::test]
+async fn hover_over_an_enum_typed_parameter_names_the_enum() {
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} }
+        }),
+    )
+    .await;
+    let _ = timeout(TIMEOUT, read_message(&mut stdout))
+        .await
+        .expect("timed out waiting for the initialize response");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    )
+    .await;
+
+    // `width` is on line 2 (zero-based), its name starting at column 3.
+    let source = "enum Value { Num(int), Text(string) }\n\
+                  \n\
+                  fn width(v: Value) -> int {\n\
+                  \x20   return 1;\n\
+                  }\n\
+                  \n\
+                  fn main() {}\n";
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///tmp/candela-lsp-smoke-test-hover.cdl",
+                    "languageId": "candela",
+                    "version": 1,
+                    "text": source
+                }
+            }
+        }),
+    )
+    .await;
+
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": { "uri": "file:///tmp/candela-lsp-smoke-test-hover.cdl" },
+                "position": { "line": 2, "character": 4 }
+            }
+        }),
+    )
+    .await;
+
+    let mut hover = None;
+    for _ in 0..20 {
+        let msg = timeout(TIMEOUT, read_message(&mut stdout))
+            .await
+            .expect("timed out waiting for the hover response");
+        if msg["id"] == 2 {
+            hover = Some(msg);
+            break;
+        }
+    }
+    let hover = hover.expect("server never answered the hover request");
+    let shown = hover["result"]["contents"]["value"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        shown.contains("v: Value"),
+        "hover should name the parameter's enum: {shown}"
+    );
+    assert!(
+        shown.contains("(Value) -> int"),
+        "the inferred signature should name it too: {shown}"
+    );
+    assert!(
+        !shown.contains("enum"),
+        "no type should read as the bare word `enum`: {shown}"
+    );
+
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

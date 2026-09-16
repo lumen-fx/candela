@@ -130,6 +130,12 @@ pub use build::build_bytecode;
 // here, not through `compiler::compile`, which stops at the program.
 #[cfg(feature = "compiler")]
 pub use trampoline::compile_checked;
+// How a type is written out for a person to read: paired with the struct and
+// enum tables a compile produces, so a user type is named the way it was
+// declared. Every diagnostic prints through this, and so does a frontend that
+// shows a type in a tooltip.
+#[cfg(feature = "compiler")]
+pub use compiler::compiler_data::TypeNames;
 
 /// Runs a freshly compiled program's `main` to completion on the CLI/REPL path.
 /// The embedding API (`Engine`/`Program`) drives the VM directly instead, with
