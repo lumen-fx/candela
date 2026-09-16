@@ -8315,3 +8315,43 @@ pub fn a_call_into_a_namespace_nothing_declares_reports_the_namespace() {
     assert_eq!(d.code, "unknown_namespace");
     assert_eq!(d.message, "nope is not a valid namespace");
 }
+
+/// A statement that is nothing but an expression has no reader for its value.
+/// The forms that have no statement arm to compile through are compiled as
+/// values anyway and the register is freed again; passing "nobody reads this"
+/// down to a literal, a variable or an operator used to trip the register-use
+/// assertion instead.
+#[test]
+pub fn a_statement_that_is_only_an_expression_compiles() {
+    run_and_check_registers!(
+        "
+        struct Point { x: int }
+        fn main() {
+            let p = Point{x: 5};
+            let xs = [1, 2, 3];
+            p.x;
+            xs;
+            xs[0];
+            p;
+            5;
+            1 + 2;
+            -1;
+            !true;
+            1 == 2;
+            print(p.x);
+        }
+        ",
+        5.into()
+    );
+}
+
+/// A bare name nothing declares is an unknown variable, reported against the
+/// name itself.
+#[test]
+pub fn a_statement_that_is_only_an_unknown_name_reports_it() {
+    let src = "fn main() { nosuch; }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unknown_variable");
+    assert_eq!(d.message, "Cannot find variable nosuch in this scope");
+}

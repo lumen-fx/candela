@@ -207,6 +207,63 @@ pub enum Expr {
     Neg(Box<Self>, Span, Span),
 }
 
+impl Expr {
+    /// Whether the only way to compile this form is as a value, so the
+    /// register it lands in has to be read back.
+    ///
+    /// [`Expr::compile`] takes a `uses_id` flag saying whether the caller
+    /// reads the value produced, and the two answers reach different arms. A
+    /// literal, a variable, an operator and a field read have a value arm and
+    /// nothing else; a declaration, a loop, an assignment and a control-flow
+    /// form have a statement arm and nothing else; a call has both, and its
+    /// statement arm is the one that skips the result register. A form in the
+    /// first group still compiles as a value when it stands alone as a
+    /// statement, and the register is freed straight away.
+    ///
+    /// The list is the arms of [`Expr::compile_with_code_context`] that open
+    /// with `debug_assert!(uses_id)`, and the two are kept in step by hand: an
+    /// arm that gains or loses that assertion belongs here or leaves here in
+    /// the same change, or a statement of that form stops on the assertion it
+    /// no longer matches.
+    #[must_use]
+    pub const fn is_value_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Float(_)
+                | Self::Int(_)
+                | Self::Bool(_)
+                | Self::Null
+                | Self::String(_)
+                | Self::Var(_, _)
+                | Self::Array(_, _)
+                | Self::Map(_, _)
+                | Self::Struct(..)
+                | Self::NamespacedRef(_, _, _)
+                | Self::GetStructField(_, _, _, _)
+                | Self::InlineCondition(_, _, _)
+                | Self::AnonymousFunction(_, _, _)
+                | Self::ArrayGetIndex(_, _, _)
+                | Self::ArrayGetSlice(..)
+                | Self::Mul(..)
+                | Self::Div(..)
+                | Self::Add(..)
+                | Self::Sub(..)
+                | Self::Mod(..)
+                | Self::Pow(..)
+                | Self::Eq(_, _)
+                | Self::NotEq(_, _)
+                | Self::Sup(..)
+                | Self::SupEq(..)
+                | Self::Inf(..)
+                | Self::InfEq(..)
+                | Self::BoolAnd(..)
+                | Self::BoolOr(..)
+                | Self::BoolNeg(_, _, _)
+                | Self::Neg(_, _, _)
+        )
+    }
+}
+
 #[cold]
 #[inline(never)]
 #[must_use]

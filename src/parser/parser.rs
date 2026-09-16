@@ -1382,23 +1382,91 @@ pub fn classify_line(line: &str) -> LineKind {
         // both separate with ':', and a call's arguments with ','. A string
         // holding an '=' is one token, so its contents cannot be mistaken for
         // one.
+        //
+        // The scan stops at the first '(' or '{'. An assignment target is a
+        // name, a field or an index, so its '=' comes before either of those;
+        // everything past one belongs to a call's arguments or a literal's
+        // body, where the '=' of a `let` inside a closure passed as an
+        // argument says nothing about the line holding it.
         _ => {
-            if tokens.any(|t| {
-                matches!(
-                    t,
-                    Ok(Token::Equals
-                        | Token::AssignOpAdd
-                        | Token::AssignOpSub
-                        | Token::AssignOpMul
-                        | Token::AssignOpDiv
-                        | Token::AssignOpMod
-                        | Token::AssignOpPow)
-                )
-            }) {
+            let assigns = tokens
+                .take_while(|t| !matches!(t, Ok(Token::LParen | Token::LBrace)))
+                .any(|t| {
+                    matches!(
+                        t,
+                        Ok(Token::Equals
+                            | Token::AssignOpAdd
+                            | Token::AssignOpSub
+                            | Token::AssignOpMul
+                            | Token::AssignOpDiv
+                            | Token::AssignOpMod
+                            | Token::AssignOpPow)
+                    )
+                });
+            if assigns {
                 LineKind::Statement
             } else {
                 LineKind::Expression
             }
         }
     }
+}
+
+/// How a line at the prompt writes the way out of the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitLine {
+    /// The name on its own. It is not a call, so there is nothing to compile
+    /// and nothing to work a status out of.
+    Bare,
+    /// A call, with an argument or without one. The status is whatever the
+    /// call names, which the session it is typed into is what works out.
+    Call,
+}
+
+/// Whether the only statement `line` holds is a call to `exit`, and in which
+/// of its two forms.
+///
+/// The prompt answers `exit` itself: the built-in of that name ends the
+/// process compiling the session, so a session holding the line would print
+/// nothing ever again. Reading the line from its tokens is what lets
+/// `exit(code)` leave with the value of `code` rather than only the forms
+/// whose status is written out.
+#[must_use]
+pub fn exit_line(line: &str) -> Option<ExitLine> {
+    let mut tokens = Token::lexer(line);
+    if !matches!(tokens.next(), Some(Ok(Token::Identifier("exit")))) {
+        return None;
+    }
+    let form = match tokens.next() {
+        None => return Some(ExitLine::Bare),
+        Some(Ok(Token::SemiColon)) => ExitLine::Bare,
+        Some(Ok(Token::LParen)) => {
+            // The argument can be any expression, parentheses of its own
+            // included, so the list ends where the depth comes back to zero.
+            let mut depth = 1u32;
+            loop {
+                match tokens.next() {
+                    Some(Ok(Token::LParen)) => depth += 1,
+                    Some(Ok(Token::RParen)) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    // Unbalanced, or a token the lexer refuses: the line is
+                    // one to compile, and it reports what its own text earns.
+                    _ => return None,
+                }
+            }
+            match tokens.next() {
+                None => return Some(ExitLine::Call),
+                Some(Ok(Token::SemiColon)) => ExitLine::Call,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    // Anything after the statement makes the line more than the way out.
+    tokens.next().is_none().then_some(form)
 }

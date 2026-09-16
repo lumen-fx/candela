@@ -203,6 +203,14 @@ exit(code)
 Stops the program. With no argument it ends the run normally; with an int `code`
 the process exits with that status.
 
+At the [REPL](../getting-started/running.md#the-repl) a line calling `exit`
+leaves the prompt with the status the call names, and the line is not kept in
+the session: the prompt compiles the session in a process of its own, and a
+kept line ending that process would stop every later run before it printed
+anything. The argument is worked out by the session the line is typed into, so
+`exit(code)` leaves with what `code` holds, and the status is the one the same
+call leaves with in a file.
+
 ### argv
 
 ```rust

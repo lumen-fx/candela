@@ -43,12 +43,13 @@ candela
 ```
 
 ```
-CANDELA 0.0.3 REPL (read-eval-print-loop)
+CANDELA <version> REPL (read-eval-print-loop)
+Type exit to leave, or press Ctrl+D (Ctrl+Z then enter on Windows).
 >
 ```
 
 Type a line at the prompt and press enter. A trailing semicolon is added for
-you when a line does not already end in `;` or `}`.
+you when a line does not already end in `;`, `}` or `{`.
 
 ```
 > let x = 21;
@@ -69,6 +70,20 @@ all typed at the prompt as they are written in a file:
 42
 ```
 
+A line has to be complete on its own: a declaration that spans several lines
+in a file is typed as one line here, and a line opening with `{` reads as a
+block rather than a map literal.
+
+A line that is an expression prints its value, so a name, a calculation or a
+call with a result needs no `print` around it:
+
+```
+> x * 2
+42
+> p
+Point {x:21}
+```
+
 The REPL keeps every line you have entered and re-runs the whole session each
 time you add one. What you see printed is the output that is new since the
 previous run.
@@ -78,9 +93,12 @@ file or reads input runs again on every subsequent line. And a line that fails
 to compile prints its error and is dropped, so the session is always left in a
 state that still works.
 
-Press Ctrl+D to leave, or Ctrl+Z then enter on Windows. Ctrl+C also works. The
-REPL stops as soon as its input runs out, so a file of statements piped into
-`candela` runs to the end and exits.
+Type `exit` to leave, or press Ctrl+D, or Ctrl+Z then enter on Windows. Ctrl+C
+also works. `exit` takes a status the way the built-in of that name does, so
+`exit(2)` leaves the prompt with status 2, and the argument can be anything the
+session works out: `exit(code)` leaves with what `code` holds. The REPL stops
+as soon as its input runs out, so a file of statements piped into `candela`
+runs to the end and exits.
 
 ## Run a project
 
