@@ -11,6 +11,7 @@ name = "geom"
 version = "0.3.1"
 description = "2D geometry"
 entry = "src/main.cdl"
+candela = ">=0.0.7"
 
 [dependencies]
 shapes = "1.2"
@@ -39,6 +40,7 @@ what is wrong with it.
 | `version` | string | yes | The package version. `candela publish` releases this version, and a workflow release checks it against the tag. |
 | `description` | string | no | One line about the package, sent to the registry when it is published. |
 | `entry` | string | no | The file `run`, `check` and `build` compile when no file is named, and the file another project reads when it imports this package by name. Defaults to `src/main.cdl`. |
+| `candela` | string | no | The oldest candela the package compiles on, as a version requirement. A release records it. With no key here, a release records the version of the candela that checked the package. |
 
 The entry is the package's front door twice over: the verbs start there, and
 `import "name"` in a project that depends on the package reads it. A library
@@ -46,6 +48,22 @@ entry needs no `main`: `check` compiles a file without one, and a `main` in an
 imported module is ignored either way. It is a path inside the package, so a
 `..` component in it is an error: a release archive holds the package root and
 nothing above it.
+
+`candela` names a floor, so it takes a version with an optional comparator in
+front: `">=0.0.7"`, `"^0.0.7"`, `"~0.0.7"`, `">0.0.7"`, `"=0.0.7"`,
+`"<=0.1.0"`, a comma-separated pair such as `">=0.0.7, <0.1.0"`, or a bare
+`"0.0.7"`. A version is one to three dot-separated numbers, with an optional
+`-prerelease` after them. Anything else is an error naming it: `nightly` and
+`latest` name whatever is newest today rather than a version, and `*` names no
+floor at all. A `[dependencies]` requirement is not held to this; candela
+passes those to the registry client as written.
+
+The key is what `candela publish` and the release workflow record as the
+toolchain a user needs, which is what keeps a package checked on the nightly
+channel from demanding the in-development version no release carries yet.
+Nothing compares the running compiler against the requirement; it travels to
+the registry with the release. `0.0.7` is the oldest candela that reads the key
+at all, so a floor below it says nothing any toolchain acts on.
 
 ## [dependencies]
 

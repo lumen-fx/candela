@@ -133,7 +133,9 @@ lock file. With names, only those move; with none, all of them do.
 
 Publishes the manifest's version to the registry, pointing it at the archive at
 `url`. The package name is registered first if the registry has not seen it,
-and the release carries the manifest's dependencies.
+and the release carries the manifest's dependencies. It carries the toolchain
+requirement `[package] candela` names too, or the version of the candela doing
+the publishing when the manifest names none, and prints which one it recorded.
 
 Without `--url` the command prints the reusable workflow that builds and
 uploads the archive for you, and exits 2. See
