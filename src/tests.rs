@@ -7391,6 +7391,151 @@ pub fn generic_instantiation_is_cached() {
     );
 }
 
+/// An instantiation is cached for the whole program, so the `impl` methods
+/// lowered for it have to live that long as well. The block that first named
+/// the type used to take them with it when it ended, and the next body that
+/// named the type hit the cache, lowered nothing, and found a type with no
+/// methods on it.
+#[test]
+pub fn an_instantiations_methods_outlive_the_block_that_named_it() {
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        fn signal<T>(name: string) -> Signal<T> { return Signal<T>{ name: name }; }
+        impl Signal<bool> {
+            fn get(self) -> bool { return true; }
+            fn set(self, v: bool) { print(v); }
+        }
+        fn one() { signal<bool>(\"a\").set(true); }
+        fn two() -> int {
+            if signal<bool>(\"a\").get() { return 9; }
+            return 0;
+        }
+        fn main() {
+            one();
+            print(two());
+        }
+        ",
+        9.into()
+    );
+}
+
+/// The same defect from a loop body: the instantiation is made inline inside
+/// the `while`, so the block that lowers the methods is the loop's, and the
+/// call in the next function comes after that block has ended.
+#[test]
+pub fn a_method_lowered_in_a_loop_body_outlives_the_loop() {
+    run_and_check_registers!(
+        "
+        struct Signal<T> { name: string }
+        fn signal<T>(name: string) -> Signal<T> { return Signal<T>{ name: name }; }
+        impl Signal<bool> {
+            fn get(self) -> bool { return true; }
+            fn set(self, v: bool) { print(v); }
+        }
+        fn writer() {
+            let i = 0;
+            while i < 2 {
+                signal<bool>(\"a\").set(true);
+                i += 1;
+            }
+        }
+        fn reader() -> int {
+            if signal<bool>(\"a\").get() { return 8; }
+            return 0;
+        }
+        fn main() {
+            writer();
+            print(reader());
+        }
+        ",
+        8.into()
+    );
+}
+
+/// A specialisation of a generic free function is kept on that function's own
+/// table entry, which the block that first needed it never owned, so a later
+/// caller reuses it.
+#[test]
+pub fn a_free_function_specialisation_outlives_the_block_it_was_made_in() {
+    run_and_check_registers!(
+        "
+        fn same<T>(x: T) -> T { return x; }
+        fn in_a_block() {
+            let i = 0;
+            while i < 2 {
+                same<int>(3);
+                i += 1;
+            }
+        }
+        fn elsewhere() -> int { return same<int>(4); }
+        fn main() {
+            in_a_block();
+            print(elsewhere());
+        }
+        ",
+        4.into()
+    );
+}
+
+/// A block does not take the function table back down with it. The closure it
+/// hoisted and the method it lowered both stay, and the register list keeps one
+/// entry per function, so nothing indexes past the table or into a neighbour.
+#[test]
+pub fn a_block_leaves_the_function_table_alone() {
+    let out = compile(
+        String::from(
+            "
+        struct Cell<T> { value: T }
+        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        fn apply(f, n) { return f(n); }
+        fn main() {
+            let i = 0;
+            while i < 1 {
+                print(apply(fn(x) { return x + 1; }, Cell<int>{ value: 4 }.get()));
+                i += 1;
+            }
+        }
+        ",
+        ),
+        "block_locals.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    assert!(
+        out.functions.iter().any(|f| f.name == "Cell<int>#get"),
+        "the method lowered in the loop body outlives it"
+    );
+    assert!(
+        out.functions.iter().any(|f| f.name.starts_with("<anon>")),
+        "so does the closure the loop body declared"
+    );
+    // A recursive call site takes an entry of its own, and this program has
+    // none, so one entry per function is the whole table.
+    assert_eq!(
+        out.functions.len(),
+        out.fn_registers.len(),
+        "every function has the register list it was pushed alongside"
+    );
+}
+
+/// A closure's id is what a call site's specialisation cache is keyed on, so an
+/// id is never handed out twice. Two closure literals passed to one function
+/// from two blocks each run their own body.
+#[test]
+pub fn two_blocks_closures_each_run_their_own_body() {
+    run_and_check_registers!(
+        "
+        fn apply(f, x) { return f(x); }
+        fn main() {
+            if true { print(apply(fn(n) { return n * 2; }, 5)); }
+            print(apply(fn(n) { return n * 7; }, 2));
+        }
+        ",
+        14.into()
+    );
+}
+
 #[test]
 pub fn nested_generic_instantiation() {
     run_and_check_registers!(

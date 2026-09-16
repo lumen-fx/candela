@@ -2748,10 +2748,15 @@ impl Expr {
                 // An anonymous function is hoisted to a synthetic non-capturing
                 // top-level function and referred to by its Fn id, exactly like a
                 // named function reference. Inference runs many times, so the
-                // hoist is keyed by source span and reused: the first encounter
-                // registers the function, later ones resolve to the same id.
-                let fn_name =
-                    format_args!("{ANON_FN_PREFIX}{}:{}", span.start, span.end).to_smolstr();
+                // hoist is keyed by the file and span the literal was written at
+                // and reused: the first encounter registers the function, later
+                // ones resolve to the same id, and two files whose closures sit
+                // at the same offset stay apart.
+                let fn_name = format_args!(
+                    "{ANON_FN_PREFIX}{}:{}:{}",
+                    ctx.file_idx, span.start, span.end
+                )
+                .to_smolstr();
                 if let Some(id) = state.fns.iter().rposition(|f| f.name == fn_name) {
                     return DataType::Fn(id as u16);
                 }
