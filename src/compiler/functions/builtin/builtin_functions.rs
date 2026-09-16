@@ -301,7 +301,7 @@ pub fn builtin_functions(
             None
         }
         fn_name => {
-            if let Some(fn_id) = state.namespace.find_function(&[], fn_name) {
+            if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) {
                 handle_user_function(
                     fn_name,
                     fn_id,
@@ -317,6 +317,7 @@ pub fn builtin_functions(
                 )
             } else if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
                 std::slice::from_ref(&SmolStr::new(fn_name)),
+                ctx.file_idx,
                 state,
             ) {
                 // An otherwise-unknown call whose name is an enum variant
@@ -334,7 +335,13 @@ pub fn builtin_functions(
                     output,
                 ))
             } else {
-                error_unknown_function(fn_name, span, state.namespace, ctx.file_idx, state.sources);
+                error_unknown_function(
+                    fn_name,
+                    span,
+                    state.scope(ctx.file_idx),
+                    ctx.file_idx,
+                    state.sources,
+                );
             }
         }
     }

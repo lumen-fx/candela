@@ -7,6 +7,7 @@ use super::type_system::ReturnAnnotation;
 use super::type_system::TypeCtx;
 use super::type_system::TypeExpr;
 use super::type_system::TypeParams;
+use crate::compiler::FileNamespaces;
 use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
@@ -164,18 +165,30 @@ pub struct State<'a> {
     pub free_registers: &'a mut Vec<u16>,
     pub sources: &'a mut Vec<Source>,
     pub reserved_registers: FxHashSet<u16>,
-    pub namespace: &'a mut Namespace,
+    pub namespaces: &'a mut FileNamespaces,
     pub generics: &'a mut Generics,
 }
 
 impl State<'_> {
+    /// The scope names written in `file_idx` resolve in: that file's own
+    /// declarations, the symbols its bare imports merged in, and the modules it
+    /// bound with `as`.
+    #[must_use]
+    pub fn scope(&self, file_idx: u16) -> &Namespace {
+        self.namespaces.get(file_idx)
+    }
+    /// The same scope, to declare into. A function or struct declared inside a
+    /// block is registered here for as long as the block is being compiled.
+    pub fn scope_mut(&mut self, file_idx: u16) -> &mut Namespace {
+        self.namespaces.get_mut(file_idx)
+    }
     /// The scope and registries a [`TypeExpr`] resolves against, borrowed from
     /// this state. Resolving a generic type registers the instantiation, which
     /// is why it needs more than the namespace.
     pub fn type_ctx(&mut self, file_idx: u16) -> TypeCtx<'_> {
         TypeCtx {
             file_idx,
-            namespace: self.namespace,
+            namespaces: self.namespaces,
             sources: self.sources,
             structs: self.structs,
             enums: self.enums,

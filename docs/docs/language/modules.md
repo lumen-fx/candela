@@ -110,6 +110,16 @@ you the names it merged as well as the ones it declares.
 Only the `main` of the file you run is the entry point. A `main` in an imported
 module is ignored, which lets a module keep one for its own checks.
 
+## What a module sees
+
+Each file resolves names in its own scope: what it declares, what its bare
+imports merged in, and the modules it bound with `as`. That holds inside
+function bodies as much as in a signature, and it does not depend on how the
+file was imported, so a module written against its own declarations behaves the
+same bare-imported and behind an alias. Names travel one way: a module does not
+see the importing file's declarations or imports, so it needs an import of its
+own for anything it uses.
+
 ## The standard library
 
 Standard library modules are library imports: `import "std/string";`,

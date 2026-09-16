@@ -2,6 +2,7 @@ use super::expr::Expr;
 use super::expr::Span;
 use super::expr::mangle_method;
 use super::expr::symbol_of_expr;
+use crate::compiler::FileNamespaces;
 use crate::compiler::Namespace;
 use crate::compiler::SymbolKind;
 use crate::compiler::compiler_data::Ctx;
@@ -30,7 +31,6 @@ use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
-use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -126,15 +126,12 @@ impl TypeExpr {
                 struct_name => {
                     if let Some(bound) = ctx.generics.bound(struct_name) {
                         bound
-                    } else if let Some(struct_id) = ctx.namespace.find_struct(
-                        &[],
-                        struct_name,
-                        *span,
-                        ctx.file_idx,
-                        ctx.sources,
-                    ) {
+                    } else if let Some(struct_id) =
+                        ctx.scope()
+                            .find_struct(&[], struct_name, *span, ctx.file_idx, ctx.sources)
+                    {
                         DataType::Struct(struct_id as u16)
-                    } else if let Some(enum_id) = ctx.namespace.find_enum(&[], struct_name) {
+                    } else if let Some(enum_id) = ctx.scope().find_enum(&[], struct_name) {
                         DataType::Enum(enum_id as u16)
                     } else if ctx.generics.is_template(struct_name) {
                         // A generic type named without its arguments is the
@@ -155,13 +152,13 @@ impl TypeExpr {
                             ctx.file_idx,
                             struct_name,
                             ctx.sources,
-                            ctx.namespace,
+                            ctx.scope(),
                         );
                     }
                 }
             },
             Self::NamespacedIdentifier(s, span) => {
-                if let Some(struct_id) = ctx.namespace.find_struct(
+                if let Some(struct_id) = ctx.scope().find_struct(
                     &s[..s.len() - 1],
                     unsafe { s.last().unwrap_unchecked() },
                     *span,
@@ -170,7 +167,7 @@ impl TypeExpr {
                 ) {
                     DataType::Struct(struct_id as u16)
                 } else if let Some(enum_id) = ctx
-                    .namespace
+                    .scope()
                     .find_enum(&s[..s.len() - 1], unsafe { s.last().unwrap_unchecked() })
                 {
                     DataType::Enum(enum_id as u16)
@@ -181,7 +178,7 @@ impl TypeExpr {
                         ctx.file_idx,
                         unsafe { s.last().unwrap_unchecked() },
                         ctx.sources,
-                        ctx.namespace,
+                        ctx.scope(),
                         &s[..s.len() - 1],
                     )
                 }
@@ -257,9 +254,6 @@ pub struct Generics {
     /// in scope: the parameters of a function never reach the body of a
     /// function it calls.
     bindings: Vec<Box<[(SmolStr, DataType)]>>,
-    /// Each file's namespace, so a template resolves its own types where it was
-    /// declared.
-    file_namespaces: FxHashMap<u16, Namespace>,
     depth: u32,
 }
 
@@ -366,20 +360,6 @@ impl Generics {
         }));
     }
 
-    pub fn set_file_namespaces(&mut self, file_namespaces: &FxHashMap<u16, Namespace>) {
-        self.file_namespaces.clone_from(file_namespaces);
-    }
-
-    /// The scope a file had once it was parsed, for resolving a type written in
-    /// that file from somewhere else.
-    #[must_use]
-    pub fn file_namespace(&self, file_idx: u16) -> Namespace {
-        self.file_namespaces
-            .get(&file_idx)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     /// Binds `frame` for the body about to be compiled. Every body pushes a
     /// frame, an empty one when it has no type parameters, so the caller's
     /// parameters do not resolve inside it.
@@ -443,7 +423,7 @@ pub struct GenericsCheckpoint {
 /// the registries an instantiation adds to.
 pub struct TypeCtx<'a> {
     pub file_idx: u16,
-    pub namespace: &'a Namespace,
+    pub namespaces: &'a FileNamespaces,
     pub sources: &'a [Source],
     pub structs: &'a mut Vec<Struct>,
     pub enums: &'a mut Vec<EnumType>,
@@ -452,18 +432,19 @@ pub struct TypeCtx<'a> {
     pub generics: &'a mut Generics,
 }
 
-impl TypeCtx<'_> {
+impl<'a> TypeCtx<'a> {
+    /// The scope the type being resolved is written in.
+    #[must_use]
+    pub fn scope(&self) -> &'a Namespace {
+        self.namespaces.get(self.file_idx)
+    }
     /// The same registries, resolving names in another file's scope. A
     /// declaration resolves its own types where it was written, whatever file
     /// the use is written in.
-    pub const fn reborrow<'b>(
-        &'b mut self,
-        file_idx: u16,
-        namespace: &'b Namespace,
-    ) -> TypeCtx<'b> {
+    pub const fn reborrow(&mut self, file_idx: u16) -> TypeCtx<'_> {
         TypeCtx {
             file_idx,
-            namespace,
+            namespaces: self.namespaces,
             sources: self.sources,
             structs: self.structs,
             enums: self.enums,
@@ -545,14 +526,14 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
     }
     let Some(template_idx) = ctx.generics.templates.iter().rposition(|t| t.name == base) else {
         if ctx
-            .namespace
+            .scope()
             .find_struct(&[], base, span, ctx.file_idx, ctx.sources)
             .is_some()
-            || ctx.namespace.find_enum(&[], base).is_some()
+            || ctx.scope().find_enum(&[], base).is_some()
         {
             error_type_args_on_plain_type(span, ctx.file_idx, base, ctx.sources);
         }
-        error_unknown_type(span, ctx.file_idx, base, ctx.sources, ctx.namespace);
+        error_unknown_type(span, ctx.file_idx, base, ctx.sources, ctx.scope());
     };
     if ctx.generics.templates[template_idx].params.len() != args.len() {
         error_type_arg_count(
@@ -569,12 +550,6 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
     }
 
     let template_file = ctx.generics.templates[template_idx].file_idx;
-    let template_namespace = ctx
-        .generics
-        .file_namespaces
-        .get(&template_file)
-        .cloned()
-        .unwrap_or_default();
     let frame: Box<[(SmolStr, DataType)]> = ctx.generics.templates[template_idx]
         .params
         .iter()
@@ -616,7 +591,7 @@ pub fn instantiate(base: &str, args: &[DataType], span: Span, ctx: &mut TypeCtx<
     ctx.generics.depth += 1;
     ctx.generics.push_bindings(frame.clone());
     {
-        let mut inner = ctx.reborrow(template_file, &template_namespace);
+        let mut inner = ctx.reborrow(template_file);
         match body {
             TemplateBody::Struct(fields) => {
                 let resolved = fields
@@ -679,12 +654,6 @@ fn lower_impls(
         .collect();
     for idx in applicable {
         let impl_file = ctx.generics.impls[idx].file_idx;
-        let impl_namespace = ctx
-            .generics
-            .file_namespaces
-            .get(&impl_file)
-            .cloned()
-            .unwrap_or_default();
         let header = ctx.generics.impls[idx].args.clone();
         let mut frame: Vec<(SmolStr, DataType)> = Vec::with_capacity(header.len());
         let mut applies = true;
@@ -694,13 +663,11 @@ fn lower_impls(
                 // header introduces, bound to whatever this instantiation
                 // passes. Anything else is a concrete type the header pins, and
                 // the block applies only when the argument is that type.
-                TypeExpr::Identifier(pname, _)
-                    if is_type_parameter(pname, &impl_namespace, ctx) =>
-                {
+                TypeExpr::Identifier(pname, _) if is_type_parameter(pname, impl_file, ctx) => {
                     frame.push((pname.clone(), arg.clone()));
                 }
                 other => {
-                    let mut inner = ctx.reborrow(impl_file, &impl_namespace);
+                    let mut inner = ctx.reborrow(impl_file);
                     inner.generics.push_bindings(Box::from(type_frame));
                     let pinned = other.to_datatype(&mut inner);
                     ctx.generics.pop_bindings();
@@ -717,21 +684,14 @@ fn lower_impls(
         let methods = ctx.generics.impls[idx].methods.clone();
         let bindings: Box<[(SmolStr, DataType)]> = Box::from(frame);
         for method in methods {
-            lower_method(
-                &method,
-                type_name,
-                &bindings,
-                impl_file,
-                &impl_namespace,
-                ctx,
-            );
+            lower_method(&method, type_name, &bindings, impl_file, ctx);
         }
     }
 }
 
 /// Whether a name written as a type argument in an `impl` header introduces a
 /// type parameter rather than naming a type.
-fn is_type_parameter(name: &SmolStr, namespace: &Namespace, ctx: &TypeCtx<'_>) -> bool {
+fn is_type_parameter(name: &SmolStr, file_idx: u16, ctx: &TypeCtx<'_>) -> bool {
     if matches!(
         name.as_str(),
         "int" | "float" | "bool" | "string" | "null" | "any"
@@ -739,9 +699,14 @@ fn is_type_parameter(name: &SmolStr, namespace: &Namespace, ctx: &TypeCtx<'_>) -
         return false;
     }
     !ctx.generics.is_template(name)
-        && !namespace.symbols.iter().any(|(symbol, kind)| {
-            symbol == name && matches!(kind, SymbolKind::Struct(_) | SymbolKind::Enum(_))
-        })
+        && !ctx
+            .namespaces
+            .get(file_idx)
+            .symbols
+            .iter()
+            .any(|(symbol, kind)| {
+                symbol == name && matches!(kind, SymbolKind::Struct(_) | SymbolKind::Enum(_))
+            })
 }
 
 /// Registers one method of an instantiated `impl` block as the mangled free
@@ -751,7 +716,6 @@ fn lower_method(
     type_name: &SmolStr,
     bindings: &[(SmolStr, DataType)],
     file_idx: u16,
-    namespace: &Namespace,
     ctx: &mut TypeCtx<'_>,
 ) {
     let Expr::FunctionDecl(method_name, args, code, name_span, return_type, params) = method else {
@@ -766,7 +730,7 @@ fn lower_method(
             ctx.sources,
         );
     }
-    let mut inner = ctx.reborrow(file_idx, namespace);
+    let mut inner = ctx.reborrow(file_idx);
     inner.generics.push_bindings(Box::from(bindings));
     let resolved_args: Box<[(SmolStr, Option<DataType>)]> = args
         .iter()
@@ -847,7 +811,7 @@ pub fn struct_literal_id(
         return instantiated_struct_id(&name, &args, span, ctx, state);
     }
     state
-        .namespace
+        .scope(ctx.file_idx)
         .find_struct(path, &name, span, ctx.file_idx, state.sources)
         .unwrap_or_else(|| {
             error_unknown_struct(&name, span, state.sources, ctx.file_idx);
@@ -925,8 +889,14 @@ pub fn resolve_generic_call(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> (usize, Vec<DataType>) {
-    let Some(fn_id) = state.namespace.find_function(&[], fn_name) else {
-        error_unknown_function(fn_name, span, state.namespace, ctx.file_idx, state.sources);
+    let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) else {
+        error_unknown_function(
+            fn_name,
+            span,
+            state.scope(ctx.file_idx),
+            ctx.file_idx,
+            state.sources,
+        );
     };
     let args = resolve_call_type_args(fn_id, fn_name, type_args, span, ctx, state);
     (fn_id, args)
@@ -1659,14 +1629,16 @@ impl Expr {
             Self::Var(name, span) => {
                 if let Some(var) = v.iter().rfind(|x| &x.name == name) {
                     var.var_type.clone()
-                } else if let Some(fn_id) = state.namespace.find_function(&[], name) {
+                } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name) {
                     // A bare identifier that names a function is a function
                     // reference (a compile-time value passed to a higher-order
                     // function). Its static type is the callee's Fn id.
                     DataType::Fn(fn_id as u16)
-                } else if let Some((enum_id, _)) =
-                    crate::compiler::resolve_enum_variant(std::slice::from_ref(name), state)
-                {
+                } else if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(
+                    std::slice::from_ref(name),
+                    ctx.file_idx,
+                    state,
+                ) {
                     DataType::Enum(enum_id)
                 } else {
                     error_unknown_variable(name, *span, v, ctx.file_idx, state.sources);
@@ -1878,7 +1850,7 @@ impl Expr {
                 // enum type; intercept before the namespaced-function paths.
                 if namespace.len() >= 2
                     && let Some((enum_id, _)) =
-                        crate::compiler::resolve_enum_variant(namespace, state)
+                        crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
                 {
                     return DataType::Enum(enum_id);
                 }
@@ -1959,16 +1931,18 @@ impl Expr {
                             // An unqualified call whose name is an enum variant
                             // (`Some(x)`) constructs that variant. User functions
                             // above keep priority.
-                            if let Some((enum_id, _)) =
-                                crate::compiler::resolve_enum_variant(namespace, state)
-                            {
+                            if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(
+                                namespace,
+                                ctx.file_idx,
+                                state,
+                            ) {
                                 return DataType::Enum(enum_id);
                             }
                             if namespace.len() == 1 {
                                 error_unknown_function(
                                     function_name,
                                     *span,
-                                    state.namespace,
+                                    state.scope(ctx.file_idx),
                                     ctx.file_idx,
                                     state.sources,
                                 );
@@ -2217,7 +2191,9 @@ impl Expr {
                     let (enum_id, _) = resolve_generic_variant(path, type_args, *span, ctx, state);
                     return DataType::Enum(enum_id);
                 }
-                if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(path, state) {
+                if let Some((enum_id, _)) =
+                    crate::compiler::resolve_enum_variant(path, ctx.file_idx, state)
+                {
                     DataType::Enum(enum_id)
                 } else {
                     crate::compiler::compiler_errors::error_enum(
