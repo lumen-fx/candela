@@ -195,7 +195,10 @@ When none of the three holds a client, or the one found is older than candela
 needs, candela downloads the newest release from the registry's own repository,
 checks it against the checksums published beside it, unpacks it to the shared
 path, and says on standard error where it went. A download that does not match
-its checksum installs nothing.
+its checksum installs nothing. The download needs `curl` or `wget` to fetch
+with, `tar` to unpack with, and one of `sha256sum`, `shasum` or `certutil` to
+hash with; a machine with none of one group gets an error naming what is
+missing rather than an unverified client.
 
 The oldest client candela works with is fixed at build time. `candela --version`
 does not report it; an older one on the machine is replaced without being asked
