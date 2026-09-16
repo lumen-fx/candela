@@ -1156,6 +1156,56 @@ pub fn error_enum(
     )
 }
 
+/// A `match` whose arms name variants of `enum_name`, on a scrutinee of type
+/// `scrut_type` instead. Only an enum value carries the variant tag the arms
+/// dispatch on. A bare parameter reaches here when its call site passes a value
+/// the compiler has no type for, an element of an empty array literal included.
+#[cold]
+#[inline(never)]
+pub fn error_match_not_enum(
+    enum_name: &str,
+    scrut_type: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let message = format!(
+        "These arms match variants of enum {enum_name}, but the matched value is {scrut_type}"
+    );
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Match on a non-enum value")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "These arms match variants of enum {}, but the matched value is {}",
+                        blue(enum_name),
+                        red(format_args!("{scrut_type}")),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Match variants only against a value of type {}",
+                blue(enum_name),
+            ))
+            .with_note(
+                "A parameter takes the type its call site passes, and an element of an empty array literal is null",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "match_not_enum",
+    )
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespace(

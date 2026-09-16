@@ -912,6 +912,64 @@ fn compile_enum_match(
     }
 }
 
+/// The enum an arm pattern names a variant of, or `None` for a pattern the
+/// equality lowering compares as an ordinary value. Resolution follows what
+/// the pattern would compile to: a variable in scope wins over a variant of
+/// the same name, and a user function wins over a bare variant name.
+fn pattern_variant_enum(
+    pattern: &Expr,
+    v: &[Variable],
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<u16> {
+    let path: &[SmolStr] = match pattern {
+        Expr::Var(name, _) if v.iter().all(|var| &var.name != name) => std::slice::from_ref(name),
+        Expr::NamespacedRef(path, _, _) => path,
+        Expr::FunctionCall(_, namespace, _, _, _)
+            if namespace.len() >= 2
+                || namespace.first().is_some_and(|name| {
+                    state
+                        .scope(ctx.file_idx)
+                        .find_function(&[], name.as_str())
+                        .is_none()
+                }) =>
+        {
+            namespace
+        }
+        _ => return None,
+    };
+    resolve_enum_variant(path, ctx.file_idx, state).map(|(enum_id, _)| enum_id)
+}
+
+/// Rejects a `match` whose arms name variants of an enum the scrutinee is not.
+/// Only an enum scrutinee carries the variant tag the arms dispatch on; the
+/// equality lowering would compile each pattern as a variant construction and
+/// compare it, which leaves every payload binder unbound.
+///
+/// Both the return-flow pass and the lowering call this, because either can be
+/// the first to read an arm body.
+pub(crate) fn check_match_scrutinee_is_enum(
+    scrut_type: &DataType,
+    arms: &[(Expr, Box<[Expr]>)],
+    span: Span,
+    v: &[Variable],
+    ctx: Ctx,
+    state: &State<'_>,
+) {
+    if let Some(enum_id) = arms
+        .iter()
+        .find_map(|(pattern, _)| pattern_variant_enum(pattern, v, ctx, state))
+    {
+        compiler_errors::error_match_not_enum(
+            &state.enums[enum_id as usize].name,
+            scrut_type,
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+}
+
 /// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
 /// with payload binding; any other scrutinee reproduces the equality-chain
 /// lowering (`scrutinee == pattern` per arm) that `match` has always had.
@@ -925,11 +983,13 @@ fn compile_match(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
-    if let DataType::Enum(enum_id) = scrutinee.infer_type(v, ctx, state) {
+    let scrut_type = scrutinee.infer_type(v, ctx, state);
+    if let DataType::Enum(enum_id) = scrut_type {
         compile_enum_match(
             enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output,
         );
     } else {
+        check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
         let obj_var = SmolStr::new_static("[MATCH TEMP]");
         let (first_pat, first_body) = &arms[0];
         let mut output_code: Vec<Expr> = Vec::with_capacity(arms.len());
