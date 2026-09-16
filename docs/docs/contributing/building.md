@@ -55,10 +55,15 @@ The rest of the tree:
 - `scripts/` holds the release tooling: `bump-version.py`, which sets the
   version the tree calls itself, and the checklist for cutting a release.
 - `editors/vscode/` holds the VS Code extension: the language server client,
-  the grammar, and snippets.
+  the TextMate grammar, and snippets.
 - `editors/jetbrains/` holds the plugin for the IntelliJ-based IDEs. It is a
   Gradle build rather than a Cargo one, and it reads its grammar out of
-  `editors/vscode/` so there is one grammar to fix.
+  `editors/vscode/` so there is one TextMate grammar to fix.
+- `editors/tree-sitter/` holds the tree-sitter grammar, its highlighting
+  queries, and the Neovim and Helix configuration that installs them. The
+  generated parser is committed, so an editor needs no tree-sitter CLI.
+- `editors/zed/` holds the Zed extension, which builds the tree-sitter grammar
+  from this repository and carries its own copy of the queries.
 - `docs/` holds this documentation site.
 
 ## Building

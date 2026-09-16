@@ -66,12 +66,29 @@ it is readable. `lpm`, the registry client, installs alongside and fetches the
 packages a project depends on.
 
 Editor support comes from `candela-lsp`, the language server, which runs the
-same compiler your build does and reports what it finds as you type. Two
-clients ship in the repository: a VS Code extension in `editors/vscode`, and a
-plugin for the IntelliJ-based IDEs in `editors/jetbrains`. Both add
-syntax highlighting from the same grammar and get diagnostics, hover,
-completion, an outline, and go to definition from the server. Build them from
-the repository; neither is published to a marketplace yet.
+same compiler your build does and reports what it finds as you type.
+Diagnostics, hover, completion, an outline, and go to definition come from it,
+so every client gets the same answers. Highlighting is the client's own, from
+one of two grammars, and `editors/` holds five clients:
+
+- `editors/vscode`, for VS Code: a TextMate grammar, with snippets.
+- `editors/jetbrains`, for the IntelliJ-based IDEs: the same TextMate grammar,
+  which the build reads out of the VS Code extension.
+- `editors/zed`, for Zed: the tree-sitter grammar, which Zed clones and
+  compiles itself.
+- `editors/tree-sitter/nvim`, for Neovim: the tree-sitter grammar and its
+  queries, through `nvim-treesitter`.
+- `editors/tree-sitter/helix`, for Helix: the tree-sitter grammar, fetched and
+  built by `hx --grammar`.
+
+Every one of them can be pointed at a server you built yourself instead of the
+one on your path.
+
+The two grammars are written separately and do not cover the same syntax, so a
+construct may colour in one editor before the other. Install the VS Code
+extension from the Marketplace or Open VSX; the rest build from this
+repository. Setup for each is in its own `README.md`, except Neovim and Helix,
+which share `editors/tree-sitter/README.md`.
 
 ## Where to go next
 

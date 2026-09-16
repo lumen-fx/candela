@@ -66,8 +66,10 @@ Run `candela` with no arguments for a REPL.
 - **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
   bytecode artifact, and `candela-vm` runs it. The runtime binary links no
   parser, compiler or REPL.
-- **Editor support.** A language server, a VS Code extension, and a plugin for
-  the IntelliJ-based IDEs live in this repository and build from source.
+- **Editor support.** A language server and five clients live in this
+  repository: extensions for VS Code, the IntelliJ-based IDEs and Zed, and the
+  grammar and configuration Neovim and Helix install. The VS Code extension
+  installs from the Marketplace or Open VSX; the rest build from source.
 - **Embedding.** A Rust host registers functions of its own, calls a script's
   functions by name, and exchanges values with it, either compiling the source
   in-process or loading a `.cdlb` with the compiler left out.
