@@ -152,6 +152,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 jobs:
   release:
     uses: lumen-fx/candela/.github/workflows/build-package.yml@main
@@ -163,7 +166,9 @@ jobs:
 
 The workflow installs candela, runs `candela check` on the package, packs
 `candela.toml` and `src/` into an archive, publishes the release, and calls the
-registry with the manifest's version and dependencies.
+registry with the manifest's version and dependencies. The `contents: write`
+grant is what lets it create the release; a workflow that only wants the check
+and the pack, on a pull request, grants `contents: read` and stops there.
 
 A package that ships a native library builds one archive per desktop target.
 Name the command that builds them, leaving the results in `dist/`:
