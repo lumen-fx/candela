@@ -4,6 +4,8 @@ use crate::compiler::compiler_data::Source;
 use crate::data::Data;
 use crate::instr::Instr;
 
+/// Compiles and runs `contents` with the compiler's debug dump on, then
+/// asserts some `print` left `expected` in its register.
 macro_rules! run_and_check_registers {
     ($contents:expr, $expected:expr) => {
         let filename = "test.kl";
@@ -4647,6 +4649,145 @@ fn main() { let xs = []; print(pick(xs[0])); }";
     assert_eq!(d.code, "match_not_enum");
     assert!(d.message.contains("variants of enum Value"));
     assert!(d.message.contains("the matched value is null"));
+}
+
+/// A declared array parameter pins the element type an empty literal leaves
+/// open, so the body compiles at that element type and can match on its
+/// elements. Both calls land on the one specialisation the declaration fixes.
+#[test]
+pub fn a_declared_array_parameter_pins_an_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn total(xs: Value[]) -> int {
+            let sum = 0;
+            let i = 0;
+            while i < xs.len() {
+                match xs[i] {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(total([]) + total([Value::Num(4), Value::Text(\"ab\")]));
+        }
+        ",
+        6.into()
+    );
+}
+
+/// The pinning reaches an empty literal nested inside the argument: an outer
+/// array of arrays fills in the inner element type from the declaration too.
+#[test]
+pub fn a_declared_array_parameter_pins_a_nested_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn total(xs: Value[]) -> int {
+            let sum = 0;
+            let i = 0;
+            while i < xs.len() {
+                match xs[i] {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn deep(rows: Value[][]) -> int {
+            let sum = 0;
+            let i = 0;
+            while i < rows.len() {
+                sum = sum + total(rows[i]);
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(deep([[], [Value::Num(7)]]) + deep([]));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A declared `-> T[]` says what a `return []` hands back, so the call site
+/// keeps the element type. The consumer here takes a bare parameter, which
+/// specialises on whatever the call passes: it can only match on variants if
+/// the declared return type reached it.
+#[test]
+pub fn a_declared_array_return_pins_an_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn empty() -> Value[] {
+            return [];
+        }
+        fn total(xs) {
+            let sum = 0;
+            let i = 0;
+            while i < xs.len() {
+                match xs[i] {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(total(empty()) + 5);
+        }
+        ",
+        5.into()
+    );
+}
+
+/// A generic `-> T[]` pins the same way once the call names its type argument:
+/// the annotation is resolved with `T` bound, so `empty<Value>()` hands the
+/// consumer elements of `Value` rather than elements of no type.
+#[test]
+pub fn a_generic_array_return_pins_an_empty_literal() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn empty<T>() -> T[] {
+            return [];
+        }
+        fn total(xs) {
+            let sum = 0;
+            let i = 0;
+            while i < xs.len() {
+                match xs[i] {
+                    Value::Num(n) => { sum = sum + n; }
+                    Value::Text(t) => { sum = sum + t.len(); }
+                }
+                i = i + 1;
+            }
+            return sum;
+        }
+        fn main() {
+            print(total(empty<Value>()) + 5);
+        }
+        ",
+        5.into()
+    );
+}
+
+/// Only an open element type is filled in. A literal that does name its element
+/// type is still checked against the declaration, so the wrong one is refused.
+#[test]
+pub fn a_wrong_array_element_type_is_still_refused() {
+    let src = "enum Value { Num(int), Text(string) }
+fn total(xs: Value[]) -> int { return xs.len(); }
+fn main() { print(total([1, 2, 3])); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
 }
 
 /// Literal arms stay an equality chain whatever the scrutinee's type is, so a

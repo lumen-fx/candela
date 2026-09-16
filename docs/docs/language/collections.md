@@ -19,6 +19,49 @@ fn main() {
 
 Mixing types in one list is a compile error: `[1, "a"]` does not compile.
 
+### The empty list
+
+`[]` names no element type. A local that starts empty takes its element type
+from the first `push`.
+
+```rust
+fn main() {
+    let xs = [];
+    xs.push(1);
+    xs.push(2);
+    print(xs, xs.len());
+}
+```
+
+Where a declaration says what the elements are, that declaration decides them.
+A parameter annotated `T[]` compiles the function body with elements of `T`
+however the call site writes the list, and a `-> T[]` return annotation hands
+the caller elements of `T`. So a function that reads its elements still works
+when it is called with nothing in the list:
+
+```rust
+enum Cell { Num(int), Text(string) }
+
+fn width(cells: Cell[]) -> int {
+    let w = 0;
+    for c in cells {
+        match c {
+            Cell::Num(n) => { w = w + 1; }
+            Cell::Text(t) => { w = w + t.len(); }
+        }
+    }
+    return w;
+}
+
+fn main() {
+    print(width([]), width([Cell::Text("ab"), Cell::Num(1)]));
+}
+```
+
+A list that does name an element type is still checked against the annotation,
+so `width([1, 2])` does not compile. A `let` takes no annotation, so a local
+that starts empty and is never pushed to keeps elements of no type.
+
 ### Indexing and slicing
 
 Index from zero with `xs[i]`. A slice `xs[start..end]` returns a new list from

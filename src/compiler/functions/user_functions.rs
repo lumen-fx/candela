@@ -8,7 +8,10 @@ use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
 use super::super::type_system::param_type_matches;
+use super::super::type_system::pinned_arg_types;
 use super::super::type_system::specialization_key;
+use super::super::type_system::specialized_arg_types;
+use super::super::type_system::specialized_return_type;
 use super::super::type_system::track_returns;
 use crate::compiler::SymbolKind;
 use crate::compiler::UnwrapId;
@@ -124,7 +127,7 @@ pub fn handle_user_function(
     }
 
     // Infer arg types
-    let infered_arg_types = args
+    let mut infered_arg_types = args
         .iter()
         .map(|arg| arg.infer_type(v, ctx, state))
         .collect::<Vec<DataType>>();
@@ -150,6 +153,13 @@ pub fn handle_user_function(
                 state.sources,
             );
         }
+    }
+
+    // An argument that is an empty array literal carries no element type, so a
+    // body specialised on it would see `null` elements. Where the parameter
+    // declares what the elements are, that declaration pins the specialisation.
+    if let Some(pinned) = pinned_arg_types(&infered_arg_types, &declared_arg_types) {
+        infered_arg_types = pinned;
     }
 
     // Try to check if function has already been compiled for these specific arg
@@ -258,75 +268,6 @@ pub fn handle_user_function(
     } else {
         Some(return_register_id)
     }
-}
-
-/// The parameter types this call specialises on.
-///
-/// Without type arguments these are the function's own declared types, where an
-/// annotation naming a type parameter was left un-pinned. A call that names its
-/// type arguments resolves the annotations again with them bound, which is what
-/// makes `first<int>(xs)` reject a `float[]`.
-fn specialized_arg_types(
-    fn_id: usize,
-    type_args: &[DataType],
-    ctx: Ctx,
-    state: &mut State<'_>,
-) -> Vec<Option<DataType>> {
-    let declared = state.fns[fn_id]
-        .args
-        .iter()
-        .map(|(_, t)| t.clone())
-        .collect::<Vec<Option<DataType>>>();
-    if type_args.is_empty() {
-        return declared;
-    }
-    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
-        return declared;
-    };
-    let arg_types = generics.arg_types.clone();
-    let file_idx = generics.file_idx;
-    let frame = fn_bindings(fn_id, type_args, state);
-    let mut base = state.type_ctx(ctx.file_idx);
-    let mut type_ctx = base.reborrow(file_idx);
-    type_ctx.generics.push_bindings(frame);
-    let resolved = arg_types
-        .iter()
-        .map(|t| t.as_ref().map(|t| t.to_datatype(&mut type_ctx)))
-        .collect();
-    type_ctx.generics.pop_bindings();
-    resolved
-}
-
-/// The `-> Type` annotation as it reads for the specialisation being compiled,
-/// with the type parameters currently bound.
-///
-/// An annotation naming a parameter the call left unbound stays un-pinned, so
-/// what the body returns is inferred rather than checked against a type that
-/// has no value yet.
-fn specialized_return_type(
-    fn_id: usize,
-    ctx: Ctx,
-    state: &mut State<'_>,
-) -> Option<(DataType, Span)> {
-    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
-        return state.fns[fn_id].return_type.clone();
-    };
-    let unbound: Vec<SmolStr> = generics
-        .params
-        .iter()
-        .filter(|param| state.generics.bound(param).is_none())
-        .cloned()
-        .collect();
-    let generics = state.fns[fn_id].generics.as_ref()?;
-    let annotation = generics.return_type.as_deref()?;
-    if annotation.0.mentions_any(&unbound) {
-        return state.fns[fn_id].return_type.clone();
-    }
-    let (return_type, return_span) = annotation.clone();
-    let file_idx = generics.file_idx;
-    let mut base = state.type_ctx(ctx.file_idx);
-    let mut type_ctx = base.reborrow(file_idx);
-    Some((return_type.to_datatype(&mut type_ctx), return_span))
 }
 
 #[allow(clippy::too_many_arguments)]
