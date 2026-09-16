@@ -24,5 +24,7 @@ jobs:
   pack:
     uses: ./.github/workflows/build-package.yml
     with:
-      candela-version: latest
+      # The self-test checks the workflow against the toolchain built from
+      # main, which is what the nightly channel is.
+      candela-version: nightly
       manifest-path: examples/package/candela.toml
