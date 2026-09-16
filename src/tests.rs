@@ -2790,6 +2790,21 @@ pub fn float_negative_pow_square() {
     );
 }
 
+/// `type` names a user type inside a map the way it already named one inside a
+/// list: both halves of the map are rendered through the same formatter.
+#[test]
+pub fn type_function_names_a_map_of_a_user_type() {
+    run_and_check_registers!(
+        r#"
+        enum Value { Num(int), Text(string) }
+        fn main() {
+            print(type({"a": Value::Num(1)}) == "{string: Value}");
+        }
+        "#,
+        true.into()
+    );
+}
+
 #[test]
 pub fn type_function() {
     run_and_check_registers!(
@@ -4917,6 +4932,168 @@ fn main() { print(total({\"a\": 1})); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "argument_type_mismatch");
+}
+
+/// A diagnostic names a user type the way the program declared it. A
+/// `DataType` carries only an enum's id, so `Display` prints the bare word
+/// `enum` and a program with two enums reports the same word for both; the
+/// message has to read `Value[]`.
+#[test]
+pub fn an_argument_type_mismatch_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+enum Other { A }
+fn total(xs: Value[]) -> int { return xs.len(); }
+fn main() { print(total([1, 2, 3])); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert!(d.message.contains("Value[]"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// The return-type mismatch names it too, in the message and in the note that
+/// repeats what the function is declared to return.
+#[test]
+pub fn a_return_type_mismatch_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn make() -> Value[] { return [1]; }
+fn main() { print(make().len()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_type");
+    assert!(d.message.contains("Value[]"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// So does the field-type mismatch, for the declared type and for what was
+/// given.
+#[test]
+pub fn a_struct_field_type_mismatch_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+struct Holder { rows: Value[] }
+fn main() { print(Holder{ rows: [1] }.rows.len()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "struct_field_type_mismatch");
+    assert!(d.message.contains("Value[]"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// The operator error names it in the message and on both operand labels.
+#[test]
+pub fn an_operator_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { print(Value::Num(1) + 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert!(d.message.contains("Value"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// So does the error for a type that cannot be indexed.
+#[test]
+pub fn an_unindexable_type_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { let v = Value::Num(1); print(v[0]); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "type_not_indexable");
+    assert!(d.message.contains("Value"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// Iterating one is the same message with a different verb, so it names the
+/// type too.
+#[test]
+pub fn a_non_iterable_type_error_names_the_struct() {
+    let src = "struct Point { x: int }
+fn main() { let p = Point{ x: 1 }; for q in p { print(q); } }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "type_not_iterable");
+    assert!(d.message.contains("Point"), "{}", d.message);
+    assert!(!d.message.contains("struct"), "{}", d.message);
+}
+
+/// A collection literal reports what it already holds against the element that
+/// does not fit, and both are named.
+#[test]
+pub fn an_array_literal_type_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { print([Value::Num(1), 2]); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "array_element_type_mismatch");
+    assert!(d.message.contains("Value"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+#[test]
+pub fn a_map_literal_type_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { print({\"a\": Value::Num(1), \"b\": 2}); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "map_entry_type_mismatch");
+    assert!(d.message.contains("Value"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// Writing through an index names the list's own type, not the word `enum[]`.
+#[test]
+pub fn an_index_assignment_type_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { let xs = [Value::Num(1)]; xs[0] = 2; print(xs.len()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "cannot_push_type_to_array");
+    assert!(d.message.contains("Value[]"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// A built-in's argument check reports the list of types it accepts. For a
+/// method on a list of a user type that list is the user type, so it is named
+/// on the expected side as well as the received one.
+#[test]
+pub fn a_builtin_argument_error_names_the_enum() {
+    let src = "enum Value { Num(int), Text(string) }
+fn main() { let xs = [Value::Num(1)]; xs.push(2); print(xs.len()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    assert!(d.message.contains("Value"), "{}", d.message);
+    assert!(!d.message.contains("enum"), "{}", d.message);
+}
+
+/// The match-on-a-non-enum report names what was matched, so a struct
+/// scrutinee reads `Point` rather than the word `struct`.
+#[test]
+pub fn a_match_on_a_non_enum_names_the_struct() {
+    let src = "enum Value { Num(int), Text(string) }
+struct Point { x: int }
+fn main() {
+    let p = Point{ x: 1 };
+    match p { Value::Num(n) => { print(n); } _ => { print(0); } }
+}";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "match_not_enum");
+    assert!(d.message.contains("Point"), "{}", d.message);
+    // The enum the arms name is still called out; the scrutinee is no longer
+    // the bare word `struct`.
+    assert!(!d.message.contains("struct"), "{}", d.message);
+}
+
+#[test]
+pub fn a_range_type_error_names_the_struct() {
+    let src = "struct Point { x: int }
+fn main() { let p = Point{ x: 1 }; for i in p..3 { print(i); } }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "range_element_type_mismatch");
+    assert!(d.message.contains("Point"), "{}", d.message);
+    assert!(!d.message.contains("struct"), "{}", d.message);
 }
 
 /// A struct field needs no pinning: reading a field takes the type the struct

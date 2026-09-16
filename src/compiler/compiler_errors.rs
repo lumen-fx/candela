@@ -6,6 +6,7 @@ use super::Source;
 use super::Span;
 use super::State;
 use super::Variable;
+use super::compiler_data::TypeNames;
 use crate::errors::BLUE;
 use crate::errors::GREEN;
 use crate::errors::RESET;
@@ -30,7 +31,10 @@ pub fn error_array_diff_types(
     array_elem_type: &DataType,
     failing_elem_span: Span,
     failing_elem_type: &DataType,
+    types: TypeNames<'_>,
 ) -> ! {
+    let holds = types.of(array_elem_type);
+    let found = types.of(failing_elem_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -41,18 +45,12 @@ pub fn error_array_diff_types(
             .with_message("Invalid array types")
             .with_label(
                 Label::new((src.filename.as_str(), array_span.into()))
-                    .with_message(format_args!(
-                        "This expression is of type {}",
-                        blue(array_elem_type)
-                    ))
+                    .with_message(format_args!("This expression is of type {}", blue(&holds)))
                     .with_color(ariadne::Color::Blue),
             )
             .with_label(
                 Label::new((src.filename.as_str(), failing_elem_span.into()))
-                    .with_message(format_args!(
-                        "This expression is of type {}",
-                        red(failing_elem_type),
-                    ))
+                    .with_message(format_args!("This expression is of type {}", red(&found)))
                     .with_color(ariadne::Color::Red),
             )
             .with_note("Arrays are homogeneous and can only hold elements of a single type")
@@ -62,7 +60,7 @@ pub fn error_array_diff_types(
         file_idx,
         array_span,
         &format!(
-            "Invalid array types: this array holds elements of type {array_elem_type} but an element of type {failing_elem_type} was found"
+            "Invalid array types: this array holds elements of type {holds} but an element of type {found} was found"
         ),
         "array_element_type_mismatch",
     );
@@ -78,7 +76,10 @@ pub fn error_invalid_type(
     note: Option<std::fmt::Arguments>,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let expected = types.of(expected_type);
+    let perceived = types.of(perceived_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -91,8 +92,8 @@ pub fn error_invalid_type(
                 Label::new((src.filename.as_str(), span.into()))
                     .with_message(format_args!(
                         "Expected {}, but this expression's type is {}",
-                        blue(expected_type),
-                        red(perceived_type)
+                        blue(&expected),
+                        red(&perceived)
                     ))
                     .with_color(ariadne::Color::Red),
             );
@@ -109,16 +110,20 @@ pub fn error_invalid_type(
         sources,
         file_idx,
         span,
-        &format!(
-            "Invalid type: expected {expected_type}, but this expression's type is {perceived_type}"
-        ),
+        &format!("Invalid type: expected {expected}, but this expression's type is {perceived}"),
         "invalid_type",
     );
 }
 
 #[inline(never)]
 #[cold]
-pub fn error_invalid_index_type(t: &DataType, span: Span, file_idx: u16, sources: &[Source]) {
+pub fn error_invalid_index_type(
+    t: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) {
     error_invalid_type(
         &DataType::Int,
         t,
@@ -130,6 +135,7 @@ pub fn error_invalid_index_type(t: &DataType, span: Span, file_idx: u16, sources
         )),
         file_idx,
         sources,
+        types,
     );
 }
 
@@ -178,7 +184,10 @@ pub fn error_cannot_push_type_to_array(
     span: Span,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let array = types.of(array_type);
+    let element = types.of(elem_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -188,19 +197,19 @@ pub fn error_cannot_push_type_to_array(
             )
             .with_message(format_args!(
                 "Cannot insert {} in {}",
-                red(elem_type),
-                red(array_type)
+                red(&element),
+                red(&array)
             ))
             .with_label(
                 Label::new((src.filename.as_str(), array_span.into()))
-                    .with_message(format_args!("This array's type is {}", blue(array_type)))
+                    .with_message(format_args!("This array's type is {}", blue(&array)))
                     .with_color(ariadne::Color::Blue),
             )
             .with_label(
                 Label::new((src.filename.as_str(), span.into()))
                     .with_message(format_args!(
                         "But this expression's type is {}",
-                        red(elem_type)
+                        red(&element)
                     ))
                     .with_color(ariadne::Color::Red),
             )
@@ -209,7 +218,7 @@ pub fn error_cannot_push_type_to_array(
         sources,
         file_idx,
         span,
-        &format!("Cannot insert {elem_type} in {array_type}"),
+        &format!("Cannot insert {element} in {array}"),
         "cannot_push_type_to_array",
     );
 }
@@ -222,7 +231,9 @@ pub fn error_type_not_indexable(
     iterator_error: bool,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let named = types.of(t);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -240,7 +251,7 @@ pub fn error_type_not_indexable(
                 Label::new((src.filename.as_str(), span.into()))
                     .with_message(format_args!(
                         "This expression's type is {}. This type cannot be {msg}.",
-                        red(t),
+                        red(&named),
                     ))
                     .with_color(ariadne::Color::Red),
             )
@@ -255,7 +266,7 @@ pub fn error_type_not_indexable(
         file_idx,
         span,
         &format!(
-            "This expression's type is {t}, which cannot be {}",
+            "This expression's type is {named}, which cannot be {}",
             if iterator_error {
                 "iterated on"
             } else {
@@ -419,7 +430,10 @@ pub fn error_map_diff_types(
     map_elem_type: &DataType,
     failing_elem_span: Span,
     failing_elem_type: &DataType,
+    types: TypeNames<'_>,
 ) -> ! {
+    let holds = types.of(map_elem_type);
+    let found = types.of(failing_elem_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -430,18 +444,12 @@ pub fn error_map_diff_types(
             .with_message("Invalid map types")
             .with_label(
                 Label::new((src.filename.as_str(), map_span.into()))
-                    .with_message(format_args!(
-                        "This expression is of type {}",
-                        blue(map_elem_type)
-                    ))
+                    .with_message(format_args!("This expression is of type {}", blue(&holds)))
                     .with_color(ariadne::Color::Blue),
             )
             .with_label(
                 Label::new((src.filename.as_str(), failing_elem_span.into()))
-                    .with_message(format_args!(
-                        "This expression is of type {}",
-                        red(failing_elem_type),
-                    ))
+                    .with_message(format_args!("This expression is of type {}", red(&found)))
                     .with_color(ariadne::Color::Red),
             )
             .with_note("Maps are homogeneous and can only hold one key-value type")
@@ -451,7 +459,7 @@ pub fn error_map_diff_types(
         file_idx,
         map_span,
         &format!(
-            "Invalid map types: this map holds entries of type {map_elem_type} but an expression of type {failing_elem_type} was found"
+            "Invalid map types: this map holds entries of type {holds} but an expression of type {found} was found"
         ),
         "map_entry_type_mismatch",
     );
@@ -630,12 +638,22 @@ pub fn check_args(
 /// part of the separator string itself: `format_args!` substitutes `{}`
 /// placeholders in its format string only, so a `{RESET}` written inside one
 /// of its arguments reaches the terminal as literal text.
-fn joined_types(types: &[DataType], color: &str) -> String {
-    types
+fn joined_types(accepted: &[DataType], names: TypeNames<'_>, color: &str) -> String {
+    accepted
         .iter()
-        .map(|t| t.to_smolstr())
+        .map(|t| names.of(t).to_smolstr())
         .collect::<Vec<SmolStr>>()
         .join(&format!("{RESET} or {color}"))
+}
+
+/// The same list for the plain-text message a `Diagnostic` carries, where there
+/// is no colour to reopen.
+fn joined_type_names(accepted: &[DataType], names: TypeNames<'_>) -> String {
+    accepted
+        .iter()
+        .map(|t| names.of(t).to_smolstr())
+        .collect::<Vec<SmolStr>>()
+        .join(" or ")
 }
 
 #[cold]
@@ -647,7 +665,9 @@ pub fn error_invalid_obj_type(
     span: Span,
     sources: &[Source],
     file_idx: u16,
+    types: TypeNames<'_>,
 ) -> ! {
+    let perceived = types.of(perceived_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -661,8 +681,8 @@ pub fn error_invalid_obj_type(
                     .with_message(format_args!(
                         "Function {} expects this expression's type to be {BLUE}{}{RESET} but here its type is {}",
                         blue(fn_name),
-                        joined_types(expected_type, BLUE),
-                        red(perceived_type)
+                        joined_types(expected_type, types, BLUE),
+                        red(&perceived)
                     ))
                     .with_color(ariadne::Color::Red),
             );
@@ -673,12 +693,8 @@ pub fn error_invalid_obj_type(
         file_idx,
         span,
         &format!(
-            "Function {fn_name} expects this expression's type to be {} but here its type is {perceived_type}",
-            expected_type
-                .iter()
-                .map(|s| s.to_smolstr())
-                .collect::<Vec<SmolStr>>()
-                .join(" or ")
+            "Function {fn_name} expects this expression's type to be {} but here its type is {perceived}",
+            joined_type_names(expected_type, types)
         ),
         "invalid_object_type",
     );
@@ -890,7 +906,10 @@ pub fn error_struct_field_invalid_type(
     value_span: Span,
     value_type: &DataType,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let declared = types.of(struct_field_type);
+    let given = types.of(value_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -905,16 +924,13 @@ pub fn error_struct_field_invalid_type(
                         "Field {} in struct {} expects type {}",
                         blue(struct_field_name),
                         blue(struct_name),
-                        blue(struct_field_type)
+                        blue(&declared)
                     ))
                     .with_color(ariadne::Color::Blue),
             )
             .with_label(
                 Label::new((src.filename.as_str(), value_span.into()))
-                    .with_message(format_args!(
-                        "This expression is of type {}",
-                        red(value_type)
-                    ))
+                    .with_message(format_args!("This expression is of type {}", red(&given)))
                     .with_color(ariadne::Color::Red),
             );
 
@@ -940,7 +956,7 @@ pub fn error_struct_field_invalid_type(
         file_idx,
         value_span,
         &format!(
-            "Field {struct_field_name} in struct {struct_name} expects type {struct_field_type}, but this expression is of type {value_type}"
+            "Field {struct_field_name} in struct {struct_name} expects type {declared}, but this expression is of type {given}"
         ),
         "struct_field_type_mismatch",
     );
@@ -1168,9 +1184,11 @@ pub fn error_match_not_enum(
     span: Span,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let matched = types.of(scrut_type);
     let message = format!(
-        "These arms match variants of enum {enum_name}, but the matched value is {scrut_type}"
+        "These arms match variants of enum {enum_name}, but the matched value is {matched}"
     );
     throw_compiler_error(
         &|| {
@@ -1185,7 +1203,7 @@ pub fn error_match_not_enum(
                     .with_message(format_args!(
                         "These arms match variants of enum {}, but the matched value is {}",
                         blue(enum_name),
-                        red(format_args!("{scrut_type}")),
+                        red(&matched),
                     ))
                     .with_color(ariadne::Color::Red),
             )
@@ -1362,7 +1380,10 @@ pub fn error_op(
     span_r: Span,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let left = types.of(l);
+    let right = types.of(r);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1376,29 +1397,38 @@ pub fn error_op(
                     .with_message(format_args!(
                         "Cannot perform operation {} {}",
                         red(op),
-                        blue(r)
+                        blue(&right)
                     ))
                     .with_label(
                         Label::new((src.filename.as_str(), span_r.into()))
-                            .with_message(format_args!("This expression is of type {}", blue(r)))
+                            .with_message(format_args!(
+                                "This expression is of type {}",
+                                blue(&right)
+                            ))
                             .with_color(ariadne::Color::Red),
                     );
             } else {
                 report = report
                     .with_message(format_args!(
                         "Cannot perform operation {} {} {}",
-                        blue(l),
+                        blue(&left),
                         red(op),
-                        green(r)
+                        green(&right)
                     ))
                     .with_label(
                         Label::new((src.filename.as_str(), span_l.into()))
-                            .with_message(format_args!("This expression is of type {}", blue(l)))
+                            .with_message(format_args!(
+                                "This expression is of type {}",
+                                blue(&left)
+                            ))
                             .with_color(ariadne::Color::Red),
                     )
                     .with_label(
                         Label::new((src.filename.as_str(), span_r.into()))
-                            .with_message(format_args!("This expression is of type {}", green(r)))
+                            .with_message(format_args!(
+                                "This expression is of type {}",
+                                green(&right)
+                            ))
                             .with_color(ariadne::Color::Red),
                     );
             }
@@ -1467,9 +1497,9 @@ pub fn error_op(
         file_idx,
         span_l.extend(span_r),
         &if (op == "-" && l == &DataType::Null) || op == "!" {
-            format!("Cannot perform operation {op} {r}")
+            format!("Cannot perform operation {op} {right}")
         } else {
-            format!("Cannot perform operation {l} {op} {r}")
+            format!("Cannot perform operation {left} {op} {right}")
         },
         "invalid_operation",
     );
@@ -1640,7 +1670,10 @@ pub fn error_function_arg_invalid_type(
     fn_decl_span: Option<(Span, u16)>,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let expected = types.of(expected_type);
+    let perceived = types.of(perceived_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1661,7 +1694,7 @@ pub fn error_function_arg_invalid_type(
 
             report = report.with_label(
                 Label::new((src.filename.as_str(), arg_span.into()))
-                    .with_message(format_args!("Function {} expects this argument's type to be {}, but this expression's type is {}", blue(fn_name), green(expected_type), red(perceived_type)))
+                    .with_message(format_args!("Function {} expects this argument's type to be {}, but this expression's type is {}", blue(fn_name), green(&expected), red(&perceived)))
                     .with_color(ariadne::Color::Red),
             );
 
@@ -1671,7 +1704,7 @@ pub fn error_function_arg_invalid_type(
         file_idx,
         arg_span,
         &format!(
-            "Function {fn_name} expects this argument's type to be {expected_type}, but this expression's type is {perceived_type}"
+            "Function {fn_name} expects this argument's type to be {expected}, but this expression's type is {perceived}"
         ),
         "argument_type_mismatch",
     );
@@ -1687,7 +1720,9 @@ pub fn error_function_arg_invalid_type_multiple(
     fn_decl_span: Option<(Span, u16)>,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let perceived = types.of(perceived_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1711,8 +1746,8 @@ pub fn error_function_arg_invalid_type_multiple(
                     .with_message(format_args!(
                         "Function {} expects this argument to be of type {GREEN}{}{RESET}, but this expression's type is {}",
                         blue(fn_name),
-                        joined_types(expected_type, GREEN),
-                        red(perceived_type)
+                        joined_types(expected_type, types, GREEN),
+                        red(&perceived)
                     ))
                     .with_color(ariadne::Color::Red),
             );
@@ -1723,12 +1758,8 @@ pub fn error_function_arg_invalid_type_multiple(
         file_idx,
         arg_span,
         &format!(
-            "Function {fn_name} expects this argument to be of type {}, but this expression's type is {perceived_type}",
-            expected_type
-                .iter()
-                .map(|s| s.to_smolstr())
-                .collect::<Vec<SmolStr>>()
-                .join(" or ")
+            "Function {fn_name} expects this argument to be of type {}, but this expression's type is {perceived}",
+            joined_type_names(expected_type, types)
         ),
         "argument_type_mismatch",
     );
@@ -1739,7 +1770,9 @@ pub fn error_range_invalid_type(
     perceived_type: &DataType,
     file_idx: u16,
     sources: &[Source],
+    types: TypeNames<'_>,
 ) -> ! {
+    let perceived = types.of(perceived_type);
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1753,7 +1786,7 @@ pub fn error_range_invalid_type(
                     .with_message(format_args!(
                         "Expected {}, but this expression's type is {}",
                         blue(DataType::Int),
-                        red(perceived_type)
+                        red(&perceived)
                     ))
                     .with_color(ariadne::Color::Red),
             )
@@ -1772,9 +1805,7 @@ pub fn error_range_invalid_type(
         sources,
         file_idx,
         span,
-        &format!(
-            "Invalid type in range: expected int, but this expression's type is {perceived_type}"
-        ),
+        &format!("Invalid type in range: expected int, but this expression's type is {perceived}"),
         "range_element_type_mismatch",
     );
 }
