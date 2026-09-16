@@ -472,10 +472,36 @@ jobs:
               if (name != "" && req != "") printf " --dep %s@%s", name, req
             }' "$MANIFEST")"
 
-          # The requirement names the candela the package was checked with,
-          # read from the binary rather than the input: `latest` and `nightly`
-          # are channels, not versions.
-          host="candela@>=$(candela --version | awk '{ print $2 }')"
+          # The release says which candela a user needs. The manifest says so
+          # when its author named one, as a version with an optional comparator
+          # in front, and that is what the registry records: a package
+          # checked on the nightly channel otherwise demands the in-development
+          # version, which has no release and so no users. With no key to read,
+          # the compiler that checked the package is the only evidence there is,
+          # taken from the binary rather than the input, since `latest` and
+          # `nightly` are channels and not versions.
+          # Either quote character comes off, and whatever follows the closing
+          # one goes with it, the same way the plan job reads a key.
+          required="$(awk '
+            /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*$/); next }
+            inside && /^[[:space:]]*candela[[:space:]]*=/ {
+              sub(/^[^=]*=[[:space:]]*/, "")
+              sub(/[[:space:]]+$/, "")
+              quote = substr($0, 1, 1)
+              if (quote == "\"" || quote == "'"'"'") {
+                sub("^" quote, "")
+                sub(quote ".*$", "")
+              }
+              print
+              exit
+            }' "$MANIFEST")"
+          if [ -n "$required" ]; then
+            host="candela@$required"
+            echo "$MANIFEST requires $host"
+          else
+            host="candela@>=$(candela --version | awk '{ print $2 }')"
+            echo "$MANIFEST names no candela requirement; recording the one it was checked with, $host"
+          fi
 
           # shellcheck disable=SC2086
           lpm release "$NAME" "$VERSION" $args $deps --requires "$host" -d "$DESCRIPTION"

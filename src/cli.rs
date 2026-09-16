@@ -593,7 +593,13 @@ fn publish_verb(args: &mut impl Iterator<Item = String>) {
         .map(|d| (d.name.clone(), d.requirement.clone()))
         .collect();
     let artifacts = vec![(String::from("any"), url)];
-    let host = format!("candela@>={}", env!("CARGO_PKG_VERSION"));
+    // The release says which candela a user needs. The manifest says so when
+    // its author named one, and otherwise the compiler that checked the
+    // package is the only evidence there is.
+    let host = match manifest.candela_requirement() {
+        Some(requirement) => format!("candela@{requirement}"),
+        None => format!("candela@>={}", env!("CARGO_PKG_VERSION")),
+    };
     if let Err(e) = lpm::release(
         manifest.name(),
         manifest.version(),
@@ -604,7 +610,11 @@ fn publish_verb(args: &mut impl Iterator<Item = String>) {
     ) {
         fail(&e.to_string());
     }
-    println!("Published {} {}", manifest.name(), manifest.version());
+    println!(
+        "Published {} {}, requiring {host}",
+        manifest.name(),
+        manifest.version()
+    );
 }
 
 /// Whether the registry turned a `publish` down because the name is already

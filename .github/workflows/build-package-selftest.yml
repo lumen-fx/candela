@@ -25,7 +25,11 @@ jobs:
     uses: ./.github/workflows/build-package.yml
     with:
       # The self-test checks the workflow against the toolchain built from
-      # main, which is what the nightly channel is.
+      # main, which is what the nightly channel is. That toolchain is one
+      # release behind the checkout, so the example manifest names only keys a
+      # nightly already parses: it gains `candela` once a nightly carries the
+      # parser for it, and until then the pack exercises the branch that
+      # records the toolchain the package was checked with.
       candela-version: nightly
       # A pure-candela package packs for `any`, and one runner would never
       # reach the Windows install, which is the leg that installs from the

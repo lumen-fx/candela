@@ -104,6 +104,14 @@ fn write_stub(dir: &Path, report: &str) -> PathBuf {
 
     #[cfg(windows)]
     {
+        // Each argument is read with its quotes stripped into a variable
+        // inside quotes, and the line is written out through delayed
+        // expansion, so a `>` in a requirement such as `candela@>=0.0.7`
+        // reaches the file instead of being read by cmd as a redirection.
+        // `%*` cannot be used: the quotes cmd puts around such an argument
+        // would nest inside the assignment and reopen the redirection. The
+        // output path is taken before the loop, because `shift` moves `%0`
+        // along with the rest.
         let path = dir.join("lpm-stub.cmd");
         std::fs::write(
             &path,
@@ -113,7 +121,18 @@ fn write_stub(dir: &Path, report: &str) -> PathBuf {
                  echo lpm version 9.9.9 ^(stub^)\r\n\
                  exit /b 0\r\n\
                  )\r\n\
-                 echo %*>>\"%~dp0args.txt\"\r\n\
+                 setlocal EnableDelayedExpansion\r\n\
+                 set \"OUT=%~dp0args.txt\"\r\n\
+                 set \"LINE=\"\r\n\
+                 :next\r\n\
+                 if \"%~1\"==\"\" goto done\r\n\
+                 set \"ARG=%~1\"\r\n\
+                 set \"LINE=!LINE!!ARG! \"\r\n\
+                 shift\r\n\
+                 goto next\r\n\
+                 :done\r\n\
+                 echo(!LINE!>>\"!OUT!\"\r\n\
+                 endlocal\r\n\
                  echo {report}\r\n"
             ),
         )
@@ -519,6 +538,62 @@ fn update_re_resolves_and_reports() {
     let args = std::fs::read_to_string(root.join("args.txt")).unwrap();
     assert!(args.starts_with("update "), "{args}");
     assert!(args.trim_end().ends_with("shapes"), "{args}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What `candela publish` records as the candela a release needs: the
+/// manifest's `candela` key when it names one, and the version doing the
+/// publishing when it does not.
+#[test]
+fn publish_records_the_candela_a_release_needs() {
+    let root = scratch_dir("publishrequires");
+    let package = shapes_package(&root);
+    let stub = write_stub(&root, &report("shapes", "1.2.3", "candela", &package));
+    let project = root.join("demo");
+    std::fs::create_dir_all(&project).unwrap();
+
+    for (key, expected) in [
+        ("", format!("candela@>={}", env!("CARGO_PKG_VERSION"))),
+        ("candela = \">=0.0.7\"\n", String::from("candela@>=0.0.7")),
+    ] {
+        std::fs::write(
+            project.join("candela.toml"),
+            format!("[package]\nname = \"demo\"\nversion = \"0.4.0\"\n{key}"),
+        )
+        .unwrap();
+        std::fs::remove_file(root.join("args.txt")).ok();
+
+        let published = common::output_with_deadline(
+            candela(&project, Some(&stub))
+                .arg("publish")
+                .arg("--url")
+                .arg("https://example.com/demo-0.4.0.tar.gz"),
+            "candela publish",
+        );
+        assert!(
+            published.status.success(),
+            "candela publish: {}",
+            stderr_of(&published)
+        );
+
+        let args = std::fs::read_to_string(root.join("args.txt")).unwrap();
+        let release = args
+            .lines()
+            .find(|line| line.starts_with("release "))
+            .unwrap_or_else(|| panic!("no release call in {args}"));
+        assert!(
+            release.contains(&format!("--requires {expected}")),
+            "{release}"
+        );
+        // The run says which one it recorded, so an author publishing from a
+        // channel can see it.
+        assert!(
+            stdout_of(&published).contains(&expected),
+            "{}",
+            stdout_of(&published)
+        );
+    }
 
     std::fs::remove_dir_all(&root).ok();
 }

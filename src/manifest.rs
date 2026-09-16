@@ -1,9 +1,9 @@
 //! `candela.toml`, the project manifest.
 //!
-//! A manifest names the package, says which file the project's verbs run, and
-//! lists the packages it depends on. `candela run`, `candela check` and
-//! `candela build` read it when no file is given on the command line, and
-//! `candela add` and `candela remove` edit it in place.
+//! A manifest names the package, says which file the project's verbs run, says
+//! which candela it needs, and lists the packages it depends on. `candela run`,
+//! `candela check` and `candela build` read it when no file is given on the
+//! command line, and `candela add` and `candela remove` edit it in place.
 //!
 //! Editing goes through `toml_edit`, so comments, key order, and whitespace
 //! survive an edit: the file is the author's, and a tool that rewrites it from
@@ -78,6 +78,7 @@ pub struct Manifest {
     version: String,
     description: Option<String>,
     entry: String,
+    candela: Option<String>,
     dependencies: Vec<Dependency>,
 }
 
@@ -142,9 +143,12 @@ impl Manifest {
             .ok_or_else(|| invalid(String::from("no [package] table")))?;
 
         for key in package.iter().map(|(key, _)| key) {
-            if !matches!(key, "name" | "version" | "description" | "entry") {
+            if !matches!(
+                key,
+                "name" | "version" | "description" | "entry" | "candela"
+            ) {
                 return Err(invalid(format!(
-                    "unknown key {key} in [package]. Known keys are name, version, description, entry"
+                    "unknown key {key} in [package]. Known keys are name, version, description, entry, candela"
                 )));
             }
         }
@@ -180,6 +184,16 @@ impl Manifest {
             )));
         }
 
+        let candela = string_key(package, "candela")?;
+        if let Some(requirement) = &candela
+            && !is_requirement(requirement)
+        {
+            return Err(invalid(format!(
+                "candela in [package] is {requirement:?}, which is not a version requirement. \
+                 Write the oldest candela that can compile this package, as >=0.0.7"
+            )));
+        }
+
         let mut dependencies = Vec::new();
         if let Some(table) = doc.get("dependencies") {
             let table = table
@@ -212,6 +226,7 @@ impl Manifest {
             version,
             description,
             entry,
+            candela,
             dependencies,
         })
     }
@@ -250,6 +265,18 @@ impl Manifest {
     #[must_use]
     pub fn entry(&self) -> &str {
         &self.entry
+    }
+
+    /// The oldest candela this package compiles on, as the manifest writes it,
+    /// when it names one.
+    ///
+    /// The value is a version requirement, passed to the registry as the
+    /// release's host requirement and never interpreted beyond being checked
+    /// for that shape. A package that names none is understood to want the
+    /// candela it was checked with.
+    #[must_use]
+    pub fn candela_requirement(&self) -> Option<&str> {
+        self.candela.as_deref()
     }
 
     /// Where the lock file goes.
@@ -312,6 +339,66 @@ impl Manifest {
     pub fn save(&self) -> Result<(), ManifestError> {
         std::fs::write(&self.path, self.doc.to_string())
             .map_err(|e| ManifestError::Write(self.path.clone(), e))
+    }
+}
+
+/// Whether `text` is a version requirement.
+///
+/// The shape is the one a dependency requirement takes: one or more
+/// comma-separated comparators, each an optional `>=`, `<=`, `>`, `<`, `=`,
+/// `^` or `~` in front of a version such as `0.0.6` or `1.0.0-rc.1`. What this
+/// catches is a channel written where a version belongs: `nightly` and
+/// `latest` name whatever is newest today, which is not something a release can
+/// require.
+fn is_requirement(text: &str) -> bool {
+    let mut comparators = 0;
+    for part in text.split(',') {
+        let part = part.trim();
+        let version =
+            if let Some(rest) = part.strip_prefix(">=").or_else(|| part.strip_prefix("<=")) {
+                rest
+            } else if let Some(rest) = part
+                .strip_prefix('>')
+                .or_else(|| part.strip_prefix('<'))
+                .or_else(|| part.strip_prefix('='))
+                .or_else(|| part.strip_prefix('^'))
+                .or_else(|| part.strip_prefix('~'))
+            {
+                rest
+            } else {
+                part
+            };
+        if !is_version(version.trim()) {
+            return false;
+        }
+        comparators += 1;
+    }
+    comparators > 0
+}
+
+/// Whether `text` is one to three dot-separated numbers, with an optional
+/// prerelease after a `-`.
+fn is_version(text: &str) -> bool {
+    let (core, prerelease) = match text.split_once('-') {
+        Some((core, prerelease)) => (core, Some(prerelease)),
+        None => (text, None),
+    };
+    let fields = core.split('.').count();
+    if !(1..=3).contains(&fields)
+        || core
+            .split('.')
+            .any(|field| field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return false;
+    }
+    match prerelease {
+        None => true,
+        Some(prerelease) => {
+            !prerelease.is_empty()
+                && prerelease
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
+        }
     }
 }
 

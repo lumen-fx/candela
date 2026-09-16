@@ -186,6 +186,19 @@ ships whenever the package has one.
 `nightly` for the rolling prerelease. Each of them installs on every target the
 workflow packs for, Windows included.
 
+The release also records which candela a user needs. Name the oldest one the
+package compiles on in the manifest, and the workflow records that:
+
+```toml
+[package]
+candela = ">=0.0.7"
+```
+
+A package that names none records the version of the toolchain that checked it,
+and says so in the log. On the nightly channel that version has no release yet,
+so a package published from nightly without the key is installable only by
+nightly users until it ships.
+
 A package that ships a native library builds one archive per desktop target.
 Name the command that builds them, leaving the results in `dist/`:
 
