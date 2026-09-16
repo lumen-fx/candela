@@ -654,7 +654,7 @@ fn help(args: &mut impl Iterator<Item = String>, flag: &str) {
     reject_extra_args(args, flag);
     let update = update::start();
     println!(
-        "{}\nCandela is a fast, statically-typed compiled scripting language that aims to combine Rust-like syntax with Python's ease-of-use.\n\n{USAGE}\n\nEnvironment:\n  CANDELA_LIB_PATH  The directory holding the shipped std/ library\n  LPM_BIN           The lpm binary to resolve dependencies with\n",
+        "{}\nCandela is a fast, statically-typed compiled scripting language that aims to combine Rust-like syntax with Python's ease-of-use.\n\n{USAGE}\n\nEnvironment:\n  CANDELA_LIB_PATH  The directory holding the shipped std/ library\n  LPM_BIN           The lpm binary to resolve dependencies with, used as given\n",
         util::CANDELA_LOGO
     );
     update::finish(update);

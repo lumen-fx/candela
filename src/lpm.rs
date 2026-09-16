@@ -6,10 +6,11 @@
 //! write the lock file, or manage the cache. That keeps one implementation of
 //! each of those, in the client that owns the registry protocol.
 //!
-//! `lpm` is found through `LPM_BIN`, then `PATH`, then the one shared path it
-//! installs to. When it is missing or older than candela needs, it is
-//! downloaded from the registry's own releases, checksum-verified, and unpacked
-//! to that shared path.
+//! `LPM_BIN` says which client to run and is obeyed as given. With it unset,
+//! `PATH` is searched and then the one shared path `lpm` installs to; when the
+//! client is missing or older than candela needs, it is downloaded from the
+//! registry's own releases, checksum-verified, and unpacked to that shared
+//! path.
 
 use crate::update::is_newer;
 use std::fmt;
@@ -256,16 +257,22 @@ pub fn shared_path() -> Option<PathBuf> {
 /// Finds an `lpm` new enough to use, downloading one when the machine has none
 /// or only an older one.
 ///
-/// `LPM_BIN` names it outright. Otherwise `PATH` is searched, and then the
-/// shared path.
+/// `LPM_BIN` is an override: when it is set, the binary it names is the one
+/// that runs, and a binary that cannot do the job is reported rather than
+/// worked around. Nothing else is looked at, so a stand-in cannot quietly hand
+/// the work to whatever real client the machine also has. With it unset,
+/// `PATH` is searched and then the shared path.
 ///
 /// # Errors
 ///
-/// Returns [`LpmError::Unavailable`] when there is none and one cannot be
-/// downloaded.
+/// Returns [`LpmError::Unavailable`] when `LPM_BIN` names a binary that will
+/// not do, or when there is no client and one cannot be downloaded.
 pub fn locate() -> Result<PathBuf, LpmError> {
-    for candidate in candidates() {
-        if let Some(version) = installed_version(&candidate)
+    if let Some(named) = std::env::var_os("LPM_BIN").filter(|v| !v.is_empty()) {
+        return named_client(PathBuf::from(named));
+    }
+    for candidate in [on_path(), shared_path()].into_iter().flatten() {
+        if let Ok(version) = version_answer(&candidate)
             && !is_newer(LPM_MIN_VERSION, &version)
         {
             return Ok(candidate);
@@ -274,18 +281,21 @@ pub fn locate() -> Result<PathBuf, LpmError> {
     download()
 }
 
-fn candidates() -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    if let Some(named) = std::env::var_os("LPM_BIN").filter(|v| !v.is_empty()) {
-        found.push(PathBuf::from(named));
+/// The client `LPM_BIN` names, or why it will not do.
+fn named_client(named: PathBuf) -> Result<PathBuf, LpmError> {
+    let refuse = |why: String| {
+        LpmError::Unavailable(format!(
+            "LPM_BIN names {}, and {why}. LPM_BIN says which registry client to run, so no other one was tried",
+            named.display()
+        ))
+    };
+    match version_answer(&named) {
+        Ok(version) if !is_newer(LPM_MIN_VERSION, &version) => Ok(named),
+        Ok(version) => Err(refuse(format!(
+            "that is lpm {version}; candela needs {LPM_MIN_VERSION} or newer"
+        ))),
+        Err(why) => Err(refuse(why)),
     }
-    if let Some(on_path) = on_path() {
-        found.push(on_path);
-    }
-    if let Some(shared) = shared_path() {
-        found.push(shared);
-    }
-    found
 }
 
 /// The first `lpm` on `PATH`, if any.
@@ -299,17 +309,38 @@ fn on_path() -> Option<PathBuf> {
 }
 
 /// Asks a binary its version. `lpm --version` prints
-/// `lpm version X.Y.Z (...)`; anything else is treated as no answer.
-fn installed_version(binary: &Path) -> Option<String> {
+/// `lpm version X.Y.Z (...)`.
+///
+/// # Errors
+///
+/// Returns what the binary did instead, phrased to follow the path that names
+/// it, so a caller can say why the thing it was pointed at is no use.
+fn version_answer(binary: &Path) -> Result<String, String> {
     let output = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())
         .output()
-        .ok()?;
+        .map_err(|e| format!("it cannot be run: {e}"))?;
+
+    let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+    let complained = String::from_utf8_lossy(&output.stderr).into_owned();
+    let said = printed
+        .lines()
+        .chain(complained.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map_or_else(
+            || String::from("printed nothing"),
+            |line| format!("printed {line:?}"),
+        );
+
     if !output.status.success() {
-        return None;
+        return Err(match output.status.code() {
+            Some(code) => format!("--version left it with status {code} and it {said}"),
+            None => format!("--version killed it, and it {said}"),
+        });
     }
-    parse_version(&String::from_utf8_lossy(&output.stdout))
+    parse_version(&printed).ok_or_else(|| format!("it {said} rather than a version lpm would"))
 }
 
 /// Pulls the version out of `lpm --version` output.

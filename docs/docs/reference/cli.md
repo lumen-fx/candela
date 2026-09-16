@@ -182,17 +182,27 @@ A project with no `[dependencies]` never reaches for the client at all.
 
 ### Finding the client
 
-candela looks in three places, in order:
+`LPM_BIN` names the client to run. It is an override: candela runs that binary
+and looks nowhere else, and one that cannot answer for `lpm` is an error naming
+the path and what it answered instead. A client too old to use is reported the
+same way, rather than replaced with a download. That is what makes a stand-in
+safe to point candela at: a mistake in it stops the command instead of handing
+the work to the real client the machine also has.
 
-1. `LPM_BIN`, when it names a file.
-2. `PATH`.
-3. `~/.local/bin/lpm`, or `%LOCALAPPDATA%\Programs\lpm\lpm.exe` on Windows.
+An empty `LPM_BIN` counts as unset, and a value with no directory separator in
+it is a command name looked up on `PATH`, so write `./lpm` for a file in the
+working directory.
 
-The third is the shared path every client of the registry installs to, which is
+With `LPM_BIN` unset, candela looks in two places, in order:
+
+1. `PATH`.
+2. `~/.local/bin/lpm`, or `%LOCALAPPDATA%\Programs\lpm\lpm.exe` on Windows.
+
+The second is the shared path every client of the registry installs to, which is
 why it is a fixed location rather than something under the candela prefix.
 
-When none of the three holds a client, or the one found is older than candela
-needs, candela downloads the newest release from the registry's own repository,
+When neither holds a client, or the one found is older than candela needs,
+candela downloads the newest release from the registry's own repository,
 checks it against the checksums published beside it, unpacks it to the shared
 path, and says on standard error where it went. A download that does not match
 its checksum installs nothing. The download needs `curl` or `wget` to fetch
@@ -201,8 +211,8 @@ hash with; a machine with none of one group gets an error naming what is
 missing rather than an unverified client.
 
 The oldest client candela works with is fixed at build time. `candela --version`
-does not report it; an older one on the machine is replaced without being asked
-about.
+does not report it; an older one found on `PATH` or at the shared path is
+replaced without being asked about.
 
 ### Offline and locked
 
@@ -254,7 +264,7 @@ process the same way it does under `candela`.
 | Variable | Effect |
 | --- | --- |
 | `CANDELA_LIB_PATH` | Names the directory holding the shipped `std/` and `std_src/` library directories, overriding the default location beside the executable |
-| `LPM_BIN` | Names the registry client to resolve dependencies with, ahead of `PATH` and the shared path |
+| `LPM_BIN` | Names the registry client to resolve dependencies with. An override: nothing else is looked at, and one that cannot answer is an error |
 | `CANDELA_NO_UPDATE_CHECK` | Set to any non-empty value to silence the update check |
 | `CI` | Silences the update check, so build machines never reach the network |
 
