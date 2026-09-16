@@ -168,11 +168,19 @@ jobs:
       lpm-token: ${{ secrets.LPM_TOKEN }}
 ```
 
-The workflow installs candela, runs `candela check` on the package, packs
-`candela.toml` and `src/` into an archive, publishes the release, and calls the
-registry with the manifest's version and dependencies. The `contents: write`
-grant is what lets it create the release; a workflow that only wants the check
-and the pack, on a pull request, grants `contents: read` and stops there.
+The workflow installs candela, runs `candela check` on the package, packs the
+archive, publishes the release, and calls the registry with the manifest's
+version and dependencies. The `contents: write` grant is what lets it create
+the release; a workflow that only wants the check and the pack, on a pull
+request, grants `contents: read` and stops there.
+
+The archive carries the manifest and the directory the manifest's `entry` sits
+in, which with the default entry is `candela.toml` and `src/`. An entry
+elsewhere moves the directory with it, so a package entered at `lib/shapes.cdl`
+ships `lib/`, and one whose entry is at the package root ships everything
+beside the manifest apart from `dist/`, `target/`, any `.tar.gz`, `.tgz` or
+`.zip` lying there, and every name that starts with a dot. A `dist/` directory
+ships whenever the package has one.
 
 `candela-version` takes `latest`, a version such as `0.0.6` or `v0.0.6`, or
 `nightly` for the rolling prerelease. Each of them installs on every target the

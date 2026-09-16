@@ -73,6 +73,7 @@ jobs:
       name: ${{ steps.read.outputs.name }}
       version: ${{ steps.read.outputs.version }}
       description: ${{ steps.read.outputs.description }}
+      entry: ${{ steps.read.outputs.entry }}
     steps:
       - uses: actions/checkout@v6
 
@@ -84,12 +85,20 @@ jobs:
         run: |
           set -euo pipefail
           [ -f "$MANIFEST" ] || { echo "no manifest at $MANIFEST" >&2; exit 1; }
+          # TOML spells a string with either quote character, so both come off
+          # and whatever follows the closing one, comment included, goes with
+          # them.
           read_key() {
             awk -v key="$1" '
               /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*$/); next }
               inside && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
                 sub(/^[^=]*=[[:space:]]*/, "")
-                sub(/^"/, ""); sub(/"[[:space:]]*$/, "")
+                sub(/[[:space:]]+$/, "")
+                quote = substr($0, 1, 1)
+                if (quote == "\"" || quote == "'"'"'") {
+                  sub("^" quote, "")
+                  sub(quote ".*$", "")
+                }
                 print
                 exit
               }' "$MANIFEST"
@@ -98,12 +107,20 @@ jobs:
           version="$(read_key version)"
           [ -n "$name" ] || { echo "$MANIFEST has no name in [package]" >&2; exit 1; }
           [ -n "$version" ] || { echo "$MANIFEST has no version in [package]" >&2; exit 1; }
+          # The entry is the package's front door: the verbs compile it and an
+          # import of this package by name reads it, so the pack packs the
+          # directory it sits in. The default below mirrors candela's own,
+          # `DEFAULT_ENTRY` in src/manifest.rs; this job runs before the
+          # toolchain is installed, so it cannot ask for it.
+          entry="$(read_key entry)"
+          [ -n "$entry" ] || entry="src/main.cdl"
           {
             echo "name=$name"
             echo "version=$version"
             echo "description=$(read_key description)"
+            echo "entry=$entry"
           } >> "$GITHUB_OUTPUT"
-          echo "$name $version"
+          echo "$name $version, entry $entry"
 
       - name: Work out the targets
         id: plan
@@ -252,19 +269,59 @@ jobs:
           MANIFEST: ${{ inputs.manifest-path }}
           TARGET: ${{ matrix.target }}
           NAME: ${{ needs.plan.outputs.name }}
+          ENTRY: ${{ needs.plan.outputs.entry }}
         run: |
           set -euo pipefail
           root="$(dirname "$MANIFEST")"
+          manifest_name="$(basename "$MANIFEST")"
           archive="$PWD/$NAME-$TARGET.tar.gz"
+          entry="$ENTRY"
+          # The archive holds the package root and nothing above it, so an
+          # entry that climbs out of the package cannot be packed. `candela
+          # check` refuses one first; this is the same rule where the archive
+          # is built.
+          case "/$entry/" in
+            */../*)
+              echo "$MANIFEST names the entry $entry, and an entry cannot leave the package with .." >&2
+              exit 1
+              ;;
+          esac
+          if [ ! -f "$root/$entry" ]; then
+            echo "$MANIFEST names the entry $entry, and there is no file there" >&2
+            exit 1
+          fi
           # The package root sits at the root of the archive, so unpacking it
           # gives a directory with candela.toml at the top, which is what the
-          # registry client expects to find.
-          members="candela.toml src"
-          if [ -d "$root/dist" ]; then
-            members="$members dist"
+          # registry client expects to find. What ships beside the manifest is
+          # the directory holding the entry, because that is what an import of
+          # this package reads: the name alone reads the entry file, and a path
+          # reads the files beside it.
+          members=("$manifest_name")
+          entry_dir="$(dirname "$entry")"
+          if [ "$entry_dir" = "." ]; then
+            # The entry sits at the package root, so the package is its own
+            # entry directory and everything beside the manifest ships. Out go
+            # build output and the archives an earlier run left. A name that
+            # starts with a dot never ships either: the glob does not match
+            # one, which is what keeps `.git`, `.github` and `.gitignore` out
+            # of the archive.
+            for item in "$root"/*; do
+              [ -e "$item" ] || continue
+              member="$(basename "$item")"
+              case "$member" in
+                "$manifest_name" | dist | target | *.tar.gz | *.tgz | *.zip) continue ;;
+              esac
+              members+=("$member")
+            done
+          else
+            members+=("$entry_dir")
           fi
-          # shellcheck disable=SC2086
-          tar -czf "$archive" -C "$root" $members
+          # dist/ ships whenever the package has one, and an entry directly in
+          # it has already put it on the list.
+          if [ -d "$root/dist" ] && [ "$entry_dir" != dist ]; then
+            members+=("dist")
+          fi
+          tar -czf "$archive" -C "$root" "${members[@]}"
           tar -tzf "$archive"
 
       - uses: actions/upload-artifact@v4

@@ -168,6 +168,17 @@ impl Manifest {
             .ok_or_else(|| invalid(String::from("no version in [package]")))?;
         let description = string_key(package, "description")?;
         let entry = string_key(package, "entry")?.unwrap_or_else(|| String::from(DEFAULT_ENTRY));
+        // The entry is a file inside the package. A release archive holds the
+        // package root and nothing above it, so an entry that climbs out names
+        // a file no one who installs the package would ever receive, and the
+        // release workflow refuses to pack it. Saying so here means `candela
+        // check` reports it before a tag does.
+        if entry.split(['/', '\\']).any(|component| component == "..") {
+            return Err(invalid(format!(
+                "entry in [package] is {entry:?}, and an entry cannot climb out of the package. \
+                 Write a path inside it, as src/main.cdl"
+            )));
+        }
 
         let mut dependencies = Vec::new();
         if let Some(table) = doc.get("dependencies") {
@@ -360,6 +371,101 @@ mod tests {
             parse("[package]\nname = \"geom\"\nversion = \"0.3.1\"\nentry = \"run.cdl\"\n")
                 .unwrap();
         assert_eq!(manifest.entry_path(), Path::new("/project/run.cdl"));
+    }
+
+    #[test]
+    fn an_entry_that_climbs_out_of_the_package_is_refused() {
+        for entry in ["../shared/main.cdl", "src/../../main.cdl", ".."] {
+            let text =
+                format!("[package]\nname = \"a\"\nversion = \"0.1.0\"\nentry = \"{entry}\"\n");
+            let err = parse(&text)
+                .err()
+                .unwrap_or_else(|| panic!("{entry} was taken"));
+            let message = err.to_string();
+            assert!(message.contains("entry"), "{entry}: {message}");
+            assert!(message.contains(".."), "{entry}: {message}");
+        }
+    }
+
+    #[test]
+    fn an_entry_spelled_with_backslashes_is_refused_too() {
+        // A TOML literal string, so the backslashes are the path's own.
+        let err =
+            parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\nentry = '..\\shared\\main.cdl'\n")
+                .err()
+                .expect("an entry that climbs out must be refused");
+        assert!(err.to_string().contains(".."), "{err}");
+    }
+
+    #[test]
+    fn an_entry_may_hold_two_dots_inside_a_name() {
+        let manifest =
+            parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\nentry = \"src/a..b.cdl\"\n")
+                .unwrap();
+        assert_eq!(manifest.entry(), "src/a..b.cdl");
+    }
+
+    #[test]
+    fn a_manifest_names_the_candela_it_needs() {
+        let manifest =
+            parse("[package]\nname = \"geom\"\nversion = \"0.3.1\"\ncandela = \">=0.0.6\"\n")
+                .unwrap();
+        assert_eq!(manifest.candela_requirement(), Some(">=0.0.6"));
+    }
+
+    #[test]
+    fn a_manifest_that_names_no_candela_has_none() {
+        let manifest = parse("[package]\nname = \"geom\"\nversion = \"0.3.1\"\n").unwrap();
+        assert_eq!(manifest.candela_requirement(), None);
+    }
+
+    #[test]
+    fn every_requirement_spelling_is_taken() {
+        for requirement in [
+            "0.0.6",
+            "0.1",
+            "1",
+            ">=0.0.6",
+            "<=1.2.3",
+            ">0.0.6",
+            "<2",
+            "=0.0.6",
+            "^0.0.6",
+            "~0.0.6",
+            "1.0.0-rc.1",
+            ">=0.0.6, <0.1.0",
+        ] {
+            let text = format!(
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\ncandela = \"{requirement}\"\n"
+            );
+            let manifest = parse(&text).unwrap_or_else(|e| panic!("{requirement}: {e}"));
+            assert_eq!(manifest.candela_requirement(), Some(requirement));
+        }
+    }
+
+    #[test]
+    fn a_candela_that_is_no_requirement_is_refused() {
+        for requirement in [
+            "nightly", "latest", "", " ", ">=", "0.0.6,", "0.0.6.7", "*", ">=v0.0.6", "0.0.x",
+        ] {
+            let text = format!(
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\ncandela = \"{requirement}\"\n"
+            );
+            let err = parse(&text)
+                .err()
+                .unwrap_or_else(|| panic!("{requirement} was taken"));
+            let message = err.to_string();
+            assert!(message.contains("candela in [package]"), "{message}");
+            assert!(message.contains("version requirement"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_candela_that_is_not_a_string_is_refused() {
+        let err = parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\ncandela = 6\n")
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("candela"), "{err}");
     }
 
     #[test]

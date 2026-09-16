@@ -43,7 +43,9 @@ what is wrong with it.
 The entry is the package's front door twice over: the verbs start there, and
 `import "name"` in a project that depends on the package reads it. A library
 entry needs no `main`: `check` compiles a file without one, and a `main` in an
-imported module is ignored either way.
+imported module is ignored either way. It is a path inside the package, so a
+`..` component in it is an error: a release archive holds the package root and
+nothing above it.
 
 ## [dependencies]
 
@@ -87,9 +89,13 @@ package/
   dist/          # native libraries, when the package ships any
 ```
 
-`src/` and `candela.toml` are what a release archive carries, with the package
-root at the root of the archive. A package that ships native libraries carries
-`dist/` too, built per target.
+A release archive carries the manifest and the directory the `entry` sits in,
+with the package root at the root of the archive, so the default entry makes it
+`candela.toml` and `src/`. An entry at the package root instead ships
+everything beside the manifest, apart from `dist/`, `target/`, any `.tar.gz`,
+`.tgz` or `.zip` lying there, and every name that starts with a dot, so `.git`,
+`.github` and `.gitignore` stay out. A package that ships native libraries
+carries `dist/` too, built per target.
 
 ## Imports into a package
 
