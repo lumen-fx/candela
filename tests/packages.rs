@@ -920,16 +920,47 @@ fn asset_name(version: &str) -> String {
     format!("lpm_{version}_{os}_{arch}.{extension}")
 }
 
+/// The digest of a fixture file, to record in the `checksums.txt` the fake
+/// release serves beside it.
+///
+/// The file arrives on standard input rather than as an argument, so the
+/// report is `<hex>  -` on every platform. Named as an argument, a path
+/// holding a backslash comes back escaped, and the fixture would record a
+/// digest candela would rightly refuse.
+///
+/// A machine with neither tool is asked `certutil`, which Windows ships and
+/// which reads a path; a machine with none of the three cannot install the
+/// client at all.
 fn sha256_of(path: &Path) -> String {
     for (program, args) in [("sha256sum", &[][..]), ("shasum", &["-a", "256"][..])] {
-        if let Ok(out) = Command::new(program).args(args).arg(path).output()
+        let file = std::fs::File::open(path).expect("open the fixture to hash it");
+        if let Ok(out) = Command::new(program).args(args).stdin(file).output()
             && out.status.success()
             && let Some(hash) = String::from_utf8_lossy(&out.stdout)
                 .split_whitespace()
                 .next()
+            && hash.len() == 64
         {
             return hash.to_owned();
         }
     }
-    panic!("no sha256sum or shasum to hash the fixture with");
+
+    let out = Command::new("certutil")
+        .arg("-hashfile")
+        .arg(path)
+        .arg("SHA256")
+        .output()
+        .expect("no sha256sum, shasum or certutil to hash the fixture with");
+    let printed = String::from_utf8_lossy(&out.stdout);
+    for line in printed.lines() {
+        // certutil spaces the digest into byte pairs on older builds.
+        let digits: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if digits.len() == 64 && digits.chars().all(|c| c.is_ascii_hexdigit()) {
+            return digits.to_ascii_lowercase();
+        }
+    }
+    panic!(
+        "certutil printed no digest for {}: {printed}",
+        path.display()
+    );
 }

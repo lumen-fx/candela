@@ -372,7 +372,7 @@ fn download() -> Result<PathBuf, LpmError> {
         })?;
     let got = sha256_of(&archive).ok_or_else(|| {
         LpmError::Unavailable(String::from(
-            "cannot verify the lpm download: no sha256sum, shasum or certutil on this machine",
+            "cannot verify the lpm download: none of sha256sum, shasum or certutil is here to hash it",
         ))
     })?;
     if !got.eq_ignore_ascii_case(&expected) {
@@ -539,32 +539,78 @@ fn fetch(url: &str, dest: &Path) -> Result<(), LpmError> {
     }
 }
 
+/// A hashing tool: the program name, the arguments that go before the path,
+/// and the arguments that go after it.
+type HashingTool = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+/// The hashing tools, in the order they are tried.
+///
+/// Windows is asked `certutil` first, because it is the tool the system itself
+/// ships. The GNU `sha256sum` that arrives on Windows with Git prints a path
+/// holding a backslash in escaped form, which is legal output and easy to
+/// misread; `certutil` has no such shape to read around.
+fn hashing_tools() -> [HashingTool; 3] {
+    let certutil = ("certutil", &["-hashfile"][..], &["SHA256"][..]);
+    let sha256sum = ("sha256sum", &[][..], &[][..]);
+    let shasum = ("shasum", &["-a", "256"][..], &[][..]);
+    if cfg!(windows) {
+        [certutil, sha256sum, shasum]
+    } else {
+        [sha256sum, shasum, certutil]
+    }
+}
+
+/// Hashes a file with whichever hashing tool the machine has.
 fn sha256_of(path: &Path) -> Option<String> {
-    for (program, args) in [("sha256sum", &[][..]), ("shasum", &["-a", "256"][..])] {
-        if let Ok(out) = Command::new(program).args(args).arg(path).output()
+    for (program, before, after) in hashing_tools() {
+        if let Ok(out) = Command::new(program)
+            .args(before)
+            .arg(path)
+            .args(after)
+            .output()
             && out.status.success()
-            && let Some(hash) = String::from_utf8_lossy(&out.stdout)
-                .split_whitespace()
-                .next()
+            && let Some(hash) = sha256_in(&String::from_utf8_lossy(&out.stdout))
         {
-            return Some(hash.to_owned());
+            return Some(hash);
         }
     }
-    // Windows ships neither, and does ship certutil, whose second line is the
-    // hash with spaces through it.
-    let out = Command::new("certutil")
-        .arg("-hashfile")
-        .arg(path)
-        .arg("SHA256")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    None
+}
+
+/// The digest in what a hashing tool printed, whichever tool printed it.
+///
+/// Every shape any of them uses puts the digest where this finds it:
+///
+/// - `sha256sum` and `shasum` print `<hex>  <filename>`. GNU coreutils escapes
+///   a filename holding a backslash or a newline by writing the name escaped
+///   and marking the line with a leading `\`, so the digest is the first field
+///   once that marker is off. Windows paths hold backslashes, which is why the
+///   marker shows up at all.
+/// - `certutil -hashfile` prints the digest on a line of its own, spaced into
+///   byte pairs on older builds and contiguous on newer ones.
+fn sha256_in(text: &str) -> Option<String> {
+    for line in text.lines() {
+        for field in line.split_whitespace() {
+            if let Some(hash) = sha256_digest(field.trim_start_matches('\\')) {
+                return Some(hash);
+            }
+        }
+        let spaced: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Some(hash) = sha256_digest(&spaced) {
+            return Some(hash);
+        }
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines()
-        .map(|line| line.replace(' ', ""))
-        .find(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
+    None
+}
+
+/// `text` as a digest, if it is one: 64 hex digits and nothing else.
+fn sha256_digest(text: &str) -> Option<String> {
+    (text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| text.to_ascii_lowercase())
 }
 
 /// Unpacks the archive. `tar` reads both shapes: the gzipped tarball every
@@ -938,11 +984,14 @@ mod json {
 
 #[cfg(test)]
 mod tests {
+    use super::hashing_tools;
     use super::json;
     use super::last_location_tag;
     use super::parse_packages;
     use super::parse_version;
     use super::recorded_sha;
+    use super::sha256_in;
+    use super::sha256_of;
     use std::path::Path;
 
     const REPORT: &str = r#"{"schema":1,"lock":"/p/candela.lock","packages":[
@@ -1075,5 +1124,112 @@ mod tests {
             Some("def456")
         );
         assert_eq!(recorded_sha(sums, "lpm_0.1.0_windows_amd64.zip"), None);
+    }
+
+    /// The digest of the five bytes `hello`, which every fixture below is a
+    /// tool's report of.
+    const HELLO: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+    #[test]
+    fn a_digest_is_read_out_of_every_tools_own_shape() {
+        // sha256sum, given a path with nothing to escape.
+        assert_eq!(
+            sha256_in(&format!("{HELLO}  /tmp/lpm_0.2.0_linux_amd64.tar.gz\n")).as_deref(),
+            Some(HELLO)
+        );
+
+        // sha256sum, given a Windows path. GNU coreutils marks the line with a
+        // leading backslash and doubles the ones in the name.
+        assert_eq!(
+            sha256_in(&format!(
+                "\\{HELLO}  C:\\\\Temp\\\\candela-lpm-1\\\\lpm_0.2.0_windows_amd64.zip\n"
+            ))
+            .as_deref(),
+            Some(HELLO)
+        );
+
+        // shasum, which marks a binary read with an asterisk.
+        assert_eq!(
+            sha256_in(&format!("{HELLO} *lpm_0.2.0_darwin_arm64.tar.gz\n")).as_deref(),
+            Some(HELLO)
+        );
+
+        // certutil on an older build, which spaces the digest into byte pairs.
+        let spaced = HELLO
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| String::from_utf8_lossy(pair).into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            sha256_in(&format!(
+                "SHA256 hash of C:\\Temp\\lpm.zip:\r\n{spaced}\r\nCertUtil: -hashfile command completed successfully.\r\n"
+            ))
+            .as_deref(),
+            Some(HELLO)
+        );
+
+        // certutil on a newer build, which does not.
+        assert_eq!(
+            sha256_in(&format!(
+                "SHA256 hash of C:\\Temp\\lpm.zip:\r\n{HELLO}\r\nCertUtil: -hashfile command completed successfully.\r\n"
+            ))
+            .as_deref(),
+            Some(HELLO)
+        );
+    }
+
+    #[test]
+    fn an_uppercase_digest_reads_as_the_same_digest() {
+        assert_eq!(
+            sha256_in(&format!("{}  lpm.zip\n", HELLO.to_ascii_uppercase())).as_deref(),
+            Some(HELLO)
+        );
+    }
+
+    #[test]
+    fn output_with_no_digest_in_it_is_no_answer() {
+        assert_eq!(sha256_in(""), None);
+        assert_eq!(
+            sha256_in("sha256sum: lpm.zip: No such file or directory"),
+            None
+        );
+        // 63 digits and 65 digits are both not a digest.
+        assert_eq!(sha256_in(&HELLO[..63]), None);
+        assert_eq!(sha256_in(&format!("{HELLO}0")), None);
+        // Hex-looking but not hex.
+        assert_eq!(sha256_in(&format!("{}g  lpm.zip", &HELLO[..63])), None);
+    }
+
+    /// Every platform asks the tool it is sure to have first, and keeps the
+    /// other two to fall back on.
+    #[test]
+    fn the_hashing_tools_are_tried_in_the_platforms_own_order() {
+        let tools = hashing_tools();
+        let first = tools[0].0;
+        if cfg!(windows) {
+            assert_eq!(first, "certutil");
+        } else {
+            assert_eq!(first, "sha256sum");
+        }
+        let mut names: Vec<&str> = tools.iter().map(|(name, _, _)| *name).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["certutil", "sha256sum", "shasum"]);
+    }
+
+    /// The whole walk, against the tool this machine actually has. A machine
+    /// with none of the three cannot install the client at all, which is what
+    /// a failure here would mean.
+    #[test]
+    fn a_file_is_hashed_with_whichever_tool_the_machine_has() {
+        let dir = std::env::temp_dir().join(format!("candela_lpm_hash_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the scratch dir");
+        let file = dir.join("empty");
+        std::fs::write(&file, b"").expect("write the file to hash");
+        assert_eq!(
+            sha256_of(&file).as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
