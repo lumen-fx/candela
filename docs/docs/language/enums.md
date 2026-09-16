@@ -45,10 +45,18 @@ fn main() {
 
 `type` on an enum value gives the enum's name; `str` gives the variant's name.
 
+An enum from a module bound with `as` is reached through the alias and then the
+enum, because a variant belongs to its enum rather than to the module:
+`shapes::Shape::Circle(1)`. A [generic](generics.md) enum carries its type
+arguments on the enum name in the middle of that path:
+`shapes::Slot<int>::Filled(1)`. The alias on its own, `shapes::Circle(1)`, names
+no function and does not compile. See [modules](modules.md).
+
 ## Matching
 
 `match` on an enum matches the variant and binds its payload. Name the variant
-alone or qualify it with the enum; both forms work in an arm.
+alone, qualify it with the enum, or write the full path through a module alias;
+all three forms work in an arm.
 
 ```rust
 enum Event {

@@ -126,7 +126,9 @@ fn main() {
 
 Name the instantiation in front of the variant (`Slot<int>::Filled(9)`) to say
 which one you mean. A bare `Filled(9)` resolves by variant name, which is enough
-when only one instantiation of the enum exists in the program.
+when only one instantiation of the enum exists in the program. From a module
+bound with `as` the instantiation sits in the middle of the path,
+`g::Slot<int>::Filled(9)`, where a value is built and in a `match` arm alike.
 
 ## impl blocks
 

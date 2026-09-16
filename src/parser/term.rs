@@ -14,6 +14,7 @@ use crate::parser::TypeArgFollow;
 use crate::parser::blocks::parse_block;
 use crate::parser::blocks::parse_block_expr;
 use crate::parser::expand_macro;
+use crate::parser::extend_namespace;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
 use crate::parser::parse_type_args;
@@ -94,30 +95,34 @@ fn parse_struct(
 }
 
 /// Parses what follows a committed type-argument list: a call, a struct
-/// literal, or a variant of a generic enum.
+/// literal, or a variant of a generic enum. `path` is what the type arguments
+/// were written on, so the enum of a module bound with `as`
+/// (`g::Slot<int>::Filled(4)`) reaches the same three shapes as a local one.
 #[inline(never)]
 fn parse_generic_term(
     parser: &mut Parser<'_>,
-    name: SmolStr,
+    path: Box<[SmolStr]>,
     type_args: Box<[TypeExpr]>,
-    name_span: Span,
+    start: u32,
 ) -> Expr {
-    let span: Span = (name_span.start, parser.last_token_end as u32).into();
+    let span: Span = (start, parser.last_token_end as u32).into();
     match parser.peek_token() {
         Token::LParen => {
             parser.next_token();
-            parse_fn_call(parser, Box::from([name]), span, type_args)
+            parse_fn_call(parser, path, span, type_args)
         }
         Token::LBrace => {
             parser.next_token();
-            parse_struct(parser, Box::from([name]), name_span.start, type_args)
+            parse_struct(parser, path, start, type_args)
         }
         // `Slot<int>::Filled(x)` / `Slot<int>::Empty`: a variant of one
         // instantiation of a generic enum.
         _ => {
             parser.next_token_expect(Token::DoubleColon, "");
-            let (namespace, end) = parse_namespace(parser, name);
-            let span: Span = (name_span.start, end).into();
+            let mut namespace = path.into_vec();
+            let end = extend_namespace(parser, &mut namespace);
+            let namespace: Box<[SmolStr]> = Box::from(namespace);
+            let span: Span = (start, end).into();
             if parser.peek_token_opt() == Some(Token::LParen) {
                 parser.next_token();
                 parse_fn_call(parser, namespace, span, type_args)
@@ -178,7 +183,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                     ) =>
                 {
                     let type_args = parse_type_args(parser);
-                    parse_generic_term(parser, SmolStr::new(s), type_args, t_span)
+                    parse_generic_term(parser, Box::from([SmolStr::new(s)]), type_args, start)
                 }
                 // NAMESPACE
                 Some(Token::DoubleColon) => {
@@ -205,6 +210,25 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                         Some(Token::LBrace) if allow_struct => {
                             parser.next_token();
                             parse_struct(parser, namespace, start, Box::from([]))
+                        }
+                        // A GENERIC TYPE INSIDE THE NAMESPACE, whose type
+                        // arguments sit on a segment in the middle of the path:
+                        // `g::Slot<int>::Filled(4)` for a module bound with
+                        // `as`. What follows the list is a call, a struct
+                        // literal or a variant, the same three shapes a local
+                        // generic name takes.
+                        Some(Token::OpInf)
+                            if type_args_ahead(
+                                parser,
+                                if allow_struct {
+                                    TypeArgFollow::Term
+                                } else {
+                                    TypeArgFollow::TermNoStruct
+                                },
+                            ) =>
+                        {
+                            let type_args = parse_type_args(parser);
+                            parse_generic_term(parser, namespace, type_args, start)
                         }
                         // A bare namespaced identifier: a nullary enum-variant
                         // construction (`Color::Red`), resolved by the compiler.

@@ -62,6 +62,11 @@ This is the form to prefer when a module has common names such as `map`, `get`,
 or `len`, and when a reader benefits from seeing where a function came from. The
 alias is yours to choose; it need not match the file name.
 
+A variant of an enum the module declares takes the enum's name in between,
+since the variant belongs to the enum and not to the module:
+`shapes::Shape::Circle(1)`, both where a value is built and in a `match` arm.
+The type itself is `shapes::Shape`. See [enums](enums.md).
+
 ## Name collisions
 
 Merging a symbol that already exists in the importing file is a compile error
