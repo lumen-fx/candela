@@ -108,6 +108,7 @@ pub fn handle_user_function(
                     Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
                     ctx.file_idx,
                     state.sources,
+                    state.type_names(),
                 )
             }
         }
@@ -151,6 +152,7 @@ pub fn handle_user_function(
                 Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
                 ctx.file_idx,
                 state.sources,
+                state.type_names(),
             );
         }
     }
@@ -374,16 +376,19 @@ fn compile_function(
     if let Some((declared, declared_span)) = specialized_return_type(function_id, ctx, state)
         && !param_type_matches(&declared, &return_type)
     {
+        let types = state.type_names();
         error_invalid_type(
             &declared,
             &return_type,
             declared_span,
             None,
             Some(format_args!(
-                "Function {fn_name} is declared to return {declared}"
+                "Function {fn_name} is declared to return {}",
+                types.of(&declared)
             )),
             fn_file_idx,
             state.sources,
+            types,
         );
     }
 

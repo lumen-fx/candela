@@ -13,6 +13,7 @@ use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Struct;
+use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::error_instantiation_depth;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
@@ -1197,12 +1198,14 @@ fn declared_return_type(namespace: &[SmolStr], state: &State<'_>) -> Option<Data
     declared(true).or_else(|| declared(false))
 }
 
-/// Renders a [`DataType`] with full struct/function detail for diagnostics.
+/// Renders a [`DataType`] with full struct/function detail. This is what the
+/// `type` builtin hands back, so its output is a string the program can read.
 ///
 /// Field and argument names are resolved against the compiler `State` by
 /// `Struct`/`Fn` id. The plain `Display` impl (in `candela-vm`) has no
 /// `State`, so it renders those variants opaquely; this is the compiler-side
-/// detailed form.
+/// detailed form. A diagnostic wants the shorter name a type was declared
+/// under, which is [`TypeNames`] instead.
 #[must_use]
 pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
     match t {
@@ -1243,10 +1246,20 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
             .to_smolstr()
         }
         DataType::Enum(e) => state.enums[*e as usize].name.clone(),
+        // Both halves are rendered through this same function, so a map of a
+        // user type names that type the way a list of it does. Reaching for
+        // `Display` here is what made `type({"a": Value::Num(1)})` answer
+        // `{string: enum}`.
         DataType::Map(m) => format_args!(
             "{{{}: {}}}",
-            m.0.as_ref().unwrap_or(&DataType::Unknown),
-            m.1.as_ref().unwrap_or(&DataType::Unknown)
+            m.0.as_ref().map_or_else(
+                || SmolStr::new_static("Unknown"),
+                |k| format_detailed(k, state)
+            ),
+            m.1.as_ref().map_or_else(
+                || SmolStr::new_static("Unknown"),
+                |val| format_detailed(val, state)
+            )
         )
         .to_smolstr(),
         DataType::Fn(id) => {
@@ -1659,7 +1672,14 @@ fn track_return_flow(
                     // walked before the loop is compiled, so a loop over a
                     // value nothing can iterate arrives here first and reports
                     // what the compile stage would have.
-                    t => error_type_not_indexable(&t, *span, true, ctx.file_idx, state.sources),
+                    t => error_type_not_indexable(
+                        &t,
+                        *span,
+                        true,
+                        ctx.file_idx,
+                        state.sources,
+                        state.type_names(),
+                    ),
                 };
                 let v_len = v.len();
                 if var_name.as_str() != "_" {
@@ -2136,7 +2156,16 @@ impl Expr {
                     (DataType::String, DataType::String) => DataType::String,
                     (DataType::Array(t1), DataType::Array(t2)) => DataType::Array(t1.or(t2)),
                     (l, r) => {
-                        error_op(&l, &r, "+", *span_l, *span_r, ctx.file_idx, state.sources);
+                        error_op(
+                            &l,
+                            &r,
+                            "+",
+                            *span_l,
+                            *span_r,
+                            ctx.file_idx,
+                            state.sources,
+                            state.type_names(),
+                        );
                     }
                 }
             }
@@ -2162,6 +2191,7 @@ impl Expr {
                             *span_r,
                             ctx.file_idx,
                             state.sources,
+                            state.type_names(),
                         );
                     }
                 }
@@ -2183,6 +2213,7 @@ impl Expr {
                         *span_r,
                         ctx.file_idx,
                         state.sources,
+                        state.type_names(),
                     ),
                 }
             }
@@ -2191,7 +2222,16 @@ impl Expr {
                     (DataType::Unknown | DataType::Bool, DataType::Bool)
                     | (DataType::Bool, DataType::Unknown) => DataType::Bool,
                     (l, r) => {
-                        error_op(&l, &r, "&&", *span_l, *span_r, ctx.file_idx, state.sources);
+                        error_op(
+                            &l,
+                            &r,
+                            "&&",
+                            *span_l,
+                            *span_r,
+                            ctx.file_idx,
+                            state.sources,
+                            state.type_names(),
+                        );
                     }
                 }
             }
@@ -2207,6 +2247,7 @@ impl Expr {
                     *span_r,
                     ctx.file_idx,
                     state.sources,
+                    state.type_names(),
                 ),
             },
             Self::BoolNeg(e, span_l, span_r) => match e.infer_type(v, ctx, state) {
@@ -2219,13 +2260,21 @@ impl Expr {
                     *span_r,
                     ctx.file_idx,
                     state.sources,
+                    state.type_names(),
                 ),
             },
             Self::ArrayGetIndex(array, _, span) => match array.infer_type(v, ctx, state) {
                 DataType::Array(array_type) => array_type.map_or(DataType::Null, |t| *t),
                 DataType::String => DataType::String,
                 DataType::Unknown => DataType::Unknown,
-                t => error_type_not_indexable(&t, *span, false, ctx.file_idx, state.sources),
+                t => error_type_not_indexable(
+                    &t,
+                    *span,
+                    false,
+                    ctx.file_idx,
+                    state.sources,
+                    state.type_names(),
+                ),
             },
             Self::GetStructField(s, field, struct_span, field_span) => {
                 let s = s.infer_type(v, ctx, state);
@@ -2256,6 +2305,10 @@ impl Expr {
                         None,
                         ctx.file_idx,
                         state.sources,
+                        TypeNames {
+                            structs: state.structs,
+                            enums: state.enums,
+                        },
                     );
                 }
             }
@@ -2263,7 +2316,14 @@ impl Expr {
                 DataType::Array(array_type) => DataType::Array(array_type),
                 DataType::String => DataType::String,
                 DataType::Unknown => DataType::Unknown,
-                t => error_type_not_indexable(&t, *span, false, ctx.file_idx, state.sources),
+                t => error_type_not_indexable(
+                    &t,
+                    *span,
+                    false,
+                    ctx.file_idx,
+                    state.sources,
+                    state.type_names(),
+                ),
             },
             Self::FunctionCall(args, namespace, span, _, type_args) => {
                 // A call written with type arguments names either a variant of a
@@ -2557,6 +2617,7 @@ impl Expr {
                                 *obj_span,
                                 state.sources,
                                 ctx.file_idx,
+                                state.type_names(),
                             )
                         })
                     };

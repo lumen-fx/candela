@@ -116,6 +116,7 @@ pub fn check_arg_type(
             None,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         )
     }
 }

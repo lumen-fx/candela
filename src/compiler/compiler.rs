@@ -1,6 +1,7 @@
 use crate::cold_path;
 use crate::compiler::compiler_data::InstrSrc;
 use crate::compiler::compiler_data::Source;
+use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_errors::error_cannot_find_dynlib_symbol;
 use crate::compiler::compiler_errors::error_cannot_load_dynlib;
 use crate::compiler::compiler_errors::error_cannot_push_type_to_array;
@@ -315,6 +316,7 @@ fn compile_array_literal(
                 &first_type,
                 failing_elem_span,
                 &failing_elem_type,
+                state.type_names(),
             )
         }
     }
@@ -452,6 +454,10 @@ fn compile_struct_literal(
                         *field_value_span,
                         &field_type,
                         state.sources,
+                        TypeNames {
+                            structs: state.structs,
+                            enums: state.enums,
+                        },
                     );
                 }
                 let id = field_expr
@@ -514,6 +520,10 @@ fn compile_struct_literal(
                         *field_value_span,
                         &field_type,
                         state.sources,
+                        TypeNames {
+                            structs: state.structs,
+                            enums: state.enums,
+                        },
                     );
                 }
                 let id = field_expr
@@ -981,6 +991,7 @@ pub(crate) fn check_match_scrutinee_is_enum(
             span,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
 }
@@ -1078,6 +1089,7 @@ fn compile_map_literal(
                         &global_key_type,
                         *key_span,
                         &key_t,
+                        state.type_names(),
                     )
                 }
                 if val_t != global_val_type {
@@ -1088,6 +1100,7 @@ fn compile_map_literal(
                         &global_val_type,
                         *val_span,
                         &val_t,
+                        state.type_names(),
                     )
                 }
             }
@@ -1147,6 +1160,7 @@ fn compile_map_literal(
                         &global_key_type,
                         *key_span,
                         &key_t,
+                        state.type_names(),
                     )
                 }
                 if val_t != global_val_type {
@@ -1157,6 +1171,7 @@ fn compile_map_literal(
                         &global_val_type,
                         *val_span,
                         &val_t,
+                        state.type_names(),
                     )
                 }
             }
@@ -1247,6 +1262,7 @@ fn compile_struct_field_access(
             None,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
 }
@@ -1262,7 +1278,14 @@ fn compile_array_indexing(
 ) -> u16 {
     let inferred = array.infer_type(v, ctx, state);
     if !inferred.is_indexable() {
-        error_type_not_indexable(&inferred, span, false, ctx.file_idx, state.sources);
+        error_type_not_indexable(
+            &inferred,
+            span,
+            false,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
 
     let id = array
@@ -1271,7 +1294,13 @@ fn compile_array_indexing(
 
     let index_inferred = index.infer_type(v, ctx, state);
     if index_inferred != DataType::Int {
-        error_invalid_index_type(&index_inferred, span, ctx.file_idx, state.sources);
+        error_invalid_index_type(
+            &index_inferred,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     let index_id = index
         .compile(v, ctx, state, output, None, false, true)
@@ -1301,21 +1330,40 @@ fn compile_array_slice(
 ) -> u16 {
     let inferred = array.infer_type(v, ctx, state);
     if !inferred.is_indexable() {
-        error_type_not_indexable(&inferred, span, false, ctx.file_idx, state.sources);
+        error_type_not_indexable(
+            &inferred,
+            span,
+            false,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     let id = array
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
     let idx_start_inferred = idx_start.infer_type(v, ctx, state);
     if idx_start_inferred != DataType::Int {
-        error_invalid_index_type(&idx_start_inferred, span, ctx.file_idx, state.sources);
+        error_invalid_index_type(
+            &idx_start_inferred,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     let idx_start_id = idx_start
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
     let idx_end_inferred = idx_end.infer_type(v, ctx, state);
     if idx_end_inferred != DataType::Int {
-        error_invalid_index_type(&idx_end_inferred, span, ctx.file_idx, state.sources);
+        error_invalid_index_type(
+            &idx_end_inferred,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     let idx_end_id = idx_end
         .compile(v, ctx, state, output, None, false, true)
@@ -1361,6 +1409,7 @@ fn uniform_op2(
             span_r,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
     let id_l = l
@@ -1441,7 +1490,16 @@ fn compile_add_op(
             DataType::String | DataType::Array(_) | DataType::Float | DataType::Int
         )
     {
-        compiler_errors::error_op(&t_l, &t_r, "+", span_l, span_r, ctx.file_idx, state.sources);
+        compiler_errors::error_op(
+            &t_l,
+            &t_r,
+            "+",
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     // var+1 or 1+var use the dedicated IncInt/IncIntTo instructions
     if t_l == DataType::Int
@@ -1502,7 +1560,16 @@ fn compile_sub_op(
     if !((t_l == DataType::Float && t_r == DataType::Float)
         || (t_l == DataType::Int && t_r == DataType::Int))
     {
-        compiler_errors::error_op(&t_l, &t_r, "-", span_l, span_r, ctx.file_idx, state.sources);
+        compiler_errors::error_op(
+            &t_l,
+            &t_r,
+            "-",
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     // var-1 uses the dedicated DecInt/DecIntTo instructions
     if t_l == DataType::Int
@@ -1611,6 +1678,7 @@ fn compile_short_circuit_value(
             span_r,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
 
@@ -1746,6 +1814,7 @@ fn compile_neg_op(
             span_r,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
     id
@@ -1776,6 +1845,7 @@ fn compile_bool_neg_op(
             span_r,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
     output.push(Instr::NegBool(id_l, id));
@@ -1920,7 +1990,14 @@ fn compile_array_index_assignment(
 ) {
     let array_type = array.infer_type(v, ctx, state);
     if !array_type.is_indexable() {
-        error_type_not_indexable(&array_type, index_span, false, ctx.file_idx, state.sources);
+        error_type_not_indexable(
+            &array_type,
+            index_span,
+            false,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
     }
     // Get the id of the source array/string (may be a nested GetIndex)
     let id = array
@@ -1953,6 +2030,7 @@ fn compile_array_index_assignment(
             elem_span,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     }
 
@@ -1989,6 +2067,7 @@ fn compile_struct_field_assignment(
             None,
             ctx.file_idx,
             state.sources,
+            state.type_names(),
         );
     };
     let mut field_index: Option<u16> = None;
@@ -2008,6 +2087,10 @@ fn compile_struct_field_assignment(
                     value_span,
                     &new_val_type,
                     state.sources,
+                    TypeNames {
+                        structs: state.structs,
+                        enums: state.enums,
+                    },
                 );
             }
             field_index = Some(i as u16);
@@ -2219,7 +2302,14 @@ fn compile_for_loop(
                 // A map iterates its keys; the loop variable is a key.
                 DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
                 t => {
-                    error_type_not_indexable(&t, span, true, ctx.file_idx, state.sources);
+                    error_type_not_indexable(
+                        &t,
+                        span,
+                        true,
+                        ctx.file_idx,
+                        state.sources,
+                        state.type_names(),
+                    );
                 }
             },
         });
@@ -2297,10 +2387,10 @@ fn compile_int_for_loop(
     let t1 = start_elem.infer_type(v, ctx, state);
     let t2 = end_elem.infer_type(v, ctx, state);
     if t1 != DataType::Int {
-        error_range_invalid_type(span1, &t1, ctx.file_idx, state.sources);
+        error_range_invalid_type(span1, &t1, ctx.file_idx, state.sources, state.type_names());
     }
     if t2 != DataType::Int {
-        error_range_invalid_type(span2, &t2, ctx.file_idx, state.sources);
+        error_range_invalid_type(span2, &t2, ctx.file_idx, state.sources, state.type_names());
     }
     let elem_id = if ctx.single_run {
         start_elem

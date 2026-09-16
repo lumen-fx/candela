@@ -24,6 +24,80 @@ pub use crate::rt::{
     DynamicLibFn, EnumType, EnumVariant, ErrorCatch, HostFnSig, InstrSrc, Pools, Source, Struct,
 };
 
+/// The type tables a message needs to call a user type by the name the program
+/// gave it.
+///
+/// A [`DataType`] carries only a struct's or an enum's id, so
+/// [`Display`](std::fmt::Display) has nothing to print but the words `struct`
+/// and `enum`: every enum in the program reads the same, and a mismatch reads
+/// "expects `enum[]`, got `int[]`". Pairing a type with these tables through
+/// [`TypeNames::of`] prints `Value[]` instead.
+///
+/// Naming a type is a compile-time job: the names come from the tables a
+/// compile builds, and nothing the VM runs reads them. A frontend that shows a
+/// type to a person reaches for this too, which is why the crate root
+/// re-exports it.
+#[derive(Clone, Copy)]
+pub struct TypeNames<'a> {
+    pub structs: &'a [Struct],
+    pub enums: &'a [EnumType],
+}
+
+impl<'a> TypeNames<'a> {
+    /// `ty` written out with these tables.
+    #[must_use]
+    pub const fn of(self, ty: &'a DataType) -> NamedType<'a> {
+        NamedType { ty, names: self }
+    }
+}
+
+/// A [`DataType`] together with the tables that name its structs and enums, as
+/// produced by [`TypeNames::of`].
+pub struct NamedType<'a> {
+    ty: &'a DataType,
+    names: TypeNames<'a>,
+}
+
+impl std::fmt::Display for NamedType<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ty {
+            DataType::Struct(id) => match self.names.structs.get(*id as usize) {
+                Some(declared) => write!(f, "{}", declared.name),
+                None => write!(f, "{}", self.ty),
+            },
+            DataType::Enum(id) => match self.names.enums.get(*id as usize) {
+                Some(declared) => write!(f, "{}", declared.name),
+                None => write!(f, "{}", self.ty),
+            },
+            DataType::Array(element) => match element {
+                Some(element) => write!(f, "{}[]", self.names.of(element)),
+                None => write!(f, "any[]"),
+            },
+            DataType::Map(entry) => write!(
+                f,
+                "{{{}: {}}}",
+                self.names
+                    .of(entry.0.as_ref().unwrap_or(&DataType::Unknown)),
+                self.names
+                    .of(entry.1.as_ref().unwrap_or(&DataType::Unknown))
+            ),
+            DataType::Union(types) => {
+                for (i, member) in types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "|")?;
+                    }
+                    write!(f, "{}", self.names.of(member))?;
+                }
+                Ok(())
+            }
+            // The dynamic slot is spelled `any` in a program, and a
+            // message about one names it the way the program does.
+            DataType::Unknown => write!(f, "any"),
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: SmolStr,
@@ -170,6 +244,16 @@ pub struct State<'a> {
 }
 
 impl State<'_> {
+    /// The tables a diagnostic needs to name a struct or an enum the program
+    /// declared, rather than printing the bare words `struct` and `enum`.
+    #[must_use]
+    pub fn type_names(&self) -> TypeNames<'_> {
+        TypeNames {
+            structs: self.structs,
+            enums: self.enums,
+        }
+    }
+
     /// The scope names written in `file_idx` resolve in: that file's own
     /// declarations, the symbols its bare imports merged in, and the modules it
     /// bound with `as`.

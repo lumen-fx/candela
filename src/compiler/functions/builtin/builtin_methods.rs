@@ -111,6 +111,7 @@ pub fn builtin_methods(
                     obj_span,
                     state.sources,
                     ctx.file_idx,
+                    state.type_names(),
                 );
             }
         };
@@ -522,6 +523,7 @@ pub fn builtin_methods(
                     obj_span,
                     state.sources,
                     ctx.file_idx,
+                    state.type_names(),
                 );
             }
             check_args_range(

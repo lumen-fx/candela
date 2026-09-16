@@ -12,6 +12,9 @@ offending expression red. A compile error also carries a second span when there
 is a related location worth showing, such as the declaration of the function you
 called.
 
+A message names a type the way you declared it, so a mismatch on a list of your
+own enum reads `Value[]` rather than the bare word `enum`.
+
 Compilation stops at the first error. Fixing one and recompiling is how you find
 the next; there is no list.
 

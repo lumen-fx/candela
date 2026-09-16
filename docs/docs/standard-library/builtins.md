@@ -89,8 +89,10 @@ type(value)
 ```
 
 Returns the static type of the expression as a string, resolved at compile time:
-`int`, `float`, `bool`, `string`, `null`, `int[]` for a list of ints, `a|b` for a
-union, and the field list for a struct.
+`int`, `float`, `bool`, `string`, `null`, `int[]` for a list of ints,
+`{string: int}` for a map, `a|b` for a union, the enum's name for an enum value,
+and the field list for a struct. A list or a map names what it holds, so a map
+of your own enum reads `{string: Value}`.
 
 ## Sequences
 
