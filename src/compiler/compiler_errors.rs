@@ -1224,6 +1224,54 @@ pub fn error_match_not_enum(
     )
 }
 
+/// A `match` arm whose pattern is qualified with an enum that is not the one
+/// the matched value has. Only the scrutinee's own variants carry tags the
+/// match dispatches on, so a pattern qualified with another enum names a
+/// variant this match can never reach, however the two spellings line up.
+#[cold]
+#[inline(never)]
+pub fn error_pattern_enum_mismatch(
+    pattern: &str,
+    pattern_enum: &str,
+    scrut_enum: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let message =
+        format!("{pattern} is a variant of enum {pattern_enum}, but this match is on {scrut_enum}");
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Variant pattern from another enum")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} is a variant of enum {}, but this match is on {}",
+                        red(pattern),
+                        red(pattern_enum),
+                        blue(scrut_enum),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Qualify the pattern with {} instead, or leave the variant name bare",
+                blue(scrut_enum),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "pattern_enum_mismatch",
+    )
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespace(

@@ -758,52 +758,83 @@ fn compile_enum_definition(
 /// and the payload binder identifiers (`_` ignores a slot). Raises a compile
 /// error for an unknown variant, a wrong-arity pattern, or a non-identifier
 /// binder.
+///
+/// A qualified pattern resolves through its qualifier, the way a qualified
+/// construction does: `Shape::Circle(r)` finds `Shape` in the arm's scope,
+/// `sh::Shape::Circle(r)` walks the alias, and `Slot<int>::Empty` instantiates
+/// the generic enum. The enum that comes back has to be the scrutinee's, so a
+/// pattern qualified with another enum is reported instead of matching the
+/// variant of the same name. Only a bare `Circle(r)` is looked up by name in
+/// the scrutinee's enum.
 pub(crate) fn resolve_variant_pattern(
     enum_id: u16,
     pattern: &Expr,
     fallback_span: Span,
     ctx: Ctx,
-    state: &State<'_>,
+    state: &mut State<'_>,
 ) -> (u16, Vec<SmolStr>) {
-    let (variant_name, binders, span): (&SmolStr, Vec<SmolStr>, Span) = match pattern {
-        Expr::Var(name, span) => (name, Vec::new(), *span),
-        Expr::NamespacedRef(path, span, _) => (&path[path.len() - 1], Vec::new(), *span),
-        Expr::FunctionCall(args, namespace, span, _, _) => {
-            let mut binders = Vec::with_capacity(args.len());
-            for arg in args {
-                if let Expr::Var(binder, _) = arg {
-                    binders.push(binder.clone());
-                } else {
-                    compiler_errors::error_enum(
-                        "Invalid match pattern",
-                        "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
-                        *span,
-                        ctx.file_idx,
-                        state.sources,
-                    );
+    let (path, type_args, binders, span): (&[SmolStr], &[TypeExpr], Vec<SmolStr>, Span) =
+        match pattern {
+            Expr::Var(name, span) => (std::slice::from_ref(name), &[], Vec::new(), *span),
+            Expr::NamespacedRef(path, span, type_args) => (path, type_args, Vec::new(), *span),
+            Expr::FunctionCall(args, namespace, span, _, type_args) => {
+                let mut binders = Vec::with_capacity(args.len());
+                for arg in args {
+                    if let Expr::Var(binder, _) = arg {
+                        binders.push(binder.clone());
+                    } else {
+                        compiler_errors::error_enum(
+                            "Invalid match pattern",
+                            "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
+                            *span,
+                            ctx.file_idx,
+                            state.sources,
+                        );
+                    }
                 }
+                (&**namespace, type_args, binders, *span)
             }
-            (&namespace[namespace.len() - 1], binders, *span)
+            _ => compiler_errors::error_enum(
+                "Invalid match pattern",
+                "A match on an enum expects variant patterns, e.g. Circle(r) or Unit",
+                fallback_span,
+                ctx.file_idx,
+                state.sources,
+            ),
+        };
+    let variant_name = path[path.len() - 1].clone();
+    let variant_idx = if path.len() >= 2 {
+        let (pattern_enum, variant_idx) = if type_args.is_empty() {
+            resolve_qualified_pattern_enum(path, enum_id, span, ctx, state)
+        } else {
+            resolve_generic_variant(path, type_args, span, ctx, state)
+        };
+        if pattern_enum != enum_id {
+            compiler_errors::error_pattern_enum_mismatch(
+                &path.join("::"),
+                &state.enums[pattern_enum as usize].name,
+                &state.enums[enum_id as usize].name,
+                span,
+                ctx.file_idx,
+                state.sources,
+            );
         }
-        _ => compiler_errors::error_enum(
-            "Invalid match pattern",
-            "A match on an enum expects variant patterns, e.g. Circle(r) or Unit",
-            fallback_span,
-            ctx.file_idx,
-            state.sources,
-        ),
+        variant_idx
+    } else {
+        let e = &state.enums[enum_id as usize];
+        let Some(variant_idx) = e.variants.iter().position(|vt| vt.name == variant_name) else {
+            compiler_errors::error_enum(
+                "Unknown enum variant",
+                &format!("{} is not a variant of enum {}", variant_name, e.name),
+                span,
+                ctx.file_idx,
+                state.sources,
+            );
+        };
+        variant_idx as u16
     };
     let e = &state.enums[enum_id as usize];
-    let Some(variant_idx) = e.variants.iter().position(|vt| &vt.name == variant_name) else {
-        compiler_errors::error_enum(
-            "Unknown enum variant",
-            &format!("{} is not a variant of enum {}", variant_name, e.name),
-            span,
-            ctx.file_idx,
-            state.sources,
-        );
-    };
-    let expected_arity = e.variants[variant_idx].payload.len();
+    let expected_arity = e.variants[variant_idx as usize].payload.len();
     if binders.len() != expected_arity {
         compiler_errors::error_enum(
             "Wrong variant payload arity",
@@ -818,7 +849,48 @@ pub(crate) fn resolve_variant_pattern(
             state.sources,
         );
     }
-    (variant_idx as u16, binders)
+    (variant_idx, binders)
+}
+
+/// The enum and variant a qualified pattern with no type arguments names.
+///
+/// The segments in front of the variant are the enum name and, before it, the
+/// module path it is reached through, so a qualifier that leads nowhere is an
+/// unknown enum rather than a pattern silently taken apart by its last segment.
+fn resolve_qualified_pattern_enum(
+    path: &[SmolStr],
+    scrut_enum: u16,
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> (u16, u16) {
+    let variant = &path[path.len() - 1];
+    let enum_name = &path[path.len() - 2];
+    let module = &path[..path.len() - 2];
+    let Some(pattern_enum) = state.scope(ctx.file_idx).find_enum(module, enum_name) else {
+        compiler_errors::error_enum(
+            "Unknown enum",
+            &format!(
+                "{} does not name an enum in scope, and this match is on enum {}",
+                path[..path.len() - 1].join("::"),
+                state.enums[scrut_enum as usize].name
+            ),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let e = &state.enums[pattern_enum];
+    let Some(variant_idx) = e.variants.iter().position(|vt| &vt.name == variant) else {
+        compiler_errors::error_enum(
+            "Unknown enum variant",
+            &format!("{} is not a variant of enum {}", variant, e.name),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    (pattern_enum as u16, variant_idx as u16)
 }
 
 /// Lowers a `match` on an enum scrutinee to a variant-tag compare chain with

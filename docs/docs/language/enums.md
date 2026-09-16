@@ -56,7 +56,11 @@ no function and does not compile. See [modules](modules.md).
 
 `match` on an enum matches the variant and binds its payload. Name the variant
 alone, qualify it with the enum, or write the full path through a module alias;
-all three forms work in an arm.
+all three forms work in an arm. A qualifier is resolved rather than skipped, so
+it has to lead to the enum the matched value has: a pattern qualified with
+another enum, with an alias that reaches one, or with another instantiation of a
+generic enum is a compile error, even where both enums declare a variant of the
+same name.
 
 ```rust
 enum Event {

@@ -4666,6 +4666,106 @@ fn main() { let xs = []; print(pick(xs[0])); }";
     assert!(d.message.contains("the matched value is null"));
 }
 
+/// A qualified arm pattern used to be reduced to its last segment and looked
+/// up in the scrutinee's enum, so a variant name two enums share matched
+/// whichever enum the pattern named. The qualifier resolves now, and an enum
+/// that is not the scrutinee's is reported.
+#[test]
+pub fn a_pattern_qualified_with_another_enum_is_reported() {
+    let src = "enum Shape { Circle(int), Empty }
+enum Other { Circle(int) }
+fn main() {
+    let s = Shape::Circle(5);
+    match s { Other::Circle(r) => { print(r); } Empty => { print(0); } }
+}";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "pattern_enum_mismatch");
+    assert!(d.message.contains("variant of enum Other"), "{d:?}");
+    assert!(d.message.contains("this match is on Shape"), "{d:?}");
+}
+
+/// The same check across a module alias. A path through the wrong alias reaches
+/// a different enum, which the reduction to the last segment hid as well.
+#[test]
+pub fn a_pattern_qualified_with_a_wrong_alias_is_reported() {
+    let dir = std::env::temp_dir().join("candela_pattern_alias_test");
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join("shapes.cdl"),
+        "enum Shape { Circle(int), Empty }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("others.cdl"), "enum Other { Circle(int) }\n").unwrap();
+    let main = dir.join("wrong_alias.cdl");
+    let src = "import \"./shapes.cdl\" as sh;
+import \"./others.cdl\" as ot;
+fn main() {
+    let s = sh::Shape::Circle(5);
+    match s { ot::Other::Circle(r) => { print(r); } Empty => { print(0); } }
+}";
+    std::fs::write(&main, src).unwrap();
+    let filename = main.to_str().unwrap().to_owned();
+    let d = collect_diagnostic(|| {
+        let _ = compile(
+            String::from(src),
+            &filename,
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+        );
+    })
+    .unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "pattern_enum_mismatch");
+    assert!(d.message.contains("variant of enum Other"), "{d:?}");
+    assert!(d.message.contains("this match is on Shape"), "{d:?}");
+}
+
+/// A generic enum's arms resolve through the instantiation the pattern names,
+/// so a pattern written at another type argument is a different enum and is
+/// reported the same way.
+#[test]
+pub fn a_pattern_at_another_instantiation_is_reported() {
+    let src = "enum Slot<T> { Full(T), Empty }
+fn main() {
+    let s = Slot<int>::Full(7);
+    match s { Slot<string>::Full(v) => { print(v); } Empty => { print(0); } }
+}";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "pattern_enum_mismatch");
+    assert!(d.message.contains("enum Slot<string>"), "{d:?}");
+    assert!(d.message.contains("this match is on Slot<int>"), "{d:?}");
+}
+
+/// Every qualified form that does name the scrutinee's enum still matches: the
+/// enum name on its own, and a generic enum written with the instantiation the
+/// value has.
+#[test]
+pub fn a_pattern_qualified_with_the_scrutinee_enum_matches() {
+    run_and_check_registers!(
+        "
+        enum Shape { Circle(int), Empty }
+        enum Slot<T> { Full(T), Empty }
+        fn main() {
+            let s = Shape::Circle(5);
+            let total = 0;
+            match s {
+                Shape::Circle(r) => { total = total + r; }
+                Shape::Empty => { total = total - 1; }
+            }
+            let slot = Slot<int>::Full(4);
+            match slot {
+                Slot<int>::Full(v) => { total = total + v; }
+                Empty => { total = total - 1; }
+            }
+            print(total);
+        }
+        ",
+        9.into()
+    );
+}
+
 /// A declared array parameter pins the element type an empty literal leaves
 /// open, so the body compiles at that element type and can match on its
 /// elements. Both calls land on the one specialisation the declaration fixes.
