@@ -364,6 +364,28 @@ jobs:
             exit 1
           fi
 
+          # lpm takes its token from the config file `lpm login` writes, at
+          # $LPM_CONFIG_DIR/config.json, so this writes that file. No released
+          # lpm reads LPM_TOKEN from the environment; it stays exported because
+          # it costs nothing and a client that grows the habit needs no change
+          # here. The file carries the secret, so it is created unreadable to
+          # anyone else and removed when the step ends or the job is cancelled.
+          config_dir="$RUNNER_TEMP/lpm"
+          rm -rf "$config_dir"
+          mkdir -p "$config_dir"
+          chmod 700 "$config_dir"
+          trap 'rm -rf "$config_dir"' EXIT INT TERM
+          (
+            umask 077
+            # The registry lpm itself defaults to, spelled out because the
+            # config file the token goes in names one.
+            printf '{"registry": "%s", "token": "%s"}\n' \
+              "https://reg.lumenfx.dev" "$LPM_TOKEN" \
+              > "$config_dir/config.json"
+          )
+          chmod 600 "$config_dir/config.json"
+          export LPM_CONFIG_DIR="$config_dir"
+
           # A package the registry has never heard of is registered first. One
           # it already knows answers 409, which is the answer this wanted.
           if ! lpm publish "$NAME" --platform candela --description "$DESCRIPTION" 2> publish.err; then
