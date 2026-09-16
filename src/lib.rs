@@ -130,6 +130,8 @@ pub use build::build_bytecode;
 /// the host-function tables the CLI never has.
 #[cfg(feature = "compiler")]
 pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
+    // Every run starts at the entry file's `main`.
+    out.require_main();
     let compiler::CompileOutput {
         instructions,
         registers,

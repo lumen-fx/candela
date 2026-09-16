@@ -1994,3 +1994,41 @@ pub fn error_instantiation_depth(span: Span, file_idx: u16, name: &str, sources:
         "generic_instantiation_depth",
     );
 }
+
+/// Reports that the program has no entry point.
+///
+/// Raised where a program is run, built or embedded, not by the compile itself:
+/// a file with no `main` still compiles, which is how `candela check` passes on
+/// a library whose entry has nothing to run. `sources` is the compile's source
+/// table, so its first entry is the entry file this error is about.
+#[inline(never)]
+#[cold]
+pub fn error_no_main(sources: &[Source]) -> ! {
+    let span = Span { start: 0, end: 0 };
+    throw_compiler_error(
+        &|| {
+            let src = &sources[0];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("No main function")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("This file declares no {}", red("main")))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(format_args!(
+                "A program is entered through {}, so a run, a build and an embedded compile all need one; {} does not",
+                blue("main"),
+                green("candela check")
+            ))
+            .finish()
+        },
+        sources,
+        0,
+        span,
+        "No main function: a program is entered through main",
+        "no_main_function",
+    );
+}

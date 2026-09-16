@@ -80,8 +80,10 @@ level.
 ## main
 
 `main` is the entry point. Running a file calls it, and only the `main` of the
-file you run counts; a `main` in an imported module is ignored. A program with
-no `main` is an error.
+file you run counts; a `main` in an imported module is ignored. Running a file
+that declares none is an error, as is building it or compiling it from an
+embedding host; `candela check` compiles it, which is how a library whose entry
+has nothing to run checks.
 
 A `return` inside `main` ends the program, wherever it sits. Nothing is waiting
 on a value from `main`, so `return expr;` there drops the value; use `exit(code)`

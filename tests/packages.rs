@@ -496,6 +496,42 @@ fn a_lumen_package_is_refused_by_name() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A library's entry has nothing to run, so `check` compiles it without a
+/// `main`. Running the same file still reports the missing entry point.
+#[test]
+fn check_passes_on_an_entry_without_main() {
+    let root = scratch_dir("nomain");
+    std::fs::write(
+        root.join("candela.toml"),
+        "[package]\nname = \"shapes\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src").join("main.cdl"),
+        "fn area(width, height) {\n    return width * height;\n}\n",
+    )
+    .unwrap();
+
+    let checked = common::output_with_deadline(candela(&root, None).arg("check"), "candela check");
+    assert!(
+        checked.status.success(),
+        "candela check: {}",
+        stderr_of(&checked)
+    );
+    assert!(
+        stdout_of(&checked).contains("compiles"),
+        "{}",
+        stdout_of(&checked)
+    );
+
+    let ran = common::output_with_deadline(candela(&root, None).arg("run"), "candela run");
+    assert!(!ran.status.success());
+    assert!(stderr_of(&ran).contains("main"), "{}", stderr_of(&ran));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A manifest key candela does not know is reported by name rather than
 /// ignored.
 #[test]

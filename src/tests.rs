@@ -3766,8 +3766,25 @@ pub fn diagnostics_unknown_variable_is_plain_text() {
 
 #[test]
 pub fn diagnostics_missing_main() {
-    let d = compile_diag("fn foo() { return 1; }", "diag.kl").unwrap_err();
-    assert_eq!(d.message, "Cannot find main function");
+    // Compiling a file with no `main` is not an error, which is what `candela
+    // check` does with a library entry. Starting a program from one is, and the
+    // report comes from there.
+    let src = "fn foo() { return 1; }";
+    compile_diag(src, "diag.kl").expect("a file without main compiles");
+    let d = collect_diagnostic(|| {
+        compile(
+            String::from(src),
+            "diag.kl",
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+        )
+        .require_main();
+    })
+    .unwrap_err();
+    assert_eq!(
+        d.message,
+        "No main function: a program is entered through main"
+    );
     assert_eq!(d.code, "no_main_function");
 }
 

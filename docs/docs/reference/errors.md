@@ -94,7 +94,10 @@ whose symbols collide with names already in scope, a `dylib` library that cannot
 be opened, and a symbol the library does not export. See
 [modules](../language/modules.md) and [C libraries](../integration/c-libraries.md).
 
-A program with no `main` function is also rejected at this stage.
+**No entry point.** A program is entered through `main`, so a run, a build and
+an embedded compile all report a file that declares none. `candela check` does
+not: compiling a file without a `main` is how a library entry checks. See
+[functions](../language/functions.md).
 
 ## Runtime errors
 

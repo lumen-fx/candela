@@ -235,17 +235,22 @@ Parses and type-checks the source, binds every `host` function it declares to a
 registered closure, and runs `main` once so top-level setup is done before the
 host makes its first call. The filename is what error reports name.
 
-It also compiles the body of every function whose parameters are all annotated,
-at those declared types, whether or not anything calls it. An error in a
-function `main` never reaches comes back from `compile` rather than from the
-first `call`. A function with a bare parameter has no declared type to compile
-against, so it is left for the call. The check runs before `main`, so a broken
-body is reported before any top-level setup has run.
+It also compiles the body of every function in the file you pass whose
+parameters are all annotated, at those declared types, whether or not anything
+calls it. An error in a function `main` never calls comes back from `compile`
+rather than from the first `call`. A function with a bare parameter has no
+declared type to compile against, so it is left for the call, and so is a
+function an import brought in. The check runs before `main`, so a broken body is
+reported before any top-level setup has run.
+
+A `main` is required: an embedded program runs one the way a run from the CLI
+does. `candela check` is the step that compiles a file without one.
 
 Returns a `Diagnostic` when the script does not compile, when the body of an
-annotated function does not compile at its declared parameter types, when a
-declared `host` function has no registered closure, when a registered closure
-disagrees with its declaration, or when running `main` raises a runtime error.
+annotated function does not compile at its declared parameter types, when the
+script declares no `main`, when a declared `host` function has no registered
+closure, when a registered closure disagrees with its declaration, or when
+running `main` raises a runtime error.
 
 ## Program
 
