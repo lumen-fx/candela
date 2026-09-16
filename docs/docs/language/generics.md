@@ -64,6 +64,11 @@ same argument and hand back different types. A function that comes from a
 [module](modules.md) bound with `as` takes its type arguments after the path:
 `m::signal<int>("count")`.
 
+Nothing in a bare `signal("count")` pins `T`, and that is not an error either: a
+type parameter no argument pins and no type argument names is `any`, so the call
+hands back a `Signal<any>` and the methods of an `impl Signal<any>` apply to it.
+Name the argument to reach a different instantiation.
+
 ## Generic structs
 
 A struct names its type parameters after the struct name and uses them as field
@@ -176,7 +181,8 @@ function twice. An `impl` on a generic type has to name its type arguments:
 
 A method declares its own type parameters after its name, on top of whatever the
 `impl` header binds for the receiver. They behave like a function's: leave them
-off and each is inferred from the arguments, or name them at the call.
+off and each is inferred from the arguments, or name them at the call. One the
+arguments do not mention is `any` when the call names nothing.
 
 ```rust
 struct Store<T> {
@@ -196,8 +202,8 @@ fn main() {
 }
 ```
 
-Name the argument when nothing in the call pins it, which is what picks the
-instantiation the body builds:
+Name the argument to choose which instantiation the body builds, since nothing
+in the call pins it:
 
 ```rust
 struct Kind<T> {
@@ -232,8 +238,9 @@ fn main() {
 ## Leaving type arguments off
 
 A missing type argument is never an error. A call falls back to inference, a
-struct literal takes its arguments from its field values, and a generic type
-named in a type position without arguments is the dynamic `any` slot:
+struct literal takes its arguments from its field values, a type parameter that
+neither pins is `any`, and a generic type named in a type position without
+arguments is the dynamic `any` slot:
 
 ```rust
 fn describe(c: Cell) {

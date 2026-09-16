@@ -264,6 +264,36 @@ pub struct ImplTemplate {
     pub span: Span,
 }
 
+/// The type parameters in scope while one body is compiled.
+///
+/// `named` are the ones the call site's type arguments and the enclosing `impl`
+/// block fixed. `unnamed` are the parameters neither of them mentions: they
+/// stand for `any`, so a body that writes such a parameter in a type position
+/// compiles instead of reporting a type that has no value yet. The two are kept
+/// apart because an annotation mentioning an unnamed parameter stays un-pinned:
+/// what the body returns is inferred rather than checked against `any`.
+#[derive(Debug, Default)]
+pub struct BindingFrame {
+    named: Box<[(SmolStr, DataType)]>,
+    unnamed: Box<[SmolStr]>,
+}
+
+impl BindingFrame {
+    /// A frame in which every parameter is fixed to a type, which is what an
+    /// `impl` block and a generic instantiation produce.
+    #[must_use]
+    pub fn all_named(named: Box<[(SmolStr, DataType)]>) -> Self {
+        Self {
+            named,
+            unnamed: Box::from([]),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.named.is_empty() && self.unnamed.is_empty()
+    }
+}
+
 /// The generic declarations of a program, the instantiations made from them,
 /// and the type parameters bound while a body is being compiled.
 #[derive(Debug, Default)]
@@ -278,20 +308,38 @@ pub struct Generics {
     /// Type parameters bound for the body being compiled. Only the top frame is
     /// in scope: the parameters of a function never reach the body of a
     /// function it calls.
-    bindings: Vec<Box<[(SmolStr, DataType)]>>,
+    bindings: Vec<BindingFrame>,
     depth: u32,
 }
 
 impl Generics {
     /// The type this name is currently bound to, if it names a type parameter
-    /// of the body being compiled.
+    /// of the body being compiled. A parameter nothing named is `any`.
     #[must_use]
     pub fn bound(&self, name: &str) -> Option<DataType> {
-        self.bindings
-            .last()?
+        let frame = self.bindings.last()?;
+        frame
+            .named
             .iter()
             .find(|(param, _)| param == name)
             .map(|(_, t)| t.clone())
+            .or_else(|| {
+                frame
+                    .unnamed
+                    .iter()
+                    .any(|param| param == name)
+                    .then_some(DataType::Unknown)
+            })
+    }
+
+    /// Whether the call site or an enclosing `impl` block fixed this type
+    /// parameter to a type, as opposed to leaving it standing for `any`. An
+    /// annotation that mentions a parameter nothing named stays un-pinned.
+    #[must_use]
+    pub fn names(&self, name: &str) -> bool {
+        self.bindings
+            .last()
+            .is_some_and(|frame| frame.named.iter().any(|(param, _)| param == name))
     }
 
     /// Whether any type parameter is in scope, which is what makes an unknown
@@ -304,7 +352,14 @@ impl Generics {
     fn bound_names(&self) -> Vec<SmolStr> {
         self.bindings
             .last()
-            .map(|frame| frame.iter().map(|(p, _)| p.clone()).collect())
+            .map(|frame| {
+                frame
+                    .named
+                    .iter()
+                    .map(|(p, _)| p.clone())
+                    .chain(frame.unnamed.iter().cloned())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -402,6 +457,12 @@ impl Generics {
     /// frame, an empty one when it has no type parameters, so the caller's
     /// parameters do not resolve inside it.
     pub fn push_bindings(&mut self, frame: Box<[(SmolStr, DataType)]>) {
+        self.bindings.push(BindingFrame::all_named(frame));
+    }
+
+    /// Binds a frame that also carries the parameters nothing named, which a
+    /// function specialisation has and an `impl` block does not.
+    pub fn push_frame(&mut self, frame: BindingFrame) {
         self.bindings.push(frame);
     }
 
@@ -1778,7 +1839,7 @@ fn infer_user_fn_return_type(
     };
     state
         .generics
-        .push_bindings(fn_bindings(fn_id, type_args, state));
+        .push_frame(fn_bindings(fn_id, type_args, state));
     let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
     // Read while the bindings are still pushed, so a generic `-> T[]` resolves
     // to the element type this call named.
@@ -1847,7 +1908,7 @@ pub(crate) fn specialized_return_type(
     let unbound: Vec<SmolStr> = generics
         .params
         .iter()
-        .filter(|param| state.generics.bound(param).is_none())
+        .filter(|param| !state.generics.names(param))
         .cloned()
         .collect();
     let generics = state.fns[fn_id].generics.as_ref()?;
@@ -1890,7 +1951,7 @@ pub(crate) fn specialized_arg_types(
     let frame = fn_bindings(fn_id, type_args, state);
     let mut base = state.type_ctx(ctx.file_idx);
     let mut type_ctx = base.reborrow(file_idx);
-    type_ctx.generics.push_bindings(frame);
+    type_ctx.generics.push_frame(frame);
     let resolved = arg_types
         .iter()
         .map(|t| t.as_ref().map(|t| t.to_datatype(&mut type_ctx)))
@@ -1952,20 +2013,30 @@ pub fn specialization_key(type_args: &[DataType], arg_types: &[DataType]) -> Box
 
 /// The type parameters bound while a function's body is compiled: what its
 /// enclosing `impl` block fixed, plus what the call site named.
+///
+/// A parameter neither of them mentions is recorded as unnamed, which stands
+/// for `any`. A call never has to name its type arguments, so `signal("x")` and
+/// `signal<any>("x")` compile the same body; without this the body could not
+/// write `T` in a type position at all.
 #[must_use]
-pub fn fn_bindings(
-    fn_id: usize,
-    type_args: &[DataType],
-    state: &State<'_>,
-) -> Box<[(SmolStr, DataType)]> {
+pub fn fn_bindings(fn_id: usize, type_args: &[DataType], state: &State<'_>) -> BindingFrame {
     let Some(generics) = state.fns[fn_id].generics.as_ref() else {
-        return Box::from([]);
+        return BindingFrame::default();
     };
-    let mut frame: Vec<(SmolStr, DataType)> = generics.bindings.to_vec();
+    let mut named: Vec<(SmolStr, DataType)> = generics.bindings.to_vec();
     for (param, arg) in generics.params.iter().zip(type_args) {
-        frame.push((param.clone(), arg.clone()));
+        named.push((param.clone(), arg.clone()));
     }
-    frame.into_boxed_slice()
+    let unnamed: Box<[SmolStr]> = generics
+        .params
+        .iter()
+        .filter(|param| !named.iter().any(|(bound, _)| bound == *param))
+        .cloned()
+        .collect();
+    BindingFrame {
+        named: named.into_boxed_slice(),
+        unnamed,
+    }
 }
 
 /// The type a builtin method returns for a receiver, applied across a union
