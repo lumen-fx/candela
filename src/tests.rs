@@ -4427,6 +4427,86 @@ pub fn method_on_builtin_cannot_shadow_builtin() {
 }
 
 #[test]
+pub fn user_fn_named_like_a_file_builtin_is_typed_as_itself() {
+    // `read` names the file library only through the `fs` path, so a program's
+    // own `read` is the one every call site means. Inference used to answer
+    // `string` off the bare name while the call compiled to the user function,
+    // and the addition below then failed to type-check.
+    run_and_check_registers!(
+        "
+        fn read(n: int) -> int { return n + 1; }
+
+        fn main() {
+            print(1 + read(1));
+        }
+        ",
+        3.into()
+    );
+}
+
+#[test]
+pub fn user_fn_named_exists_is_typed_as_itself() {
+    // Same seam as `read`, for the name whose file-library type is `bool`.
+    run_and_check_registers!(
+        "
+        fn exists(n: int) -> int { return n * 2; }
+
+        fn main() {
+            print(1 + exists(3));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn user_fn_named_str_shadows_the_builtin() {
+    // A function in scope wins over a built-in of the same name, in the type
+    // checker and in lowering alike: `str` is the program's `str`, so the sum
+    // is arithmetic rather than a string conversion.
+    run_and_check_registers!(
+        "
+        fn str(n: int) -> int { return n * 2; }
+
+        fn main() {
+            print(1 + str(3));
+        }
+        ",
+        7.into()
+    );
+}
+
+#[test]
+pub fn builtins_still_infer_when_nothing_shadows_them() {
+    // The built-in table answers whenever the scope holds no function of the
+    // name, so the conversions keep their own types.
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            print(type(str(3)) + type(int("4")) + type(bool("true")) == "stringintbool");
+        }
+        "#,
+        true.into()
+    );
+}
+
+#[test]
+pub fn fs_return_types_stay_on_the_fs_path() {
+    // A user `read` and `fs::read` coexist: the path picks the family, so each
+    // call gets the type of the function it names.
+    run_and_check_registers!(
+        r#"
+        fn read(n: int) -> int { return n; }
+
+        fn main() {
+            print(type(read(1)) + type(fs::read("p")) == "intstring");
+        }
+        "#,
+        true.into()
+    );
+}
+
+#[test]
 pub fn hof_named_function_reference() {
     run_and_check_registers!(
         "

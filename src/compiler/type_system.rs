@@ -1202,6 +1202,53 @@ fn declared_return_type(namespace: &[SmolStr], state: &State<'_>) -> Option<Data
     declared(true).or_else(|| declared(false))
 }
 
+/// The type an unqualified built-in call yields, or `None` when no built-in
+/// takes that name.
+///
+/// Keep in step with the match in `builtin_functions`, which lowers these
+/// calls: a name that lowers there and is missing here is reported as an
+/// unknown function, and a name here that does not lower there types a call
+/// that never reaches a built-in.
+fn builtin_fn_return_type(name: &str) -> Option<DataType> {
+    Some(match name {
+        "print" | "exit" | "throw" => DataType::Null,
+        "type" | "str" | "input" | "json_stringify" | "as_str" => DataType::String,
+        "float" | "as_float" => DataType::Float,
+        "int" | "the_answer" | "as_int" => DataType::Int,
+        "bool" | "as_bool" | "is_int" | "is_float" | "is_str" | "is_bool" | "is_list"
+        | "is_map" | "is_null" => DataType::Bool,
+        "range" => DataType::Array(Some(Box::from(DataType::Int))),
+        "argv" => DataType::Array(Some(Box::from(DataType::String))),
+        // A downcast to a collection yields an element/entry type of `any`
+        // (Unknown). That is a known type, not a gap: the entries stay dynamic
+        // instead of taking their type from the first `push`/`insert` the way an
+        // empty literal does. json::parse yields a fully dynamic value.
+        "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
+        "as_map" => DataType::Map(Box::from((
+            Some(DataType::Unknown),
+            Some(DataType::Unknown),
+        ))),
+        "json_parse" => DataType::Unknown,
+        _ => return None,
+    })
+}
+
+/// The type an `fs::` call yields, or `None` when the file library takes no
+/// function of that name. Keep in step with `fs_lib_functions`, which lowers
+/// these calls.
+///
+/// These names are reachable only through the `fs` path. Answering for them off
+/// the bare last segment is what made a program's own `read` or `exists` infer
+/// as a file operation.
+fn fs_fn_return_type(name: &str) -> Option<DataType> {
+    Some(match name {
+        "read" => DataType::String,
+        "exists" => DataType::Bool,
+        "write" | "append" | "delete" | "delete_dir" => DataType::Null,
+        _ => return None,
+    })
+}
+
 /// Renders a [`DataType`] with full struct/function detail. This is what the
 /// `type` builtin hands back, so its output is a string the program can read.
 ///
@@ -2365,124 +2412,113 @@ impl Expr {
                     );
                 }
                 // A qualified enum-variant construction (`Color::Red(x)`) has an
-                // enum type; intercept before the namespaced-function paths.
+                // enum type; intercept before the function paths, which is where
+                // `handle_functions` intercepts it too.
                 if namespace.len() >= 2
                     && let Some((enum_id, _)) =
                         crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
                 {
                     return DataType::Enum(enum_id);
                 }
-                // A call into a declared namespace takes its type from the
-                // declaration, before the built-in table below gets to read the
-                // bare name. `gpio::read` is whatever its `host` block says it
-                // is, not the `read` that returns a string.
-                if namespace.len() >= 2
-                    && let Some(declared) = declared_return_type(namespace, state)
-                {
-                    return declared;
-                }
-                match namespace.last().unwrap().as_str() {
-                    "print" | "write" | "append" | "delete" | "delete_dir" => DataType::Null,
-                    "type" | "str" | "input" | "read" | "json_stringify" | "as_str" => {
-                        DataType::String
-                    }
-                    "float" | "as_float" => DataType::Float,
-                    "int" | "the_answer" | "as_int" => DataType::Int,
-                    "bool" | "exists" | "as_bool" | "is_int" | "is_float" | "is_str"
-                    | "is_bool" | "is_list" | "is_map" | "is_null" => DataType::Bool,
-                    "range" => DataType::Array(Some(Box::from(DataType::Int))),
-                    "argv" => DataType::Array(Some(Box::from(DataType::String))),
-                    // A downcast to a collection yields an element/entry type of
-                    // `any` (Unknown). That is a known type, not a gap: the
-                    // entries stay dynamic instead of taking their type from
-                    // the first `push`/`insert` the way an empty literal does.
-                    // json::parse yields a fully dynamic value.
-                    "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
-                    "as_map" => DataType::Map(Box::from((
-                        Some(DataType::Unknown),
-                        Some(DataType::Unknown),
-                    ))),
-                    "json_parse" => DataType::Unknown,
-                    function_name => {
-                        // A call to a function-typed parameter (a higher-order
-                        // function calling the function it was handed): resolve
-                        // the concrete callee from the parameter's static Fn type
-                        // and infer that function's return type.
-                        if namespace.len() == 1
-                            && let Some(DataType::Fn(fn_id)) = v
-                                .iter()
-                                .rfind(|var| var.name.as_str() == function_name)
-                                .map(|var| var.var_type.clone())
-                        {
-                            let infered_arg_types = args
-                                .iter()
-                                .map(|x| x.infer_type(v, ctx, state))
-                                .collect::<Vec<DataType>>();
-                            return infer_user_fn_return_type(
-                                fn_id as usize,
-                                &infered_arg_types,
-                                &[],
-                                function_name,
-                                v,
-                                ctx,
-                                state,
-                            );
-                        }
-                        if let Some(return_type) =
-                            dyn_lib_return_type(&namespace[0], function_name, state)
-                        {
-                            return return_type;
-                        }
-                        let infered_arg_types = args
-                            .iter()
-                            .map(|x| x.infer_type(v, ctx, state))
-                            .collect::<Vec<DataType>>();
-
-                        let Some(fn_id) = state
-                            .fns
-                            .iter()
-                            .rposition(|func| func.name == function_name)
-                        else {
-                            // An unqualified call whose name is an enum variant
-                            // (`Some(x)`) constructs that variant. User functions
-                            // above keep priority.
-                            if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(
-                                namespace,
+                // What follows resolves the name in the order `handle_functions`
+                // lowers it: the path picks the family, and inside a family a
+                // function in scope wins over a built-in of the same name. One
+                // flat table of built-in names, read before the scope, is what
+                // typed a program's own `read` as the string `fs::read` returns.
+                let (fn_name, path) = namespace.split_last().unwrap();
+                let infered_args = |v: &mut Vec<Variable>, state: &mut State<'_>| {
+                    args.iter()
+                        .map(|x| x.infer_type(v, ctx, state))
+                        .collect::<Vec<DataType>>()
+                };
+                if !path.is_empty() {
+                    if path == ["fs"] {
+                        return fs_fn_return_type(fn_name).unwrap_or_else(|| {
+                            error_unknown_function(
+                                fn_name,
+                                *span,
+                                &Namespace::default(),
                                 ctx.file_idx,
-                                state,
-                            ) {
-                                return DataType::Enum(enum_id);
-                            }
-                            if namespace.len() == 1 {
-                                error_unknown_function(
-                                    function_name,
-                                    *span,
-                                    state.scope(ctx.file_idx),
-                                    ctx.file_idx,
-                                    state.sources,
-                                );
-                            } else {
-                                error_unknown_function_in_namespace(
-                                    function_name,
-                                    &namespace[..namespace.len() - 1],
-                                    *span,
-                                    ctx.file_idx,
-                                    state,
-                                );
-                            }
-                        };
-
-                        infer_user_fn_return_type(
-                            fn_id,
-                            &infered_arg_types,
-                            &[],
-                            function_name,
-                            v,
-                            ctx,
-                            state,
-                        )
+                                state.sources,
+                            )
+                        });
                     }
+                    // A call into a `host` or `dylib` block takes its type from
+                    // the declaration: `gpio::read` is whatever its block says it
+                    // is, not the `read` that returns a string.
+                    if let Some(declared) = declared_return_type(namespace, state) {
+                        return declared;
+                    }
+                    let Some(fn_id) = state.scope(ctx.file_idx).find_function(path, fn_name) else {
+                        error_unknown_function_in_namespace(
+                            fn_name,
+                            path,
+                            *span,
+                            ctx.file_idx,
+                            state,
+                        );
+                    };
+                    let infered_arg_types = infered_args(v, state);
+                    return infer_user_fn_return_type(
+                        fn_id,
+                        &infered_arg_types,
+                        &[],
+                        fn_name,
+                        v,
+                        ctx,
+                        state,
+                    );
                 }
+                // A call to a function-typed parameter (a higher-order function
+                // calling the function it was handed): the callee comes from the
+                // parameter's static Fn type. Lowering reads the same function
+                // off the scope symbol `handle_user_function` declares for that
+                // parameter, which inference has not run yet.
+                if let Some(DataType::Fn(fn_id)) = v
+                    .iter()
+                    .rfind(|var| var.name.as_str() == fn_name.as_str())
+                    .map(|var| var.var_type.clone())
+                {
+                    let infered_arg_types = infered_args(v, state);
+                    return infer_user_fn_return_type(
+                        fn_id as usize,
+                        &infered_arg_types,
+                        &[],
+                        fn_name,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
+                if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) {
+                    let infered_arg_types = infered_args(v, state);
+                    return infer_user_fn_return_type(
+                        fn_id,
+                        &infered_arg_types,
+                        &[],
+                        fn_name,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
+                if let Some(return_type) = builtin_fn_return_type(fn_name) {
+                    return return_type;
+                }
+                // An unqualified call whose name is an enum variant (`Some(x)`)
+                // constructs that variant. Functions above keep priority.
+                if let Some((enum_id, _)) =
+                    crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
+                {
+                    return DataType::Enum(enum_id);
+                }
+                error_unknown_function(
+                    fn_name,
+                    *span,
+                    state.scope(ctx.file_idx),
+                    ctx.file_idx,
+                    state.sources,
+                )
             }
             Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, _, type_args) => {
                 let method = namespace.last().unwrap().as_str();

@@ -73,6 +73,14 @@ Declaration order does not matter, so a function may call one declared further
 down the file. Two functions cannot share a name: there is no overloading, and a
 repeated name is a compile error.
 
+A declaration may take the name of a [built-in](../standard-library/builtins.md),
+and the declaration wins. `fn str(n: int) -> int` makes `str` the program's own
+function wherever the file calls it, with its own argument and return types, and
+the built-in conversion is out of reach there. An imported name counts as
+declared, so a module that exports `read` is the `read` its importers call. The
+built-in methods are the exception: one of their names in an `impl` block never
+resolves, as [methods](methods.md) describes.
+
 `fn` belongs at the top level of a file. A declaration inside a block, including
 inside another function's body, is a compile error; move it out to the top
 level.

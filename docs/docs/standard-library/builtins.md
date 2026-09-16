@@ -4,6 +4,12 @@ These functions and methods are part of the language. They need no import, and
 they are available in a `.cdlb` artifact running under `candela-vm` with no
 library directory installed.
 
+A function your program declares or imports takes precedence over a built-in
+function of the same name; see
+[functions](../language/functions.md#declaring-and-calling). The built-in
+methods work the other way round and keep precedence over an `impl` block, as
+[methods](../language/methods.md#methods-on-the-built-in-types) describes.
+
 Everything here raises errors the same way the language does. A raised error
 carries a short code, and that code is what a `catch` binds and what
 `catch "code"` filters on; the longer message is what an uncaught error prints.

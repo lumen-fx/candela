@@ -27,6 +27,27 @@ pub fn builtin_functions(
     span: Span,
     args_indexes: &[Span],
 ) -> Option<u16> {
+    // A function the program declares or imports wins over a built-in of the
+    // same name, and the scope is asked before the table below so that
+    // `Expr::infer_type` and this function resolve the name identically. Both
+    // ask `find_function`; while the type checker had its own table of built-in
+    // names it read first, a program's own `read` compiled to the user function
+    // and type-checked as the string `fs::read` returns.
+    if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name) {
+        return handle_user_function(
+            name,
+            fn_id,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            args,
+            span,
+            args_indexes,
+            &[],
+        );
+    }
     match name {
         "print" => {
             for arg in args {
@@ -301,28 +322,15 @@ pub fn builtin_functions(
             None
         }
         fn_name => {
-            if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) {
-                handle_user_function(
-                    fn_name,
-                    fn_id,
-                    output,
-                    v,
-                    ctx,
-                    state,
-                    tgt_id,
-                    args,
-                    span,
-                    args_indexes,
-                    &[],
-                )
-            } else if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
+            if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
                 std::slice::from_ref(&SmolStr::new(fn_name)),
                 ctx.file_idx,
                 state,
             ) {
                 // An otherwise-unknown call whose name is an enum variant
-                // (`Some(x)`, `Ok(v)`) is a variant construction. User functions
-                // above keep priority, so a function never gets shadowed.
+                // (`Some(x)`, `Ok(v)`) is a variant construction. The scope
+                // lookup at the top of this function keeps priority, so a
+                // function never gets shadowed.
                 Some(crate::compiler::compile_enum_construction(
                     enum_id,
                     variant_idx,
