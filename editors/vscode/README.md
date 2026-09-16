@@ -26,6 +26,12 @@ attribution details.
   - `import`, `host`, and `dylib` constructs, struct declarations and literals,
     `enum` and `impl` declarations, function definitions and calls, method
     calls, and `namespace::` access.
+  - Generics: a declaration's type parameters (`struct Cell<T>`, `fn first<T>`,
+    `impl Signal<int>`) and the type arguments a use names (`Cell<int>` in a
+    type, `first<int>(xs)`, `Cell<int>{ .. }`, `Slot<int>::Filled(9)`) color as
+    types inside angle brackets. `a < b` and `a < b > c` stay comparisons: a
+    list is read only where the closing `>` is followed by something no operand
+    can start with. A list written across two lines is not recognized.
   - Macro invocations, `name!( ... )`: the name colors as a macro rather than a
     function, and the region between the parentheses stays raw, so markup
     written inside one is not read as candela strings and operators.

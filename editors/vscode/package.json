@@ -2,7 +2,7 @@
   "name": "candela",
   "displayName": "Candela",
   "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics, hover, completion, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "lumen-fx",
   "license": "Apache-2.0",
   "engines": {
