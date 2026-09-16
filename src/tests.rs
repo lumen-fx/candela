@@ -4522,6 +4522,90 @@ pub fn enum_match_wildcard() {
     );
 }
 
+/// The compiler's debug register dump formats every register before the
+/// program runs, and an enum construction's destination register is only a
+/// placeholder until `CloneEnum` writes it. The placeholder used to name
+/// object-pool slot 0, so the dump read the first word of whatever object the
+/// program built first as this enum's variant tag: an array of ints gave a tag
+/// past the last variant, and an array of enums gave a word that is no tag at
+/// all. Both cases dump here, because `run_and_check_registers!` compiles with
+/// the dump on.
+#[test]
+pub fn enum_in_an_array_dumps_its_registers() {
+    run_and_check_registers!(
+        "
+        enum Value { Int(int), Null }
+        fn main() {
+            let xs = [Value::Int(3)];
+            match xs[0] {
+                Int(n) => { print(n); }
+                Null => { print(-1); }
+            }
+        }
+        ",
+        3.into()
+    );
+}
+
+/// The same dump, with an array of plain ints built before the enum, which is
+/// what put a tag past the last variant in front of the unchecked variant
+/// lookup.
+#[test]
+pub fn enum_after_an_int_array_dumps_its_registers() {
+    run_and_check_registers!(
+        "
+        enum Value { Int(int), Null }
+        fn main() {
+            let seen = [42];
+            let v = Value::Int(seen[0]);
+            match v {
+                Int(n) => { print(n); }
+                Null => { print(-1); }
+            }
+        }
+        ",
+        42.into()
+    );
+}
+
+/// What the dump prints for an enum construction's destination register: the
+/// variant the register is about to hold, not the fallback `Data::format`
+/// gives an entry that carries no readable variant tag.
+#[test]
+pub fn an_enum_destination_register_dumps_its_variant() {
+    let out = compile(
+        String::from(
+            "
+        enum Value { Int(int), Null }
+        fn main() {
+            let xs = [Value::Int(3)];
+            print(7);
+        }
+        ",
+        ),
+        "enum_dump.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let dumped: Vec<String> = out
+        .registers
+        .iter()
+        .map(|data| {
+            data.format(
+                &out.pools.objs,
+                &out.pools.strings,
+                &out.pools.maps,
+                &out.structs,
+                &out.enums,
+                true,
+            )
+            .to_string()
+        })
+        .collect();
+    assert!(dumped.iter().any(|s| s == "Int(3)"), "{dumped:?}");
+    assert!(!dumped.iter().any(|s| s == "enum"), "{dumped:?}");
+}
+
 /// A bare parameter takes the type its call site passes, so a call that hands
 /// it an enum value gets the variant-matching lowering with its payload bound.
 #[test]
@@ -4659,14 +4743,10 @@ pub fn enum_returned_from_fn() {
 /// for the life of the program. The template is a constant register, so once a
 /// caller's variable is allowed to reuse it, the second call to the function
 /// clones whatever the caller left there instead of the variant.
-///
-/// This compiles with the debug dump off. The dump formats every register, and
-/// an enum destination register still holds the placeholder it carries before
-/// execution, which has no variant tag to format.
 #[test]
 pub fn enum_built_in_a_loop_survives_a_second_call() {
-    let filename = "enum_loop.cdl";
-    let contents = "
+    run_and_check_registers!(
+        "
         enum Value { Int(int), Text(string) }
         fn build(n) {
             let cells = [];
@@ -4685,43 +4765,9 @@ pub fn enum_built_in_a_loop_survives_a_second_call() {
             }
             print(total);
         }
-    ";
-    let out = compile(
-        String::from(contents),
-        filename,
-        false,
-        &crate::compiler::imports::ImportResolver::new(),
+        ",
+        6.into()
     );
-    let mut pools = out.pools;
-    let mut reg = RegisterFile(out.registers);
-    crate::vm::execute(
-        &out.instructions,
-        &mut reg,
-        &mut pools,
-        &crate::errors::ErrorCtx {
-            instr_src: out.instr_src,
-            sources: vec![Source {
-                filename: filename.into(),
-                contents: String::from(contents),
-            }],
-        },
-        &out.fn_registers,
-        &[],
-        &[],
-        &[],
-        out.allocated_arg_count,
-        out.allocated_call_depth,
-        &[],
-        &[],
-        0,
-    );
-    assert!(out.instructions.iter().any(|x| {
-        if let Instr::Print(tgt) = x {
-            reg[(*tgt) as usize] == 6.into()
-        } else {
-            false
-        }
-    }));
 }
 
 #[test]

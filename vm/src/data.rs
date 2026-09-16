@@ -426,7 +426,9 @@ impl Data {
         } else if self.is_null() {
             SmolStr::new_static("null")
         } else if self.is_struct() {
-            let s_name = unsafe { &structs.get_unchecked(self.struct_type_id() as usize).name };
+            let s_name = structs
+                .get(self.struct_type_id() as usize)
+                .map_or("struct", |s| s.name.as_str());
             format_args!(
                 "{} {{{}}}",
                 s_name,
@@ -444,10 +446,19 @@ impl Data {
             )
             .to_smolstr()
         } else if self.is_enum() {
-            let e = unsafe { enums.get_unchecked(self.enum_type_id() as usize) };
             let entry = &obj_pool[self.as_enum()];
-            let tag = entry[0].as_int() as usize;
-            let variant = unsafe { e.variants.get_unchecked(tag) };
+            // The variant tag is the entry's first word. Look the variant up
+            // instead of indexing on trust: a word that is no tag, which is
+            // what an entry a register only aliases can hold, would otherwise
+            // index the variant table out of range. An entry carrying no
+            // readable tag has no variant name to print.
+            let variant = enums
+                .get(self.enum_type_id() as usize)
+                .filter(|_| entry.first().is_some_and(|word| word.is_int()))
+                .and_then(|e| e.variants.get(entry[0].as_int() as usize));
+            let Some(variant) = variant else {
+                return SmolStr::new_static("enum");
+            };
             if entry.len() <= 1 {
                 variant.name.clone()
             } else {
@@ -521,6 +532,78 @@ impl From<Data> for bool {
     #[inline(always)]
     fn from(value: Data) -> Self {
         value.as_bool()
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::Data;
+    use crate::rt::{DataType, EnumType, EnumVariant, Span};
+    use crate::vm::{MapPool, ObjectPool, Pool, StringPool};
+    use smol_strc::SmolStr;
+
+    fn one_enum() -> Vec<EnumType> {
+        vec![EnumType {
+            name: SmolStr::new_static("Value"),
+            variants: Box::new([EnumVariant {
+                name: SmolStr::new_static("Int"),
+                payload: Box::new([DataType::Int]),
+                name_span: Span { start: 0, end: 0 },
+            }]),
+            id: 0,
+            name_span: Span { start: 0, end: 0 },
+        }]
+    }
+
+    /// An enum value nested in an array formats through the same path a
+    /// top-level one does, tag and payload included.
+    #[test]
+    fn an_enum_inside_an_array_formats_as_its_variant() {
+        let enums = one_enum();
+        let obj_pool: ObjectPool = Pool(vec![
+            vec![Data::int(0), Data::int(3)],
+            vec![Data::enum_instance(0, 0)],
+        ]);
+        let rendered = Data::array(1).format(
+            &obj_pool,
+            &Pool(Vec::new()),
+            &Pool(Vec::new()),
+            &[],
+            &enums,
+            true,
+        );
+        assert_eq!(rendered, "[Int(3)]");
+    }
+
+    /// A pool entry whose first word is no variant tag has no variant to name,
+    /// and says so rather than indexing the variant table with whatever the
+    /// word happened to be.
+    #[test]
+    fn an_entry_with_no_readable_tag_formats_as_the_bare_type() {
+        let enums = one_enum();
+        let string_pool: StringPool = Pool(Vec::new());
+        let map_pool: MapPool = Pool(Vec::new());
+        for entry in [
+            // An array of enum values, read as if it were an enum value.
+            vec![Data::enum_instance(0, 0)],
+            // A tag past the last variant.
+            vec![Data::int(42)],
+            // A negative tag.
+            vec![Data::int(-1)],
+            // No tag at all.
+            Vec::new(),
+        ] {
+            let obj_pool: ObjectPool = Pool(vec![entry]);
+            let rendered = Data::enum_instance(0, 0).format(
+                &obj_pool,
+                &string_pool,
+                &map_pool,
+                &[],
+                &enums,
+                true,
+            );
+            assert_eq!(rendered, "enum");
+        }
     }
 }
 
