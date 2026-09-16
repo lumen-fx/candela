@@ -312,3 +312,222 @@ fn char_at(s, i) {
           (binary_expression
             (identifier)
             (integer_literal)))))))
+
+================================================================================
+Type parameters on declarations (docs/docs/language/generics.md)
+================================================================================
+
+struct Pair<K, V> {
+    key: K,
+    value: V,
+}
+enum Slot<T> {
+    Filled(T),
+    Empty,
+}
+fn first<T>(items: T[]) -> T {
+    return items[0];
+}
+impl Cell<T> {
+    fn tagged<U>(self, extra: U) -> U {
+        return extra;
+    }
+}
+impl Signal<int> {
+    fn get(self) -> int {
+        return 0;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (type_parameters
+      (type_identifier)
+      (type_identifier))
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (type_identifier))
+      (field_declaration
+        (identifier)
+        (type_identifier))))
+  (enum_declaration
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (enum_variant_list
+      (enum_variant
+        (identifier)
+        (payload_type_list
+          (type_identifier)))
+      (enum_variant
+        (identifier))))
+  (function_declaration
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameter_list
+      (parameter
+        (identifier)
+        (array_type
+          (type_identifier))))
+    (return_type
+      (type_identifier))
+    (block
+      (return_statement
+        (index_expression
+          (identifier)
+          (integer_literal)))))
+  (impl_block
+    (type_identifier)
+    (type_arguments
+      (type_identifier))
+    (function_declaration
+      (identifier)
+      (type_parameters
+        (type_identifier))
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (identifier)))))
+  (impl_block
+    (type_identifier)
+    (type_arguments
+      (type_identifier))
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (integer_literal))))))
+
+================================================================================
+Generic types in type positions (docs/docs/language/generics.md)
+================================================================================
+
+struct Row {
+    cells: Cell<int>[],
+    seen: {string: Cell<Cell<int>>},
+}
+fn deepen(c: Cell<int>) -> Cell<Cell<int>> {
+    return c;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (array_type
+          (generic_type
+            (type_identifier)
+            (type_arguments
+              (type_identifier)))))
+      (field_declaration
+        (identifier)
+        (map_type
+          (type_identifier)
+          (generic_type
+            (type_identifier)
+            (type_arguments
+              (generic_type
+                (type_identifier)
+                (type_arguments
+                  (type_identifier)))))))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (generic_type
+          (type_identifier)
+          (type_arguments
+            (type_identifier)))))
+    (return_type
+      (generic_type
+        (type_identifier)
+        (type_arguments
+          (generic_type
+            (type_identifier)
+            (type_arguments
+              (type_identifier))))))
+    (block
+      (return_statement
+        (identifier)))))
+
+================================================================================
+A generic in a union, and a module-qualified generic (docs/docs/language/generics.md)
+================================================================================
+
+struct Row {
+    slot: Cell<int>|null,
+    from: shapes::Cell<int>,
+}
+fn pick(c: shapes::Cell<int>|null) -> Cell<shapes::Point>|null {
+    return c;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (union_type
+          (generic_type
+            (type_identifier)
+            (type_arguments
+              (type_identifier)))
+          (type_identifier)))
+      (field_declaration
+        (identifier)
+        (generic_type
+          (qualified_type
+            (type_identifier)
+            (type_identifier))
+          (type_arguments
+            (type_identifier))))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (union_type
+          (generic_type
+            (qualified_type
+              (type_identifier)
+              (type_identifier))
+            (type_arguments
+              (type_identifier)))
+          (type_identifier))))
+    (return_type
+      (union_type
+        (generic_type
+          (type_identifier)
+          (type_arguments
+            (qualified_type
+              (type_identifier)
+              (type_identifier))))
+        (type_identifier)))
+    (block
+      (return_statement
+        (identifier)))))

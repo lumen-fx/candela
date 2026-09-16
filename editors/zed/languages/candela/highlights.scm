@@ -131,9 +131,7 @@
   "^"
   "=="
   "!="
-  "<"
   "<="
-  ">"
   ">="
   "&&"
   "||"
@@ -150,6 +148,27 @@
   "=>"
   "|"
 ] @operator
+
+; `<` and `>` are the comparison operators here and the brackets of a type
+; argument list below, so each spelling is captured where it stands rather
+; than in the list above.
+(binary_expression
+  operator: [
+    "<"
+    ">"
+  ] @operator)
+
+(type_arguments
+  [
+    "<"
+    ">"
+  ] @punctuation.bracket)
+
+(type_parameters
+  [
+    "<"
+    ">"
+  ] @punctuation.bracket)
 
 [
   "("

@@ -9,6 +9,12 @@
 // Binary operator levels, loosest first, matching `check_op` in
 // src/parser/parser_expr.rs and the table in docs/docs/reference/operators.md.
 // The prefix operators bind tighter than `^` and looser than the postfix forms.
+//
+// Everything a bare name can grow into sits at the postfix level: a call, a
+// struct literal, a namespaced path, and the name on its own. Holding them
+// level is what lets the parser carry all four readings of `a <` forward
+// together, since a `<` opens a type argument list and is also the comparison
+// operator; see the `conflicts` list.
 const PREC = {
   or: 1,
   and: 2,
@@ -22,6 +28,11 @@ const PREC = {
   // A `name { ... }` struct literal competes with the block that follows a
   // condition, so it is resolved dynamically; see the `conflicts` list.
   struct_literal: 10,
+  // `a < b > (c)` reads as a comparison and as a call naming a type argument,
+  // and both readings run to the end of the expression. The compiler takes the
+  // type argument, so the branch that reads one carries this dynamic
+  // precedence and wins the tie.
+  type_arguments: 11,
 };
 
 /**
@@ -63,6 +74,13 @@ module.exports = grammar({
     [$._expression, $.struct_literal],
     // `{` opens a block statement and also a map literal.
     [$.block, $.map_literal],
+    // `a < b`, `a<b>(c)`, `a<b>{ ... }` and `a<b>::c` all start alike, and
+    // only the token after the matching `>` tells them apart, so all four
+    // readings are carried until it arrives.
+    [$._expression, $.call_expression, $.struct_literal, $.qualified_identifier],
+    // The same choice after a `.`, where the name is a field or the method of
+    // a call that may name type arguments.
+    [$.field_expression, $.method_call_expression, $.qualified_identifier],
   ],
 
   rules: {
@@ -97,6 +115,7 @@ module.exports = grammar({
       seq(
         'fn',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         field('parameters', $.parameter_list),
         optional(field('return_type', $.return_type)),
         field('body', $.block),
@@ -113,7 +132,12 @@ module.exports = grammar({
     return_type: ($) => seq('->', $._type),
 
     struct_declaration: ($) =>
-      seq('struct', field('name', $.identifier), field('body', $.field_declaration_list)),
+      seq(
+        'struct',
+        field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
+        field('body', $.field_declaration_list),
+      ),
 
     field_declaration_list: ($) =>
       seq('{', sepBy1(',', $.field_declaration), optional(','), '}'),
@@ -122,7 +146,12 @@ module.exports = grammar({
       seq(field('name', $.identifier), ':', field('type', $._type)),
 
     enum_declaration: ($) =>
-      seq('enum', field('name', $.identifier), field('body', $.enum_variant_list)),
+      seq(
+        'enum',
+        field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
+        field('body', $.enum_variant_list),
+      ),
 
     enum_variant_list: ($) => seq('{', sepByTrailing(',', $.enum_variant), '}'),
 
@@ -133,8 +162,20 @@ module.exports = grammar({
 
     // Methods lower to mangled free functions, so an impl block holds nothing
     // but `fn` declarations.
+    //
+    // An `impl` on a generic type names type arguments in its header, either a
+    // parameter it binds for the methods (`impl Cell<T>`) or the concrete
+    // instantiation the block applies to (`impl Signal<int>`). Both are spelt
+    // as a type argument list.
     impl_block: ($) =>
-      seq('impl', field('type', $._type_identifier), '{', repeat($.function_declaration), '}'),
+      seq(
+        'impl',
+        field('type', $._type_identifier),
+        optional(field('type_arguments', $.type_arguments)),
+        '{',
+        repeat($.function_declaration),
+        '}',
+      ),
 
     dylib_block: ($) =>
       seq('dylib', field('path', $.string_literal), field('body', $.signature_list)),
@@ -165,7 +206,41 @@ module.exports = grammar({
     _type: ($) => choice($._atomic_type, $.union_type),
 
     _atomic_type: ($) =>
-      choice($._type_identifier, $.qualified_type, $.array_type, $.map_type),
+      choice(
+        $._type_identifier,
+        $.qualified_type,
+        $.generic_type,
+        $.array_type,
+        $.map_type,
+      ),
+
+    // `Cell<int>`, and nested as deep as it goes: a type argument is an
+    // ordinary type, so `Cell<Cell<int>>` and `Cell<int>[]` both spell out.
+    generic_type: ($) =>
+      seq(
+        field('name', choice($._type_identifier, $.qualified_type)),
+        field('type_arguments', $.type_arguments),
+      ),
+
+    // The names a declaration binds: `struct Cell<T>`, `fn first<T>`. Each is
+    // a bare name, never a composite type.
+    type_parameters: ($) => seq('<', sepBy1(',', $._type_identifier), '>'),
+
+    // The types a use names. A type argument list has no spelling of its own,
+    // so in an expression one stands only where a `(`, a `{` or a `::` follows
+    // the closing `>`, and here that falls out of the grammar, because nothing
+    // else accepts a list: `a < b` and `a < b > c` stay the comparisons they
+    // have always been.
+    //
+    // The compiler, in `type_args_ahead`, narrows it twice more, and this
+    // grammar deliberately does not: in an `if`, `while` or `for` header a
+    // struct literal cannot start, so a following `{` does not make a list
+    // there, and after a `.` a following `::` does not either. Both accept
+    // here and are refused by the compiler, which is the direction to err in;
+    // the language server reports them while highlighting stays steady. See
+    // the "When `<` is a comparison" section of
+    // docs/docs/language/generics.md.
+    type_arguments: ($) => seq('<', sepBy1(',', $._type), '>'),
 
     union_type: ($) => seq($._atomic_type, repeat1(seq('|', $._atomic_type))),
 
@@ -276,8 +351,14 @@ module.exports = grammar({
 
     _expression: ($) =>
       choice(
-        $.identifier,
-        $.qualified_identifier,
+        // A name, plain or namespaced, is an expression at the same level as
+        // everything that continues it: a call, a struct literal, a longer
+        // path, a type argument list. Holding them level is what keeps each
+        // reading a candidate until the token that settles it, so `a < b` and
+        // `a<b>(c)` are both still in play at the `<`, and `Colour::Red` in an
+        // `if` header is still a value and not the start of a literal.
+        prec(PREC.postfix, $.identifier),
+        prec(PREC.postfix, $.qualified_identifier),
         $.integer_literal,
         $.float_literal,
         $.string_literal,
@@ -342,23 +423,49 @@ module.exports = grammar({
     // A call names a function directly: candela has no call on an arbitrary
     // expression. A namespaced name is either an imported module's function
     // or an enum variant with a payload.
+    //
+    // The form that names type arguments is a branch of its own so that it can
+    // carry the dynamic precedence that settles `f(a < b, c > (d))`, which is
+    // as good a comparison as it is a call.
     call_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(
-          field('function', choice($.identifier, $.qualified_identifier)),
-          field('arguments', $.arguments),
+        choice(
+          seq(
+            field('function', choice($.identifier, $.qualified_identifier)),
+            field('arguments', $.arguments),
+          ),
+          prec.dynamic(
+            PREC.type_arguments,
+            seq(
+              field('function', choice($.identifier, $.qualified_identifier)),
+              field('type_arguments', $.type_arguments),
+              field('arguments', $.arguments),
+            ),
+          ),
         ),
       ),
 
     method_call_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(
-          field('receiver', $._expression),
-          '.',
-          field('method', choice($.identifier, $.qualified_identifier)),
-          field('arguments', $.arguments),
+        choice(
+          seq(
+            field('receiver', $._expression),
+            '.',
+            field('method', choice($.identifier, $.qualified_identifier)),
+            field('arguments', $.arguments),
+          ),
+          prec.dynamic(
+            PREC.type_arguments,
+            seq(
+              field('receiver', $._expression),
+              '.',
+              field('method', choice($.identifier, $.qualified_identifier)),
+              field('type_arguments', $.type_arguments),
+              field('arguments', $.arguments),
+            ),
+          ),
         ),
       ),
 
@@ -394,9 +501,13 @@ module.exports = grammar({
     struct_literal: ($) =>
       prec.dynamic(
         PREC.struct_literal,
-        seq(
-          field('name', choice($.identifier, $.qualified_identifier)),
-          field('body', $.field_initializer_list),
+        prec(
+          PREC.postfix,
+          seq(
+            field('name', choice($.identifier, $.qualified_identifier)),
+            optional(field('type_arguments', $.type_arguments)),
+            field('body', $.field_initializer_list),
+          ),
         ),
       ),
 
@@ -442,11 +553,18 @@ module.exports = grammar({
         ')',
       ),
 
+    // A segment may name the instantiation it belongs to, which is how a
+    // generic enum's variant is reached: `Slot<int>::Filled`, and
+    // `g::Slot<int>::Filled` from a module bound with `as`.
     qualified_identifier: ($) =>
-      seq(
-        field('module', choice($.identifier, $.qualified_identifier)),
-        '::',
-        field('name', $.identifier),
+      prec(
+        PREC.postfix,
+        seq(
+          field('module', choice($.identifier, $.qualified_identifier)),
+          optional(field('type_arguments', $.type_arguments)),
+          '::',
+          field('name', $.identifier),
+        ),
       ),
 
     // ------------------------------------------------------------------

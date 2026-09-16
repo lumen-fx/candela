@@ -64,6 +64,24 @@ their escapes, `true`, `false`, `null`, lists, maps, struct literals, and
 anonymous functions. The type syntax covers arrays, map types, unions, and
 namespaced names.
 
+Generics parse on both sides. A declaration's type parameters (`struct
+Cell<T>`, `fn first<T>`, `impl Signal<int>`) and the type arguments a use names
+(`Cell<int>` in a type, `first<int>(xs)` at a call, `Cell<int>{ .. }`,
+`Slot<int>::Filled(9)`) are their own nodes, which the queries colour as types
+rather than as comparisons. Since type arguments have no spelling of their own,
+`<` opens a list only where a `(`, a `{` or a `::` follows the closing `>`; `a
+< b` and `a < b > c` stay the comparisons they have always been. The one shape
+that reads both ways, a comparison whose right-hand side is parenthesised or
+braced, parses as a type argument list here, as it does in the compiler.
+
+In two spots the rule here is deliberately looser than the compiler's. The
+compiler knows a struct literal cannot start in an `if`, `while` or `for`
+header, so it reads `if Cell<int>{ v: 1 }.v {` as a comparison where this
+grammar reads a type argument list; and it knows a `::` cannot follow a
+method's type arguments, so it refuses `p.x<int>::y(1)` where this grammar
+accepts it. Accepting a little more keeps highlighting steady while you type,
+and the language server is what reports either one.
+
 A macro invocation, `name!( ... )`, parses as an expression whose body is one
 opaque region. The region ends at the parenthesis that balances the one that
 opened it, and a parenthesis inside a string literal or after `//` does not
@@ -88,9 +106,12 @@ npx tree-sitter test
 npx tree-sitter parse ../../libs/std/string.cdl
 ```
 
-Commit the regenerated `src/` along with `grammar.js`. Corpus cases in
-`test/corpus` are taken from the standard library, the examples, and the
-documentation, so a construct that appears in real candela source has a test.
+Commit the regenerated `src/` along with `grammar.js`; the `grammar` workflow
+regenerates it and fails when the two disagree, then runs the corpus. The CLI
+version is pinned in `package.json`, because the generated parser carries the
+version that wrote it. Corpus cases in `test/corpus` are taken from the
+standard library, the examples, and the documentation, so a construct that
+appears in real candela source has a test.
 Update the expectations with `npx tree-sitter test --update` and read the diff
 before committing it.
 
