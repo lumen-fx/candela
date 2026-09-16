@@ -1044,6 +1044,33 @@ pub fn param_type_matches(expected: &DataType, received: &DataType) -> bool {
     *expected == DataType::Unknown || *received == DataType::Unknown || expected == received
 }
 
+/// Fills in array element types a value left open, taking them from the type
+/// that was declared for it.
+///
+/// An empty array literal has no element type: it is `Array(None)`, so indexing
+/// it yields `null` and a body specialised on it cannot match on its elements.
+/// Where the declaration says what the elements are, the declaration wins and
+/// the specialisation compiles at the declared element type. Only an open
+/// position is filled, so an array that does name its element type still has to
+/// match what was declared. The walk descends through arrays and map values, so
+/// an empty literal nested inside one is pinned too.
+fn pin_open_element_types(inferred: &mut DataType, declared: &DataType) {
+    match (inferred, declared) {
+        (DataType::Array(element), DataType::Array(Some(declared_element))) => match element {
+            None => *element = Some(declared_element.clone()),
+            Some(element) => pin_open_element_types(element, declared_element),
+        },
+        (DataType::Map(entry), DataType::Map(declared_entry)) => {
+            if let Some(value) = entry.1.as_mut()
+                && let Some(declared_value) = declared_entry.1.as_ref()
+            {
+                pin_open_element_types(value, declared_value);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Equality for monomorphization and return-type cache keys.
 ///
 /// Identical to the loose type `==` except that function-typed arguments compare
@@ -1506,6 +1533,19 @@ fn infer_user_fn_return_type(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> DataType {
+    // The body is compiled at the types `handle_user_function` specialises on,
+    // which pin an argument's open element type to what the parameter declares.
+    // Infer against the same types, or the caller reads a return type from a
+    // body that was never compiled that way. Reading the declarations costs a
+    // clone, so the arguments are asked first whether any left one open.
+    let pinned = if infered_arg_types.iter().any(has_open_element_type) {
+        let declared_arg_types = specialized_arg_types(fn_id, type_args, ctx, state);
+        pinned_arg_types(infered_arg_types, &declared_arg_types)
+    } else {
+        None
+    };
+    let infered_arg_types = pinned.as_deref().unwrap_or(infered_arg_types);
+
     let key = specialization_key(type_args, infered_arg_types);
     let func = &state.fns[fn_id];
     // Check the return type cache
@@ -1548,11 +1588,14 @@ fn infer_user_fn_return_type(
         .generics
         .push_bindings(fn_bindings(fn_id, type_args, state));
     let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
+    // Read while the bindings are still pushed, so a generic `-> T[]` resolves
+    // to the element type this call named.
+    let declared_return = specialized_return_type(fn_id, fn_ctx, state);
     state.generics.pop_bindings();
 
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
-    let to_return = if fn_type.is_empty() {
+    let mut to_return = if fn_type.is_empty() {
         // No tracked type means either no value is returned at all, or every
         // returned value was itself dynamic (return-type tracking records no
         // type for `Unknown`). A function handing back an `any` payload is
@@ -1566,6 +1609,12 @@ fn infer_user_fn_return_type(
         // If function returns anything, check if it returns the same thing each time
         DataType::Union(Box::from(fn_type)).check_poly()
     };
+
+    // `return []` carries no element type, so a declared `-> T[]` is what the
+    // caller gets: the annotation says what the empty array holds.
+    if let Some((declared, _)) = &declared_return {
+        pin_open_element_types(&mut to_return, declared);
+    }
 
     v.truncate(v_len_before_args);
 
@@ -1587,6 +1636,109 @@ fn dyn_lib_return_type(block: &str, function: &str, state: &State<'_>) -> Option
         .find(|lib| lib.name == block)
         .and_then(|lib| lib.fns.iter().find(|sig| sig.name == function))
         .map(|sig| sig.return_type.clone())
+}
+
+/// The `-> Type` annotation as it reads for the specialisation being compiled,
+/// with the type parameters currently bound.
+///
+/// An annotation naming a parameter the call left unbound stays un-pinned, so
+/// what the body returns is inferred rather than checked against a type that
+/// has no value yet.
+pub(crate) fn specialized_return_type(
+    fn_id: usize,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(DataType, Span)> {
+    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
+        return state.fns[fn_id].return_type.clone();
+    };
+    let unbound: Vec<SmolStr> = generics
+        .params
+        .iter()
+        .filter(|param| state.generics.bound(param).is_none())
+        .cloned()
+        .collect();
+    let generics = state.fns[fn_id].generics.as_ref()?;
+    let annotation = generics.return_type.as_deref()?;
+    if annotation.0.mentions_any(&unbound) {
+        return state.fns[fn_id].return_type.clone();
+    }
+    let (return_type, return_span) = annotation.clone();
+    let file_idx = generics.file_idx;
+    let mut base = state.type_ctx(ctx.file_idx);
+    let mut type_ctx = base.reborrow(file_idx);
+    Some((return_type.to_datatype(&mut type_ctx), return_span))
+}
+
+/// The parameter types this call specialises on.
+///
+/// Without type arguments these are the function's own declared types, where an
+/// annotation naming a type parameter was left un-pinned. A call that names its
+/// type arguments resolves the annotations again with them bound, which is what
+/// makes `first<int>(xs)` reject a `float[]`.
+pub(crate) fn specialized_arg_types(
+    fn_id: usize,
+    type_args: &[DataType],
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<Option<DataType>> {
+    let declared = state.fns[fn_id]
+        .args
+        .iter()
+        .map(|(_, t)| t.clone())
+        .collect::<Vec<Option<DataType>>>();
+    if type_args.is_empty() {
+        return declared;
+    }
+    let Some(generics) = state.fns[fn_id].generics.as_ref() else {
+        return declared;
+    };
+    let arg_types = generics.arg_types.clone();
+    let file_idx = generics.file_idx;
+    let frame = fn_bindings(fn_id, type_args, state);
+    let mut base = state.type_ctx(ctx.file_idx);
+    let mut type_ctx = base.reborrow(file_idx);
+    type_ctx.generics.push_bindings(frame);
+    let resolved = arg_types
+        .iter()
+        .map(|t| t.as_ref().map(|t| t.to_datatype(&mut type_ctx)))
+        .collect();
+    type_ctx.generics.pop_bindings();
+    resolved
+}
+
+/// The argument types a call specialises on: what its arguments infer to, with
+/// any element type they left open filled in from `declared_arg_types`, the
+/// parameter declarations as [`specialized_arg_types`] reads them.
+///
+/// Answers `None` when no argument left an element type open, which is every
+/// call that passes no empty collection literal.
+pub(crate) fn pinned_arg_types(
+    infered_arg_types: &[DataType],
+    declared_arg_types: &[Option<DataType>],
+) -> Option<Vec<DataType>> {
+    if !infered_arg_types.iter().any(has_open_element_type) {
+        return None;
+    }
+    let mut pinned = infered_arg_types.to_vec();
+    for (inferred, declared) in pinned.iter_mut().zip(declared_arg_types) {
+        if let Some(declared) = declared {
+            pin_open_element_types(inferred, declared);
+        }
+    }
+    Some(pinned)
+}
+
+/// Whether this type leaves an array element type open, which is what an empty
+/// array literal produces.
+#[must_use]
+fn has_open_element_type(ty: &DataType) -> bool {
+    match ty {
+        DataType::Array(None) => true,
+        DataType::Array(Some(element)) => has_open_element_type(element),
+        DataType::Map(entry) => entry.1.as_ref().is_some_and(has_open_element_type),
+        _ => false,
+    }
 }
 
 /// The key one specialisation of a function is found by: the type arguments the

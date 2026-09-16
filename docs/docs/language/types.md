@@ -104,6 +104,15 @@ parameters and return types. The type grammar is the same in all of them.
 - `A|B`: a union, a value that is either an `A` or a `B`.
 - `any`: a slot whose type is decided by the value, allowed in an enum payload.
 
+An annotation is not only checked against the value. Where a list carries no
+element type of its own the annotation supplies one: an empty list has no
+element type, so a parameter declared `Value[]` decides that the body sees
+`Value` elements, and a `-> Value[]` return type decides what the caller gets
+back from `return []`. An
+annotation never overrides a type the value does have, so passing `[1, 2]` to a
+`Value[]` parameter is still an error. A `let` takes no annotation, so an empty
+list in a local takes its element type from the first `push` instead.
+
 ## Structs
 
 A struct groups named fields into one type. Declare it at the top level, with a
