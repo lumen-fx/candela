@@ -925,11 +925,7 @@ pub fn resolve_generic_call(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> (usize, Vec<DataType>) {
-    let Some(fn_id) =
-        state
-            .namespace
-            .find_function(&[], fn_name, span, ctx.file_idx, state.sources)
-    else {
+    let Some(fn_id) = state.namespace.find_function(&[], fn_name) else {
         error_unknown_function(fn_name, span, state.namespace, ctx.file_idx, state.sources);
     };
     let args = resolve_call_type_args(fn_id, fn_name, type_args, span, ctx, state);
@@ -1663,11 +1659,7 @@ impl Expr {
             Self::Var(name, span) => {
                 if let Some(var) = v.iter().rfind(|x| &x.name == name) {
                     var.var_type.clone()
-                } else if let Some(fn_id) =
-                    state
-                        .namespace
-                        .find_function(&[], name, *span, ctx.file_idx, state.sources)
-                {
+                } else if let Some(fn_id) = state.namespace.find_function(&[], name) {
                     // A bare identifier that names a function is a function
                     // reference (a compile-time value passed to a higher-order
                     // function). Its static type is the callee's Fn id.
@@ -1983,11 +1975,10 @@ impl Expr {
                             } else {
                                 error_unknown_function_in_namespace(
                                     function_name,
-                                    state.namespace,
                                     &namespace[..namespace.len() - 1],
                                     *span,
                                     ctx.file_idx,
-                                    state.sources,
+                                    state,
                                 );
                             }
                         };

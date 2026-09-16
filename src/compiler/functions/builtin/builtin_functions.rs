@@ -301,11 +301,7 @@ pub fn builtin_functions(
             None
         }
         fn_name => {
-            if let Some(fn_id) =
-                state
-                    .namespace
-                    .find_function(&[], fn_name, span, ctx.file_idx, state.sources)
-            {
+            if let Some(fn_id) = state.namespace.find_function(&[], fn_name) {
                 handle_user_function(
                     fn_name,
                     fn_id,

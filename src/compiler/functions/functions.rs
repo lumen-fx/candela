@@ -285,11 +285,7 @@ pub fn handle_functions(
         } else {
             Some(register_id)
         }
-    } else if let Some(fn_id) =
-        state
-            .namespace
-            .find_function(namespace, fn_name, span, ctx.file_idx, state.sources)
-    {
+    } else if let Some(fn_id) = state.namespace.find_function(namespace, fn_name) {
         handle_user_function(
             fn_name,
             fn_id,
@@ -304,13 +300,6 @@ pub fn handle_functions(
             &[],
         )
     } else {
-        error_unknown_function_in_namespace(
-            fn_name,
-            state.namespace,
-            namespace,
-            span,
-            ctx.file_idx,
-            state.sources,
-        );
+        error_unknown_function_in_namespace(fn_name, namespace, span, ctx.file_idx, state);
     }
 }

@@ -3426,27 +3426,24 @@ impl Namespace {
             .iter()
             .filter(|(_, kind)| matches!(kind, SymbolKind::Struct(_)))
     }
+    /// Resolves a function id by name (with an optional module path). Returns
+    /// `None` both when `path` names no namespace and when the namespace it
+    /// names declares no such function; raising is left to the caller, which
+    /// is the only place that knows whether another resolution can still
+    /// match. A call into a `host` or `dylib` namespace is one that can: those
+    /// functions are declared in `State::dyn_libs` and never appear in this
+    /// tree.
     #[must_use]
-    pub fn find_function(
-        &self,
-        path: &[SmolStr],
-        function_name: &str,
-        span: Span,
-        file_idx: u16,
-        sources: &[Source],
-    ) -> Option<usize> {
-        self.walk_to_namespace(path, span, file_idx, sources)
-            .symbols
-            .iter()
-            .find_map(|(name, kind)| {
-                if name.as_str() == function_name
-                    && let SymbolKind::Fn(fn_id) = kind
-                {
-                    Some(*fn_id as usize)
-                } else {
-                    None
-                }
-            })
+    pub fn find_function(&self, path: &[SmolStr], function_name: &str) -> Option<usize> {
+        self.resolve(path)?.symbols.iter().find_map(|(name, kind)| {
+            if name.as_str() == function_name
+                && let SymbolKind::Fn(fn_id) = kind
+            {
+                Some(*fn_id as usize)
+            } else {
+                None
+            }
+        })
     }
     #[must_use]
     pub fn find_struct(
@@ -3476,11 +3473,7 @@ impl Namespace {
     /// enum-variant resolution against otherwise-unknown call/reference paths.
     #[must_use]
     pub fn find_enum(&self, path: &[SmolStr], enum_name: &str) -> Option<usize> {
-        let mut current = self;
-        for sub in path {
-            current = &current.children.iter().find(|(name, _)| name == sub)?.1;
-        }
-        current.symbols.iter().find_map(|(name, kind)| {
+        self.resolve(path)?.symbols.iter().find_map(|(name, kind)| {
             if name.as_str() == enum_name
                 && let SymbolKind::Enum(enum_id) = kind
             {
@@ -3490,6 +3483,19 @@ impl Namespace {
             }
         })
     }
+    /// The namespace `path` names, or `None` when any segment of it is not
+    /// declared. Resolution alone is not an error: a path can also name a
+    /// `host` or `dylib` namespace, which lives in `State::dyn_libs`.
+    #[must_use]
+    pub fn resolve(&self, path: &[SmolStr]) -> Option<&Self> {
+        let mut current = self;
+        for sub in path {
+            current = &current.children.iter().find(|(name, _)| name == sub)?.1;
+        }
+        Some(current)
+    }
+    /// The namespace `path` names, for a caller that has nowhere else to look:
+    /// an unresolvable path ends the compile with the unknown-namespace error.
     #[must_use]
     pub fn walk_to_namespace(
         &self,
@@ -3498,17 +3504,10 @@ impl Namespace {
         file_idx: u16,
         sources: &[Source],
     ) -> &Self {
-        let mut current = self;
-        for sub in path {
-            current = if let Some((_, child_namespace)) =
-                current.children.iter().find(|(name, _)| name == sub)
-            {
-                child_namespace
-            } else {
-                error_unknown_namespace(path, span, file_idx, sources);
-            };
+        match self.resolve(path) {
+            Some(namespace) => namespace,
+            None => error_unknown_namespace(path, span, file_idx, sources),
         }
-        current
     }
 }
 

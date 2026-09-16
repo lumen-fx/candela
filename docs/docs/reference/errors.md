@@ -44,7 +44,9 @@ Raised by the type checker once the file parses.
 
 **Unknown names.** A variable, function, method, type, struct, enum variant or
 namespace that does not resolve. These reports suggest the closest name in scope
-when there is one.
+when there is one. A namespace a `host` or `dylib` block declares resolves like
+any other, so a call it has no function for is reported against the function,
+naming the namespace it was looked for in.
 
 **Struct and field errors.** Reading a field a struct does not declare, building
 a struct literal that supplies an unknown field or omits a required one, and
