@@ -4163,6 +4163,16 @@ fn parse_toplevel(
                         path.clone()
                     };
                     for (name, kind) in child_namespace.symbols {
+                        // Only the entry file's `main` runs, so a module's own
+                        // `main` function is not one of the names it exports. A
+                        // package that keeps one would otherwise collide with
+                        // the importer's the moment it is bare-imported. Only
+                        // the function is held back: a struct or an enum named
+                        // `main` is a separate symbol and merges like any
+                        // other.
+                        if name == "main" && matches!(kind, SymbolKind::Fn(_)) {
+                            continue;
+                        }
                         if let Some((_, existing)) =
                             namespace.symbols.iter().find(|(n, _)| n == &name)
                         {
