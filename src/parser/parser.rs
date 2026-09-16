@@ -414,6 +414,15 @@ impl<'a> Parser<'a> {
 fn parse_namespace(parser: &mut Parser<'_>, initial: SmolStr) -> (Box<[SmolStr]>, u32) {
     let mut namespace: Vec<SmolStr> = Vec::with_capacity(2);
     namespace.push(initial);
+    let end = extend_namespace(parser, &mut namespace);
+    (Box::from(namespace), end)
+}
+
+/// Reads the segments behind a `::` that is already consumed, appending each to
+/// `namespace` and answering where the last one ends. A path whose middle
+/// segment carries type arguments (`g::Slot<int>::Filled`) comes through here
+/// twice, once for each side of the list.
+fn extend_namespace(parser: &mut Parser<'_>, namespace: &mut Vec<SmolStr>) -> u32 {
     let mut end: u32;
     loop {
         let (next_token, span) = parser.next_token();
@@ -431,11 +440,14 @@ fn parse_namespace(parser: &mut Parser<'_>, initial: SmolStr) -> (Box<[SmolStr]>
                 ),
             );
         }
-        let next_token = parser.peek_token();
-        if next_token == Token::DoubleColon {
+        if parser.peek_token() == Token::DoubleColon {
+            // Consume the separator so the next turn of the loop reads the
+            // segment behind it. Without this the loop takes the `::` itself
+            // for a segment, which caps a path at two of them.
+            parser.next_token();
             continue;
         }
-        return (Box::from(namespace), end);
+        return end;
     }
 }
 

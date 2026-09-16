@@ -305,6 +305,105 @@ fn aliased_module_sees_its_own_enum() {
     );
 }
 
+/// A variant of an aliased module's enum is reached through the alias and the
+/// enum: `shapes::Shape::Circle(1)`, with or without a payload, and the same
+/// path in a `match` arm.
+#[test]
+fn aliased_enum_variant_is_reached_through_its_enum() {
+    let output = run_program(
+        "aliased_variant",
+        &[
+            ("shapes.cdl", "enum Shape { Circle(int), Empty }\n"),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as shapes;\n\
+                 fn name(s: shapes::Shape) -> string {\n\
+                     let out = \"?\";\n\
+                     match s {\n\
+                         shapes::Shape::Circle(r) => { out = str(r); }\n\
+                         shapes::Shape::Empty => { out = \"empty\"; }\n\
+                     }\n\
+                     return out;\n\
+                 }\n\
+                 fn main() {\n\
+                     print(str(shapes::Shape::Circle(1)));\n\
+                     print(name(shapes::Shape::Circle(7)));\n\
+                     print(name(shapes::Shape::Empty));\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Circle(1)") && stdout.contains('7') && stdout.contains("empty"),
+        "{stdout}"
+    );
+}
+
+/// A generic enum an aliased module declares names its instantiation in the
+/// middle of the path: `g::Slot<int>::Filled(4)`, with or without a payload,
+/// and the same path in a `match` arm.
+#[test]
+fn aliased_generic_enum_variant_names_its_instantiation() {
+    let output = run_program(
+        "aliased_generic_variant",
+        &[
+            ("shapes.cdl", "enum Slot<T> { Filled(T), Empty }\n"),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as g;\n\
+                 fn read(s) {\n\
+                     match s {\n\
+                         g::Slot<int>::Filled(x) => { return x; }\n\
+                         g::Slot<int>::Empty => { return 0; }\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     print(read(g::Slot<int>::Filled(4)));\n\
+                     print(read(g::Slot<int>::Empty));\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "4\n0", "{stdout}");
+}
+
+/// A variant belongs to its enum, so the alias alone does not name one: the
+/// two-segment path is a function call, and there is no such function.
+#[test]
+fn aliased_variant_without_its_enum_is_unknown() {
+    let output = check_program(
+        "aliased_variant_bare",
+        &[
+            ("shapes.cdl", "enum Shape { Circle(int), Empty }\n"),
+            (
+                "prog.cdl",
+                "import \"shapes.cdl\" as shapes;\n\
+                 fn build() { return shapes::Circle(1); }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cannot find function")
+            && stderr.contains("Circle")
+            && stderr.contains("in namespace"),
+        "stderr: {stderr}"
+    );
+}
+
 /// An aliased module's own imports are its own: what it bare-imported and what
 /// it aliased are reachable from its bodies, and a closure it builds still
 /// resolves the function it calls.
