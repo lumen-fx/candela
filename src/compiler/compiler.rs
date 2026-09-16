@@ -2949,6 +2949,9 @@ pub fn compile_expr(
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let mut output: Vec<Instr> = Vec::with_capacity(input.len());
     for (idx, x) in input.iter().enumerate() {
+        // Nothing reads the value of a statement, except where the form has no
+        // statement arm to compile through: `x;` and `1 + 2;` are compiled as
+        // values, and the register is freed again on the next line.
         if let Some(id) = x.compile_with_code_context(
             v,
             ctx,
@@ -2957,7 +2960,7 @@ pub fn compile_expr(
             None,
             false,
             &input[idx + 1..],
-            false,
+            x.is_value_only(),
         ) {
             state.free_reg(id, v);
         }

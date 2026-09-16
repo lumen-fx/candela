@@ -27,11 +27,16 @@ session and the whole session is re-run, so earlier definitions and output stay
 in place; only new output is printed. A line takes anything a file takes: a
 statement, or a top-level declaration (`fn`, `struct`, `enum`, `impl`,
 `import`, `dylib`, `host`), which goes above the synthesised `main` while
-everything else goes inside it. A line that does not already end in `;` or `}`
-gets a semicolon added, and a line that fails to compile is dropped so the
-session stays usable. Leave with Ctrl+D, Ctrl+Z then enter on Windows, or
-Ctrl+C. The REPL also exits when its input ends, so a file of statements can be
-piped in.
+everything else goes inside it. A line has to be complete on its own, and one
+opening with `{` reads as a block rather than a map literal. A line that is an
+expression prints its value. A line that does not already end in `;`, `}` or
+`{` gets a semicolon added, and a line that fails to compile is dropped so the
+session stays usable. A line that compiles and then fails at run time is
+dropped too, having run once. Leave by typing `exit`, which takes a status the
+way the built-in of that name does (`exit(2)`, or `exit(code)` for one the
+session works out), or with Ctrl+D, Ctrl+Z then enter on Windows, or Ctrl+C.
+The REPL also exits when its input ends, so a file of statements can be piped
+in.
 
 ### candela new &lt;name&gt;
 
@@ -173,8 +178,8 @@ the value it starts on, and the instruction stream. A register that an array,
 struct, map or enum construction fills at run time starts on that
 construction's own template, so it dumps the shape and the constant parts of
 the value it is about to hold. It also reports what parsing, compiling and
-running each took. `--debug-parser` compiles the file and
-stops without running it. Neither flag is present in a released build.
+running each took. `--debug-parser` compiles the file and stops without running
+it. Neither flag is present in a released build.
 
 ### Exit status
 

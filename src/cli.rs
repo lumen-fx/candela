@@ -81,8 +81,7 @@ pub fn main() -> ExitCode {
 
     let Some(first) = args.next() else {
         std::hint::cold_path();
-        repl();
-        return ExitCode::SUCCESS;
+        return repl();
     };
 
     match first.as_str() {
