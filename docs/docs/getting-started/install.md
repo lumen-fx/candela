@@ -170,13 +170,17 @@ parser and type checker, so an editor reports the same errors the compiler
 does. On top of diagnostics it gives hover, completion, go-to-definition, and a
 document outline. Every editor below finds it as `candela-lsp` on your path.
 
-Highlighting comes from one of two grammars. VS Code uses a TextMate grammar;
-Neovim, Helix, and Zed use the tree-sitter grammar, which also drives
-structural selection and bracket matching. Both live in the repository, under
-`editors/`.
+Highlighting comes from one of two grammars. VS Code and the IntelliJ-based
+IDEs use a TextMate grammar; Neovim, Helix, and Zed use the tree-sitter
+grammar, which also drives structural selection and bracket matching. Both live
+in the repository, under `editors/`.
 
-- **VS Code.** Install the extension from `editors/vscode`. Set
-  `candela.languageServerPath` to use a server that is not on your path.
+- **VS Code.** Install the Candela extension from the Marketplace or Open VSX.
+  Set `candela.languageServerPath` to use a server that is not on your path.
+- **IntelliJ IDEA and the other JetBrains IDEs.** Build `editors/jetbrains`
+  with `./gradlew buildPlugin`, install [LSP4IJ] from the JetBrains
+  Marketplace, then install the zip from `build/distributions/` with
+  Settings | Plugins | Install Plugin from Disk.
 - **Neovim.** Copy `editors/tree-sitter/nvim/candela.lua` into your config,
   call `require('candela').setup()`, and install the parser with
   `:TSInstall candela`.
@@ -186,8 +190,11 @@ structural selection and bracket matching. Both live in the repository, under
 - **Zed.** Install `editors/zed` from the Extensions view with "Install Dev
   Extension".
 
-Each directory has a README with the full setup, including how to point an
-editor at a server you built yourself.
+[LSP4IJ]: https://plugins.jetbrains.com/plugin/23257-lsp4ij
+
+Each client has a README with the full setup, including how to point it at a
+server you built yourself; Neovim and Helix share
+`editors/tree-sitter/README.md`.
 
 ## In a browser
 

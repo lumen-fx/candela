@@ -26,7 +26,11 @@ the codebase you are changing.
   compiler.
 - `libs/std` is the standard library, written in Candela as `.cdl` files;
   `libs/std_src` holds the native sources behind it.
-- `editors/vscode` is the VS Code extension and its language client.
+- `editors/` holds the editor clients: `editors/vscode` is the VS Code
+  extension and its language client, `editors/jetbrains` the plugin for the
+  IntelliJ-based IDEs, `editors/zed` the Zed extension, and
+  `editors/tree-sitter` the tree-sitter grammar with the Neovim and Helix
+  configuration that reads it.
 
 The workspace root builds only the `candela-lang` package, so build and test the
 other crates by name: `cargo build -p candela-vm`, `cargo test -p candela-lsp`.
