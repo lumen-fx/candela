@@ -503,3 +503,211 @@ fn main() {
             (binary_expression
               (identifier)
               (integer_literal))))))))
+
+================================================================================
+Type arguments at a call, a literal, and a variant (docs/docs/language/generics.md)
+================================================================================
+
+fn main() {
+    let c = Cell<int>{ value: 3 };
+    let p = Pair<string, int>{ key: "width", value: 40 };
+    print(first<int>(nums));
+    print(Slot<int>::Filled(9));
+    print(g::Slot<int>::Empty);
+    print(s.name_of<int>());
+    print(Cell<Cell<int>>{ value: c });
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (type_arguments
+            (type_identifier))
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (integer_literal)))))
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (type_arguments
+            (type_identifier)
+            (type_identifier))
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (string_literal))
+            (field_initializer
+              (identifier)
+              (integer_literal)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (identifier)
+              (type_arguments
+                (type_identifier))
+              (arguments
+                (identifier))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (qualified_identifier
+                (identifier)
+                (type_arguments
+                  (type_identifier))
+                (identifier))
+              (arguments
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (qualified_identifier
+              (qualified_identifier
+                (identifier)
+                (identifier))
+              (type_arguments
+                (type_identifier))
+              (identifier)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (type_arguments
+                (type_identifier))
+              (arguments)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (struct_literal
+              (identifier)
+              (type_arguments
+                (generic_type
+                  (type_identifier)
+                  (type_arguments
+                    (type_identifier))))
+              (field_initializer_list
+                (field_initializer
+                  (identifier)
+                  (identifier))))))))))
+
+================================================================================
+An angle bracket that stays a comparison (docs/docs/language/generics.md)
+================================================================================
+
+fn main() {
+    print(a < b);
+    print(a < b && c > d);
+    print(a < b > c);
+    while a < b {
+        print(a);
+    }
+    print(p.x < a);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (identifier)
+              (identifier)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (identifier))
+              (binary_expression
+                (identifier)
+                (identifier))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
+      (while_statement
+        (binary_expression
+          (identifier)
+          (identifier))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (field_expression
+                (identifier)
+                (identifier))
+              (identifier))))))))
+
+================================================================================
+A comparison that reads as a type argument list (docs/docs/language/generics.md)
+================================================================================
+
+fn main() {
+    f(a < b, c > (d));
+    p.x < a > (b);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (identifier)
+              (type_arguments
+                (type_identifier)
+                (type_identifier))
+              (arguments
+                (identifier))))))
+      (expression_statement
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (type_arguments
+            (type_identifier))
+          (arguments
+            (identifier)))))))

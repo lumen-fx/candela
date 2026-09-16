@@ -1,0 +1,50 @@
+name: grammar
+
+# The tree-sitter grammar ships the parser `tree-sitter generate` writes, and
+# the editors that use it read those generated files rather than grammar.js. So
+# this regenerates them, fails when the checkout's copy is not what grammar.js
+# produces, and runs the corpus.
+#
+# The CLI is pinned in editors/tree-sitter/package.json, because the generated
+# files carry the version that wrote them.
+
+on:
+  pull_request:
+    paths:
+      - "editors/tree-sitter/**"
+      - ".github/workflows/grammar.yml"
+  # The merge queue runs this against the queued merge commit with no path
+  # filter, the same way the Rust jobs report there.
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grammar:
+    name: grammar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editors/tree-sitter
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Generate the parser
+        run: |
+          npx tree-sitter --version
+          npx tree-sitter generate --abi 14
+
+      - name: The generated parser is the one grammar.js produces
+        run: git diff --exit-code src
+
+      - name: Corpus
+        run: npx tree-sitter test
