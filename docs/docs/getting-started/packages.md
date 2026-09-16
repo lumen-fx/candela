@@ -135,7 +135,11 @@ candela runs it and reads the answer; it does not resolve versions itself.
 
 The toolchain installer puts `lpm` at `~/.local/bin/lpm`, and candela downloads
 it there itself the first time a project needs it and finds none. You do not
-have to run it by hand. To point candela at one of your own, set `LPM_BIN`.
+have to run it by hand.
+
+To run one of your own instead, set `LPM_BIN` to it. That is an override:
+candela runs what it names and looks nowhere else, so if the binary cannot do
+the job candela says so and names it rather than reaching for another client.
 
 ## Publish a package
 

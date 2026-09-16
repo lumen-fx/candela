@@ -141,6 +141,59 @@ fn write_stub(dir: &Path, report: &str) -> PathBuf {
     }
 }
 
+/// Writes a stand-in that answers `--version` with `line` and leaves `status`
+/// behind, and refuses every other verb, recording in `used.txt` beside it
+/// that it was reached.
+///
+/// It is for the tests about which client candela picks. Those tests fail if
+/// anything past `--version` runs at all, so what it would answer does not
+/// matter, only that it leaves a mark when it is asked.
+fn write_answering_stub(dir: &Path, name: &str, line: &str, status: i32) -> PathBuf {
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\n\
+                 here=$(dirname \"$0\")\n\
+                 if [ \"$1\" = \"--version\" ]; then\n\
+                 \x20 printf '%s\\n' '{line}'\n\
+                 \x20 exit {status}\n\
+                 fi\n\
+                 printf '%s\\n' \"$*\" >> \"$here/used.txt\"\n\
+                 echo 'this stand-in resolves nothing' >&2\n\
+                 exit 1\n"
+            ),
+        )
+        .expect("write the stand-in");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in executable");
+        path
+    }
+
+    #[cfg(windows)]
+    {
+        let path = dir.join(format!("{name}.cmd"));
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\n\
+                 if \"%1\"==\"--version\" (\r\n\
+                 echo {line}\r\n\
+                 exit /b {status}\r\n\
+                 )\r\n\
+                 echo %*>>\"%~dp0used.txt\"\r\n\
+                 echo this stand-in resolves nothing 1>&2\r\n\
+                 exit /b 1\r\n"
+            ),
+        )
+        .expect("write the stand-in");
+        path
+    }
+}
+
 /// A `candela` command in `dir`, with the stub and the checkout's library
 /// directory in place.
 fn candela(dir: &Path, stub: Option<&Path>) -> Command {
@@ -698,6 +751,242 @@ fn a_verb_outside_a_project_says_how_to_start_one() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A project with one dependency, so the client is reached for.
+fn depending_project(root: &Path) -> PathBuf {
+    let project = root.join("demo");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("candela.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nshapes = \"^1.2\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src").join("main.cdl"),
+        "fn main() {\n    print(\"ran\");\n}\n",
+    )
+    .unwrap();
+    project
+}
+
+/// The shared path under a scratch home, which these tests point `HOME` and
+/// `LOCALAPPDATA` at so the machine's own client is out of reach.
+fn shared_path_under(home: &Path) -> PathBuf {
+    if cfg!(windows) {
+        home.join("Programs").join("lpm").join("lpm.exe")
+    } else {
+        home.join(".local").join("bin").join("lpm")
+    }
+}
+
+/// `LPM_BIN` says which registry client to run, and candela runs that one.
+///
+/// A binary it names that cannot answer for lpm is reported by path, with what
+/// it answered instead. Nothing else is tried, so a stand-in cannot hand the
+/// work to whatever real client the machine also has.
+#[test]
+fn a_named_client_that_cannot_answer_is_reported_and_nothing_else_is_tried() {
+    let root = scratch_dir("override");
+    let package = shapes_package(&root);
+
+    // A client that does resolve, on `PATH` under the name candela searches
+    // for. It is what a fall-through would reach, so the assertions below are
+    // about it staying untouched.
+    //
+    // Windows cannot stage this one: the stand-in is a batch file and the name
+    // searched for is `lpm.exe`, which Windows refuses to run a batch file as.
+    // The rest of the test holds there, where a fall-through would show up as a
+    // download instead.
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    #[cfg(not(windows))]
+    {
+        let written = write_stub(&elsewhere, &report("shapes", "1.2.3", "candela", &package));
+        std::fs::rename(&written, elsewhere.join("lpm")).unwrap();
+    }
+    let _ = &package;
+
+    let named = root.join("named");
+    std::fs::create_dir_all(&named).unwrap();
+    let project = depending_project(&root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    for (answer, status, named_in_the_error) in [
+        ("lpm-stub, and proud of it", 0, "lpm-stub, and proud of it"),
+        ("lpm version 0.1.0 (older than candela needs)", 0, "0.1.0"),
+        // A client that cannot even answer `--version` is the same refusal,
+        // and the error says what it exited with.
+        ("lpm version 9.9.9 (but broken)", 3, "status 3"),
+    ] {
+        let stub = write_answering_stub(&named, "lpm-named", answer, status);
+        let mut command = candela(&project, Some(&stub));
+        command
+            .arg("check")
+            .env("HOME", &home)
+            .env("LOCALAPPDATA", &home)
+            .env("PATH", path_ahead_of_any_client(&elsewhere))
+            .env(
+                "CANDELA_LPM_RELEASES_URL",
+                "file:///candela-tests-reach-nothing",
+            )
+            .env("CANDELA_LPM_TAG", "v9.9.9");
+        let checked = common::output_with_deadline(&mut command, "candela check");
+        let message = stderr_of(&checked);
+
+        assert!(
+            !checked.status.success(),
+            "an LPM_BIN that cannot answer must stop it: {message}"
+        );
+        assert!(message.contains("LPM_BIN"), "{message}");
+        assert!(
+            message.contains(&stub.display().to_string()),
+            "the error must name the path: {message}"
+        );
+        assert!(
+            message.contains(named_in_the_error),
+            "the error must say what it answered: {message}"
+        );
+        assert!(
+            !message.contains("download"),
+            "nothing may be downloaded instead: {message}"
+        );
+        assert!(
+            !named.join("used.txt").exists(),
+            "a client that cannot answer must not be asked to resolve"
+        );
+        assert!(
+            !elsewhere.join("args.txt").exists(),
+            "candela fell through to the client on PATH: {message}"
+        );
+        assert!(
+            !shared_path_under(&home).exists(),
+            "nothing may be installed to the shared path"
+        );
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// `LPM_BIN` naming a file that is not there says so, rather than quietly
+/// meaning whatever else the machine has.
+#[test]
+fn a_named_client_that_is_not_there_is_reported_by_path() {
+    let root = scratch_dir("overridemissing");
+    let project = depending_project(&root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let missing = root.join("nowhere").join("lpm");
+
+    let mut command = candela(&project, Some(&missing));
+    command
+        .arg("check")
+        .env("HOME", &home)
+        .env("LOCALAPPDATA", &home)
+        .env("PATH", path_without_client())
+        .env(
+            "CANDELA_LPM_RELEASES_URL",
+            "file:///candela-tests-reach-nothing",
+        )
+        .env("CANDELA_LPM_TAG", "v9.9.9");
+    let checked = common::output_with_deadline(&mut command, "candela check");
+    let message = stderr_of(&checked);
+
+    assert!(!checked.status.success(), "{message}");
+    assert!(message.contains("LPM_BIN"), "{message}");
+    assert!(
+        message.contains(&missing.display().to_string()),
+        "the error must name the path: {message}"
+    );
+    assert!(
+        !message.contains("download"),
+        "nothing may be downloaded instead: {message}"
+    );
+    assert!(!shared_path_under(&home).exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// An empty `LPM_BIN` is no override at all: it counts as unset, and the
+/// search runs as if the variable were not there.
+///
+/// With nothing on `PATH` and nothing at the shared path, that search ends at
+/// the download, so a run that reaches for one is the proof. An empty value
+/// read as a path would name it in the error instead.
+#[test]
+fn an_empty_named_client_counts_as_unset() {
+    let root = scratch_dir("overrideempty");
+    let project = depending_project(&root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let mut command = candela(&project, None);
+    command
+        .arg("check")
+        .env("LPM_BIN", "")
+        .env("HOME", &home)
+        .env("LOCALAPPDATA", &home)
+        .env("PATH", path_without_client())
+        .env(
+            "CANDELA_LPM_RELEASES_URL",
+            "file:///candela-tests-reach-nothing",
+        )
+        .env("CANDELA_LPM_TAG", "v9.9.9");
+    let checked = common::output_with_deadline(&mut command, "candela check");
+    let message = stderr_of(&checked);
+
+    assert!(!checked.status.success(), "{message}");
+    assert!(
+        !message.contains("LPM_BIN"),
+        "an empty LPM_BIN must not be read as a path: {message}"
+    );
+    assert!(
+        message.contains("download"),
+        "the search must run to the download: {message}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// `LPM_BIN` naming a directory is reported the way any other value that
+/// cannot answer is, rather than falling through to another client.
+#[test]
+fn a_named_client_that_is_a_directory_is_reported_by_path() {
+    let root = scratch_dir("overridedir");
+    let project = depending_project(&root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let directory = root.join("not-a-binary");
+    std::fs::create_dir_all(&directory).unwrap();
+
+    let mut command = candela(&project, Some(&directory));
+    command
+        .arg("check")
+        .env("HOME", &home)
+        .env("LOCALAPPDATA", &home)
+        .env("PATH", path_without_client())
+        .env(
+            "CANDELA_LPM_RELEASES_URL",
+            "file:///candela-tests-reach-nothing",
+        )
+        .env("CANDELA_LPM_TAG", "v9.9.9");
+    let checked = common::output_with_deadline(&mut command, "candela check");
+    let message = stderr_of(&checked);
+
+    assert!(!checked.status.success(), "{message}");
+    assert!(message.contains("LPM_BIN"), "{message}");
+    assert!(
+        message.contains(&directory.display().to_string()),
+        "the error must name the path: {message}"
+    );
+    assert!(
+        !message.contains("download"),
+        "nothing may be downloaded instead: {message}"
+    );
+    assert!(!shared_path_under(&home).exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// With no client on the machine, candela downloads one, checks it against the
 /// checksums published beside it, and installs it to the shared path.
 ///
@@ -742,14 +1031,7 @@ fn a_missing_client_is_downloaded_and_verified() {
     let sum = sha256_of(&archive);
     std::fs::write(serve.join("checksums.txt"), format!("{sum}  {asset}\n")).unwrap();
 
-    // A project with one dependency, so the client is reached for.
-    let project = root.join("demo");
-    std::fs::create_dir_all(project.join("src")).unwrap();
-    std::fs::write(
-        project.join("candela.toml"),
-        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nshapes = \"^1.2\"\n",
-    )
-    .unwrap();
+    let project = depending_project(&root);
 
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -768,11 +1050,7 @@ fn a_missing_client_is_downloaded_and_verified() {
 
     // Resolving the tag, fetching the checksums and the archive, verifying it,
     // unpacking it and installing it to the shared path all happen everywhere.
-    let installed = if cfg!(windows) {
-        home.join("Programs").join("lpm").join("lpm.exe")
-    } else {
-        home.join(".local").join("bin").join("lpm")
-    };
+    let installed = shared_path_under(&home);
     assert!(
         installed.is_file(),
         "the client must land at the shared path: {}\n{}",
@@ -836,13 +1114,7 @@ fn a_download_that_fails_its_checksum_installs_nothing() {
     )
     .unwrap();
 
-    let project = root.join("demo");
-    std::fs::create_dir_all(project.join("src")).unwrap();
-    std::fs::write(
-        project.join("candela.toml"),
-        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nshapes = \"^1.2\"\n",
-    )
-    .unwrap();
+    let project = depending_project(&root);
 
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -865,11 +1137,7 @@ fn a_download_that_fails_its_checksum_installs_nothing() {
         "{}",
         stderr_of(&fetched)
     );
-    let installed = if cfg!(windows) {
-        home.join("Programs").join("lpm").join("lpm.exe")
-    } else {
-        home.join(".local").join("bin").join("lpm")
-    };
+    let installed = shared_path_under(&home);
     assert!(!installed.exists(), "nothing must be installed");
 
     std::fs::remove_dir_all(&root).ok();
@@ -899,6 +1167,19 @@ fn path_without_client() -> std::ffi::OsString {
         .filter(|dir| !dir.join(name).is_file())
         .collect();
     std::env::join_paths(kept).expect("rebuild PATH")
+}
+
+/// `PATH` with `first` ahead of everything on it that is not a registry
+/// client.
+///
+/// The stand-in in `first` is a script, so it needs the rest of `PATH` to find
+/// the shell tools it runs; and a fall-through has to be able to reach it, or
+/// the test that looks for one proves nothing.
+fn path_ahead_of_any_client(first: &Path) -> std::ffi::OsString {
+    let rest = path_without_client();
+    let mut dirs = vec![first.to_path_buf()];
+    dirs.extend(std::env::split_paths(&rest));
+    std::env::join_paths(dirs).expect("rebuild PATH")
 }
 
 /// The release asset this machine asks for, named the way the registry
