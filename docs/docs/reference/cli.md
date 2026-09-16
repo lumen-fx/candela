@@ -24,11 +24,14 @@ package the project depends on runs under `candela run`.
 
 With no arguments, starts the REPL. Each line you enter is appended to the
 session and the whole session is re-run, so earlier definitions and output stay
-in place; only new output is printed. A line that does not already end in `;` or
-`}` gets a semicolon added, `import` lines are hoisted above everything else,
-and a line that fails to compile is dropped so the session stays usable. Leave
-with Ctrl+D, Ctrl+Z then enter on Windows, or Ctrl+C. The REPL also exits when
-its input ends, so a file of statements can be piped in.
+in place; only new output is printed. A line takes anything a file takes: a
+statement, or a top-level declaration (`fn`, `struct`, `enum`, `impl`,
+`import`, `dylib`, `host`), which goes above the synthesised `main` while
+everything else goes inside it. A line that does not already end in `;` or `}`
+gets a semicolon added, and a line that fails to compile is dropped so the
+session stays usable. Leave with Ctrl+D, Ctrl+Z then enter on Windows, or
+Ctrl+C. The REPL also exits when its input ends, so a file of statements can be
+piped in.
 
 ### candela new &lt;name&gt;
 

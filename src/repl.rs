@@ -1,6 +1,10 @@
 use crate::errors::BLUE;
 use crate::errors::RESET;
+use crate::parser::LineKind;
+use crate::parser::classify_line;
 use std::io::{Write, stderr, stdin, stdout};
+use std::path::Path;
+use std::process::Output;
 
 /// Writes to the REPL's stdout, and drops the text when the write fails.
 ///
@@ -11,6 +15,46 @@ macro_rules! say {
     ($($arg:tt)*) => {{
         let _ = write!(stdout(), $($arg)*);
     }};
+}
+
+/// One accepted line of the session, in the form that compiled.
+struct Line {
+    text: String,
+    /// Whether the line declares something at the top level, which goes above
+    /// the synthesised `main` rather than inside it.
+    declaration: bool,
+}
+
+/// Writes the session out as a program: the declarations first, then a `main`
+/// holding everything else, each group in the order the lines were typed.
+fn program(lines: &[Line], contents: &mut String) {
+    contents.clear();
+    for line in lines.iter().filter(|line| line.declaration) {
+        contents.push_str(&line.text);
+        contents.push('\n');
+    }
+    contents.push_str("fn main() {\n");
+    for line in lines.iter().filter(|line| !line.declaration) {
+        contents.push_str(&line.text);
+        contents.push('\n');
+    }
+    contents.push_str("\n}");
+}
+
+/// Compiles and runs `contents` as a program, and hands back what it wrote.
+///
+/// The session runs in a process of its own, so a line the compiler rejects
+/// reports its error there and leaves the prompt to read the next line.
+fn evaluate(exe: &Path, tmp: &Path, contents: &str) -> Output {
+    std::fs::write(tmp, contents).expect("{RED}[ERROR]{RESET} Cannot write to temporary file");
+    let output = std::process::Command::new(exe)
+        .arg(tmp)
+        .output()
+        .expect("{RED}[ERROR]{RESET} Failed to execute Candela");
+    // The next line writes the file again, so a removal that does not happen
+    // costs nothing beyond the file staying behind.
+    let _ = std::fs::remove_file(tmp);
+    output
 }
 
 #[cold]
@@ -27,9 +71,11 @@ pub fn repl() {
     let mut update = crate::update::start();
 
     let exe = std::env::current_exe().expect("{RED}[ERROR]{RESET} Cannot find candela binary path");
-    let tmp = std::env::temp_dir().join("candela_repl_tmp.cdl");
+    // One file per process: two prompts open at once each compile a session of
+    // their own, and a shared path would hand one of them the other's program.
+    let tmp = std::env::temp_dir().join(format!("candela_repl_{}.cdl", std::process::id()));
 
-    let mut all_lines: Vec<String> = Vec::with_capacity(1);
+    let mut lines: Vec<Line> = Vec::with_capacity(1);
     let mut prev_stdout = String::with_capacity(1);
     let mut contents = String::with_capacity(20);
 
@@ -58,6 +104,9 @@ pub fn repl() {
         if s.is_empty() {
             continue;
         }
+        // Read before the semicolon goes on, so the line the grammar sees is
+        // the line that was typed.
+        let kind = classify_line(&s);
         if !s.ends_with(';') && !s.ends_with('}') {
             s.push(';');
         }
@@ -67,30 +116,12 @@ pub fn repl() {
             );
         }
 
-        all_lines.push(s);
-
-        contents.clear();
-        for x in all_lines.iter().filter(|x| x.starts_with("import")) {
-            contents.push_str(x);
-            contents.push('\n');
-        }
-        contents.push_str("fn main() {\n");
-        for x in all_lines.iter().filter(|x| !x.starts_with("import")) {
-            contents.push_str(x);
-            contents.push('\n');
-        }
-        contents.push('\n');
-        contents.push('}');
-
-        std::fs::write(&tmp, &contents)
-            .expect("{RED}[ERROR]{RESET} Cannot write to temporary file");
-
-        let output = std::process::Command::new(&exe)
-            .arg(tmp.to_str().unwrap())
-            .output()
-            .expect("{RED}[ERROR]{RESET} Failed to execute Candela");
-
-        std::fs::remove_file(&tmp).unwrap();
+        lines.push(Line {
+            text: s,
+            declaration: kind == LineKind::Declaration,
+        });
+        program(&lines, &mut contents);
+        let output = evaluate(&exe, &tmp, &contents);
 
         let new_stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -101,7 +132,7 @@ pub fn repl() {
             prev_stdout = new_stdout;
         } else {
             let _ = write!(stderr(), "{}", String::from_utf8_lossy(&output.stderr));
-            all_lines.pop();
+            lines.pop();
         }
     }
 }

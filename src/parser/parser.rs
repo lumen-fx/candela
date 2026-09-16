@@ -1322,3 +1322,83 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
     );
     ParsedFile { code, impls }
 }
+
+/// What one line of source is, as far as the grammar can tell from its opening
+/// tokens.
+///
+/// The REPL builds a file out of the lines typed at it, and where a line goes
+/// depends on which of these it is. Only the grammar knows which tokens open a
+/// declaration, so the answer is read here rather than guessed from the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    /// A top-level declaration: one of the forms [`parse`] accepts at file
+    /// scope, which a block does not.
+    Declaration,
+    /// A statement: it belongs in a block and yields no value.
+    Statement,
+    /// Anything else, which may be an expression with a value to show. The
+    /// reading is a guess: the opening tokens rule out the other two, and only
+    /// a compile settles the rest.
+    Expression,
+}
+
+/// Reads `line` as far as its first tokens, and says which of [`LineKind`] it
+/// opens.
+///
+/// A line whose first token is unknown to the lexer reads as a statement, so
+/// the error it raises is the one its own text earns rather than one about
+/// text wrapped around it.
+#[must_use]
+pub fn classify_line(line: &str) -> LineKind {
+    let mut tokens = Token::lexer(line);
+    let Some(Ok(first)) = tokens.next() else {
+        return LineKind::Statement;
+    };
+    match first {
+        Token::Function
+        | Token::Import
+        | Token::Struct
+        | Token::Enum
+        | Token::Impl
+        | Token::Dylib
+        | Token::Host => LineKind::Declaration,
+        // Every form `parse_statement` reads on its own, plus `{`, which opens
+        // an evaluation block there and not a map literal.
+        Token::Let
+        | Token::If
+        | Token::Else
+        | Token::While
+        | Token::For
+        | Token::Match
+        | Token::Loop
+        | Token::Try
+        | Token::Catch
+        | Token::Return
+        | Token::Break
+        | Token::Continue
+        | Token::LBrace => LineKind::Statement,
+        // An assignment is a statement wherever its target ends, and `=` never
+        // stands anywhere else in an expression: a struct literal and a map
+        // both separate with ':', and a call's arguments with ','. A string
+        // holding an '=' is one token, so its contents cannot be mistaken for
+        // one.
+        _ => {
+            if tokens.any(|t| {
+                matches!(
+                    t,
+                    Ok(Token::Equals
+                        | Token::AssignOpAdd
+                        | Token::AssignOpSub
+                        | Token::AssignOpMul
+                        | Token::AssignOpDiv
+                        | Token::AssignOpMod
+                        | Token::AssignOpPow)
+                )
+            }) {
+                LineKind::Statement
+            } else {
+                LineKind::Expression
+            }
+        }
+    }
+}

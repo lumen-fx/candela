@@ -47,8 +47,8 @@ CANDELA 0.0.3 REPL (read-eval-print-loop)
 >
 ```
 
-Type a statement at the prompt and press enter. A trailing semicolon is added
-for you when a line does not already end in `;` or `}`.
+Type a line at the prompt and press enter. A trailing semicolon is added for
+you when a line does not already end in `;` or `}`.
 
 ```
 > let x = 21;
@@ -56,10 +56,22 @@ for you when a line does not already end in `;` or `}`.
 42
 ```
 
+A line takes anything a file takes. A statement goes inside a synthesised
+`main`, and a top-level declaration goes above it, so a `struct`, an `enum`, an
+`impl` block, a function, an `import`, a `dylib` block and a `host` block are
+all typed at the prompt as they are written in a file:
+
+```
+> struct Point { x: int }
+> impl Point { fn twice(self) -> int { return self.x * 2; } }
+> let p = Point{x: 21};
+> print(p.twice());
+42
+```
+
 The REPL keeps every line you have entered and re-runs the whole session each
-time you add one. Lines beginning with `import` are hoisted to the top of the
-program; everything else goes inside a synthesised `main`. What you see printed
-is the output that is new since the previous run.
+time you add one. What you see printed is the output that is new since the
+previous run.
 
 Two consequences are worth knowing. Side effects repeat: a line that writes a
 file or reads input runs again on every subsequent line. And a line that fails
