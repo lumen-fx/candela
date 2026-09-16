@@ -4655,6 +4655,75 @@ pub fn enum_returned_from_fn() {
     );
 }
 
+/// An enum construction inside a loop keeps its object-pool template register
+/// for the life of the program. The template is a constant register, so once a
+/// caller's variable is allowed to reuse it, the second call to the function
+/// clones whatever the caller left there instead of the variant.
+///
+/// This compiles with the debug dump off. The dump formats every register, and
+/// an enum destination register still holds the placeholder it carries before
+/// execution, which has no variant tag to format.
+#[test]
+pub fn enum_built_in_a_loop_survives_a_second_call() {
+    let filename = "enum_loop.cdl";
+    let contents = "
+        enum Value { Int(int), Text(string) }
+        fn build(n) {
+            let cells = [];
+            for i in range(n) { cells.push(Value::Int(i)); }
+            return cells;
+        }
+        fn main() {
+            let a = build(4);
+            let b = build(4);
+            let total = 0;
+            for c in b {
+                match c {
+                    Int(v) => { total = total + v; }
+                    Text(s) => { total = total - 1; }
+                }
+            }
+            print(total);
+        }
+    ";
+    let out = compile(
+        String::from(contents),
+        filename,
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let mut pools = out.pools;
+    let mut reg = RegisterFile(out.registers);
+    crate::vm::execute(
+        &out.instructions,
+        &mut reg,
+        &mut pools,
+        &crate::errors::ErrorCtx {
+            instr_src: out.instr_src,
+            sources: vec![Source {
+                filename: filename.into(),
+                contents: String::from(contents),
+            }],
+        },
+        &out.fn_registers,
+        &[],
+        &[],
+        &[],
+        out.allocated_arg_count,
+        out.allocated_call_depth,
+        &[],
+        &[],
+        0,
+    );
+    assert!(out.instructions.iter().any(|x| {
+        if let Instr::Print(tgt) = x {
+            reg[(*tgt) as usize] == 6.into()
+        } else {
+            false
+        }
+    }));
+}
+
 #[test]
 pub fn enum_any_payload() {
     run_and_check_registers!(
