@@ -7131,6 +7131,28 @@ pub fn inference_rejects_a_loop_over_a_value_that_cannot_be_iterated() {
 // the same thing, and the colouring has to reach the terminal as colour.
 // ---------------------------------------------------------------------------
 
+/// A call that accepts more than one type lists them in colour. Writing the
+/// escape placeholders inside a `format_args!` argument printed them as text.
+#[test]
+pub fn a_report_colours_the_types_a_call_accepts() {
+    for (src, listed) in [
+        (
+            "fn main() { let a = \"x\"; a.abs(); }",
+            "type to be int or float but here its type is string",
+        ),
+        (
+            "fn main() { let b = true; print(float(b)); }",
+            "of type string or int, but this expression's type is bool",
+        ),
+    ] {
+        let report = compile_report(src, "diag.cdl");
+        for placeholder in ["{RESET}", "{BLUE}", "{GREEN}"] {
+            assert!(!report.contains(placeholder), "{placeholder} in: {report}");
+        }
+        assert!(strip_ansi(&report).contains(listed), "{report}");
+    }
+}
+
 /// A `host` block declares a namespace that has no node in the namespace tree,
 /// so resolving a call into it used to fail as an unknown namespace before the
 /// unknown-function report could name the callee.

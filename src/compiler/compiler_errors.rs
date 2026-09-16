@@ -623,6 +623,21 @@ pub fn check_args(
     }
 }
 
+/// The types a call accepts, joined for a coloured report label.
+///
+/// The colour closes before each separator and reopens after it so the " or "
+/// between two types is not painted with them. The escape codes have to be
+/// part of the separator string itself: `format_args!` substitutes `{}`
+/// placeholders in its format string only, so a `{RESET}` written inside one
+/// of its arguments reaches the terminal as literal text.
+fn joined_types(types: &[DataType], color: &str) -> String {
+    types
+        .iter()
+        .map(|t| t.to_smolstr())
+        .collect::<Vec<SmolStr>>()
+        .join(&format!("{RESET} or {color}"))
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_invalid_obj_type(
@@ -646,7 +661,7 @@ pub fn error_invalid_obj_type(
                     .with_message(format_args!(
                         "Function {} expects this expression's type to be {BLUE}{}{RESET} but here its type is {}",
                         blue(fn_name),
-                        expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join("{RESET} or {BLUE}"),
+                        joined_types(expected_type, BLUE),
                         red(perceived_type)
                     ))
                     .with_color(ariadne::Color::Red),
@@ -1643,7 +1658,12 @@ pub fn error_function_arg_invalid_type_multiple(
 
             report = report.with_label(
                 Label::new((src.filename.as_str(), arg_span.into()))
-                    .with_message(format_args!("Function {} expects this argument to be of type {GREEN}{}{RESET}, but this expression's type is {}", blue(fn_name), expected_type.iter().map(|s| s.to_smolstr()).collect::<Vec<SmolStr>>().join("{RESET} or {GREEN}"), red(perceived_type)))
+                    .with_message(format_args!(
+                        "Function {} expects this argument to be of type {GREEN}{}{RESET}, but this expression's type is {}",
+                        blue(fn_name),
+                        joined_types(expected_type, GREEN),
+                        red(perceived_type)
+                    ))
                     .with_color(ariadne::Color::Red),
             );
 
