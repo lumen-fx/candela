@@ -491,6 +491,7 @@ fn compile_function(
         match instr {
             Instr::CloneArray(template_reg, _, _)
             | Instr::CloneStruct(template_reg, _)
+            | Instr::CloneEnum(template_reg, _)
             | Instr::CloneMap(template_reg, _) => {
                 reserved_registers.push(*template_reg);
             }
