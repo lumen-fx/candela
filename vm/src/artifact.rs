@@ -82,8 +82,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// the origin of each dynamic-library recipe, which says whether its spec is
 /// the program's own or a path into the standard library's `libs` directory.
 /// Version 7 widened `int` to 64 bits, so every recorded value carries a
-/// second word.
-const FORMAT_VERSION: u8 = 7;
+/// second word. Version 8 added the cell instructions a captured variable is
+/// read and written through.
+const FORMAT_VERSION: u8 = 8;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
