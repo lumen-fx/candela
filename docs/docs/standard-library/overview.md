@@ -97,7 +97,7 @@ when your file already binds the name `list`.
 | [random](random.md) | A seedable pseudo-random generator for ints and floats |
 | [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with methods |
 | [set](set.md) | A set of unique values, with union, intersection, and difference |
-| [string](string.md) | Substrings, padding, capitalisation, line splitting, counting |
+| [string](string.md) | Substrings, characters, padding, capitalisation, line splitting, counting |
 | [time](time.md) | The current unix time, and formatting a timestamp |
 
 ## Errors

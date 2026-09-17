@@ -1634,9 +1634,37 @@ pub fn execute(
                     output.clear();
                     output.reserve(source.len() / 4);
                     let separator_len = separator.len();
-                    let mut i = 0;
-                    for part_i in memmem::find_iter(source.as_bytes(), separator.as_bytes()) {
-                        let part = &source[i..part_i];
+                    if separator_len == 0 {
+                        // An empty separator answers the characters. Matching
+                        // it at every byte offset instead would report a match
+                        // before the first character and after the last, and
+                        // would cut a multi-byte character in half. A character
+                        // is at most four bytes, so every part fits the inline
+                        // string form and none reaches the pool.
+                        for (byte_i, character) in source.char_indices() {
+                            output.push(Data::small_str(
+                                &source[byte_i..byte_i + character.len_utf8()],
+                            ));
+                        }
+                    } else {
+                        let mut i = 0;
+                        for part_i in memmem::find_iter(source.as_bytes(), separator.as_bytes()) {
+                            let part = &source[i..part_i];
+                            output.push({
+                                if part.len() <= 6 {
+                                    Data::small_str(part)
+                                } else if let Some(id) = free_strings.pop() {
+                                    part.clone_into(&mut str_pool[id as usize]);
+                                    Data::large_str_id(id as u64)
+                                } else {
+                                    let id = str_pool.len() as u64;
+                                    str_pool.push(part.to_owned());
+                                    Data::large_str_id(id)
+                                }
+                            });
+                            i = part_i + separator_len;
+                        }
+                        let part = &source[i..];
                         output.push({
                             if part.len() <= 6 {
                                 Data::small_str(part)
@@ -1649,21 +1677,7 @@ pub fn execute(
                                 Data::large_str_id(id)
                             }
                         });
-                        i = part_i + separator_len;
                     }
-                    let part = &source[i..];
-                    output.push({
-                        if part.len() <= 6 {
-                            Data::small_str(part)
-                        } else if let Some(id) = free_strings.pop() {
-                            part.clone_into(&mut str_pool[id as usize]);
-                            Data::large_str_id(id as u64)
-                        } else {
-                            let id = str_pool.len() as u64;
-                            str_pool.push(part.to_owned());
-                            Data::large_str_id(id)
-                        }
-                    });
                     r[dest_register] = Data::array(output_str_reg_id);
                 } else if source.is_array() {
                     let source_array_id = source.as_array();

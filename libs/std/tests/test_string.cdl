@@ -16,6 +16,9 @@ fn main() {
     assert::assert_eq("7".pad_right(3, "0"), "700");
     assert::assert_eq("banana".count("a"), 3);
     assert::assert_eq("aaaa".count("aa"), 2);
+    assert::assert_eq("abc".chars().len(), 3);
+    assert::assert_eq("abc".chars().join("-"), "a-b-c");
+    assert::assert_eq("".chars().len(), 0);
 
     // Methods chain with the built-in string methods.
     assert::assert_eq("  hi  ".trim().capitalize(), "Hi");

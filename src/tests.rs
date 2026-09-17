@@ -280,6 +280,70 @@ pub fn string_split_array_len() {
 }
 
 #[test]
+pub fn string_split_on_empty_separator_yields_characters() {
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            let parts = "abc".split("");
+            print(parts.len());
+        }
+        "#,
+        3.into()
+    );
+}
+
+#[test]
+pub fn string_split_on_empty_separator_keeps_no_empty_ends() {
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            print("abc".split("").join("-").len());
+        }
+        "#,
+        5.into()
+    );
+}
+
+#[test]
+pub fn string_split_on_empty_separator_cuts_by_character() {
+    // The accented e is two bytes, so a byte-wise split would answer five
+    // parts and would cut the character in half.
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(\"caf\u{e9}\".split(\"\").len());
+        }
+        ",
+        4.into()
+    );
+}
+
+#[test]
+pub fn string_split_on_empty_separator_keeps_a_character_whole() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let parts = \"caf\u{e9}\".split(\"\");
+            print(parts[3].len());
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn string_split_of_nothing_on_empty_separator_is_empty() {
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            print("".split("").len());
+        }
+        "#,
+        0.into()
+    );
+}
+
+#[test]
 pub fn string_contains() {
     run_and_check_registers!(
         r#"
