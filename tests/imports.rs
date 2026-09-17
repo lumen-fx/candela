@@ -30,7 +30,13 @@ fn program_output(test_name: &str, files: &[(&str, &str)], verb: &[&str]) -> Out
     ));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     for (name, contents) in files {
-        std::fs::write(dir.join(name), contents).expect("write test file");
+        let path = dir.join(name);
+        // A file name may carry a directory, for a program whose modules sit
+        // in different packages.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create module dir");
+        }
+        std::fs::write(path, contents).expect("write test file");
     }
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
     command
@@ -866,4 +872,140 @@ fn a_module_spelled_two_ways_is_loaded_once() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+/// Two modules can each declare a plain struct by the same name. The alias in
+/// front of the name says which one is meant, and a method call on a value of
+/// one reaches that module's method rather than the other module's.
+#[test]
+fn two_modules_can_each_declare_the_same_struct_name() {
+    let output = run_program(
+        "same_struct_name_two_modules",
+        &[
+            (
+                "left.cdl",
+                "struct Plain { tag: string }\n\
+                 impl Plain { fn get(self) -> string { return self.tag; } }\n",
+            ),
+            (
+                "right.cdl",
+                "struct Plain { held: int }\n\
+                 impl Plain { fn get(self) -> int { return self.held; } }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"left.cdl\" as a;\n\
+                 import \"right.cdl\" as b;\n\
+                 fn takeA(p: a::Plain) -> string { return p.tag; }\n\
+                 fn takeB(p: b::Plain) -> int { return p.held; }\n\
+                 fn main() {\n\
+                     let left = a::Plain { tag: \"left\" };\n\
+                     let right = b::Plain { held: 2 };\n\
+                     print(takeA(left));\n\
+                     print(takeB(right));\n\
+                     print(left.get());\n\
+                     print(right.get());\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "left\n2\nleft\n2", "{stdout}");
+}
+
+/// The same for plain enums: two modules each declaring `Tag` keep their own
+/// variants and their own methods.
+#[test]
+fn two_modules_can_each_declare_the_same_enum_name() {
+    let output = run_program(
+        "same_enum_name_two_modules",
+        &[
+            (
+                "left.cdl",
+                "enum Tag { One, Two }\n\
+                 impl Tag { fn name(self) -> string { return \"left\"; } }\n",
+            ),
+            (
+                "right.cdl",
+                "enum Tag { Three }\n\
+                 impl Tag { fn name(self) -> string { return \"right\"; } }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"left.cdl\" as a;\n\
+                 import \"right.cdl\" as b;\n\
+                 fn takeA(t: a::Tag) -> string { return t.name(); }\n\
+                 fn takeB(t: b::Tag) -> string { return t.name(); }\n\
+                 fn main() {\n\
+                     print(takeA(a::Tag::One));\n\
+                     print(takeB(b::Tag::Three));\n\
+                     print(a::Tag::Two.name());\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "left\nright\nleft", "{stdout}");
+}
+
+/// One module's `Plain` is not the other's, so a function declared to return
+/// `a::Plain` cannot return `b::Plain`. The two are told apart by the module
+/// they come from rather than both reading `Plain`.
+#[test]
+fn a_mismatch_between_same_named_structs_names_both_modules() {
+    let output = check_program(
+        "same_struct_name_mismatch",
+        &[
+            ("left.cdl", "struct Plain { tag: string }\n"),
+            ("right.cdl", "struct Plain { held: int }\n"),
+            (
+                "prog.cdl",
+                "import \"left.cdl\" as a;\n\
+                 import \"right.cdl\" as b;\n\
+                 fn mkB() -> a::Plain { return b::Plain { held: 7 }; }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("left::Plain") && stderr.contains("right::Plain"),
+        "stderr: {stderr}"
+    );
+}
+
+/// Two packages can each ship a module of the same file name declaring the
+/// same type. The qualifier in a diagnostic takes as much of the path as it
+/// takes to tell the two modules apart.
+#[test]
+fn same_named_modules_in_two_packages_declare_the_same_type() {
+    let output = check_program(
+        "same_struct_name_two_packages",
+        &[
+            ("left/types.cdl", "struct Plain { tag: string }\n"),
+            ("right/types.cdl", "struct Plain { held: int }\n"),
+            (
+                "prog.cdl",
+                "import \"left/types.cdl\" as a;\n\
+                 import \"right/types.cdl\" as b;\n\
+                 fn mkB() -> a::Plain { return b::Plain { held: 7 }; }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("left::types::Plain") && stderr.contains("right::types::Plain"),
+        "stderr: {stderr}"
+    );
 }

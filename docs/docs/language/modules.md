@@ -90,6 +90,13 @@ one of the two with `as` to keep them apart, or rename yours. The same symbol
 arriving twice by different routes is not a collision, so two modules that both
 depend on a third are fine.
 
+Types are separate per module. Two modules can each declare a `Plain`, whether
+struct, enum, or generic, and a program can import both under aliases and use
+both: each keeps its own fields or variants and its own `impl` methods. The two
+are different types, so one is not accepted where the other is expected, and a
+message about either puts the module in front of the name to say which one it
+means.
+
 ## Importing your own files
 
 Split a program by putting declarations in a file next to it and importing the
