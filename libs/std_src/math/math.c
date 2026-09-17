@@ -4,8 +4,21 @@
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
+
+// An exponent wider than a C int says the same thing as the largest one that
+// fits: the result is zero or an infinity either way.
+static int clamp_exponent(int64_t y) {
+  if (y > INT_MAX) {
+    return INT_MAX;
+  }
+  if (y < INT_MIN) {
+    return INT_MIN;
+  }
+  return (int)y;
+}
 
 EXPORT double candela_acos(double x) { return acos(x); }
 EXPORT double candela_asin(double x) { return asin(x); }
@@ -27,9 +40,13 @@ EXPORT double candela_log10(double x) { return log10(x); }
 EXPORT double candela_log2(double x) { return log2(x); }
 EXPORT double candela_log1p(double x) { return log1p(x); }
 EXPORT double candela_logb(double x) { return logb(x); }
-EXPORT double candela_ldexp(double x, int y) { return ldexp(x, y); }
-EXPORT int32_t candela_ilogb(double x) { return (int32_t)ilogb(x); }
-EXPORT double candela_scalbn(double x, int y) { return scalbn(x, y); }
+EXPORT double candela_ldexp(double x, int64_t y) {
+  return ldexp(x, clamp_exponent(y));
+}
+EXPORT int64_t candela_ilogb(double x) { return (int64_t)ilogb(x); }
+EXPORT double candela_scalbn(double x, int64_t y) {
+  return scalbn(x, clamp_exponent(y));
+}
 EXPORT double candela_cbrt(double x) { return cbrt(x); }
 EXPORT double candela_hypot(double x, double y) { return hypot(x, y); }
 EXPORT double candela_erf(double x) { return erf(x); }

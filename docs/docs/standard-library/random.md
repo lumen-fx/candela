@@ -35,8 +35,8 @@ same sequence.
 random::random_int()
 ```
 
-- Returns: an int drawn from the generator's full 32-bit range, so the result can
-  be negative.
+- Returns: an int drawn from the generator's full range, so the result can be
+  negative.
 
 ## random_int_range
 

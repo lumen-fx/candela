@@ -45,5 +45,5 @@ fn main() {
 }
 ```
 
-The value `now` returns is a 32-bit signed count of seconds, so it stops being
-representable in 2038.
+The value `now` returns is a signed count of seconds wide enough to outlast the
+platform clock that produces it.
