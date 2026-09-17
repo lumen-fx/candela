@@ -3824,6 +3824,30 @@ pub fn diagnostics_parser_error_span() {
     assert_eq!(d.span, 21..21);
 }
 
+/// `int` is 32 bits wide, so a literal past its range is a compile error at
+/// the literal, naming the range it has to sit in.
+#[test]
+pub fn diagnostics_int_literal_past_the_range() {
+    let src = "fn main() { print(3000000000); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "int_literal_out_of_range");
+    assert!(d.message.contains("-2147483648"), "{}", d.message);
+    assert!(d.message.contains("2147483647"), "{}", d.message);
+    assert_eq!(&src[d.span], "3000000000");
+}
+
+/// A literal at the top of the 64-bit range reaches the same error, rather
+/// than a different one from the number parser underneath.
+#[test]
+pub fn diagnostics_int_literal_past_64_bits() {
+    let src = "fn main() { print(9223372036854775807); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "int_literal_out_of_range");
+    assert_eq!(&src[d.span], "9223372036854775807");
+}
+
 #[test]
 pub fn diagnostics_compile_error_span() {
     let src = "fn main() { let x = 1 + \"a\"; }";

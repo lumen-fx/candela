@@ -25,7 +25,22 @@ impl std::fmt::Display for Token<'_> {
     }
 }
 
+/// Why the lexer refused the text it was looking at.
+///
+/// [`LexErr::UnknownToken`] is what no rule matching leaves behind, and is the
+/// default the lexer fills in. The other variants come from a rule that matched
+/// and then rejected what it read, so the parser reports the mistake the
+/// literal made rather than a bare unknown token.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum LexErr {
+    #[default]
+    UnknownToken,
+    /// An integer literal outside what `int` holds.
+    IntOutOfRange,
+}
+
 #[derive(Logos, Debug, PartialEq, Clone, Copy)]
+#[logos(error = LexErr)]
 #[logos(skip r"[ \t\r\n\f]+")] // Ignore whitespace
 #[logos(skip(r"//[^\n\r]*", allow_greedy = true))] // Ignore comments
 pub enum Token<'a> {
@@ -178,14 +193,17 @@ pub enum Token<'a> {
     })]
     Float(f64),
 
+    // `2147483648` on its own is one past `int`, and is accepted because the
+    // only way to write the smallest `int` is to negate it: the '-' is a
+    // separate token, so the literal is read before the sign reaches it.
     #[regex(r"[0-9]+", |lex| {
         let slice = lex.slice();
         match lexical_core::parse::<i64>(slice.as_bytes()) {
-            Ok(v) if v <= (i32::MAX as i64) => v as i32,
-            Ok(2_147_483_648) => i32::MIN,
+            Ok(v) if v <= (i32::MAX as i64) => Ok(v as i32),
+            Ok(2_147_483_648) => Ok(i32::MIN),
             _ => {
                 cold_path();
-                panic!("Invalid float");
+                Err(LexErr::IntOutOfRange)
             }
         }
     })]

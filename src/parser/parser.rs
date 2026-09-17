@@ -28,6 +28,7 @@ use blocks::parse_match;
 use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
 use blocks::parse_while_block;
+use lexer::LexErr;
 use lexer::MacroToken;
 use lexer::parse_string;
 use logos::SpannedIter;
@@ -79,6 +80,8 @@ pub const MAX_NESTING_DEPTH: u32 = 128;
 enum ParserErr<'a> {
     UnexpectedEOF,
     UnknownToken,
+    /// An integer literal outside the range `int` holds.
+    IntLiteralOutOfRange,
     /// (expected, received)
     UnexpectedToken(Token<'a>, Token<'a>, &'static str),
     /// (expected, received)
@@ -120,6 +123,7 @@ impl ParserErr<'_> {
         match self {
             ParserErr::UnexpectedEOF => "unexpected_eof",
             ParserErr::UnknownToken => "unknown_token",
+            ParserErr::IntLiteralOutOfRange => "int_literal_out_of_range",
             ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => {
                 "unexpected_token"
             }
@@ -145,6 +149,15 @@ impl ParserErr<'_> {
     }
 }
 
+/// The parser error a refused token earns, so a literal the lexer read and
+/// rejected reports what was wrong with it.
+const fn lex_err(e: LexErr) -> ParserErr<'static> {
+    match e {
+        LexErr::UnknownToken => ParserErr::UnknownToken,
+        LexErr::IntOutOfRange => ParserErr::IntLiteralOutOfRange,
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> ! {
@@ -152,6 +165,11 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     let err_message = match t {
         ParserErr::UnexpectedEOF => "Unexpected EOF",
         ParserErr::UnknownToken => "Unknown token",
+        ParserErr::IntLiteralOutOfRange => &format!(
+            "This number does not fit an {BLUE}{BOLD}int{RESET}, which holds {} to {}. A wider value goes in a {BLUE}{BOLD}float{RESET}",
+            i32::MIN,
+            i32::MAX
+        ),
         ParserErr::UnexpectedToken(expected, received, msg) => &format_args!(
             "Expected {BLUE}{BOLD}{expected}{RESET}, but got {RED}{BOLD}{received}{RESET}. {msg}"
         )
@@ -294,7 +312,7 @@ impl<'a> Parser<'a> {
         (
             t.0.unwrap_or_else(
                 #[cold]
-                |()| self.error(span, ParserErr::UnknownToken),
+                |e| self.error(span, lex_err(e)),
             ),
             span,
         )
@@ -310,7 +328,7 @@ impl<'a> Parser<'a> {
         };
         t.unwrap_or_else(
             #[cold]
-            |()| self.error(self.placed((start, end).into()), ParserErr::UnknownToken),
+            |e| self.error(self.placed((start, end).into()), lex_err(e)),
         )
     }
     #[inline(always)]
@@ -335,7 +353,7 @@ impl<'a> Parser<'a> {
             .map(|(t, span)| (*t, span.start, span.end))?;
         Some(t.unwrap_or_else(
             #[cold]
-            |()| self.error(self.placed((start, end).into()), ParserErr::UnknownToken),
+            |e| self.error(self.placed((start, end).into()), lex_err(e)),
         ))
     }
     #[inline(always)]

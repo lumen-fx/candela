@@ -18,7 +18,9 @@ up before it runs.
 | Function | inferred | `fn(x) { return x; }` |
 
 `int` is a signed 32-bit integer and `float` is double precision. A numeric
-literal with a decimal point is a `float`; without one it is an `int`.
+literal with a decimal point is a `float`; without one it is an `int`. An `int`
+literal outside -2147483648 to 2147483647 is a compile error at the literal;
+give it a decimal point to write it as a `float` instead.
 
 Lists and maps are covered in [Collections](collections.md), functions in
 [Functions](functions.md), and your own types in [Enums](enums.md) and in
