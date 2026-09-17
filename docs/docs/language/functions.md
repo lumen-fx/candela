@@ -231,6 +231,26 @@ fn main() {
 }
 ```
 
+A struct field holds one the same way, and calling the field is the same dot a
+method call uses. Declare the field with a type parameter, since the field's
+type is the function that went into it; see [Generics](generics.md).
+
+```rust
+struct Button<T> {
+    label: string,
+    on_press: T,
+}
+
+fn main() {
+    let b = Button { label: "ok", on_press: fn(x) { return x * 2; } };
+    print(b.on_press(21));
+}
+```
+
+A method of that name wins: the field is reached only when the receiver's type
+has no such method, so adding a method never changes which call an existing
+program makes. See [Methods](methods.md).
+
 Both forms work as arguments: the name of a declared function, and an anonymous
 function written at the call site. A declared function's name is usable as a
 value only in an argument position; to keep one in a variable, wrap it in an

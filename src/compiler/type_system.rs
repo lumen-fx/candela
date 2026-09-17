@@ -2645,6 +2645,23 @@ fn builtin_method_return(
     Some(DataType::Union(types.into_boxed_slice()).check_poly())
 }
 
+/// The function a struct field holds, for a field whose type names one.
+///
+/// A function is a compile-time entity, so a field's static type carries the id
+/// of the function put into it. That is what lets `obj.field(x)` lower to the
+/// direct call `fs[0](x)` already lowers to.
+#[must_use]
+pub(crate) fn struct_field_fn(struct_id: u16, field: &str, state: &State<'_>) -> Option<usize> {
+    state.structs[struct_id as usize]
+        .fields
+        .iter()
+        .find(|(name, _, _)| name == field)
+        .and_then(|(_, field_type, _)| match field_type {
+            DataType::Fn(fn_id) => Some(*fn_id as usize),
+            _ => None,
+        })
+}
+
 impl Expr {
     /// Infers this expression's static [`DataType`] without emitting code.
     ///
@@ -3117,8 +3134,28 @@ impl Expr {
                             state,
                         );
                     }
-                    // No matching method: mirror the compile-time error path so
-                    // inference does not hit the builtin arms with a struct type.
+                    // No method of that name: a field holding a function is
+                    // called through the same dot, so `obj.field(x)` calls what
+                    // the field holds. A method wins, which is why this comes
+                    // second.
+                    if let Some(field_fn) = struct_field_fn(struct_id, method, state) {
+                        let arg_types = args
+                            .iter()
+                            .map(|a| a.infer_type(v, ctx, state))
+                            .collect::<Vec<DataType>>();
+                        let fn_name = state.fns[field_fn].name.clone();
+                        return infer_user_fn_return_type(
+                            field_fn,
+                            &arg_types,
+                            &[],
+                            &fn_name,
+                            v,
+                            ctx,
+                            state,
+                        );
+                    }
+                    // Neither: mirror the compile-time error path so inference
+                    // does not hit the builtin arms with a struct type.
                     crate::compiler::compiler_errors::error_no_such_method(
                         method,
                         &struct_name,
