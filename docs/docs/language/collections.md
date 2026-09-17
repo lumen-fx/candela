@@ -156,8 +156,8 @@ fn main() {
 }
 ```
 
-The functions you pass do not capture surrounding variables; see
-[Functions](functions.md).
+The functions you pass read the variables around them, so a predicate can test
+against what the scope holds; see [Functions](functions.md).
 
 ## Maps
 
