@@ -691,12 +691,12 @@ fn the_call_depth_limit_holds_for_an_artifact_run() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The character-boundary checks belong to the VM, so an artifact run stops at
-/// a position inside a character the same way a source run does, and a catch
-/// reaches it there too. Skips if `candela-vm` is not built alongside
-/// `candela`.
+/// String positions count characters, and the VM is what counts them, so an
+/// artifact run indexes, slices and iterates a string with characters wider
+/// than one byte exactly as a source run does. Skips if `candela-vm` is not
+/// built alongside `candela`.
 #[test]
-fn a_position_inside_a_character_is_caught_in_an_artifact_run() {
+fn string_positions_count_characters_in_an_artifact_run() {
     let candela = env!("CARGO_BIN_EXE_candela");
     let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
         "candela-vm.exe"
@@ -705,31 +705,34 @@ fn a_position_inside_a_character_is_caught_in_an_artifact_run() {
     });
     if !candela_vm.exists() {
         eprintln!(
-            "skipping a_position_inside_a_character_is_caught_in_an_artifact_run: {} not built",
+            "skipping string_positions_count_characters_in_an_artifact_run: {} not built",
             candela_vm.display()
         );
         return;
     }
 
-    let dir = scratch_dir("char_boundary");
+    let dir = scratch_dir("char_positions");
     let app = dir.join("app.cdl");
     std::fs::write(
         &app,
         "
 fn main() {
     let word = \"caf\u{e9}\";
-    try {
-        print(word[3..4]);
-    } catch \"not_a_char_boundary\" {
-        print(\"slice\");
+    print(word.len());
+    print(word[3]);
+    print(word[0..4]);
+    print(word.find(\"\u{e9}\"));
+    for c in word {
+        print(c);
     }
+    let mixed = \"a\u{1f600}b\u{4e2d}\";
+    print(mixed.len());
+    print(mixed[1..3]);
     try {
-        print(word[3]);
-    } catch \"not_a_char_boundary\" {
-        print(\"index\");
+        print(word[4]);
+    } catch \"index_out_of_bounds\" {
+        print(\"past the end\");
     }
-    print(word[0..3]);
-    print(word[3..5]);
 }
 ",
     )
@@ -747,8 +750,8 @@ fn main() {
     assert!(vm_out.status.success(), "candela-vm run failed");
     assert_eq!(
         String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
-        "slice\nindex\ncaf\n\u{e9}\n",
-        "the artifact run catches both, and whole-character slices still work"
+        "4\n\u{e9}\ncaf\u{e9}\n3\nc\na\nf\n\u{e9}\n4\n\u{1f600}b\npast the end\n",
+        "the artifact run counts characters everywhere a position appears"
     );
 
     std::fs::remove_dir_all(&dir).ok();

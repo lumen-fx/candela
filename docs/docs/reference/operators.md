@@ -154,15 +154,15 @@ Use `let` to introduce a name and `=` to change one; see
 
 ## Indexing and slicing
 
-`a[i]` reads one element of an array, or one byte of a string as a
+`a[i]` reads one element of an array, or one character of a string as a
 one-character string. The index must be an `int` and must be within bounds; a
 negative index does not count from the end, and an out-of-range index raises the
 catchable `index_out_of_bounds`.
 
 `a[i..j]` takes a slice from `i` up to but not including `j`. `a[..j]` starts at
-zero. Both bounds must be `int`. The end may equal the length, the start may
-not, and a slice that falls outside the value raises `slice_out_of_bounds`.
-There is no `a[i..]` form; give the upper bound.
+zero. Both bounds must be `int`. Either bound may equal the length, and a slice
+that falls outside the value raises `slice_out_of_bounds`. There is no `a[i..]`
+form; give the upper bound.
 
 ```rust
 let word = "candela";
@@ -170,10 +170,10 @@ print(word[0]);      // c
 print(word[0..4]);   // cand
 ```
 
-Strings index and slice by byte. A position that lands in a character taking
-more than one byte raises the catchable `not_a_char_boundary` rather than
-handing back a piece of one, so `word[0..4]` on a four-letter word ending in an
-accented vowel stops instead of cutting the vowel in half.
+Positions on a string count characters, so `word[0..4]` on a four-letter word
+ending in an accented vowel takes the whole word, and `word[3]` reads the
+accented vowel. A character is a Unicode scalar value, whatever it takes to
+store.
 
 Maps are not indexed with `[]`. Use the `get` method; see
 [collections](../language/collections.md).

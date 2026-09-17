@@ -320,6 +320,8 @@ pub fn string_split_on_empty_separator_cuts_by_character() {
 
 #[test]
 pub fn string_split_on_empty_separator_keeps_a_character_whole() {
+    // The last part is the whole accented e, which is one character however
+    // many bytes it takes.
     run_and_check_registers!(
         "
         fn main() {
@@ -327,7 +329,7 @@ pub fn string_split_on_empty_separator_keeps_a_character_whole() {
             print(parts[3].len());
         }
         ",
-        2.into()
+        1.into()
     );
 }
 

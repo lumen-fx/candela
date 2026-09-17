@@ -342,10 +342,6 @@ pub enum ErrType<'a> {
     /// A call that would stand one frame past the call-depth limit. Carries the
     /// name the call site wrote and the limit it reached.
     CallDepthExceeded(&'a str, usize),
-    /// A byte position that lands in a character taking more than one byte,
-    /// where a whole character is the only answer. Carries the position and
-    /// the character it landed in.
-    NotACharBoundary(i64, char),
 }
 
 impl From<ErrType<'_>> for SmolStr {
@@ -383,7 +379,6 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
             ErrType::NotAString(got) => format_args!("Cannot join this {RED}{BOLD}{got}{RESET} value onto a {BLUE}{BOLD}string{RESET}").to_smolstr(),
             ErrType::CallDepthExceeded(name, limit) => format_args!("The call to {RED}{BOLD}{name}{RESET} stands {BLUE}{BOLD}{limit}{RESET} calls deep, which is the call depth limit").to_smolstr(),
-            ErrType::NotACharBoundary(position, character) => format_args!("Position {RED}{BOLD}{position}{RESET} lands in the character {BLUE}{BOLD}{character}{RESET}, which takes more than one byte").to_smolstr(),
         }
     }
 }
@@ -423,7 +418,6 @@ impl ErrType<'_> {
             ErrType::HostFn(_, _) => "host_fn_error",
             ErrType::NotAString(_) => "not_a_string",
             ErrType::CallDepthExceeded(_, _) => "call_depth_exceeded",
-            ErrType::NotACharBoundary(_, _) => "not_a_char_boundary",
         }
     }
 }

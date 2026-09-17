@@ -118,7 +118,6 @@ clause matches and the string bound to the catch variable. See
 | --- | --- |
 | `index_out_of_bounds` | An array or string index outside the value |
 | `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end. A slice starting where the value ends is in range and produces an empty one |
-| `not_a_char_boundary` | A string position that lands in a character taking more than one byte. Positions count bytes, so an index or a slice bound can fall inside one; the report names the position and the character |
 | `unknown_map_key` | Reading a map key that is not present |
 
 ### Arithmetic

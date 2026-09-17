@@ -513,7 +513,7 @@ impl RuntimeProgram {
                 })
                 .collect(),
         );
-        let strings: StringPool = Pool(img.strings);
+        let strings = StringPool::from_strings(img.strings);
 
         let structs: Vec<Struct> = img
             .structs
