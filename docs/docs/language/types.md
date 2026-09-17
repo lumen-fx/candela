@@ -74,10 +74,9 @@ A conversion that cannot succeed raises at runtime; see
 
 ## Truthiness
 
-There is none, and none is added for you. A condition of another type still
-compiles, but it is not interpreted: only the boolean `false` fails a test, so
-every other value takes the true branch, `0`, `""` and `null` included. Write
-the comparison out rather than leaning on that.
+There is none, and none is added for you. `0`, `""` and `null` are not tests,
+and a condition of any type but `bool` is a compile error at the condition. Write
+the comparison out.
 
 ```rust
 fn main() {

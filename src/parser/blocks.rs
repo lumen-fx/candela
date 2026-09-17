@@ -18,11 +18,19 @@ use crate::parser::parse_type_params;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
+/// Parses a condition and reports the span it covers, which is what a
+/// condition whose type is not `bool` is reported against.
+fn parse_condition_expr(parser: &mut Parser<'_>) -> (Expr, Span) {
+    let start = parser.peek_token_span().start;
+    let condition = parse_expr_no_struct(parser);
+    (condition, (start, parser.last_token_end as u32).into())
+}
+
 // call right after peeking Token::If
 pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
     let t = parser.next_token();
     debug_assert_eq!(t.0, Token::If);
-    let condition = parse_expr_no_struct(parser);
+    let (condition, condition_span) = parse_condition_expr(parser);
     let mut output_code = parse_block(parser);
     loop {
         let next_token = parser.peek_token_opt();
@@ -36,11 +44,12 @@ pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
         let next_token = parser.peek_token_opt();
         if next_token == Some(Token::If) {
             parser.next_token();
-            let else_if_condition = parse_expr_no_struct(parser);
+            let (else_if_condition, else_if_condition_span) = parse_condition_expr(parser);
             let else_if_code = parse_block(parser);
             output_code.push(Expr::ElseIfBlock(
                 Box::new(else_if_condition),
                 Box::from(else_if_code),
+                else_if_condition_span,
             ));
         } else if next_token == Some(Token::LBrace) {
             let else_code = parse_block(parser);
@@ -54,6 +63,7 @@ pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
         Box::new(condition),
         Box::from(output_code),
         (start, parser.last_token_end as u32).into(),
+        condition_span,
     )
 }
 
@@ -84,9 +94,13 @@ pub fn parse_block_expr(parser: &mut Parser<'_>) -> Expr {
 pub fn parse_while_block(input: &mut Parser<'_>) -> Expr {
     let t = input.next_token();
     debug_assert_eq!(t.0, Token::While);
-    let while_condition = parse_expr_no_struct(input);
+    let (while_condition, condition_span) = parse_condition_expr(input);
     let while_code = parse_block(input);
-    Expr::WhileBlock(Box::new(while_condition), Box::from(while_code))
+    Expr::WhileBlock(
+        Box::new(while_condition),
+        Box::from(while_code),
+        condition_span,
+    )
 }
 
 /// Parses ForLoop and IntForLoop
@@ -313,6 +327,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
                     Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
                 )),
                 Box::from(c),
+                catch_span,
             ));
         }
     }
@@ -323,6 +338,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
         Box::from([Expr::Condition(
             Box::from(main_condition),
             Box::from(output_code),
+            catch_span,
             catch_span,
         )]),
     )

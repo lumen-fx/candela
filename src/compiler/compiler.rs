@@ -12,6 +12,7 @@ use crate::compiler::compiler_errors::error_duplicate_map_key;
 use crate::compiler::compiler_errors::error_invalid_index_type;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_map_diff_types;
+use crate::compiler::compiler_errors::error_non_bool_condition;
 use crate::compiler::compiler_errors::error_not_literal_map_key;
 use crate::compiler::compiler_errors::error_range_invalid_type;
 use crate::compiler::compiler_errors::error_type_arg_count;
@@ -192,8 +193,48 @@ const fn set_jmp_size(instr: &mut Instr, size: u16) {
 /// bool_or_mode false emits false jumps
 /// Returns (true_jump_idxs, false_jump_idxs)
 #[allow(clippy::too_many_arguments)]
+/// Compiles one condition operand and checks that it is a `bool`.
+///
+/// candela has no truthiness, so a condition whose type the compiler knows and
+/// which is not `bool` is reported where it is written. A condition typed `any`
+/// carries no type to check against, so it goes through `AsBoolVal`, which
+/// hands a bool straight back and raises `bad_downcast` on anything else; only
+/// that path pays for the check.
+fn compile_condition_operand(
+    expr: &Expr,
+    condition_span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let condition_type = expr.infer_type(v, ctx, state);
+    match condition_type {
+        DataType::Bool => expr
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id(),
+        DataType::Unknown => {
+            let cond_id = expr
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id();
+            state.free_reg(cond_id, v);
+            let checked_id = state.alloc_reg();
+            output.push(Instr::CallLibFunc(LibFunc::AsBoolVal, cond_id, checked_id));
+            checked_id
+        }
+        other => error_non_bool_condition(
+            condition_span,
+            &other,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        ),
+    }
+}
+
 fn compile_short_circuit_condition(
     expr: &Expr,
+    condition_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -201,22 +242,29 @@ fn compile_short_circuit_condition(
     bool_or_mode: bool,
 ) -> (Vec<usize>, Vec<usize>) {
     match expr {
-        Expr::BoolOr(left, right, _, _) => {
+        Expr::BoolOr(left, right, left_span, right_span) => {
             // left side of || always uses true jump mode
             let (mut true_jumps, left_false) =
-                compile_short_circuit_condition(left, v, ctx, state, output, true);
+                compile_short_circuit_condition(left, *left_span, v, ctx, state, output, true);
             // A false left operand does not settle `||`, so it continues into
             // the right operand rather than out of the whole expression.
             let right_start = output.len();
             for j in left_false {
                 set_jmp_size(&mut output[j], (right_start - j) as u16);
             }
-            let (right_true, right_false) =
-                compile_short_circuit_condition(right, v, ctx, state, output, bool_or_mode);
+            let (right_true, right_false) = compile_short_circuit_condition(
+                right,
+                *right_span,
+                v,
+                ctx,
+                state,
+                output,
+                bool_or_mode,
+            );
             true_jumps.extend(right_true);
             (true_jumps, right_false)
         }
-        Expr::BoolAnd(left, right, _, _) => {
+        Expr::BoolAnd(left, right, left_span, right_span) => {
             if bool_or_mode {
                 // `&&` on the left of `||`, where the caller wants jumps taken
                 // when this conjunction is true. A false left operand settles
@@ -224,9 +272,16 @@ fn compile_short_circuit_condition(
                 // and land on whatever is emitted next, which is exactly where
                 // the enclosing `||` continues.
                 let (_, left_false) =
-                    compile_short_circuit_condition(left, v, ctx, state, output, false);
-                let (right_true, _) =
-                    compile_short_circuit_condition(right, v, ctx, state, output, true);
+                    compile_short_circuit_condition(left, *left_span, v, ctx, state, output, false);
+                let (right_true, _) = compile_short_circuit_condition(
+                    right,
+                    *right_span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    true,
+                );
                 let fallthrough = output.len();
                 for j in left_false {
                     set_jmp_size(&mut output[j], (fallthrough - j) as u16);
@@ -235,7 +290,7 @@ fn compile_short_circuit_condition(
             } else {
                 // normal && -> if either side is false, jump past the body
                 let (left_true, mut false_jumps) =
-                    compile_short_circuit_condition(left, v, ctx, state, output, false);
+                    compile_short_circuit_condition(left, *left_span, v, ctx, state, output, false);
                 // A true left operand does not settle `&&`, so it continues
                 // into the right operand. Only the right operand's true jumps
                 // settle the conjunction, and the caller aims those at the body.
@@ -243,16 +298,21 @@ fn compile_short_circuit_condition(
                 for j in left_true {
                     set_jmp_size(&mut output[j], (right_start - j) as u16);
                 }
-                let (right_true, right_false) =
-                    compile_short_circuit_condition(right, v, ctx, state, output, false);
+                let (right_true, right_false) = compile_short_circuit_condition(
+                    right,
+                    *right_span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    false,
+                );
                 false_jumps.extend(right_false);
                 (right_true, false_jumps)
             }
         }
         expr => {
-            let cond_id = expr
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let cond_id = compile_condition_operand(expr, condition_span, v, ctx, state, output);
             if bool_or_mode {
                 add_cmp_true(cond_id, output);
                 state.free_reg(cond_id, v);
@@ -1125,6 +1185,7 @@ fn compile_match(
                     Box::new(pat.clone()),
                 )),
                 body.clone(),
+                span,
             ));
         }
         if let Some(w) = wildcard {
@@ -1138,6 +1199,7 @@ fn compile_match(
                     Box::new(first_pat.clone()),
                 )),
                 Box::from(output_code),
+                span,
                 span,
             ),
         ]));
@@ -1991,6 +2053,7 @@ fn compile_inline_condition(
     main_condition: &Expr,
     code: &[Expr],
     span: Span,
+    condition_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2002,7 +2065,7 @@ fn compile_inline_condition(
     // get first code limit (after which there are only else(if) blocks)
     let main_code_limit = code
         .iter()
-        .position(|x| matches!(x, Expr::ElseIfBlock(_, _) | Expr::ElseBlock(_)))
+        .position(|x| matches!(x, Expr::ElseIfBlock(_, _, _) | Expr::ElseBlock(_)))
         .unwrap_or(code.len());
 
     let condition_blocks_count = code.len() - main_code_limit;
@@ -2011,9 +2074,8 @@ fn compile_inline_condition(
     let mut condition_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
 
     // parse the main condition
-    let condition_id = main_condition
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let condition_id =
+        compile_condition_operand(main_condition, condition_span, v, ctx, state, output);
     add_cmp_false(condition_id, &mut 0, output, false);
     cmp_markers.push(output.len() - 1);
 
@@ -2025,11 +2087,10 @@ fn compile_inline_condition(
 
     let mut else_exists = false;
     for elem in &code[main_code_limit..] {
-        if let Expr::ElseIfBlock(condition, code) = elem {
+        if let Expr::ElseIfBlock(condition, code, condition_span) = elem {
             condition_markers.push(output.len());
-            let condition_id = condition
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let condition_id =
+                compile_condition_operand(condition, *condition_span, v, ctx, state, output);
             add_cmp_false(condition_id, &mut 0, output, false);
             state.free_reg(condition_id, v);
             cmp_markers.push(output.len() - 1);
@@ -2221,6 +2282,7 @@ fn compile_struct_field_assignment(
 fn compile_condition(
     main_condition: &Expr,
     code: &[Expr],
+    condition_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2229,7 +2291,7 @@ fn compile_condition(
     // get first code limit (after which there are only else(if) blocks)
     let main_code_limit = code
         .iter()
-        .position(|x| matches!(x, Expr::ElseIfBlock(_, _) | Expr::ElseBlock(_)))
+        .position(|x| matches!(x, Expr::ElseIfBlock(_, _, _) | Expr::ElseBlock(_)))
         .unwrap_or(code.len());
 
     let condition_blocks_count = code.len() - main_code_limit;
@@ -2240,8 +2302,15 @@ fn compile_condition(
     let mut condition_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
 
     // Compile the main condition
-    let (true_jump_idxs, false_jump_idxs) =
-        compile_short_circuit_condition(main_condition, v, ctx, state, output, false);
+    let (true_jump_idxs, false_jump_idxs) = compile_short_circuit_condition(
+        main_condition,
+        condition_span,
+        v,
+        ctx,
+        state,
+        output,
+        false,
+    );
     conditional_false_jmp_idxs.push(false_jump_idxs);
 
     // Modify true jump instructions to point to body_start
@@ -2264,11 +2333,10 @@ fn compile_condition(
     }
 
     for elem in &code[main_code_limit..] {
-        if let Expr::ElseIfBlock(condition, code) = elem {
+        if let Expr::ElseIfBlock(condition, code, condition_span) = elem {
             condition_markers.push(output.len());
-            let condition_id = condition
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let condition_id =
+                compile_condition_operand(condition, *condition_span, v, ctx, state, output);
             state.free_reg(condition_id, v);
             add_cmp_false(condition_id, &mut 0, output, false);
             conditional_false_jmp_idxs.push(vec![output.len() - 1]);
@@ -2303,6 +2371,7 @@ fn compile_condition(
 fn compile_while_loop(
     condition: &Expr,
     code: &[Expr],
+    condition_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2311,7 +2380,7 @@ fn compile_while_loop(
     let output_len_before = output.len();
 
     let (true_jump_idxs, false_jump_idxs) =
-        compile_short_circuit_condition(condition, v, ctx, state, output, false);
+        compile_short_circuit_condition(condition, condition_span, v, ctx, state, output, false);
 
     let body_start = output.len();
     for j in true_jump_idxs {
@@ -3360,12 +3429,13 @@ impl Expr {
                     l, *span1, *span2, tgt_id, v, ctx, state, output,
                 ))
             }
-            Self::InlineCondition(main_condition, code, span) => {
+            Self::InlineCondition(main_condition, code, span, condition_span) => {
                 debug_assert!(uses_id);
                 Some(compile_inline_condition(
                     main_condition,
                     code,
                     *span,
+                    *condition_span,
                     v,
                     ctx,
                     state,
@@ -3477,14 +3547,14 @@ impl Expr {
                 );
                 None
             }
-            Self::Condition(main_condition, code, _) => {
+            Self::Condition(main_condition, code, _, condition_span) => {
                 debug_assert!(!uses_id);
-                compile_condition(main_condition, code, v, ctx, state, output);
+                compile_condition(main_condition, code, *condition_span, v, ctx, state, output);
                 None
             }
-            Self::WhileBlock(condition, code) => {
+            Self::WhileBlock(condition, code, condition_span) => {
                 debug_assert!(!uses_id);
-                compile_while_loop(condition, code, v, ctx, state, output);
+                compile_while_loop(condition, code, *condition_span, v, ctx, state, output);
                 None
             }
             Self::ForLoop(var_name, array, code, span) => {

@@ -321,9 +321,9 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         }
         Expr::VarDeclare(_, val) => visit_expr(val, src_file, out),
         Expr::VarAssign(_, val, _) => visit_expr(val, src_file, out),
-        Expr::Condition(cond, body, _)
-        | Expr::InlineCondition(cond, body, _)
-        | Expr::ElseIfBlock(cond, body) => {
+        Expr::Condition(cond, body, _, _)
+        | Expr::InlineCondition(cond, body, _, _)
+        | Expr::ElseIfBlock(cond, body, _) => {
             visit_expr(cond, src_file, out);
             for b in body.iter() {
                 visit_expr(b, src_file, out);
@@ -337,7 +337,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 visit_expr(b, src_file, out);
             }
         }
-        Expr::WhileBlock(cond, body) => {
+        Expr::WhileBlock(cond, body, _) => {
             visit_expr(cond, src_file, out);
             for b in body.iter() {
                 visit_expr(b, src_file, out);

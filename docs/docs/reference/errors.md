@@ -68,7 +68,8 @@ including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,
 
 **Type errors.** The general mismatch: an index that is not an `int`, indexing
 or iterating a type that supports neither, a field access on something that is
-not a struct. A condition that is not a `bool` is not one of these; see
+not a struct, and the condition of an `if`, an `else if`, a `while` or an `if`
+expression whose type is not `bool`. See
 [control flow](../language/control-flow.md).
 
 **Collection literal errors.** Arrays and maps are homogeneous, so an element or
@@ -146,7 +147,7 @@ runs; the kinds above cover the cases where a value is only known at run time.
 | `invalid_int` | `int()` on a string that is not an integer |
 | `invalid_float` | `float()` on a string that is not a number |
 | `invalid_bool` | `bool()` on a string that is neither `true` nor `false` |
-| `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type |
+| `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type, and a condition typed `any` holding anything but a bool |
 | `not_a_string` | Joining a value onto a string when the value is not one. A variadic host function is the way this happens: it is not signature-checked, so its closure can return a type its `host` block does not declare |
 | `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason. Objects and arrays nest to a fixed depth, and text past it is rejected the same way |
 
