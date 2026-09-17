@@ -35,11 +35,11 @@ const NAN_ENUM: u64 = NAN_BASE;
 /// observable.
 const CANONICAL_NAN: u64 =
     0b0111_1111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
-pub const NULL: Data = Data(NAN_NULL);
-pub const FALSE: Data = Data(NAN_BOOL);
-pub const TRUE: Data = Data(NAN_BOOL | 1);
+pub const NULL: Data = Data::tagged(NAN_NULL);
+pub const FALSE: Data = Data::tagged(NAN_BOOL);
+pub const TRUE: Data = Data::tagged(NAN_BOOL | 1);
 
-/// NaN-boxed u64.
+/// A NaN-boxed word, plus the word an `int` needs.
 /// ### Layout:
 /// - first 13 bits are NaN
 /// - remaining 51 bits: 3 bits for type (4 for the MAP type) & 48 bits of actual payload (47 for the MAP type)
@@ -57,8 +57,16 @@ pub const TRUE: Data = Data(NAN_BOOL | 1);
 /// ### Strings
 /// Strings are inlined if they're 6 bytes long or less.
 /// If they're longer, they're stored in `string_pool`.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Data(pub u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct Data {
+    /// The tag and, for every type but `int`, the payload. It comes first so
+    /// an inlined string still reads out of the low bytes of the value.
+    boxed: u64,
+    /// An `int`, and zero for every other type. An `int` spans all 64 bits, so
+    /// the tagged word has no room left to hold one.
+    int: i64,
+}
 
 #[derive(Default, Clone, Copy)]
 pub struct DataHash(u64);
@@ -72,6 +80,17 @@ impl Hasher for DataHash {
     }
     fn write_u64(&mut self, i: u64) {
         self.0 = i;
+    }
+}
+
+impl std::hash::Hash for Data {
+    /// Both words in one, so an `int` hashes by its value and every other type
+    /// hashes by its box exactly as it did when the box was the whole value.
+    /// `DataHash` keeps only the last word written, so writing them apart would
+    /// collapse every non-`int` onto the same hash.
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.boxed ^ (self.int as u64));
     }
 }
 
@@ -120,26 +139,47 @@ impl PoolString for &str {
 }
 
 impl Data {
+    /// A value whose whole content is its NaN box. Every type but `int` is
+    /// built through here, which is what keeps the second word zero for them
+    /// and so keeps equality and hashing reading one word.
+    #[inline(always)]
+    const fn tagged(boxed: u64) -> Self {
+        Self { boxed, int: 0 }
+    }
+    /// The pair of words a `.cdlb` records a value as. The artifact keeps the
+    /// box and the integer rather than a type tag, so a value comes back
+    /// without being inspected.
+    #[must_use]
+    #[inline(always)]
+    pub const fn into_words(self) -> (u64, i64) {
+        (self.boxed, self.int)
+    }
+    /// Rebuilds a value from the words [`Data::into_words`] handed out.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_words(boxed: u64, int: i64) -> Self {
+        Self { boxed, int }
+    }
     #[inline(always)]
     pub const fn tag(self) -> u64 {
-        self.0 & !0xFFFF_FFFF // also includes type_id
+        self.boxed & !0xFFFF_FFFF // also includes type_id
     }
     #[inline(always)]
     pub const fn is_null(self) -> bool {
-        self.0 == NAN_NULL
+        self.boxed == NAN_NULL
     }
     #[inline(always)]
     pub const fn bool(b: bool) -> Self {
-        Self(NAN_BOOL | b as u64)
+        Self::tagged(NAN_BOOL | b as u64)
     }
     #[inline(always)]
     pub fn as_bool(self) -> bool {
         debug_assert!(self.is_bool());
-        (self.0 & 1) != 0
+        (self.boxed & 1) != 0
     }
     #[inline(always)]
     pub const fn is_bool(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_BOOL
+        (self.boxed & !PAYLOAD_MASK) == NAN_BOOL
     }
     #[inline(always)]
     pub const fn float(n: f64) -> Self {
@@ -148,49 +188,52 @@ impl Data {
         // NAN_BASE clear and so cannot be mistaken for a tagged value. A
         // negative quiet NaN is stored as the positive one instead.
         if (bits & NAN_BASE) == NAN_BASE {
-            Self(CANONICAL_NAN)
+            Self::tagged(CANONICAL_NAN)
         } else {
-            Self(bits)
+            Self::tagged(bits)
         }
     }
     #[inline(always)]
     pub const fn as_float(self) -> f64 {
         debug_assert!(self.is_float());
-        f64::from_bits(self.0)
+        f64::from_bits(self.boxed)
     }
     #[inline(always)]
     pub const fn is_float(self) -> bool {
-        (self.0 & NAN_BASE) != NAN_BASE
+        (self.boxed & NAN_BASE) != NAN_BASE
     }
     #[inline(always)]
-    /// Convert the given integer to a NaN-boxed integer.
-    /// Integers are stored in the lower 32 bits
-    pub const fn int(n: i32) -> Self {
-        Self(NAN_INT | (n as u32 as u64))
+    /// Convert the given integer to a tagged integer.
+    /// The box carries the tag and the second word carries all 64 bits.
+    pub const fn int(n: i64) -> Self {
+        Self {
+            boxed: NAN_INT,
+            int: n,
+        }
     }
     #[inline(always)]
-    pub const fn as_int(self) -> i32 {
+    pub const fn as_int(self) -> i64 {
         debug_assert!(self.is_int());
-        self.0 as i32
+        self.int
     }
     #[inline(always)]
     pub const fn is_int(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_INT
+        (self.boxed & !PAYLOAD_MASK) == NAN_INT
     }
     #[inline(always)]
     pub const fn array(id: u32) -> Self {
-        Self(NAN_ARRAY | id as u64)
+        Self::tagged(NAN_ARRAY | id as u64)
     }
     #[inline(always)]
     pub const fn as_array(self) -> usize {
         // Enum values share the object pool with arrays/structs and are compared
         // through this accessor in `obj_eq`.
         debug_assert!(self.is_array() || self.is_struct() || self.is_enum());
-        (self.0 & 0xFFFF_FFFF) as usize
+        (self.boxed & 0xFFFF_FFFF) as usize
     }
     #[inline(always)]
     pub const fn is_array(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_ARRAY
+        (self.boxed & !PAYLOAD_MASK) == NAN_ARRAY
     }
     /// This will create a new inlined string.
     /// In debug it'll panic (just in case).
@@ -203,11 +246,11 @@ impl Data {
         for (i, byte) in s.as_bytes().iter().enumerate() {
             payload |= (*byte as u64) << (i * 8);
         }
-        Self(NAN_STRING_SMALL | (payload & PAYLOAD_MASK))
+        Self::tagged(NAN_STRING_SMALL | (payload & PAYLOAD_MASK))
     }
     #[inline(always)]
     pub const fn large_str_id(id: u64) -> Self {
-        Self(NAN_STRING_LARGE | id)
+        Self::tagged(NAN_STRING_LARGE | id)
     }
     /// Same as str(), except this never runs the GC because this function is called by the compiler
     #[inline(always)]
@@ -215,11 +258,11 @@ impl Data {
         if s.len() <= 6 {
             Self::small_str(s)
         } else if let Some(id) = string_pool.iter().position(|existing| existing == s) {
-            Self(NAN_STRING_LARGE | id as u64)
+            Self::tagged(NAN_STRING_LARGE | id as u64)
         } else {
             let string_pool_id = string_pool.len() as u64;
             string_pool.push(s.to_owned());
-            Self(NAN_STRING_LARGE | string_pool_id)
+            Self::tagged(NAN_STRING_LARGE | string_pool_id)
         }
     }
     /// Allocates a string, storing it directly inside the u64 if it's <= 6 characters or inside string_pool if it's bigger
@@ -251,19 +294,19 @@ impl Data {
             }
             if let Some(id) = free_strings.pop() {
                 s.move_to_slot(string_pool.get_mut(id as usize));
-                Self(NAN_STRING_LARGE | (id as u64))
+                Self::tagged(NAN_STRING_LARGE | (id as u64))
             } else {
                 let string_pool_id = string_pool.len() as u64;
                 s.push_to_pool(string_pool);
-                Self(NAN_STRING_LARGE | string_pool_id)
+                Self::tagged(NAN_STRING_LARGE | string_pool_id)
             }
         }
     }
     #[inline(always)]
     pub fn as_str(&self, string_pool: &StringPool) -> &str {
         debug_assert!(self.is_string());
-        if (self.0 & !PAYLOAD_MASK) == NAN_STRING_SMALL {
-            let payload = self.0 & PAYLOAD_MASK;
+        if (self.boxed & !PAYLOAD_MASK) == NAN_STRING_SMALL {
+            let payload = self.boxed & PAYLOAD_MASK;
             let len = ((64 - payload.leading_zeros()) as usize + 7) >> 3;
             let ptr = self as *const Self as *const u8;
             unsafe {
@@ -271,51 +314,53 @@ impl Data {
                 std::str::from_utf8_unchecked(slice)
             }
         } else {
-            let payload = (self.0 & PAYLOAD_MASK) as usize;
+            let payload = (self.boxed & PAYLOAD_MASK) as usize;
             unsafe { &*(string_pool[payload].as_str() as *const str) }
         }
     }
     #[inline(always)]
     pub const fn is_string(self) -> bool {
         // this works because NAN_TAG_STRING_LARGE == NAN_TAG_STRING_SMALL + (1 << 48)
-        (self.0 & !PAYLOAD_MASK).wrapping_sub(NAN_STRING_SMALL) <= const { 1u64 << 48 }
+        (self.boxed & !PAYLOAD_MASK).wrapping_sub(NAN_STRING_SMALL) <= const { 1u64 << 48 }
     }
     /// Increments the integer stored in this Data in-place. Wraps.
     #[inline(always)]
     pub const fn inc_int(&mut self) {
         debug_assert!(self.is_int());
-        self.0 = NAN_INT | (self.0.wrapping_add(1) & 0xFFFF_FFFF);
+        self.int = self.int.wrapping_add(1);
     }
     /// Decrements the integer stored in this Data in-place. Wraps.
     #[inline(always)]
     pub const fn dec_int(&mut self) {
         debug_assert!(self.is_int());
-        self.0 = NAN_INT | (self.0.wrapping_sub(1) & 0xFFFF_FFFF);
+        self.int = self.int.wrapping_sub(1);
     }
     /// Writes src + 1 into self. Wraps.
     #[inline(always)]
     pub const fn inc_into(&mut self, src: Self) {
         debug_assert!(src.is_int());
-        self.0 = NAN_INT | (src.0.wrapping_add(1) & 0xFFFF_FFFF);
+        self.boxed = NAN_INT;
+        self.int = src.int.wrapping_add(1);
     }
     /// Writes src - 1 into self. Wraps.
     #[inline(always)]
     pub const fn dec_into(&mut self, src: Self) {
         debug_assert!(src.is_int());
-        self.0 = NAN_INT | (src.0.wrapping_sub(1) & 0xFFFF_FFFF);
+        self.boxed = NAN_INT;
+        self.int = src.int.wrapping_sub(1);
     }
     #[inline(always)]
     pub const fn is_large_str(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_STRING_LARGE
+        (self.boxed & !PAYLOAD_MASK) == NAN_STRING_LARGE
     }
     #[inline(always)]
     pub const fn get_str_pool_id(self) -> usize {
         debug_assert!(self.is_large_str());
-        (self.0 & PAYLOAD_MASK) as usize
+        (self.boxed & PAYLOAD_MASK) as usize
     }
     #[inline(always)]
     pub const fn struct_instance(type_id: u16, id: u32) -> Self {
-        Self(NAN_STRUCT | ((type_id as u64) << 32) | id as u64)
+        Self::tagged(NAN_STRUCT | ((type_id as u64) << 32) | id as u64)
     }
     #[inline(always)]
     pub const fn as_struct(self) -> usize {
@@ -323,46 +368,46 @@ impl Data {
         // (`GetFieldStruct`/`SetFieldStruct`), which extract the low-32 object
         // index regardless of the box tag, so an enum value is accepted here.
         debug_assert!(self.is_struct() || self.is_enum());
-        (self.0 & 0xFFFF_FFFF) as usize
+        (self.boxed & 0xFFFF_FFFF) as usize
     }
     #[inline(always)]
     pub const fn enum_instance(type_id: u16, id: u32) -> Self {
-        Self(NAN_ENUM | ((type_id as u64) << 32) | id as u64)
+        Self::tagged(NAN_ENUM | ((type_id as u64) << 32) | id as u64)
     }
     #[inline(always)]
     pub const fn as_enum(self) -> usize {
         debug_assert!(self.is_enum());
-        (self.0 & 0xFFFF_FFFF) as usize
+        (self.boxed & 0xFFFF_FFFF) as usize
     }
     #[inline(always)]
     pub const fn enum_type_id(self) -> u16 {
         debug_assert!(self.is_enum());
-        ((self.0 >> 32) & 0xFFFF) as u16
+        ((self.boxed >> 32) & 0xFFFF) as u16
     }
     #[inline(always)]
     pub const fn is_enum(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_ENUM
+        (self.boxed & !PAYLOAD_MASK) == NAN_ENUM
     }
     #[inline(always)]
     pub const fn struct_type_id(self) -> u16 {
-        ((self.0 >> 32) & 0xFFFF) as u16
+        ((self.boxed >> 32) & 0xFFFF) as u16
     }
     #[inline(always)]
     pub const fn is_struct(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_STRUCT && (self.0 & (1 << 47)) == 0
+        (self.boxed & !PAYLOAD_MASK) == NAN_STRUCT && (self.boxed & (1 << 47)) == 0
     }
     #[inline(always)]
     pub const fn map(id: u32) -> Self {
-        Self(NAN_MAP | id as u64)
+        Self::tagged(NAN_MAP | id as u64)
     }
     #[inline(always)]
     pub const fn as_map(self) -> usize {
         debug_assert!(self.is_map());
-        (self.0 & 0xFFFF_FFFF) as usize
+        (self.boxed & 0xFFFF_FFFF) as usize
     }
     #[inline(always)]
     pub const fn is_map(self) -> bool {
-        (self.0 & !PAYLOAD_MASK) == NAN_STRUCT && (self.0 & (1 << 47)) != 0
+        (self.boxed & !PAYLOAD_MASK) == NAN_STRUCT && (self.boxed & (1 << 47)) != 0
     }
     /// A short runtime type name, used in downcast error messages. Reads only
     /// the box tag, so it needs no pools.
@@ -520,13 +565,13 @@ impl From<Data> for f64 {
     }
 }
 
-impl From<i32> for Data {
+impl From<i64> for Data {
     #[inline(always)]
-    fn from(value: i32) -> Self {
+    fn from(value: i64) -> Self {
         Self::int(value)
     }
 }
-impl From<Data> for i32 {
+impl From<Data> for i64 {
     #[inline(always)]
     fn from(value: Data) -> Self {
         value.as_int()
@@ -536,7 +581,7 @@ impl From<Data> for i32 {
 impl From<bool> for Data {
     #[inline(always)]
     fn from(value: bool) -> Self {
-        Self(NAN_BOOL | (value as u64))
+        Self::tagged(NAN_BOOL | (value as u64))
     }
 }
 impl From<Data> for bool {

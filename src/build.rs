@@ -89,20 +89,24 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
 
     ProgramImage {
         instructions: out.instructions,
-        registers: out.registers.iter().map(|d| d.0).collect(),
+        registers: out.registers.iter().map(|d| d.into_words()).collect(),
         objs: out
             .pools
             .objs
             .0
             .iter()
-            .map(|v| v.iter().map(|d| d.0).collect())
+            .map(|v| v.iter().map(|d| d.into_words()).collect())
             .collect(),
         maps: out
             .pools
             .maps
             .0
             .iter()
-            .map(|m| m.iter().map(|(k, v)| (k.0, v.0)).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.into_words(), v.into_words()))
+                    .collect()
+            })
             .collect(),
         strings: out.pools.strings.0.clone(),
         instr_src: out

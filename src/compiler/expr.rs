@@ -29,7 +29,7 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Float(f64),
-    Int(i32),
+    Int(i64),
     Bool(bool),
     Null,
     String(SmolStr),

@@ -486,7 +486,7 @@ pub fn execute(
                 continue;
             }
             Instr::Mov(tgt, dest) => r[dest] = r[tgt],
-            Instr::SetInt(dest, n) => r[dest] = n.into(),
+            Instr::SetInt(dest, n) => r[dest] = Data::int(i64::from(n)),
             Instr::SetBool(b, dest) => r[dest] = b.into(),
             Instr::CallFunc(new_loc, return_id) => {
                 if call_frames.len() == CALL_DEPTH_LIMIT {
@@ -634,7 +634,7 @@ pub fn execute(
                 // Call the function, and convert the result back into Data
                 r[dest] = unsafe {
                     match func.get_return_type() {
-                        DataType::Int => func.cif.call::<i32>(func.ptr, &ffi_args).into(),
+                        DataType::Int => func.cif.call::<i64>(func.ptr, &ffi_args).into(),
                         DataType::Float => func.cif.call::<f64>(func.ptr, &ffi_args).into(),
                         DataType::String => {
                             let ptr = func
@@ -1136,7 +1136,7 @@ pub fn execute(
             Instr::SetElementObj(array_reg_id, new_elem_reg_id, idx) => {
                 let array = obj_pool.get_mut(r[array_reg_id].as_array());
                 let index = r[idx].as_int();
-                if (index as usize) >= array.len() || index < 0 {
+                if index < 0 || (index as u64) >= array.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(array.len(), index));
                 }
                 array[index as usize] = r[new_elem_reg_id];
@@ -1145,7 +1145,7 @@ pub fn execute(
                 let index = r[idx].as_int();
                 let temp_str_reg_id = r[string_reg_id];
                 let source_string = temp_str_reg_id.as_str(str_pool);
-                if (index as usize) >= source_string.len() || index < 0 {
+                if index < 0 || (index as u64) >= source_string.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(source_string.len(), index));
                 }
                 let mut temp = source_string.to_owned();
@@ -1163,7 +1163,7 @@ pub fn execute(
                 let idx = r[index].as_int();
                 let arr_id = r[array_reg_id].as_array();
                 let array = &obj_pool[arr_id];
-                if (idx as usize) >= array.len() || idx < 0 {
+                if idx < 0 || (idx as u64) >= array.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(array.len(), idx));
                 }
                 r[dest] = unsafe { *array.get_unchecked(idx as usize) };
@@ -1180,10 +1180,10 @@ pub fn execute(
                 let array = &obj_pool[arr_id];
                 // A slice runs from `start` to `end` with `0 <= start <= end <= len`,
                 // so a start sitting on the end of the list is in range and yields
-                // an empty list. A negative bound casts to a huge `usize` and is
+                // an empty list. A negative bound casts to a huge `u64` and is
                 // rejected by the same comparison.
-                if (idx_end as usize) > array.len()
-                    || (idx_start as usize) > array.len()
+                if (idx_end as u64) > array.len() as u64
+                    || (idx_start as u64) > array.len() as u64
                     || idx_start > idx_end
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(array.len(), idx_start, idx_end));
@@ -1225,7 +1225,7 @@ pub fn execute(
                 let tgt_data = r[tgt];
                 let text = tgt_data.as_str(str_pool);
                 let bytes = text.as_bytes();
-                if (idx as usize) >= bytes.len() {
+                if idx < 0 || (idx as u64) >= bytes.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(bytes.len(), idx));
                 }
                 // The bound above makes the read safe, and a byte outside
@@ -1246,8 +1246,8 @@ pub fn execute(
                 let s = r[str_reg_id].as_str(str_pool).to_smolstr();
                 // Same rule as a list slice: a start on the end of the string is
                 // in range and yields "".
-                if (idx_end as usize) > s.len()
-                    || (idx_start as usize) > s.len()
+                if (idx_end as u64) > s.len() as u64
+                    || (idx_start as u64) > s.len() as u64
                     || idx_start > idx_end
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(s.len(), idx_start, idx_end));
@@ -1271,7 +1271,7 @@ pub fn execute(
             Instr::Remove(array, idx) => {
                 let arr = obj_pool.get_mut(r[array].as_array());
                 let index = r[idx].as_int();
-                if (index as usize) >= arr.len() || index < 0 {
+                if index < 0 || (index as u64) >= arr.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(arr.len(), index));
                 }
                 arr.remove(index as usize);
@@ -1357,7 +1357,7 @@ pub fn execute(
                     let temp_elem = r[args.pop_unchecked()];
                     let element = temp_elem.as_str(str_pool);
                     r[dest] = if let Some(idx) = memmem::find(str.as_bytes(), element.as_bytes()) {
-                        idx as i32
+                        idx as i64
                     } else {
                         cold_path();
                         -1
@@ -1368,7 +1368,7 @@ pub fn execute(
                     let element = r[args.pop_unchecked()];
                     r[dest] =
                         if let Some(idx) = obj_pool[arr_id].iter().position(|x| x == &element) {
-                            idx as i32
+                            idx as i64
                         } else {
                             cold_path();
                             -1
@@ -1456,10 +1456,10 @@ pub fn execute(
             Instr::CallLibFunc(LibFunc::Int, tgt, dest) => {
                 let reg = r[tgt];
                 if reg.is_float() {
-                    r[dest] = (reg.as_float() as i32).into();
+                    r[dest] = (reg.as_float() as i64).into();
                 } else if reg.is_string() {
                     let str = reg.as_str(str_pool);
-                    r[dest] = if let Ok(i) = lexical_core::parse::<i32>(str.as_bytes()) {
+                    r[dest] = if let Ok(i) = lexical_core::parse::<i64>(str.as_bytes()) {
                         i.into()
                     } else {
                         cold_path();
@@ -1470,7 +1470,7 @@ pub fn execute(
             Instr::CallLibFunc(LibFunc::Str, tgt, dest) => {
                 let value = r[tgt];
                 r[dest] = if value.is_int() {
-                    let mut buffer = [0u8; i32::FORMATTED_SIZE_DECIMAL];
+                    let mut buffer = [0u8; i64::FORMATTED_SIZE_DECIMAL];
                     let digits = lexical_core::write(value.as_int(), &mut buffer);
                     string!(unsafe { str::from_utf8_unchecked(digits) })
                 } else if value.is_float() {
@@ -1527,11 +1527,11 @@ pub fn execute(
             Instr::CallLibFunc(LibFunc::Len, tgt, dest) => {
                 let reg = r[tgt];
                 if reg.is_array() {
-                    r[dest] = (obj_pool[reg.as_array()].len() as i32).into();
+                    r[dest] = (obj_pool[reg.as_array()].len() as i64).into();
                 } else if reg.is_string() {
-                    r[dest] = (reg.as_str(str_pool).len() as i32).into();
+                    r[dest] = (reg.as_str(str_pool).len() as i64).into();
                 } else if reg.is_map() {
-                    r[dest] = (map_pool[reg.as_map()].len() as i32).into();
+                    r[dest] = (map_pool[reg.as_map()].len() as i64).into();
                 } else {
                     unsafe { unreachable_unchecked() }
                 }
@@ -1954,7 +1954,9 @@ pub fn execute(
 
                 #[cfg(not(target_arch = "wasm32"))]
                 if code != 0 {
-                    std::process::exit(r[code].as_int());
+                    // An exit status is a C `int`, so a wider code arrives at
+                    // the operating system as its low 32 bits.
+                    std::process::exit(r[code].as_int() as i32);
                 }
 
                 break;

@@ -153,7 +153,7 @@ impl DataType {
     #[must_use]
     pub fn to_c_type(&self, structs: &[Struct]) -> Type {
         match self {
-            Self::Int => libffi::middle::Type::i32(),
+            Self::Int => libffi::middle::Type::i64(),
             Self::Float => libffi::middle::Type::f64(),
             Self::String | Self::Array(_) => libffi::middle::Type::pointer(),
             Self::Null => libffi::middle::Type::void(),

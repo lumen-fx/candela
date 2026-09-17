@@ -40,8 +40,9 @@ error. Convert first with `float()` or `int()`:
 let total = float(count) + 2.0;
 ```
 
-`int` is a signed 32-bit integer and `float` is a 64-bit binary floating-point
-number. See [types](../language/types.md).
+`int` is a signed 64-bit integer and `float` is a 64-bit binary floating-point
+number. Arithmetic on `int` wraps at the ends of that range. See
+[types](../language/types.md).
 
 ## Arithmetic
 

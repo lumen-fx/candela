@@ -17,12 +17,15 @@ up before it runs.
 | Map | `{K: V}` | `{"a": 1}` |
 | Function | inferred | `fn(x) { return x; }` |
 
-`int` is a signed 32-bit integer and `float` is double precision. A numeric
+`int` is a signed 64-bit integer and `float` is double precision. A numeric
 literal with a decimal point is a `float`; without one it is an `int`. An
 exponent makes a `float` too, with a point or without: `1e3`, `2.5e-1`,
-`6.02e23`. An `int` literal outside -2147483648 to 2147483647 is a compile
-error at the literal; give it a decimal point or an exponent to write it as a
-`float` instead.
+`6.02e23`. An `int` literal outside -9223372036854775808 to 9223372036854775807
+is a compile error at the literal; give it a decimal point or an exponent to
+write it as a `float` instead.
+
+Arithmetic that leaves the range wraps around it rather than raising, so a sum
+past the top comes back at the bottom.
 
 Lists and maps are covered in [Collections](collections.md), functions in
 [Functions](functions.md), and your own types in [Enums](enums.md) and in

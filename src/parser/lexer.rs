@@ -206,21 +206,24 @@ pub enum Token<'a> {
     #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?", exponent_without_digits)]
     Float(f64),
 
-    // `2147483648` on its own is one past `int`, and is accepted because the
-    // only way to write the smallest `int` is to negate it: the '-' is a
-    // separate token, so the literal is read before the sign reaches it.
+    // `9223372036854775808` on its own is one past `int`, and is accepted
+    // because the only way to write the smallest `int` is to negate it: the
+    // '-' is a separate token, so the literal is read before the sign reaches
+    // it.
     #[regex(r"[0-9]+", |lex| {
         let slice = lex.slice();
         match lexical_core::parse::<i64>(slice.as_bytes()) {
-            Ok(v) if v <= (i32::MAX as i64) => Ok(v as i32),
-            Ok(2_147_483_648) => Ok(i32::MIN),
-            _ => {
-                cold_path();
-                Err(LexErr::IntOutOfRange)
-            }
+            Ok(v) => Ok(v),
+            _ => match lexical_core::parse::<u64>(slice.as_bytes()) {
+                Ok(v) if v == (i64::MAX as u64) + 1 => Ok(i64::MIN),
+                _ => {
+                    cold_path();
+                    Err(LexErr::IntOutOfRange)
+                }
+            },
         }
     })]
-    Int(i32),
+    Int(i64),
 }
 
 /// A macro invocation as the lexer sees it: the name, and the raw text of the

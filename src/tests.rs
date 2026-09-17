@@ -1481,12 +1481,12 @@ pub fn int_wraps_on_overflow() {
     run_and_check_registers!(
         "
         fn main() {
-            let x = 2147483647;
+            let x = 9223372036854775807;
             x += 1;
             print(x);
         }
         ",
-        (-2_147_483_648_i32).into()
+        i64::MIN.into()
     );
 }
 
@@ -1495,12 +1495,12 @@ pub fn int_wraps_on_underflow() {
     run_and_check_registers!(
         "
         fn main() {
-            let x = -2147483648;
+            let x = -9223372036854775808;
             x -= 1;
             print(x);
         }
         ",
-        2_147_483_647_i32.into()
+        i64::MAX.into()
     );
 }
 
@@ -1509,11 +1509,11 @@ pub fn negative_int_literal() {
     run_and_check_registers!(
         "
         fn main() {
-            let x = -2147483648;
+            let x = -9223372036854775808;
             print(x);
         }
         ",
-        (-2_147_483_648_i32).into()
+        i64::MIN.into()
     );
 }
 
@@ -3862,37 +3862,205 @@ pub fn diagnostics_parser_error_span() {
     assert_eq!(d.span, 21..21);
 }
 
-/// `int` is 32 bits wide, so a literal past its range is a compile error at
+/// `int` is 64 bits wide, so a literal past its range is a compile error at
 /// the literal, naming the range it has to sit in.
 #[test]
 pub fn diagnostics_int_literal_past_the_range() {
-    let src = "fn main() { print(3000000000); }";
+    let src = "fn main() { print(9223372036854775809); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
+    assert!(d.message.contains("-9223372036854775808"), "{}", d.message);
+    assert!(d.message.contains("9223372036854775807"), "{}", d.message);
     assert_eq!(d.code, "int_literal_out_of_range");
-    assert!(d.message.contains("-2147483648"), "{}", d.message);
-    assert!(d.message.contains("2147483647"), "{}", d.message);
-    assert_eq!(&src[d.span], "3000000000");
+    assert_eq!(&src[d.span], "9223372036854775809");
 }
 
-/// A literal at the top of the 64-bit range reaches the same error, rather
-/// than a different one from the number parser underneath.
+/// A literal past what the number parser underneath can read reaches the same
+/// error, rather than a different one from that parser.
 #[test]
 pub fn diagnostics_int_literal_past_64_bits() {
-    let src = "fn main() { print(9223372036854775807); }";
+    let src = "fn main() { print(99999999999999999999999); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "int_literal_out_of_range");
-    assert_eq!(&src[d.span], "9223372036854775807");
+    assert_eq!(&src[d.span], "99999999999999999999999");
+}
+
+/// The literal one past the top of the range is read, because negating it is
+/// the only way to write the smallest `int`.
+#[test]
+pub fn smallest_int_literal_is_read_through_its_sign() {
+    run_and_check_registers!(
+        "fn main() { print(-9223372036854775808); }",
+        i64::MIN.into()
+    );
 }
 
 /// Two literals fold at parse time, and the fold wraps the way the runtime
 /// does, so a debug build of the compiler agrees with a release one.
 #[test]
 pub fn folding_an_overflowing_constant_wraps() {
-    run_and_check_registers!("fn main() { print(2147483647 + 1); }", i32::MIN.into());
-    run_and_check_registers!("fn main() { print(-2147483648 - 1); }", i32::MAX.into());
-    run_and_check_registers!("fn main() { print(65536 * 65536); }", 0.into());
+    run_and_check_registers!(
+        "fn main() { print(9223372036854775807 + 1); }",
+        i64::MIN.into()
+    );
+    run_and_check_registers!(
+        "fn main() { print(-9223372036854775808 - 1); }",
+        i64::MAX.into()
+    );
+    run_and_check_registers!("fn main() { print(4294967296 * 4294967296); }", 0.into());
+}
+
+/// An `int` holds 64 bits: a literal at the top of the range reads back as
+/// itself rather than as whatever fits in a narrower one.
+#[test]
+pub fn int_literal_holds_the_whole_range() {
+    run_and_check_registers!("fn main() { print(9223372036854775807); }", i64::MAX.into());
+}
+
+/// Arithmetic past 32 bits answers with the value, not with a wrap. The
+/// operands reach the VM through a call, so the compiler computes nothing here
+/// that the interpreter does not.
+#[test]
+pub fn arithmetic_past_32_bits() {
+    run_and_check_registers!(
+        "
+        fn add(a, b) { return a + b; }
+        fn main() { print(add(2147483647, 1)); }
+        ",
+        2_147_483_648_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn mul(a, b) { return a * b; }
+        fn main() { print(mul(65536, 65536)); }
+        ",
+        4_294_967_296_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn div(a, b) { return a / b; }
+        fn main() { print(div(9000000000, 3)); }
+        ",
+        3_000_000_000_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn rem(a, b) { return a % b; }
+        fn main() { print(rem(9000000001, 9000000000)); }
+        ",
+        1_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn pow(a, b) { return a ^ b; }
+        fn main() { print(pow(2, 62)); }
+        ",
+        4_611_686_018_427_387_904_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn sub(a, b) { return a - b; }
+        fn main() { print(sub(0, 9000000000)); }
+        ",
+        (-9_000_000_000_i64).into()
+    );
+}
+
+/// Comparison reads all 64 bits, so two values that share their low 32 do not
+/// compare equal.
+#[test]
+pub fn comparison_past_32_bits() {
+    run_and_check_registers!(
+        "
+        fn cmp(a, b) { return a > b; }
+        fn main() { print(cmp(4294967296, 2147483647)); }
+        ",
+        true.into()
+    );
+    run_and_check_registers!(
+        "
+        fn eq(a, b) { return a == b; }
+        fn main() { print(eq(4294967296, 0)); }
+        ",
+        false.into()
+    );
+}
+
+/// `int` and `str` carry the whole width in both directions.
+#[test]
+pub fn conversions_past_32_bits() {
+    run_and_check_registers!(
+        "fn main() { print(int(\"3000000000\")); }",
+        3_000_000_000_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            let s = str(9223372036854775807);
+            print(s == \"9223372036854775807\");
+        }
+        ",
+        true.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(int(4000000000.5));
+        }
+        ",
+        4_000_000_000_i64.into()
+    );
+}
+
+/// A range runs over bounds past 32 bits.
+#[test]
+pub fn range_over_large_bounds() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let total = 0;
+            for i in 4294967296..4294967299 {
+                total += i;
+            }
+            print(total);
+        }
+        ",
+        12_884_901_891_i64.into()
+    );
+}
+
+/// An index past what 32 bits could hold is out of bounds, and says so rather
+/// than reading whatever the low half of it points at.
+#[test]
+pub fn index_past_32_bits_is_out_of_bounds() {
+    let src = "fn main() { let a = [1, 2, 3]; print(a[4294967296]); }";
+    let d = run_diag(src, "index.kl").unwrap_err();
+    assert_eq!(d.code, "index_out_of_bounds");
+    assert!(d.message.contains("4294967296"), "message: {:?}", d.message);
+}
+
+/// JSON carries an integer a double could not hold exactly, in and out.
+#[test]
+pub fn json_round_trips_a_large_integer() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let v = as_int(json_parse(\"9007199254740993\"));
+            print(v);
+        }
+        ",
+        9_007_199_254_740_993_i64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            let s = json_stringify(9007199254740993);
+            print(s == \"9007199254740993\");
+        }
+        ",
+        true.into()
+    );
 }
 
 /// An exponent with no digits after it is an error that names what is

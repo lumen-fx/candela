@@ -315,9 +315,9 @@ pub enum ErrType<'a> {
     // BOOL PARSING ERRORS
     InvalidBool,
     /// IndexOutOfBounds(length, index)
-    IndexOutOfBounds(usize, i32),
+    IndexOutOfBounds(usize, i64),
     /// SliceOutOfBounds(length, idx_start, idx_end)
-    SliceOutOfBounds(usize, i32, i32),
+    SliceOutOfBounds(usize, i64, i64),
     UnknownMapKey(&'a str),
     NullByteInString,
     CArrayReturnTypeNotSupported,
@@ -326,7 +326,7 @@ pub enum ErrType<'a> {
     ModuloByZero,
     /// An `int` raised to a negative `int` power, which has no `int` result.
     /// The parser rejects the all-literal form; this is the run-time one.
-    NegativeExponent(i32),
+    NegativeExponent(i64),
     /// A json string could not be parsed. Carries a short static reason.
     JsonParse(&'static str),
     /// A downcast of an `any` value found a different runtime type than the
@@ -345,7 +345,7 @@ pub enum ErrType<'a> {
     /// A byte position that lands in a character taking more than one byte,
     /// where a whole character is the only answer. Carries the position and
     /// the character it landed in.
-    NotACharBoundary(i32, char),
+    NotACharBoundary(i64, char),
 }
 
 impl From<ErrType<'_>> for SmolStr {

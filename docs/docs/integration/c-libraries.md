@@ -82,7 +82,7 @@ directory holding builds for several architectures.
 
 | candela | C |
 | --- | --- |
-| `int` | `int32_t` |
+| `int` | `int64_t` |
 | `float` | `double` |
 | `string` | `char *`, null-terminated |
 | `T[]` | pointer to the packed elements |
@@ -140,9 +140,9 @@ one file with its exports marked visible:
 #include <stdint.h>
 #include <time.h>
 
-EXPORT int32_t now(void) { return (int32_t)time(NULL); }
+EXPORT int64_t now(void) { return (int64_t)time(NULL); }
 
-EXPORT const char *format(int32_t timestamp, const char *fmt) {
+EXPORT const char *format(int64_t timestamp, const char *fmt) {
   static char buffer[128];
   time_t t = (time_t)timestamp;
   struct tm *info = localtime(&t);
@@ -151,7 +151,7 @@ EXPORT const char *format(int32_t timestamp, const char *fmt) {
 }
 ```
 
-Note the types: `int32_t` for candela's `int`, `double` for its `float`, and a
+Note the types: `int64_t` for candela's `int`, `double` for its `float`, and a
 `static` buffer for the returned string, since candela copies it out and the C
 side keeps ownership.
 

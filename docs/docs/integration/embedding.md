@@ -485,10 +485,10 @@ pub enum Value {
 `as_i64`, `as_f64`, `as_str`, `into_string`, `into_array` and `into_map` unwrap
 one when it holds what you ask for.
 
-candela integers are 32-bit; `Value::Int` is an `i64` for convenience on the
-host side and narrows on the way in. Arrays are homogeneous and maps are
-string-keyed, matching how candela types them. A struct read back from a script
-arrives as a `Map` of its fields.
+`Value::Int` is an `i64`, the width a candela `int` holds, so an integer
+crosses either way unchanged. Arrays are homogeneous and maps are string-keyed,
+matching how candela types them. A struct read back from a script arrives as a
+`Map` of its fields.
 
 An [enum](../language/enums.md) arrives as `Value::Enum`, naming the variant it
 holds and carrying that variant's payload in declaration order; a nullary
