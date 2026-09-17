@@ -142,11 +142,24 @@ pub fn get_tgt_ids(x: &[Instr]) -> Vec<u16> {
     ids
 }
 
+/// The `SetInt` operand for `v`, or `None` when `v` is no `int` or is one too
+/// wide for that operand to carry.
+#[must_use]
+pub fn int_immediate(v: Data) -> Option<i32> {
+    if v.is_int() {
+        i32::try_from(v.as_int()).ok()
+    } else {
+        None
+    }
+}
+
 /// Write v, located in the src_id register, into the dest_id register using the cheapest instruction
 #[inline(always)]
 pub fn move_reg_to_reg(output: &mut Vec<Instr>, src_id: u16, dest_id: u16, v: Data) {
-    if v.is_int() {
-        output.push(Instr::SetInt(dest_id, v.as_int()));
+    // An `int` the immediate operand cannot hold is moved out of its register
+    // like any other value.
+    if let Some(n) = int_immediate(v) {
+        output.push(Instr::SetInt(dest_id, n));
     } else if v.is_bool() {
         output.push(Instr::SetBool(v.as_bool(), dest_id));
     } else {

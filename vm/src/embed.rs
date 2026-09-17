@@ -27,13 +27,13 @@ use std::fmt;
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-/// A candela runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
+/// A candela runtime map: `Data`-keyed, hashed by the raw value bits.
 type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// A dynamically-typed value passed across the host/script boundary.
 ///
-/// candela integers are 32-bit internally (NaN-boxed); [`Value::Int`] widens them
-/// to `i64` for host ergonomics and narrows on the way back in.
+/// [`Value::Int`] is an `i64`, the width a candela `int` holds, so a value
+/// crosses the boundary unchanged.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -973,7 +973,7 @@ pub fn marshal_value(
 ) -> Data {
     match v {
         Value::Null => NULL,
-        Value::Int(i) => Data::int(*i as i32),
+        Value::Int(i) => Data::int(*i),
         Value::Float(f) => Data::float(*f),
         Value::Bool(b) => Data::bool(*b),
         Value::String(s) => Data::p_str(s, strings),
@@ -1019,7 +1019,7 @@ pub fn unmarshal_value(
     enums: &[EnumType],
 ) -> Value {
     if d.is_int() {
-        Value::Int(i64::from(d.as_int()))
+        Value::Int(d.as_int())
     } else if d.is_bool() {
         Value::Bool(d.as_bool())
     } else if d.is_string() {

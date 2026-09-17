@@ -48,11 +48,11 @@ pub fn array_to_c_ptr(
     let elems = &obj_pool[data.as_array()];
     let first_array_element = unsafe { elems.get_unchecked(0) };
     if first_array_element.is_int() {
-        // C expects [u8; 4] for ints
-        let mut bytes = Box::new_uninit_slice(elems.len() * 4);
+        // C expects [u8; 8] for ints
+        let mut bytes = Box::new_uninit_slice(elems.len() * 8);
         for (i, e) in elems.iter().enumerate() {
             unsafe {
-                write_bytes_at_offset(&mut bytes, i * 4, &e.as_int().to_ne_bytes());
+                write_bytes_at_offset(&mut bytes, i * 8, &e.as_int().to_ne_bytes());
             }
         }
         keep_buffer_alive(bytes, keep_alive)
@@ -107,10 +107,7 @@ fn get_struct_size(struct_fields: &[Data], obj_pool: &ObjectPool) -> (usize, usi
     for field in struct_fields {
         let elem_size: usize;
         let elem_alignment: usize;
-        if field.is_int() {
-            elem_size = 4;
-            elem_alignment = 4;
-        } else if field.is_float() || field.is_array() || field.is_string() {
+        if field.is_int() || field.is_float() || field.is_array() || field.is_string() {
             elem_size = 8;
             elem_alignment = 8;
         } else if field.is_struct() {
@@ -146,11 +143,7 @@ pub fn get_struct_size_datatype(
         let elem_size: usize;
         let elem_alignment: usize;
         match field {
-            DataType::Int => {
-                elem_size = 4;
-                elem_alignment = 4;
-            }
-            DataType::Float | DataType::Array(_) | DataType::String => {
+            DataType::Int | DataType::Float | DataType::Array(_) | DataType::String => {
                 elem_size = 8;
                 elem_alignment = 8;
             }
@@ -189,7 +182,7 @@ pub fn candela_struct_to_c_struct(
             let offset = *field_offsets.get_unchecked(i);
             if field.is_int() {
                 let bytes = field.as_int().to_ne_bytes();
-                buf.get_unchecked_mut(offset..offset + 4)
+                buf.get_unchecked_mut(offset..offset + 8)
                     .copy_from_slice_unchecked(&bytes);
             } else if field.is_float() {
                 let bytes = field.as_float().to_ne_bytes();
@@ -249,11 +242,11 @@ pub fn c_struct_to_candela_struct(
         let field_offset = *unsafe { field_offsets.get_unchecked(i) };
         match field_type {
             DataType::Int => {
-                let mut bytes: [u8; 4] = [0; 4];
+                let mut bytes: [u8; 8] = [0; 8];
                 unsafe {
-                    bytes.copy_from_slice_unchecked(&c_struct[field_offset..(field_offset + 4)]);
+                    bytes.copy_from_slice_unchecked(&c_struct[field_offset..(field_offset + 8)]);
                 }
-                recursion_stack.0.push(Data::int(i32::from_ne_bytes(bytes)));
+                recursion_stack.0.push(Data::int(i64::from_ne_bytes(bytes)));
             }
             DataType::Float => {
                 let mut bytes: [u8; 8] = [0; 8];

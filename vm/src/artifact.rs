@@ -63,7 +63,10 @@ use smol_strc::SmolStr;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 
-/// Runtime map: `Data`-keyed, hashed by the raw NaN-boxed bits.
+/// The pair of words a value is recorded as. See [`Data::into_words`].
+pub type DataWords = (u64, i64);
+
+/// Runtime map: `Data`-keyed, hashed by the raw value bits.
 type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// 4-byte artifact magic, so a non-`.cdlb` file fails cleanly.
@@ -78,20 +81,23 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// [`RuntimeProgram::call`]. Version 6 added the `MapRemove` instruction and
 /// the origin of each dynamic-library recipe, which says whether its spec is
 /// the program's own or a path into the standard library's `libs` directory.
-const FORMAT_VERSION: u8 = 6;
+/// Version 7 widened `int` to 64 bits, so every recorded value carries a
+/// second word.
+const FORMAT_VERSION: u8 = 7;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
-/// A dedicated DTO keeps `serde` off the hot runtime types: `Data` becomes a raw
-/// `u64`, `SmolStr` becomes `String`, maps become key/value pairs. Only [`Instr`],
-/// [`Span`], and [`DataType`] carry `serde` derives directly. Fields are `pub`
-/// so the compiler front-end can build an image from a fresh compile.
+/// A dedicated DTO keeps `serde` off the hot runtime types: `Data` becomes its
+/// pair of raw words, `SmolStr` becomes `String`, maps become key/value pairs.
+/// Only [`Instr`], [`Span`], and [`DataType`] carry `serde` derives directly.
+/// Fields are `pub` so the compiler front-end can build an image from a fresh
+/// compile.
 #[derive(Serialize, Deserialize)]
 pub struct ProgramImage {
     pub instructions: Vec<Instr>,
-    pub registers: Vec<u64>,
-    pub objs: Vec<Vec<u64>>,
-    pub maps: Vec<Vec<(u64, u64)>>,
+    pub registers: Vec<DataWords>,
+    pub objs: Vec<Vec<DataWords>>,
+    pub maps: Vec<Vec<(DataWords, DataWords)>>,
     pub strings: Vec<String>,
     pub instr_src: Vec<InstrSrcImage>,
     /// The registers each recursive call site saves across its call, indexed by
@@ -485,7 +491,11 @@ impl RuntimeProgram {
         let objs: ObjectPool = Pool(
             img.objs
                 .into_iter()
-                .map(|v| v.into_iter().map(Data).collect())
+                .map(|v| {
+                    v.into_iter()
+                        .map(|(boxed, int)| Data::from_words(boxed, int))
+                        .collect()
+                })
                 .collect(),
         );
         let maps: MapPool = Pool(
@@ -493,8 +503,11 @@ impl RuntimeProgram {
                 .into_iter()
                 .map(|pairs| {
                     let mut m: CandelaMap = HashMap::default();
-                    for (k, v) in pairs {
-                        m.insert(Data(k), Data(v));
+                    for ((k_boxed, k_int), (v_boxed, v_int)) in pairs {
+                        m.insert(
+                            Data::from_words(k_boxed, k_int),
+                            Data::from_words(v_boxed, v_int),
+                        );
                     }
                     m
                 })
@@ -564,7 +577,11 @@ impl RuntimeProgram {
 
         Ok(Self {
             instructions: img.instructions,
-            registers: img.registers.into_iter().map(Data).collect(),
+            registers: img
+                .registers
+                .into_iter()
+                .map(|(boxed, int)| Data::from_words(boxed, int))
+                .collect(),
             pools: Pools::new(objs, maps, strings),
             instr_src: img
                 .instr_src

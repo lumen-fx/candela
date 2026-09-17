@@ -49,7 +49,7 @@ attribution details.
 - Comments: line comments only (`// ...`). There is no block comment syntax.
 - Strings: double-quoted, with the escapes listed above. No string
   interpolation.
-- Numbers: integers are `i32` (`[0-9]+`); floats are `f64` and must be written
+- Numbers: integers are `i64` (`[0-9]+`); floats are `f64` and must be written
   with a decimal point (`[0-9]*.[0-9]+`).
 - Structs: `struct Name { field: type, ... }`; instantiated with
   `Name { field: value }`; fields accessed with `x.field`.

@@ -31,7 +31,9 @@ pub enum Instr {
 
     Mov(u16, u16),
     /// SetInt(dest_reg_id, val)\
-    /// Writes val directly into dest_reg_id
+    /// Writes val directly into dest_reg_id. The operand is narrower than an
+    /// `int`, so a wider constant is moved out of its register instead, which
+    /// keeps every instruction one word.
     SetInt(u16, i32),
     /// SetBool(dest_reg_id, val)\
     /// Writes val directly into dest_reg_id

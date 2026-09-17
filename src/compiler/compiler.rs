@@ -46,6 +46,7 @@ use expr::code_modifies_variable;
 use functions::handle_functions;
 use functions::handle_value_call;
 use methods::handle_method_calls;
+use registers::int_immediate;
 use registers::move_reg_to_reg;
 use registers::move_to_id;
 use rustc_hash::FxHashMap;
@@ -686,7 +687,7 @@ pub(crate) fn compile_enum_construction(
         .pools
         .objs
         .get_mut(pool_idx)
-        .push(Data::int(i32::from(variant_idx)));
+        .push(Data::int(i64::from(variant_idx)));
 
     let mut dynamic: Vec<(u16, u16)> = Vec::with_capacity(arity);
     for (i, arg) in args.iter().enumerate() {
@@ -2506,8 +2507,11 @@ fn compile_int_for_loop(
             .unwrap_id();
         let start_val = state.registers[start_elem_id as usize];
         let elem_id = state.alloc_reg();
-        if state.const_registers.values().any(|&v| v == start_elem_id) && start_val.is_int() {
-            output.push(Instr::SetInt(elem_id, start_val.as_int()));
+        // An `int` wider than the immediate operand comes out of its register.
+        if let Some(n) = int_immediate(start_val)
+            && state.const_registers.values().any(|&v| v == start_elem_id)
+        {
+            output.push(Instr::SetInt(elem_id, n));
         } else {
             output.push(Instr::Mov(start_elem_id, elem_id));
         }

@@ -242,18 +242,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_six_and_v2_is_rejected() {
-    // The version byte was bumped to 6 when the map `remove` instruction was
-    // added and the dynamic-library recipes gained the origin that tells a
-    // standard-library one from the program's own. A freshly built artifact
-    // must carry version 6.
+fn current_format_version_is_seven_and_v2_is_rejected() {
+    // The version byte was bumped to 7 when `int` became 64 bits wide and a
+    // recorded value grew the second word that holds one. A freshly built
+    // artifact must carry version 7.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 6, "current .cdlb format version must be 6");
+    assert_eq!(bytes[4], 7, "current .cdlb format version must be 7");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -284,7 +283,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 6);
+    assert_eq!(bytes[4], 7);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
@@ -390,6 +389,74 @@ fn host_block_program_builds_but_load_names_missing_host_fn() {
         Err(e) => panic!("expected an unregistered host fn, got: {e}"),
         Ok(_) => panic!("load must not silently succeed when a host fn is unbound"),
     }
+}
+
+/// Values past 32 bits: a literal at the top of the range, a sum that used to
+/// wrap, a product of two values that each fit in 32 bits, and a conversion
+/// back out to text.
+const WIDE_INT_PROGRAM: &str = "
+fn mul(a, b) {
+    return a * b;
+}
+
+fn main() {
+    print(9223372036854775807);
+    print(2147483647 + 1);
+    print(mul(4294967296, 2));
+    print(str(-9000000000));
+}
+";
+
+/// A value past 32 bits reads the same through `candela <file>` and through
+/// `candela build` plus `candela-vm`, so the artifact carries the whole width
+/// rather than the half the register used to hold. Skips if `candela-vm` is
+/// not built alongside `candela`.
+#[test]
+fn wide_ints_agree_across_source_and_artifact() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping wide_ints_agree_across_source_and_artifact: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("wide_ints");
+    let app = dir.join("app.cdl");
+    std::fs::write(&app, WIDE_INT_PROGRAM).unwrap();
+
+    let mut src_cmd = std::process::Command::new(candela);
+    src_cmd.arg(&app);
+    let src_out = common::output_with_deadline(&mut src_cmd, "source run");
+    assert!(src_out.status.success(), "candela source run failed");
+    assert_eq!(
+        String::from_utf8_lossy(&src_out.stdout).replace("\r\n", "\n"),
+        "9223372036854775807\n2147483648\n8589934592\n-9000000000\n"
+    );
+
+    let cdlb = dir.join("app.cdlb");
+    let mut build_cmd = std::process::Command::new(candela);
+    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+    let build = common::output_with_deadline(&mut build_cmd, "candela build");
+    assert!(build.status.success(), "candela build failed");
+    std::fs::remove_file(&app).unwrap();
+
+    let mut vm_cmd = std::process::Command::new(&candela_vm);
+    vm_cmd.arg(&cdlb);
+    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+    assert!(vm_out.status.success(), "candela-vm run failed");
+    assert_eq!(
+        vm_out.stdout, src_out.stdout,
+        "candela-vm must reach the same answers as the source run"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A recursive function followed by one that lives in more registers runs to

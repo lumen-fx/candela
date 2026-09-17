@@ -694,7 +694,7 @@ impl Program {
 fn value_to_expr(v: &Value) -> Option<Expr> {
     Some(match v {
         Value::Null => Expr::Null,
-        Value::Int(i) => Expr::Int(*i as i32),
+        Value::Int(i) => Expr::Int(*i),
         Value::Float(f) => Expr::Float(*f),
         Value::Bool(b) => Expr::Bool(*b),
         Value::String(s) => Expr::String(SmolStr::from(s.as_str())),

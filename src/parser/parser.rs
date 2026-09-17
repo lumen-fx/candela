@@ -171,8 +171,8 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::UnknownToken => "Unknown token",
         ParserErr::IntLiteralOutOfRange => &format!(
             "This number does not fit an {BLUE}{BOLD}int{RESET}, which holds {} to {}. A wider value goes in a {BLUE}{BOLD}float{RESET}",
-            i32::MIN,
-            i32::MAX
+            i64::MIN,
+            i64::MAX
         ),
         ParserErr::FloatExponentMissingDigits => {
             "This exponent has no digits after it. Write the power, as in 1e3 or 2.5e-1"
