@@ -576,7 +576,9 @@ module.exports = grammar({
     integer_literal: (_) => /[0-9]+/,
 
     // A leading digit is optional, so `.5` is a float; a trailing point is not.
-    float_literal: (_) => /[0-9]*\.[0-9]+/,
+    // An exponent makes a float with or without a point, as in `1e3`.
+    float_literal: (_) =>
+      /[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+/,
 
     string_literal: ($) =>
       seq('"', repeat(choice($.escape_sequence, token.immediate(/[^"\\]+/))), '"'),

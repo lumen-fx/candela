@@ -529,6 +529,44 @@ pub fn float_addition() {
     );
 }
 
+/// A float literal may carry an exponent, with or without a decimal point and
+/// with either case of `e`.
+#[test]
+pub fn float_literal_with_exponent() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(1e3);
+        }
+        ",
+        1000.0f64.into()
+    );
+}
+
+#[test]
+pub fn float_literal_with_negative_exponent() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(2.5e-1);
+        }
+        ",
+        0.25f64.into()
+    );
+}
+
+#[test]
+pub fn float_literal_with_capital_exponent() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print(1E5);
+        }
+        ",
+        100_000.0f64.into()
+    );
+}
+
 #[test]
 pub fn float_sqrt() {
     run_and_check_registers!(
@@ -3846,6 +3884,17 @@ pub fn diagnostics_int_literal_past_64_bits() {
     assert_wellformed(&d, src);
     assert_eq!(d.code, "int_literal_out_of_range");
     assert_eq!(&src[d.span], "9223372036854775807");
+}
+
+/// An exponent with no digits after it is an error that names what is
+/// missing, rather than a number followed by a stray name.
+#[test]
+pub fn diagnostics_float_exponent_without_digits() {
+    let src = "fn main() { print(1e); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "float_exponent_missing_digits");
+    assert_eq!(&src[d.span], "1e");
 }
 
 #[test]

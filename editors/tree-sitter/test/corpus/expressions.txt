@@ -210,6 +210,33 @@ fn main() {
           (integer_literal))))))
 
 ================================================================================
+Float literals carry an exponent (docs/docs/language/types.md)
+================================================================================
+
+fn main() {
+    let a = 1e3;
+    let b = 2.5e-1;
+    let c = 1E5;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (float_literal))
+      (let_declaration
+        (identifier)
+        (float_literal))
+      (let_declaration
+        (identifier)
+        (float_literal)))))
+
+================================================================================
 Literals (examples/nbody/nbody_lua.cdl, docs/docs/language/collections.md)
 ================================================================================
 

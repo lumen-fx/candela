@@ -59,10 +59,10 @@ compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
 range, `loop`, `match`, `try`/`catch`, and bare blocks. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates
 before it raises; calls, method calls, field access, indexing, and slicing bind
-tighter than every operator. Literals cover integers, floats, strings with
-their escapes, `true`, `false`, `null`, lists, maps, struct literals, and
-anonymous functions. The type syntax covers arrays, map types, unions, and
-namespaced names.
+tighter than every operator. Literals cover integers, floats with a decimal
+point or an exponent or both, strings with their escapes, `true`, `false`,
+`null`, lists, maps, struct literals, and anonymous functions. The type syntax
+covers arrays, map types, unions, and namespaced names.
 
 Generics parse on both sides. A declaration's type parameters (`struct
 Cell<T>`, `fn first<T>`, `impl Signal<int>`) and the type arguments a use names
