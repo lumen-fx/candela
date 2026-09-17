@@ -1549,6 +1549,39 @@ pub(crate) fn pin_empty_literal_bindings(
     }
 }
 
+/// Pins a binding that still holds an empty array literal to what the first
+/// `push` puts in it.
+///
+/// Only an array with no element type at all upgrades: an array of `any`
+/// compares equal to `Array(None)` and keeps its dynamic element type.
+pub(crate) fn pin_pushed_element(obj: &Expr, element: &DataType, v: &mut [Variable]) {
+    let Expr::Var(var_name, _) = obj else {
+        return;
+    };
+    if let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name)
+        && matches!(var.var_type, DataType::Array(None))
+    {
+        var.var_type = DataType::Array(Some(Box::new(element.clone())));
+    }
+}
+
+/// Pins a binding that still holds an empty map literal to what the first
+/// `insert` puts in it, so later `get`s and iteration see concrete types.
+///
+/// The test is on missing key and value types, not on `== Map((None, None))`:
+/// a map of `any` compares equal to it and keeps taking entries of any type,
+/// which is what a downcast (`as_map`) hands back.
+pub(crate) fn pin_inserted_entry(obj: &Expr, key: &DataType, value: &DataType, v: &mut [Variable]) {
+    let Expr::Var(var_name, _) = obj else {
+        return;
+    };
+    if let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name)
+        && matches!(&var.var_type, DataType::Map(m) if m.0.is_none() && m.1.is_none())
+    {
+        var.var_type = DataType::Map(Box::from((Some(key.clone()), Some(value.clone()))));
+    }
+}
+
 /// Whether a type is what an empty literal leaves behind: an array with no
 /// element type, or a map with neither a key nor a value type. A downcast
 /// (`as_map`) hands back entries of `any`, which names a type and is left
@@ -1960,21 +1993,29 @@ fn track_return_flow(
                 extend_return_types!(&mut return_types, flow.types);
                 v.truncate(v_len);
             }
+            // The statements that say what a collection a `let` left empty
+            // holds. This walk runs over the body before the compile walk
+            // lowers it, so it applies the same pins; without them a read
+            // written in a `return` sees the empty-literal placeholder while
+            // the same read written anywhere else sees the pinned type.
             Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _)
-                if namespace.last().unwrap().as_str() == "push" =>
+                if namespace.last().unwrap().as_str() == "push" && args.len() == 1 =>
             {
-                // Only an array with no element type at all upgrades here; an
-                // array of `any` compares equal to `Array(None)` and keeps its
-                // dynamic element type.
-                if let Expr::Var(var_name, _) = obj.as_ref()
-                    && v.iter()
-                        .rfind(|var| &var.name == var_name)
-                        .is_some_and(|var| matches!(var.var_type, DataType::Array(None)))
-                {
-                    let arg_type = args[0].infer_type(v, ctx, state);
-                    if let Some(var) = v.iter_mut().rfind(|var| &var.name == var_name) {
-                        var.var_type = DataType::Array(Some(Box::new(arg_type)));
-                    }
+                let element = args[0].infer_type(v, ctx, state);
+                pin_pushed_element(obj, &element, v);
+            }
+            Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _)
+                if namespace.last().unwrap().as_str() == "insert" && args.len() == 2 =>
+            {
+                let key = args[0].infer_type(v, ctx, state);
+                let value = args[1].infer_type(v, ctx, state);
+                pin_inserted_entry(obj, &key, &value, v);
+            }
+            Expr::FunctionCall(args, namespace, _, _, type_args) if type_args.is_empty() => {
+                let (fn_name, path) = namespace.split_last().unwrap();
+                if let Some(fn_id) = state.scope(ctx.file_idx).find_function(path, fn_name) {
+                    let declared = specialized_arg_types(fn_id, &[], ctx, state);
+                    pin_empty_literal_bindings(args, &declared, v);
                 }
             }
             Expr::Match(scrutinee, arms, wildcard, span) => {
