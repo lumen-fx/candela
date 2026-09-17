@@ -132,6 +132,12 @@ and both print as such. A float raised to a negative power does not raise
 either. The parser rejects the all-literal forms of these before the program
 runs; the kinds above cover the cases where a value is only known at run time.
 
+### Calls
+
+| Kind | Raised by |
+| --- | --- |
+| `call_depth_exceeded` | A call made with 1000000 calls already standing. The report names the call it stopped at. A recursion that never reaches its base case ends here |
+
 ### Conversion
 
 | Kind | Raised by |

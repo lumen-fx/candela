@@ -256,6 +256,7 @@ pub fn handle_user_function(
     } else {
         output.push(Instr::CallFunc(loc, return_register_id));
         *state.allocated_call_depth += 2;
+        state.add_to_src(ctx, output, span);
     }
 
     if is_recursive {
@@ -264,6 +265,10 @@ pub fn handle_user_function(
             return_register_id,
             callsite_id.unwrap(),
         );
+        // The frame a recursive call pushes is the one the call-depth limit
+        // stops at, and the limit reports where it stopped, so the patched
+        // instruction gets the call site it belongs to.
+        state.add_instr_to_src(ctx, output[saveframe_loc], span);
     }
 
     if fn_returns_null {

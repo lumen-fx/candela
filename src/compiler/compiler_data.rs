@@ -357,8 +357,14 @@ impl State<'_> {
     /// This allows runtime errors to be traced back to `span` in the source code.
     #[inline(always)]
     pub fn add_to_src(&mut self, ctx: Ctx, output: &[Instr], span: Span) {
+        self.add_instr_to_src(ctx, unsafe { *output.last().unwrap_unchecked() }, span);
+    }
+    /// [`add_to_src`](Self::add_to_src) for an instruction that is written back
+    /// into `output` after later ones were emitted, so it is no longer the last.
+    #[inline(always)]
+    pub fn add_instr_to_src(&mut self, ctx: Ctx, instr: Instr, span: Span) {
         self.instr_src.push(InstrSrc {
-            instr: unsafe { *output.last().unwrap_unchecked() },
+            instr,
             span,
             file_id: ctx.file_idx,
         });

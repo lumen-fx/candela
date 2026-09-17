@@ -557,3 +557,69 @@ fn cli_whole_program_output_matches_source_run() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The call depth limit belongs to the VM, so it holds for a `.cdlb` run the
+/// same way it holds for a source run: a runaway recursion stops with the
+/// error, and a deep one that ends still reaches its answer. Skips if
+/// `candela-vm` is not built alongside `candela`.
+#[test]
+fn the_call_depth_limit_holds_for_an_artifact_run() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping the_call_depth_limit_holds_for_an_artifact_run: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("call_depth");
+    for (name, source, deep) in [
+        (
+            "runaway",
+            "fn climb(n) {\n    return climb(n + 1);\n}\n\nfn main() { print(climb(0)); }\n",
+            false,
+        ),
+        (
+            "bounded",
+            "fn countdown(n) {\n    if n == 0 { return 0; }\n    return countdown(n - 1) + 1;\n}\n\nfn main() { print(countdown(100000)); }\n",
+            true,
+        ),
+    ] {
+        let app = dir.join(format!("{name}.cdl"));
+        std::fs::write(&app, source).unwrap();
+        let cdlb = dir.join(format!("{name}.cdlb"));
+        let mut build_cmd = std::process::Command::new(candela);
+        build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+        let build = common::output_with_deadline(&mut build_cmd, "candela build");
+        assert!(build.status.success(), "candela build failed");
+
+        let mut vm_cmd = std::process::Command::new(&candela_vm);
+        vm_cmd.arg(&cdlb);
+        let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+        if deep {
+            assert!(vm_out.status.success(), "a bounded deep recursion must run");
+            assert_eq!(
+                String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
+                "100000\n"
+            );
+        } else {
+            assert!(
+                !vm_out.status.success(),
+                "a runaway recursion must stop the run"
+            );
+            let said = String::from_utf8_lossy(&vm_out.stderr);
+            assert!(
+                said.contains("climb"),
+                "the report names the call it stopped at: {said}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}

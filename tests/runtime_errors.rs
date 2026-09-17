@@ -1056,3 +1056,77 @@ fn exit_leaves_with_the_status_it_was_given() {
     assert_eq!(none.code, Some(0), "stderr: {}", none.stderr);
     assert_eq!(none.stdout.trim(), "done");
 }
+
+/// A recursion that never reaches a base case used to push frames until the
+/// operating system killed the run, with nothing on either stream to say why.
+/// It now stops at the call depth limit, and the report names the call it
+/// stopped at.
+#[test]
+fn a_runaway_recursion_stops_at_the_call_depth_limit() {
+    let said = refuse(
+        "runaway_recursion",
+        r"
+fn climb(n) {
+    return climb(n + 1);
+}
+
+fn main() {
+    print(climb(0));
+}
+",
+    );
+    assert!(
+        said.contains("climb"),
+        "the report names the call it stopped at: {said}"
+    );
+    assert!(
+        said.contains("call depth limit"),
+        "the report says what it ran into: {said}"
+    );
+}
+
+/// The limit is a runtime error like any other, so a program can take it and
+/// carry on.
+#[test]
+fn the_call_depth_limit_is_catchable() {
+    let out = run(
+        "catch_call_depth",
+        r#"
+fn climb(n) {
+    return climb(n + 1);
+}
+
+fn main() {
+    try {
+        print(climb(0));
+    } catch "call_depth_exceeded" {
+        print("too deep");
+    }
+    print("after");
+}
+"#,
+    );
+    assert_eq!(out, ["too deep", "after"]);
+}
+
+/// The limit sits far above what a working recursion needs: a hundred thousand
+/// levels run to the end.
+#[test]
+fn a_deep_recursion_under_the_limit_finishes() {
+    let out = run(
+        "deep_recursion",
+        r"
+fn countdown(n) {
+    if n == 0 {
+        return 0;
+    }
+    return countdown(n - 1) + 1;
+}
+
+fn main() {
+    print(countdown(100000));
+}
+",
+    );
+    assert_eq!(out, ["100000"]);
+}
