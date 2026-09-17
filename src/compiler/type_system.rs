@@ -532,7 +532,6 @@ pub struct TypeCtx<'a> {
     pub structs: &'a mut Vec<Struct>,
     pub enums: &'a mut Vec<EnumType>,
     pub fns: &'a mut Vec<Function>,
-    pub fn_registers: &'a mut Vec<Vec<u16>>,
     pub generics: &'a mut Generics,
 }
 
@@ -553,7 +552,6 @@ impl<'a> TypeCtx<'a> {
             structs: self.structs,
             enums: self.enums,
             fns: self.fns,
-            fn_registers: self.fn_registers,
             generics: self.generics,
         }
     }
@@ -968,7 +966,6 @@ fn lower_method(
             file_idx,
         })),
     });
-    ctx.fn_registers.push(Vec::new());
 }
 
 /// Resolves the struct a literal names, instantiating the generic type when the
@@ -2839,7 +2836,6 @@ impl Expr {
                     return_type: None,
                     generics: None,
                 });
-                state.fn_registers.push(Vec::new());
                 DataType::Fn(id)
             }
             _ => unsafe { unreachable_unchecked() },

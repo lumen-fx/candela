@@ -31,7 +31,8 @@ The artifact produces the same output as running the source through `candela`.
 - The bytecode instructions and the register file they run against.
 - The constant pools: strings, objects and maps built at compile time.
 - The struct and enum type tables, with field and variant names.
-- Per-function register layouts and the allocation sizes the VM needs up front.
+- The registers each recursive call site saves across its call, and the
+  allocation sizes the VM needs up front.
 - The source text of every file that went into the program, along with the span
   each instruction came from. This is what lets a runtime error from an artifact
   print the same underlined source report you get when running from source.

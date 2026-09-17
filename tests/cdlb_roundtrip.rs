@@ -49,6 +49,30 @@ fn main() {
 }
 ";
 
+/// A recursive function, then a function that holds more live registers than it
+/// does. The second function is declared after the first, so under a
+/// saved-register table shared with the function table its id would name the
+/// recursive call site's entry.
+const RECURSION_PROGRAM: &str = "
+fn fib(n) {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn poly(a, b, c) {
+    let d = a * b;
+    let e = d + c;
+    let f = e * e;
+    let g = f - a;
+    return g + b + c + d + e;
+}
+
+fn main() {
+    print(fib(10));
+    print(poly(2, 3, 4));
+}
+";
+
 #[test]
 fn bytecode_round_trips_through_load() {
     let bytes = candela::build_bytecode(
@@ -344,6 +368,61 @@ fn host_block_program_builds_but_load_names_missing_host_fn() {
         Err(e) => panic!("expected an unregistered host fn, got: {e}"),
         Ok(_) => panic!("load must not silently succeed when a host fn is unbound"),
     }
+}
+
+/// A recursive function followed by one that lives in more registers runs to
+/// the same answers through `candela <file>` and through `candela build` plus
+/// `candela-vm`. The saved-register table a recursive call site writes is what
+/// both paths read on the way back out of a call, so a table keyed the wrong
+/// way shows up here as a wrong number. Skips if `candela-vm` is not built
+/// alongside `candela`.
+#[test]
+fn recursion_then_a_wider_function_agrees_across_source_and_artifact() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping recursion_then_a_wider_function_agrees_across_source_and_artifact: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("recursion");
+    let app = dir.join("app.cdl");
+    std::fs::write(&app, RECURSION_PROGRAM).unwrap();
+
+    let mut src_cmd = std::process::Command::new(candela);
+    src_cmd.arg(&app);
+    let src_out = common::output_with_deadline(&mut src_cmd, "source run");
+    assert!(src_out.status.success(), "candela source run failed");
+    assert_eq!(
+        String::from_utf8_lossy(&src_out.stdout).replace("\r\n", "\n"),
+        "55\n121\n",
+        "fib(10) then poly(2, 3, 4)"
+    );
+
+    let cdlb = dir.join("app.cdlb");
+    let mut build_cmd = std::process::Command::new(candela);
+    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+    let build = common::output_with_deadline(&mut build_cmd, "candela build");
+    assert!(build.status.success(), "candela build failed");
+    std::fs::remove_file(&app).unwrap();
+
+    let mut vm_cmd = std::process::Command::new(&candela_vm);
+    vm_cmd.arg(&cdlb);
+    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+    assert!(vm_out.status.success(), "candela-vm run failed");
+    assert_eq!(
+        vm_out.stdout, src_out.stdout,
+        "candela-vm must reach the same answers as the source run"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Full CLI round-trip: compile source with `candela`, run the `.cdlb` with the
