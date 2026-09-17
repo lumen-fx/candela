@@ -90,18 +90,18 @@ pub fn add_op(
             (lhs, rhs) => Expr::SupEq(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpAdd => match (lhs, rhs) {
-            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x + y),
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_add(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x + y),
             (Expr::String(x), Expr::String(y)) => Expr::String(format_args!("{x}{y}").to_smolstr()),
             (lhs, rhs) => Expr::Add(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpSub => match (lhs, rhs) {
-            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x - y),
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_sub(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x - y),
             (lhs, rhs) => Expr::Sub(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpMul => match (lhs, rhs) {
-            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x * y),
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_mul(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x * y),
             (lhs, rhs) => Expr::Mul(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
@@ -113,7 +113,7 @@ pub fn add_op(
                 cold_path();
                 parser.error(span_l.extend(span_r), ParserErr::DivisionByZero);
             }
-            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x / y),
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_div(y)),
             (lhs, rhs) => Expr::Div(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpMod => match (lhs, rhs) {
@@ -122,7 +122,7 @@ pub fn add_op(
                 cold_path();
                 parser.error(span_l.extend(span_r), ParserErr::ModuloByZero);
             }
-            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x % y),
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_rem(y)),
             (lhs, rhs) => Expr::Mod(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
         Token::OpPow => match (lhs, rhs) {
