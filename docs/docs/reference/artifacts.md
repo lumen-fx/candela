@@ -103,8 +103,9 @@ The version is raised whenever the shape of what is recorded changes: adding the
 dynamic-library and host-function tables, adding the enum type table, adding the
 map, JSON and `any` operations, adding the export table, adding the map
 `remove` instruction together with the mark on the dynamic libraries the
-standard library owns, and widening `int` to 64 bits, which gave every recorded
-value a second word, each raised it. There is no forward or backward
+standard library owns, widening `int` to 64 bits, which gave every recorded
+value a second word, and adding the cell instructions a captured variable is
+read and written through, each raised it. There is no forward or backward
 compatibility across a change, and there is no conversion tool.
 
 In practice this means: build the artifact with the toolchain whose `candela-vm`

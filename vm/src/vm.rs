@@ -1457,6 +1457,30 @@ pub fn execute(
                 let part = src.as_str(str_pool)[start..end].to_smolstr();
                 r[dest_reg_id] = string!(part.as_str());
             }
+            Instr::NewCell(src, dest) => {
+                let cell_id = alloc_array(
+                    obj_pool,
+                    map_pool,
+                    free_arrays,
+                    r,
+                    &recursion_stack,
+                    gc_array_threshold,
+                    gc,
+                );
+                obj_pool.get_mut(cell_id as usize).push(r[src]);
+                r[dest] = Data::array(cell_id);
+            }
+            Instr::LoadCell(cell, dest) => {
+                let slot = &obj_pool[r[cell].as_array()];
+                r[dest] = unsafe { *slot.get_unchecked(0) };
+            }
+            Instr::StoreCell(cell, src) => {
+                let value = r[src];
+                let slot = obj_pool.get_mut(r[cell].as_array());
+                unsafe {
+                    *slot.get_unchecked_mut(0) = value;
+                }
+            }
             Instr::Push(array, element) => {
                 obj_pool.get_mut(r[array].as_array()).push(r[element]);
             }

@@ -188,6 +188,21 @@ pub enum Instr {
     MapRemove(u16, u16),
     CloneMap(u16, u16),
 
+    /// NewCell(src_reg_id, dest_reg_id)\
+    /// Allocates a one-slot cell holding what src_reg_id holds and puts the
+    /// cell in dest_reg_id. A variable a closure captures lives in a cell, so
+    /// the function that declared it and every closure that took it read and
+    /// write one slot.
+    NewCell(u16, u16),
+
+    /// LoadCell(cell_reg_id, dest_reg_id)\
+    /// Reads the value out of the cell in cell_reg_id.
+    LoadCell(u16, u16),
+
+    /// StoreCell(cell_reg_id, src_reg_id)\
+    /// Writes what src_reg_id holds into the cell in cell_reg_id.
+    StoreCell(u16, u16),
+
     /// Exits the program with the i32 code if it's != 0
     Halt(u16),
 }
@@ -312,6 +327,7 @@ impl Instr {
             | Self::Halt(_)
             | Self::StopErrorCatch
             | Self::ThrowError(_)
+            | Self::StoreCell(_, _)
             => None,
 
             Self::StartErrorCatch(_, y) if y == u16::MAX => None,
@@ -374,6 +390,8 @@ impl Instr {
             | Self::CloneStruct(_, y)
             | Self::CloneEnum(_, y)
             | Self::CloneMap(_, y)
+            | Self::NewCell(_, y)
+            | Self::LoadCell(_, y)
             | Self::CloneArray(_, y, _) => Some(y),
         }
     }
@@ -434,6 +452,7 @@ impl Instr {
             | Self::MapGet(a, b, _)
             | Self::MapInsert(_, a, b)
             | Self::MapRemove(a, b)
+            | Self::StoreCell(a, b)
             | Self::Remove(a, b) => {
                 f(a);
                 f(b);
@@ -464,6 +483,8 @@ impl Instr {
             | Self::ThrowError(a)
             | Self::GetFieldStruct(a, _, _)
             | Self::NegBool(a, _)
+            | Self::NewCell(a, _)
+            | Self::LoadCell(a, _)
             | Self::ObjElemMov(a, _, _) => f(a),
 
             Self::CallLibFuncVoid(func, a, b) => {

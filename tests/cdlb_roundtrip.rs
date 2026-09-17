@@ -242,17 +242,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_seven_and_v2_is_rejected() {
-    // The version byte was bumped to 7 when `int` became 64 bits wide and a
-    // recorded value grew the second word that holds one. A freshly built
-    // artifact must carry version 7.
+fn current_format_version_is_eight_and_v2_is_rejected() {
+    // The version byte was bumped to 8 when the cell instructions a captured
+    // variable is read and written through joined the set. A freshly built
+    // artifact must carry version 8.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 7, "current .cdlb format version must be 7");
+    assert_eq!(bytes[4], 8, "current .cdlb format version must be 8");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -283,7 +283,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 7);
+    assert_eq!(bytes[4], 8);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
