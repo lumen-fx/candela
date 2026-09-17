@@ -6692,6 +6692,109 @@ pub fn empty_array_literal_pins_its_type_on_the_first_push() {
     );
 }
 
+/// A pin applies to a read written in a `return` the same as to one written
+/// anywhere else. The return-type walk runs over the body before the compile
+/// walk lowers it, so it applies the pins the body's statements perform.
+#[test]
+pub fn a_pinned_map_reads_back_in_a_return() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn wrap() {
+            let m = {};
+            m.insert(\"a\", P { x: 5 });
+            return m.get(\"a\").x;
+        }
+        fn main() {
+            print(wrap());
+        }
+        ",
+        5.into()
+    );
+}
+
+#[test]
+pub fn a_pinned_array_reads_back_in_a_return() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn wrap() {
+            let xs = [];
+            xs.push(P { x: 6 });
+            return xs[0].x;
+        }
+        fn main() {
+            print(wrap());
+        }
+        ",
+        6.into()
+    );
+}
+
+/// A declared return type walks the body the same way, so the pin has to hold
+/// there too.
+#[test]
+pub fn a_pinned_map_reads_back_in_an_annotated_return() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn wrap() -> int {
+            let m = {};
+            m.insert(\"a\", P { x: 7 });
+            return m.get(\"a\").x;
+        }
+        fn main() {
+            print(wrap());
+        }
+        ",
+        7.into()
+    );
+}
+
+/// The pin a call applies to its argument reaches a `return` as well: the
+/// parameter's declared type is what says what the caller's empty map holds.
+#[test]
+pub fn a_parameter_pinned_map_reads_back_in_a_return() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn fill(m: {string: P}) {
+            m.insert(\"a\", P { x: 8 });
+        }
+        fn wrap() {
+            let m = {};
+            fill(m);
+            return m.get(\"a\").x;
+        }
+        fn main() {
+            print(wrap());
+        }
+        ",
+        8.into()
+    );
+}
+
+#[test]
+pub fn a_parameter_pinned_array_reads_back_in_a_return() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn fill(xs: P[]) {
+            xs.push(P { x: 9 });
+        }
+        fn wrap() {
+            let xs = [];
+            fill(xs);
+            return xs[0].x;
+        }
+        fn main() {
+            print(wrap());
+        }
+        ",
+        9.into()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // TYPED PARAMETERS AND RETURN ANNOTATIONS
 // ---------------------------------------------------------------------------
