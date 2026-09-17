@@ -37,6 +37,8 @@ pub enum LexErr {
     UnknownToken,
     /// An integer literal outside what `int` holds.
     IntOutOfRange,
+    /// A number whose exponent marker carries no digits, such as `1e`.
+    FloatExponentMissingDigits,
 }
 
 #[derive(Logos, Debug, PartialEq, Clone, Copy)]
@@ -187,10 +189,21 @@ pub enum Token<'a> {
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice())]
     Identifier(&'a str),
 
+    // Three spellings of the same type: a decimal point, an exponent, or both.
+    // The exponent form is what lets a constant like 6.02e23 be written at the
+    // scale it is quoted at.
     #[regex(r"[0-9]*[.][0-9]+", |lex| {
         let slice = lex.slice();
         lexical_core::parse::<f64>(slice.as_bytes()).unwrap()
     })]
+    #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?[0-9]+", |lex| {
+        let slice = lex.slice();
+        lexical_core::parse::<f64>(slice.as_bytes()).unwrap()
+    })]
+    // An exponent marker with nothing after it. The rule exists so the number
+    // is refused as a number, rather than read as a smaller one followed by a
+    // name the file never declared.
+    #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?", exponent_without_digits)]
     Float(f64),
 
     // `2147483648` on its own is one past `int`, and is accepted because the
@@ -217,6 +230,12 @@ pub enum Token<'a> {
 pub struct MacroToken<'a> {
     pub name: &'a str,
     pub body: Option<&'a str>,
+}
+
+/// Refuses a number whose exponent marker has no digits after it.
+const fn exponent_without_digits<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<f64, LexErr> {
+    cold_path();
+    Err(LexErr::FloatExponentMissingDigits)
 }
 
 /// Consumes the region opened by a `name!(` head and yields it whole. The token

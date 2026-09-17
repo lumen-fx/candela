@@ -82,6 +82,8 @@ enum ParserErr<'a> {
     UnknownToken,
     /// An integer literal outside the range `int` holds.
     IntLiteralOutOfRange,
+    /// A number whose exponent marker carries no digits.
+    FloatExponentMissingDigits,
     /// (expected, received)
     UnexpectedToken(Token<'a>, Token<'a>, &'static str),
     /// (expected, received)
@@ -124,6 +126,7 @@ impl ParserErr<'_> {
             ParserErr::UnexpectedEOF => "unexpected_eof",
             ParserErr::UnknownToken => "unknown_token",
             ParserErr::IntLiteralOutOfRange => "int_literal_out_of_range",
+            ParserErr::FloatExponentMissingDigits => "float_exponent_missing_digits",
             ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => {
                 "unexpected_token"
             }
@@ -155,6 +158,7 @@ const fn lex_err(e: LexErr) -> ParserErr<'static> {
     match e {
         LexErr::UnknownToken => ParserErr::UnknownToken,
         LexErr::IntOutOfRange => ParserErr::IntLiteralOutOfRange,
+        LexErr::FloatExponentMissingDigits => ParserErr::FloatExponentMissingDigits,
     }
 }
 
@@ -170,6 +174,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             i32::MIN,
             i32::MAX
         ),
+        ParserErr::FloatExponentMissingDigits => {
+            "This exponent has no digits after it. Write the power, as in 1e3 or 2.5e-1"
+        }
         ParserErr::UnexpectedToken(expected, received, msg) => &format_args!(
             "Expected {BLUE}{BOLD}{expected}{RESET}, but got {RED}{BOLD}{received}{RESET}. {msg}"
         )
