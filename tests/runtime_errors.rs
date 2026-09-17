@@ -1130,3 +1130,73 @@ fn main() {
     );
     assert_eq!(out, ["100000"]);
 }
+
+/// Positions count bytes, so one can land in the middle of a character. Every
+/// operation that takes one used to reach a Rust slice that panicked and took
+/// the VM down with it; each now raises an error a `catch` reaches.
+#[test]
+fn a_position_inside_a_character_is_catchable() {
+    let out = run(
+        "inside_a_character",
+        "
+import \"std/string\";
+
+fn main() {
+    let word = \"caf\u{e9}\";
+    try {
+        print(word[3..4]);
+    } catch \"not_a_char_boundary\" {
+        print(\"slice\");
+    }
+    try {
+        print(word[4]);
+    } catch \"not_a_char_boundary\" {
+        print(\"index\");
+    }
+    try {
+        print(word.substring(0, 4));
+    } catch \"not_a_char_boundary\" {
+        print(\"substring\");
+    }
+    try {
+        print(word.char_at(3));
+    } catch \"not_a_char_boundary\" {
+        print(\"char_at\");
+    }
+    print(word[0..3]);
+}
+",
+    );
+    assert_eq!(out, ["slice", "index", "substring", "char_at", "caf"]);
+}
+
+/// An index that lands on a character wider than one byte has no one-byte
+/// answer to give, so it raises rather than handing back half of it.
+#[test]
+fn an_index_on_a_wide_character_raises_instead_of_half_of_it() {
+    let said = refuse(
+        "index_a_wide_character",
+        "fn main() {\n    let word = \"caf\u{e9}\";\n    print(word[3]);\n}\n",
+    );
+    assert!(
+        said.contains('3') && said.contains('\u{e9}'),
+        "the report names the position and the character: {said}"
+    );
+    assert!(
+        !said.contains('\u{fffd}'),
+        "no half a character reaches the output: {said}"
+    );
+}
+
+/// The uncaught report names the position and the character it lands in.
+#[test]
+fn a_slice_report_names_the_position_and_the_character() {
+    let said = refuse(
+        "slice_a_wide_character",
+        "fn main() {\n    let word = \"caf\u{e9}\";\n    print(word[3..4]);\n}\n",
+    );
+    assert!(
+        said.contains('4') && said.contains('\u{e9}'),
+        "the report names the position and the character: {said}"
+    );
+}

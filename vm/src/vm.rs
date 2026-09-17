@@ -147,6 +147,22 @@ fn obj_eq(
     false
 }
 
+/// The character a byte position lands in, for the error that reports it.
+/// Walking back to where the character starts is what lets the report name the
+/// whole character rather than the byte the position points at.
+#[cold]
+#[inline(never)]
+fn character_at(s: &str, position: usize) -> char {
+    let mut start = position.min(s.len());
+    while start > 0 && !s.is_char_boundary(start) {
+        start -= 1;
+    }
+    s[start..]
+        .chars()
+        .next()
+        .unwrap_or(char::REPLACEMENT_CHARACTER)
+}
+
 struct CallFrame {
     return_addr: u16,
     return_reg: u16,
@@ -1200,13 +1216,23 @@ pub fn execute(
                 }
                 r[dest_reg_id] = Data::array(new_array_id);
             }
-            // Candela currently indexes strings by byte, meaning multi-byte characters won't get properly indexed
+            // A string is indexed by byte, so a position can land in a character
+            // that takes several of them. One byte of such a character is not a
+            // string, so the index raises instead of answering with a piece of
+            // one.
             Instr::GetIndexString(tgt, index, dest) => {
                 let idx = r[index].as_int();
                 let tgt_data = r[tgt];
-                let bytes = tgt_data.as_str(str_pool).as_bytes();
+                let text = tgt_data.as_str(str_pool);
+                let bytes = text.as_bytes();
                 if (idx as usize) >= bytes.len() {
                     error_with_catch!(ErrType::IndexOutOfBounds(bytes.len(), idx));
+                }
+                // The bound above makes the read safe, and a byte outside
+                // ASCII is part of a character no single byte can stand for.
+                if unsafe { *bytes.get_unchecked(idx as usize) } >= 0x80 {
+                    let character = character_at(text, idx as usize);
+                    error_with_catch!(ErrType::NotACharBoundary(idx, character));
                 }
                 r[dest] = string!(unsafe {
                     std::str::from_utf8_unchecked(std::slice::from_ref(
@@ -1225,6 +1251,17 @@ pub fn execute(
                     || idx_start > idx_end
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(s.len(), idx_start, idx_end));
+                }
+                // Both ends have to sit between characters. A cut through one
+                // would leave a piece of it on each side, so the slice raises
+                // and names where it stopped.
+                if !s.is_char_boundary(idx_start as usize) {
+                    let character = character_at(&s, idx_start as usize);
+                    error_with_catch!(ErrType::NotACharBoundary(idx_start, character));
+                }
+                if !s.is_char_boundary(idx_end as usize) {
+                    let character = character_at(&s, idx_end as usize);
+                    error_with_catch!(ErrType::NotACharBoundary(idx_end, character));
                 }
                 r[dest_reg_id] = string!(&s[(idx_start as usize)..(idx_end as usize)]);
             }
