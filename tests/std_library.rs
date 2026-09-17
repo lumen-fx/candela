@@ -188,6 +188,128 @@ fn default_resolution_needs_no_env() {
     );
 }
 
+/// A std module that binds a dynamic library is the one part of the library an
+/// artifact cannot carry, so its recipe names the library relative to `libs`
+/// and the runtime resolves it the way the compiler does. The artifact runs
+/// from a directory with no `std_src` anywhere under it, once with
+/// `CANDELA_LIB_PATH` naming the library directory and once with the layout an
+/// install lays out beside the binaries and nothing set.
+#[test]
+fn a_std_dylib_artifact_runs_from_any_directory() {
+    let candela_vm = Path::new(env!("CARGO_BIN_EXE_candela"))
+        .parent()
+        .expect("the test binary sits in a directory")
+        .join(if cfg!(windows) {
+            "candela-vm.exe"
+        } else {
+            "candela-vm"
+        });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping a_std_dylib_artifact_runs_from_any_directory: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    // The native module is compiled by the release workflow, not by cargo, so
+    // a checkout that has not built it has nothing for the artifact to load.
+    let native = if cfg!(windows) {
+        "math.dll"
+    } else if cfg!(target_os = "macos") {
+        "math.dylib"
+    } else {
+        "math.so"
+    };
+    let native_src = repo()
+        .join("libs")
+        .join("std_src")
+        .join("math")
+        .join(native);
+    if !native_src.exists() {
+        eprintln!(
+            "skipping a_std_dylib_artifact_runs_from_any_directory: {} not built",
+            native_src.display()
+        );
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!("candela_std_dylib_{}", std::process::id()));
+    let work = tmp.join("work");
+    std::fs::create_dir_all(&work).expect("create work dir");
+    std::fs::write(
+        work.join("prog.cdl"),
+        "import \"std/math\" as math;\nfn main() { print(math::sqrt(9.0)); }\n",
+    )
+    .expect("write program");
+
+    let mut build = Command::new(env!("CARGO_BIN_EXE_candela"));
+    build
+        .arg("build")
+        .arg("prog.cdl")
+        .current_dir(&work)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let built = common::output_with_deadline(&mut build, "candela build");
+    assert!(
+        built.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&built.stderr),
+    );
+
+    let mut by_env = Command::new(&candela_vm);
+    by_env
+        .arg("prog.cdlb")
+        .current_dir(&work)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let named = common::output_with_deadline(&mut by_env, "candela-vm run");
+    assert!(
+        named.status.success() && String::from_utf8_lossy(&named.stdout).contains('3'),
+        "run with CANDELA_LIB_PATH failed: {:?}\nstdout: {}\nstderr: {}",
+        named.status.code(),
+        String::from_utf8_lossy(&named.stdout),
+        String::from_utf8_lossy(&named.stderr),
+    );
+
+    // The install layout: the binary at the top of the prefix, the library
+    // under `libs/` beside it. Only the native module travels; the artifact
+    // carries the candela source of every module it uses.
+    let bin_dir = tmp.join("bin");
+    let native_dir = bin_dir.join("libs").join("std_src").join("math");
+    std::fs::create_dir_all(&native_dir).expect("create install layout");
+    let installed_vm = bin_dir.join(candela_vm.file_name().expect("the binary has a name"));
+    std::fs::copy(&candela_vm, &installed_vm).expect("copy binary");
+    std::fs::copy(&native_src, native_dir.join(native)).expect("copy the native module");
+
+    // A sibling test spawning its own child can inherit the write handle this
+    // copy just closed, which makes the fresh binary briefly unexecutable
+    // ("text file busy"). The handle goes away with that child, so retry.
+    let mut attempt = 0;
+    let beside = loop {
+        let mut command = Command::new(&installed_vm);
+        command
+            .arg("prog.cdlb")
+            .current_dir(&work)
+            .env_remove("CANDELA_LIB_PATH");
+        match common::try_output_with_deadline(&mut command, "installed candela-vm run") {
+            Ok(output) => break output,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => panic!("installed candela-vm runs: {e}"),
+        }
+    };
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        beside.status.success() && String::from_utf8_lossy(&beside.stdout).contains('3'),
+        "run beside the install layout failed: {:?}\nstdout: {}\nstderr: {}",
+        beside.status.code(),
+        String::from_utf8_lossy(&beside.stdout),
+        String::from_utf8_lossy(&beside.stderr),
+    );
+}
+
 /// The json/map/set modules must inline into a `.cdlb` and run under the
 /// VM-only path with no source tree, like the other pure-candela std modules.
 #[test]

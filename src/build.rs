@@ -70,6 +70,7 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
             library: d.library.to_string(),
             symbol: d.symbol.to_string(),
             types: d.types.to_vec(),
+            origin: d.origin,
         })
         .collect();
     // `host` functions are captured as name + signature so an embedding runtime

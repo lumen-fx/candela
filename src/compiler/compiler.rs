@@ -21,6 +21,7 @@ use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
 use crate::instr::LibFunc;
 use crate::parser;
+use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
 use crate::rt::resolve_library_filename;
 use crate::vm::Pool;
@@ -3956,7 +3957,7 @@ fn load_auto_prelude(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
-        SmolStr,
+        (SmolStr, LibraryOrigin),
         Span,
     )>,
     pending_host: &mut Vec<(
@@ -4099,6 +4100,46 @@ fn open_path_dylib(dirs: &[&Path], spec: &str) -> (Option<Library>, SmolStr) {
     (None, name)
 }
 
+/// The spec to record for a library the standard library names, relative to the
+/// `libs` directory, and `None` for every other `dylib` import.
+///
+/// A std module reaches its C library by a path from its own source file
+/// (`../std_src/math/math`), and an artifact carries no source tree to resolve
+/// that against. Recording the path from `libs` instead is what lets
+/// `candela-vm` find the file through the toolchain. Both ends have to sit
+/// under the library directory: the module doing the import, and the library it
+/// names.
+#[cfg(not(target_arch = "wasm32"))]
+fn std_library_spec(lib_dir: Option<&Path>, file_path: &Path, spec: &str) -> Option<SmolStr> {
+    let lib_dir = lib_dir?.canonicalize().ok()?;
+    if !file_path.canonicalize().ok()?.starts_with(&lib_dir) {
+        return None;
+    }
+    let target = file_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(spec);
+    // The spec leaves the platform extension off, so the file is not there to
+    // canonicalize; its directory is.
+    let relative = target
+        .parent()?
+        .canonicalize()
+        .ok()?
+        .strip_prefix(&lib_dir)
+        .ok()?
+        .join(target.file_name()?);
+    // Written with forward slashes, so an artifact built on Windows names the
+    // same file on Linux.
+    let mut recorded = String::new();
+    for part in relative.components() {
+        if !recorded.is_empty() {
+            recorded.push('/');
+        }
+        recorded.push_str(part.as_os_str().to_str()?);
+    }
+    Some(SmolStr::from(recorded))
+}
+
 /// Opens the library file `base` stands for.
 ///
 /// A path that already carries an extension is used as written. One without
@@ -4165,9 +4206,9 @@ fn parse_toplevel(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
-        // Library spec exactly as written in the source (logical name or path),
-        // carried to the artifact recipe so a `.cdlb` re-resolves it by name.
-        SmolStr,
+        // The spec to record in the artifact recipe so a `.cdlb` re-resolves the
+        // library by name, and the search that resolves it.
+        (SmolStr, LibraryOrigin),
         Span,
     )>,
     pending_host: &mut Vec<(
@@ -4362,12 +4403,22 @@ fn parse_toplevel(
                 let lib = Rc::new(
                     lib.unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources)),
                 );
+                // A standard-library module names its C library by a path
+                // relative to its own source file, which an artifact never
+                // carries. Record that one relative to the `libs` directory
+                // instead, so `candela-vm` reaches it through the toolchain
+                // from whatever directory the artifact runs in.
+                let recorded = match std_library_spec(resolver.lib_dir(), file_path, spec.as_str())
+                {
+                    Some(relative) => (relative, LibraryOrigin::StandardLibrary),
+                    None => (spec, LibraryOrigin::Program),
+                };
                 pending_dylibs.push((
                     src_file_idx,
                     dynamic_libs.len() as u16,
                     fn_signatures,
                     lib,
-                    spec,
+                    recorded,
                     span,
                 ));
                 dynamic_libs.push(Dynamiclib {
@@ -4549,9 +4600,9 @@ fn resolve_types(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
-        // Library spec exactly as written in the source (logical name or path),
-        // carried to the artifact recipe so a `.cdlb` re-resolves it by name.
-        SmolStr,
+        // The spec to record in the artifact recipe so a `.cdlb` re-resolves the
+        // library by name, and the search that resolves it.
+        (SmolStr, LibraryOrigin),
         Span,
     )>,
     pending_host: Vec<(
@@ -4675,7 +4726,9 @@ fn resolve_types(
             });
     }
     #[cfg(not(target_arch = "wasm32"))]
-    for (src_file_idx, dynlib_id, fn_signatures, lib, library_spec, span) in pending_dylibs {
+    for (src_file_idx, dynlib_id, fn_signatures, lib, (library_spec, origin), span) in
+        pending_dylibs
+    {
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
@@ -4736,6 +4789,7 @@ fn resolve_types(
                 dynamic_libs_fns.push(DynamicLibFn {
                     types: Box::from(types),
                     library: library_spec.clone(),
+                    origin,
                     symbol: fn_name.clone(),
                     _lib: Rc::clone(&lib),
                     ptr,
@@ -4928,7 +4982,7 @@ pub fn compile(
         u16,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Rc<Library>,
-        SmolStr,
+        (SmolStr, LibraryOrigin),
         Span,
     )> = Vec::new();
     let mut pending_host: Vec<(

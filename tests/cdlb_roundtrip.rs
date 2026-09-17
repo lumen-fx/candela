@@ -224,7 +224,9 @@ fn unknown_version_is_rejected() {
 #[test]
 fn current_format_version_is_six_and_v2_is_rejected() {
     // The version byte was bumped to 6 when the map `remove` instruction was
-    // added. A freshly built artifact must carry version 6.
+    // added and the dynamic-library recipes gained the origin that tells a
+    // standard-library one from the program's own. A freshly built artifact
+    // must carry version 6.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",

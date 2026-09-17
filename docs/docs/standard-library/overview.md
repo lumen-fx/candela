@@ -25,8 +25,9 @@ Because the modules are ordinary source files, the compiler links the ones you
 import into your program. A `.cdlb` artifact built from a program that imports
 only pure-candela modules runs under `candela-vm` with no library directory
 present. The `math`, `random`, and `time` modules bind a dynamic library, so a
-`.cdlb` that uses them records the binding recipe and the library has to be
-present when the artifact runs. See
+`.cdlb` that uses them records the binding recipe and needs the `libs` directory
+when it runs; `candela-vm` finds it the way the compiler does, through
+`CANDELA_LIB_PATH` or beside its own binary. See
 [artifacts](../reference/artifacts.md).
 
 ## Importing a module

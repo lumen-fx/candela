@@ -280,7 +280,7 @@ process the same way it does under `candela`.
 
 | Variable | Effect |
 | --- | --- |
-| `CANDELA_LIB_PATH` | Names the directory holding the shipped `std/` and `std_src/` library directories, overriding the default location beside the executable |
+| `CANDELA_LIB_PATH` | Names the directory holding the shipped `std/` and `std_src/` library directories, overriding the default location beside the executable. `candela` reads it to resolve a library import, `candela-vm` to re-open a dynamic library the standard library owns |
 | `LPM_BIN` | Names the registry client to resolve dependencies with. An override: nothing else is looked at, and one that cannot answer is an error |
 | `CANDELA_NO_UPDATE_CHECK` | Set to any non-empty value to silence the update check |
 | `CI` | Silences the update check, so build machines never reach the network |
