@@ -7,8 +7,8 @@
 #include <stdint.h>
 #include <time.h>
 
-EXPORT int32_t now(void) { return (int32_t)time(NULL); }
-EXPORT const char *format(int32_t timestamp, const char *fmt) {
+EXPORT int64_t now(void) { return (int64_t)time(NULL); }
+EXPORT const char *format(int64_t timestamp, const char *fmt) {
   static char buffer[128];
   time_t t = (time_t)timestamp;
   struct tm *info = localtime(&t);
