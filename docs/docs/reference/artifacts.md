@@ -96,9 +96,9 @@ rather than risk decoding it wrongly.
 
 The version is raised whenever the shape of what is recorded changes: adding the
 dynamic-library and host-function tables, adding the enum type table, adding the
-map, JSON and `any` operations, and adding the export table each raised it. There
-is no forward or backward compatibility across a change, and there is no
-conversion tool.
+map, JSON and `any` operations, adding the export table, and adding the map
+`remove` instruction each raised it. There is no forward or backward
+compatibility across a change, and there is no conversion tool.
 
 In practice this means: build the artifact with the toolchain whose `candela-vm`
 will run it, and rebuild after a toolchain upgrade. The failure is loud, not

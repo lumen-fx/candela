@@ -5,7 +5,7 @@
 //! arms in `src/compiler/functions/builtin/{builtin_functions,
 //! builtin_methods}.rs`, neither of which is exposed as a runtime-queryable
 //! table. The lists and descriptions below are transcribed from those files
-//! and from `docs/docs/standard-library/built-in-functions.md`, and must be
+//! and from `docs/docs/standard-library/builtins.md`, and must be
 //! kept in sync by hand if candela's built-ins change.
 
 /// Reserved words, from `Token` in `src/parser/lexer.rs`.
@@ -133,7 +133,7 @@ pub const BUILTIN_METHODS: &[(&str, &str)] = &[
     ),
     (
         "remove",
-        "<T[]>.remove(n: int)\n\nRemoves the n-th element from an array, in place.",
+        "<T[]>.remove(n: int)\n<{K: V}>.remove(key: K)\n\nRemoves the n-th element from an array, or the entry under `key` from a map, in place. Removing a key a map does not hold changes nothing.",
     ),
     (
         "sqrt",
