@@ -486,14 +486,11 @@ fn main() {}
 }
 
 /// A closure literal hoists to a fresh entry in the function table the first
-/// time it is reached, with a matching entry pushed onto the per-function
-/// saved-register table in the same breath. An aborted `Program::call` used to
-/// leave the first entry behind while a truncate elsewhere removed the second,
-/// so the next call's own closure took a function id one past where its
-/// saved-register entry actually landed, and calling it panicked on
-/// `state.fn_registers.get_mut(fn_id).unwrap()` in
-/// `functions/user_functions.rs` instead of running. `a` and `b` take a bare
-/// parameter for the same reason as in
+/// time it is reached. An aborted `Program::call` used to leave that entry
+/// behind while a truncate elsewhere removed the saved-register slot pushed
+/// with it, so the next call's own closure took a function id one past where
+/// its register list had landed and panicked instead of running. `a` and `b`
+/// take a bare parameter for the same reason as in
 /// `a_diagnostic_mid_call_does_not_corrupt_a_later_call`.
 #[test]
 fn a_diagnostic_mid_call_does_not_desync_a_later_closure() {

@@ -91,7 +91,9 @@ pub struct ProgramImage {
     pub maps: Vec<Vec<(u64, u64)>>,
     pub strings: Vec<String>,
     pub instr_src: Vec<InstrSrcImage>,
-    pub fn_registers: Vec<Vec<u16>>,
+    /// The registers each recursive call site saves across its call, indexed by
+    /// the call-site id its `SaveFrame` carries.
+    pub callsite_registers: Vec<Vec<u16>>,
     pub structs: Vec<StructImage>,
     pub enums: Vec<EnumImage>,
     pub sources: Vec<SourceImage>,
@@ -229,7 +231,7 @@ pub struct RuntimeProgram {
     registers: Vec<Data>,
     pools: Pools,
     instr_src: Vec<InstrSrc>,
-    fn_registers: Vec<Vec<u16>>,
+    callsite_registers: Vec<Vec<u16>>,
     dyn_lib_fns: Vec<DynamicLibFn>,
     host_sigs: Vec<HostFnSig>,
     host_dispatch: Vec<HostDispatch>,
@@ -256,7 +258,7 @@ impl RuntimeProgram {
             &mut register_file,
             &mut self.pools,
             &err_ctx,
-            &self.fn_registers,
+            &self.callsite_registers,
             &self.dyn_lib_fns,
             &self.structs,
             &self.enums,
@@ -351,7 +353,7 @@ impl RuntimeProgram {
 
         let instructions = &self.instructions;
         let pools = &mut self.pools;
-        let fn_registers = &self.fn_registers;
+        let callsite_registers = &self.callsite_registers;
         let dyn_lib_fns = &self.dyn_lib_fns;
         let structs = &self.structs;
         let enums = &self.enums;
@@ -366,7 +368,7 @@ impl RuntimeProgram {
                 &mut register_file,
                 pools,
                 &err_ctx,
-                fn_registers,
+                callsite_registers,
                 dyn_lib_fns,
                 structs,
                 enums,
@@ -567,7 +569,7 @@ impl RuntimeProgram {
                     file_id: s.file_id,
                 })
                 .collect(),
-            fn_registers: img.fn_registers,
+            callsite_registers: img.callsite_registers,
             dyn_lib_fns,
             host_sigs,
             host_dispatch,

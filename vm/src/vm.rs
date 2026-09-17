@@ -161,7 +161,7 @@ struct CallFrame {
 fn unwind_to_catch(
     handle: &ErrorCatch,
     call_frames: &[CallFrame],
-    fn_registers: &[Vec<u16>],
+    callsite_registers: &[Vec<u16>],
     recursion_stack: &mut RegisterFile,
     r: &mut RegisterFile,
 ) {
@@ -173,7 +173,7 @@ fn unwind_to_catch(
     // resuming function has its registers already and only the deeper levels
     // go.
     let regs: &[u16] = match aborted.saved_callsite {
-        Some(callsite_id) => unsafe { fn_registers.get_unchecked(callsite_id as usize) },
+        Some(callsite_id) => unsafe { callsite_registers.get_unchecked(callsite_id as usize) },
         None => &[],
     };
     restore_registers(base, regs, recursion_stack, r);
@@ -182,15 +182,15 @@ fn unwind_to_catch(
 /// Puts back the registers `SaveFrame` pushed for `callsite` on the way into a
 /// call that is now returning, and drops them from the recursion stack. The top
 /// of the stack belongs to that call, so the saved values sit in the last
-/// `fn_registers[callsite].len()` slots.
+/// `callsite_registers[callsite].len()` slots.
 #[inline(always)]
 fn restore_saved_registers(
     callsite: u16,
-    fn_registers: &[Vec<u16>],
+    callsite_registers: &[Vec<u16>],
     recursion_stack: &mut RegisterFile,
     r: &mut RegisterFile,
 ) {
-    let regs = unsafe { fn_registers.get_unchecked(callsite as usize) };
+    let regs = unsafe { callsite_registers.get_unchecked(callsite as usize) };
     restore_registers(recursion_stack.len() - regs.len(), regs, recursion_stack, r);
 }
 
@@ -358,7 +358,7 @@ pub fn execute(
             },
     }: &mut Pools,
     err_ctx: &ErrorCtx,
-    fn_registers: &[Vec<u16>],
+    callsite_registers: &[Vec<u16>],
     dyn_libs: &[DynamicLibFn],
     structs: &[Struct],
     enums: &[EnumType],
@@ -417,7 +417,7 @@ pub fn execute(
                 // standing: a thrown value the unwind is about to overwrite is
                 // still a garbage-collection root here.
                 let caught = string!($err.kind());
-                unwind_to_catch(&err_handle, &call_frames, fn_registers, &mut recursion_stack, r);
+                unwind_to_catch(&err_handle, &call_frames, callsite_registers, &mut recursion_stack, r);
                 unsafe {
                     args.set_len(err_handle.args_len as usize);
                     call_frames.set_len(err_handle.call_frames_len as usize);
@@ -436,7 +436,7 @@ pub fn execute(
                 // standing: a thrown value the unwind is about to overwrite is
                 // still a garbage-collection root here.
                 let caught = string!($err.kind());
-                unwind_to_catch(&err_handle, &call_frames, fn_registers, &mut recursion_stack, r);
+                unwind_to_catch(&err_handle, &call_frames, callsite_registers, &mut recursion_stack, r);
                 unsafe {
                     args.set_len(err_handle.args_len as usize);
                     call_frames.set_len(err_handle.call_frames_len as usize);
@@ -480,7 +480,12 @@ pub fn execute(
                 // caller back the registers the call overwrote before jumping.
                 let call_frame = call_frames.pop_unchecked();
                 if let Some(callsite_id) = call_frame.saved_callsite {
-                    restore_saved_registers(callsite_id, fn_registers, &mut recursion_stack, r);
+                    restore_saved_registers(
+                        callsite_id,
+                        callsite_registers,
+                        &mut recursion_stack,
+                        r,
+                    );
                 }
                 i = call_frame.return_addr as usize;
             }
@@ -491,7 +496,7 @@ pub fn execute(
                     saved_callsite: Some(callsite_id),
                 });
                 recursion_stack.0.extend(
-                    unsafe { fn_registers.get_unchecked(callsite_id as usize) }
+                    unsafe { callsite_registers.get_unchecked(callsite_id as usize) }
                         .iter()
                         .map(|&reg| r[reg]),
                 );
@@ -506,7 +511,12 @@ pub fn execute(
                 let call_frame = call_frames.pop_unchecked();
                 let temp = r[tgt];
                 if let Some(callsite_id) = call_frame.saved_callsite {
-                    restore_saved_registers(callsite_id, fn_registers, &mut recursion_stack, r);
+                    restore_saved_registers(
+                        callsite_id,
+                        callsite_registers,
+                        &mut recursion_stack,
+                        r,
+                    );
                 }
                 i = call_frame.return_addr as usize;
                 r[call_frame.return_reg] = temp;

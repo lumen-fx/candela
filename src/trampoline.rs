@@ -220,7 +220,7 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         enums: &mut out.enums,
         pools: &mut out.pools,
         instr_src: &mut out.instr_src,
-        fn_registers: &mut out.fn_registers,
+        callsite_registers: &mut out.callsite_registers,
         dyn_libs: &mut out.dyn_libs,
         allocated_arg_count: &mut out.allocated_arg_count,
         allocated_call_depth: &mut out.allocated_call_depth,

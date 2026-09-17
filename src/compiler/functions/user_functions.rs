@@ -200,7 +200,6 @@ pub fn handle_user_function(
             type_args,
             args,
             &fn_code,
-            fn_id as u16,
             is_recursive,
             state.fns[fn_id].src_file,
         );
@@ -211,9 +210,13 @@ pub fn handle_user_function(
     let args_loc_len = state.fns[fn_id].impls[fn_impl_idx].args_loc.len();
 
     let saveframe_loc = output.len();
+    // Only a recursive call saves registers, so the table is keyed by call site
+    // and takes an entry here. The list stays empty until the enclosing body
+    // finishes compiling and `compile_function` can see which registers are
+    // still read after the call returns.
     let callsite_id = if is_recursive {
-        let id = state.fn_registers.len() as u16;
-        state.fn_registers.push(Vec::new());
+        let id = state.callsite_registers.len() as u16;
+        state.callsite_registers.push(Vec::new());
         output.push(Instr::SaveFrame(0, 0, 0));
         *state.allocated_call_depth += 2;
         Some(id)
@@ -237,14 +240,6 @@ pub fn handle_user_function(
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
-    if !is_recursive {
-        state
-            .fn_registers
-            .get_mut(fn_id)
-            .unwrap()
-            .extend(get_tgt_ids(&output[saveframe_loc..]));
-    }
-
     let return_register_id = if fn_returns_null {
         0
     } else {
@@ -285,7 +280,6 @@ fn compile_function(
     type_args: &[DataType],
     _args: &[Expr],
     fn_code: &[Expr],
-    fn_id: u16,
     is_recursive: bool,
     fn_file_idx: u16,
 ) {
@@ -478,16 +472,12 @@ fn compile_function(
                 live_regs.sort_unstable();
                 live_regs.dedup();
                 unsafe {
-                    *state.fn_registers.get_unchecked_mut(callsite_id as usize) = live_regs;
+                    *state
+                        .callsite_registers
+                        .get_unchecked_mut(callsite_id as usize) = live_regs;
                 }
             }
         }
-    } else {
-        state
-            .fn_registers
-            .get_mut(fn_id as usize)
-            .unwrap()
-            .extend(get_tgt_ids(&parsed));
     }
 
     output.extend(parsed);

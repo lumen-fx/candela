@@ -29,7 +29,7 @@ macro_rules! run_and_check_registers {
                     contents: String::from($contents),
                 }],
             },
-            &out.fn_registers,
+            &out.callsite_registers,
             &[],
             &[],
             &[],
@@ -70,7 +70,7 @@ macro_rules! run {
                     contents: String::from($contents),
                 }],
             },
-            &out.fn_registers,
+            &out.callsite_registers,
             &[],
             &[],
             &[],
@@ -3698,7 +3698,7 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
                     contents: String::from(src),
                 }],
             },
-            &out.fn_registers,
+            &out.callsite_registers,
             &[],
             &out.structs,
             &out.enums,
@@ -5851,7 +5851,7 @@ pub fn gc_state_persists_across_runs() {
             &mut reg,
             &mut pools,
             &err_ctx,
-            &out.fn_registers,
+            &out.callsite_registers,
             &[],
             &[],
             &[],
@@ -7650,8 +7650,8 @@ pub fn a_free_function_specialisation_outlives_the_block_it_was_made_in() {
 }
 
 /// A block does not take the function table back down with it. The closure it
-/// hoisted and the method it lowered both stay, and the register list keeps one
-/// entry per function, so nothing indexes past the table or into a neighbour.
+/// hoisted and the method it lowered both stay, and neither takes a slot in the
+/// saved-register table, which only recursive call sites write to.
 #[test]
 pub fn a_block_leaves_the_function_table_alone() {
     let out = compile(
@@ -7681,12 +7681,60 @@ pub fn a_block_leaves_the_function_table_alone() {
         out.functions.iter().any(|f| f.name.starts_with("<anon>")),
         "so does the closure the loop body declared"
     );
-    // A recursive call site takes an entry of its own, and this program has
-    // none, so one entry per function is the whole table.
+    // The saved-register table is keyed by recursive call site, and this
+    // program has none, so it stays empty however many functions the block
+    // hoisted.
+    assert!(
+        out.callsite_registers.is_empty(),
+        "a program without a recursive call saves no registers"
+    );
+}
+
+/// The saved-register table is keyed by recursive call site, not by function. A
+/// recursive call site takes an entry while the callee is still compiling, so a
+/// table that also carried one entry per function would hand a function
+/// declared later an index naming a call site rather than its own list. Every
+/// entry belongs to exactly one `SaveFrame`.
+#[test]
+pub fn the_saved_register_table_is_one_entry_per_recursive_call_site() {
+    let out = compile(
+        String::from(
+            "
+        fn fib(n) {
+            if n < 2 { return n; }
+            return fib(n - 1) + fib(n - 2);
+        }
+        fn poly(a, b, c) {
+            let d = a * b;
+            let e = d + c;
+            let f = e * e;
+            let g = f - a;
+            return g + b + c + d + e;
+        }
+        fn main() { print(fib(10)); print(poly(2, 3, 4)); }
+        ",
+        ),
+        "callsite_registers.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let mut callsites: Vec<u16> = out
+        .instructions
+        .iter()
+        .filter_map(|i| match i {
+            Instr::SaveFrame(_, _, callsite_id) => Some(*callsite_id),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !callsites.is_empty(),
+        "the recursive calls must each save a frame"
+    );
+    callsites.sort_unstable();
+    let entries: Vec<u16> = (0..out.callsite_registers.len() as u16).collect();
     assert_eq!(
-        out.functions.len(),
-        out.fn_registers.len(),
-        "every function has the register list it was pushed alongside"
+        callsites, entries,
+        "every entry is one call site's, and no function holds one"
     );
 }
 
@@ -7979,7 +8027,7 @@ pub fn generic_declared_in_an_imported_module() {
             instr_src: out.instr_src,
             sources: out.sources,
         },
-        &out.fn_registers,
+        &out.callsite_registers,
         &[],
         &[],
         &[],

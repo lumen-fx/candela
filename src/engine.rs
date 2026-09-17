@@ -327,7 +327,7 @@ impl Engine {
             registers: out.registers,
             pools: out.pools,
             instr_src: out.instr_src,
-            fn_registers: out.fn_registers,
+            callsite_registers: out.callsite_registers,
             dyn_lib_fns: out.dyn_lib_fns,
             host_sigs: out.host_fns,
             host_dispatch,
@@ -365,7 +365,7 @@ pub struct Program {
     registers: Vec<Data>,
     pools: Pools,
     instr_src: Vec<InstrSrc>,
-    fn_registers: Vec<Vec<u16>>,
+    callsite_registers: Vec<Vec<u16>>,
     dyn_lib_fns: Vec<DynamicLibFn>,
     host_sigs: Vec<HostFnSig>,
     host_dispatch: Vec<HostDispatch>,
@@ -391,21 +391,18 @@ struct CompileCheckpoint {
     /// `Program::functions` itself grows during a compile, not just once at
     /// [`Engine::compile`]: an anonymous function literal hoists to a fresh
     /// entry the first time it is reached, and instantiating a generic type
-    /// lowers every applicable `impl` method the same way. Each of those
-    /// pushes a matching entry onto `Program::fn_registers` in the same
-    /// breath, so the two must be truncated back to the same length together;
-    /// truncating one without the other is what left `fn_registers` a
-    /// function short of `functions` and panicked the next call that reached
-    /// the orphaned entry.
+    /// lowers every applicable `impl` method the same way. A function the
+    /// aborted attempt hoisted is left holding a bytecode address the resident
+    /// stream never reached, so it goes back with everything else.
     functions: usize,
     /// Each pre-existing function's specialization-cache length, indexed the
     /// same as the first `functions` entries of `Program::functions`.
     fn_impls: Box<[usize]>,
-    fn_registers: usize,
-    /// The length of every already-existing entry in `Program::fn_registers`
-    /// at checkpoint time, indexed the same way; a non-recursive call site
-    /// extends its own function's entry in place.
-    fn_registers_inner: Box<[usize]>,
+    /// `Program::callsite_registers` takes one entry per recursive call site
+    /// the attempt compiled, and each entry is written once, at the end of the
+    /// body that holds the call site. An entry from an earlier compile is
+    /// therefore never touched, so the length alone undoes the growth.
+    callsite_registers: usize,
     /// Every file's scope length, not only the entry file's: a body compiled
     /// from an imported module declares into that module's scope.
     namespaces: crate::compiler::FileNamespacesCheckpoint,
@@ -547,7 +544,7 @@ impl Program {
             enums: &mut self.enums,
             pools: &mut self.pools,
             instr_src: &mut self.instr_src,
-            fn_registers: &mut self.fn_registers,
+            callsite_registers: &mut self.callsite_registers,
             dyn_libs: &mut self.dyn_libs,
             allocated_arg_count: &mut self.allocated_arg_count,
             allocated_call_depth: &mut self.allocated_call_depth,
@@ -583,8 +580,7 @@ impl Program {
             registers: self.registers.len(),
             functions: self.functions.len(),
             fn_impls: self.functions.iter().map(|f| f.impls.len()).collect(),
-            fn_registers: self.fn_registers.len(),
-            fn_registers_inner: self.fn_registers.iter().map(Vec::len).collect(),
+            callsite_registers: self.callsite_registers.len(),
             namespaces: self.namespaces.checkpoint(),
             structs: self.structs.len(),
             enums: self.enums.len(),
@@ -614,30 +610,22 @@ impl Program {
             .retain(|&reg| (reg as usize) < checkpoint.registers);
         self.registers.truncate(checkpoint.registers);
 
-        // `functions` and `fn_registers` are truncated to the same length
-        // together first, so every function this attempt added (a hoisted
-        // closure, a lowered `impl` method) goes with the `fn_registers` entry
-        // it was pushed alongside, and the two tables index each other the
-        // same way they did before this call began.
+        // Every function this attempt added (a hoisted closure, a lowered
+        // `impl` method) goes, along with every specialization cached on a
+        // function that was already there.
         self.functions.truncate(checkpoint.functions);
         for (func, &len) in self.functions.iter_mut().zip(checkpoint.fn_impls.iter()) {
             func.impls.truncate(len);
         }
-        for (inner, &len) in self
-            .fn_registers
-            .iter_mut()
-            .zip(checkpoint.fn_registers_inner.iter())
-        {
-            inner.truncate(len);
-        }
-        self.fn_registers.truncate(checkpoint.fn_registers);
+        self.callsite_registers
+            .truncate(checkpoint.callsite_registers);
 
         self.namespaces.rollback_to(&checkpoint.namespaces);
 
         // A generic type instantiated during the attempt is cached in
         // `self.generics` by rendered name, pointing at the struct or enum
         // entry the attempt pushed here; both go together for the same reason
-        // `functions`/`fn_registers` do.
+        // `functions` does.
         self.structs.truncate(checkpoint.structs);
         self.enums.truncate(checkpoint.enums);
         self.generics.rollback_to(&checkpoint.generics);
@@ -666,7 +654,7 @@ impl Program {
 
         let instructions = &self.instructions;
         let pools = &mut self.pools;
-        let fn_registers = &self.fn_registers;
+        let callsite_registers = &self.callsite_registers;
         let dyn_lib_fns = &self.dyn_lib_fns;
         let structs = &self.structs;
         let enums = &self.enums;
@@ -681,7 +669,7 @@ impl Program {
                 &mut register_file,
                 pools,
                 &err_ctx,
-                fn_registers,
+                callsite_registers,
                 dyn_lib_fns,
                 structs,
                 enums,

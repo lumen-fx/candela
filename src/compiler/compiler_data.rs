@@ -231,7 +231,7 @@ pub struct State<'a> {
     pub enums: &'a mut Vec<EnumType>,
     pub pools: &'a mut Pools,
     pub instr_src: &'a mut Vec<InstrSrc>,
-    pub fn_registers: &'a mut Vec<Vec<u16>>,
+    pub callsite_registers: &'a mut Vec<Vec<u16>>,
     pub dyn_libs: &'a mut Vec<Dynamiclib>,
     pub allocated_arg_count: &'a mut usize,
     pub allocated_call_depth: &'a mut usize,
@@ -277,7 +277,6 @@ impl State<'_> {
             structs: self.structs,
             enums: self.enums,
             fns: self.fns,
-            fn_registers: self.fn_registers,
             generics: self.generics,
         }
     }

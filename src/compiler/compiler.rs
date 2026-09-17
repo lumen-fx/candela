@@ -2873,7 +2873,6 @@ fn compile_function_definition(
         return_type,
         generics,
     });
-    state.fn_registers.push(Vec::new());
 }
 
 fn compile_return(
@@ -3943,7 +3942,6 @@ fn load_auto_prelude(
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
     enums: &mut Vec<EnumType>,
-    fn_registers: &mut Vec<Vec<u16>>,
     dynamic_libs: &mut Vec<Dynamiclib>,
     sources: &mut Vec<Source>,
     namespace: &mut Namespace,
@@ -4016,7 +4014,6 @@ fn load_auto_prelude(
         fns,
         structs,
         enums,
-        fn_registers,
         dynamic_libs,
         sources,
         &mut child_namespace,
@@ -4154,7 +4151,6 @@ fn parse_toplevel(
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
     enums: &mut Vec<EnumType>,
-    fn_registers: &mut Vec<Vec<u16>>,
     dynamic_libs: &mut Vec<Dynamiclib>,
     sources: &mut Vec<Source>,
     namespace: &mut Namespace,
@@ -4198,7 +4194,6 @@ fn parse_toplevel(
                         sources,
                     );
                 }
-                fn_registers.push(Vec::new());
                 let returns_void = check_if_returns_void(&fn_code);
                 let mut callees = Vec::new();
                 collect_direct_fn_calls(&fn_code, self_type_of(&fn_name), &mut callees);
@@ -4305,7 +4300,6 @@ fn parse_toplevel(
             fns,
             structs,
             enums,
-            fn_registers,
             dynamic_libs,
             sources,
             namespace,
@@ -4463,7 +4457,6 @@ fn parse_toplevel(
                         fns,
                         structs,
                         enums,
-                        fn_registers,
                         dynamic_libs,
                         sources,
                         &mut child_namespace,
@@ -4546,7 +4539,6 @@ fn resolve_types(
     structs: &mut Vec<Struct>,
     enums: &mut Vec<EnumType>,
     fns: &mut Vec<Function>,
-    fn_registers: &mut Vec<Vec<u16>>,
     generics: &mut Generics,
     pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: PendingEnums,
@@ -4604,7 +4596,6 @@ fn resolve_types(
                         structs,
                         enums,
                         fns,
-                        fn_registers,
                         generics,
                     }),
                     *field_span,
@@ -4628,7 +4619,6 @@ fn resolve_types(
                             structs,
                             enums,
                             fns,
-                            fn_registers,
                             generics,
                         })
                     })
@@ -4658,7 +4648,6 @@ fn resolve_types(
                                 structs,
                                 enums,
                                 fns,
-                                fn_registers,
                                 generics,
                             })
                         }),
@@ -4678,7 +4667,6 @@ fn resolve_types(
                         structs,
                         enums,
                         fns,
-                        fn_registers,
                         generics,
                     }),
                     t_span,
@@ -4700,7 +4688,6 @@ fn resolve_types(
                             structs,
                             enums,
                             fns,
-                            fn_registers,
                             generics,
                         })
                     })
@@ -4713,7 +4700,6 @@ fn resolve_types(
                     structs,
                     enums,
                     fns,
-                    fn_registers,
                     generics,
                 });
                 let return_val = FnSignature {
@@ -4786,7 +4772,6 @@ fn resolve_types(
                                 structs,
                                 enums,
                                 fns,
-                                fn_registers,
                                 generics,
                             })
                         })
@@ -4800,7 +4785,6 @@ fn resolve_types(
                     structs,
                     enums,
                     fns,
-                    fn_registers,
                     generics,
                 });
                 let return_val = FnSignature {
@@ -4838,7 +4822,7 @@ pub struct CompileOutput {
     pub registers: Vec<Data>,
     pub pools: Pools,
     pub instr_src: Vec<InstrSrc>,
-    pub fn_registers: Vec<Vec<u16>>,
+    pub callsite_registers: Vec<Vec<u16>>,
     pub dyn_lib_fns: Vec<DynamicLibFn>,
     pub host_fns: Vec<HostFnSig>,
     pub allocated_arg_count: usize,
@@ -4915,7 +4899,7 @@ pub fn compile(
         Pool::with_capacity(10),
     );
     let mut instr_src: Vec<InstrSrc> = Vec::new();
-    let mut fn_registers: Vec<Vec<u16>> = Vec::new();
+    let mut callsite_registers: Vec<Vec<u16>> = Vec::new();
     let mut functions: Vec<Function> = Vec::new();
     let mut structs: Vec<Struct> = Vec::new();
     let mut enums: Vec<EnumType> = Vec::new();
@@ -4962,7 +4946,6 @@ pub fn compile(
         &mut functions,
         &mut structs,
         &mut enums,
-        &mut fn_registers,
         &mut dyn_libs,
         &mut sources,
         &mut namespace,
@@ -4982,7 +4965,6 @@ pub fn compile(
         &mut structs,
         &mut enums,
         &mut functions,
-        &mut fn_registers,
         &mut generics,
         pending_structs,
         pending_enums,
@@ -5012,7 +4994,7 @@ pub fn compile(
         enums: &mut enums,
         pools: &mut pools,
         instr_src: &mut instr_src,
-        fn_registers: &mut fn_registers,
+        callsite_registers: &mut callsite_registers,
         dyn_libs: &mut dyn_libs,
         allocated_arg_count: &mut allocated_arg_count,
         allocated_call_depth: &mut allocated_call_depth,
@@ -5077,7 +5059,7 @@ pub fn compile(
         registers,
         pools,
         instr_src,
-        fn_registers,
+        callsite_registers,
         dyn_lib_fns,
         host_fns,
         allocated_arg_count,

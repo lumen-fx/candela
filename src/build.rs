@@ -113,7 +113,7 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
                 file_id: s.file_id,
             })
             .collect(),
-        fn_registers: out.fn_registers,
+        callsite_registers: out.callsite_registers,
         structs: out
             .structs
             .iter()
