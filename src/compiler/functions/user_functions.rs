@@ -8,6 +8,7 @@ use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
 use super::super::type_system::param_type_matches;
+use super::super::type_system::pin_empty_literal_bindings;
 use super::super::type_system::pinned_arg_types;
 use super::super::type_system::specialization_key;
 use super::super::type_system::specialized_arg_types;
@@ -163,6 +164,11 @@ pub fn handle_user_function(
     if let Some(pinned) = pinned_arg_types(&infered_arg_types, &declared_arg_types) {
         infered_arg_types = pinned;
     }
+
+    // The caller's own binding takes the declared type too, when the literal it
+    // holds is still empty: the call is what first says what the collection
+    // holds, so what the caller reads back out of it afterwards has a type.
+    pin_empty_literal_bindings(args, &declared_arg_types, v);
 
     // Try to check if function has already been compiled for these specific arg
     // types. Function-typed arguments must match by exact Fn id: each distinct

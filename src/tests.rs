@@ -5330,6 +5330,137 @@ fn main() { print(total({\"a\": 1})); }";
     assert_eq!(d.code, "argument_type_mismatch");
 }
 
+/// A `let` takes no annotation, so an empty map literal holds nothing until
+/// something says what it holds. Handing it to a parameter that declares its
+/// types is such a statement: the binding takes the declared types, so what the
+/// caller reads back out of the map has the value type the callee put in it.
+#[test]
+pub fn a_typed_parameter_pins_an_empty_map_binding() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn fill(m: {string: P}) {
+            m.insert(\"a\", P { x: 1 });
+        }
+        fn main() {
+            let m = {};
+            fill(m);
+            print(m.get(\"a\").x);
+        }
+        ",
+        1.into()
+    );
+}
+
+/// The same for an empty array literal: the declared element type reaches the
+/// caller's binding, so indexing it yields an element of that type.
+#[test]
+pub fn a_typed_parameter_pins_an_empty_array_binding() {
+    run_and_check_registers!(
+        "
+        struct P { x: int }
+        fn fill(xs: P[]) {
+            xs.push(P { x: 2 });
+        }
+        fn main() {
+            let xs = [];
+            fill(xs);
+            print(xs[0].x);
+        }
+        ",
+        2.into()
+    );
+}
+
+/// The declared type is taken whole, so a binding pinned from a nested
+/// declaration reads back through both levels.
+#[test]
+pub fn a_typed_parameter_pins_a_nested_empty_map_binding() {
+    run_and_check_registers!(
+        "
+        fn fill(m: {string: int[]}) {
+            m.insert(\"a\", [7]);
+        }
+        fn main() {
+            let m = {};
+            fill(m);
+            print(m.get(\"a\")[0]);
+        }
+        ",
+        7.into()
+    );
+}
+
+/// Two parameters that declare the same type pin the binding to it once. The
+/// second call passes a binding that already names its element type and is
+/// checked against the declaration like any other argument.
+#[test]
+pub fn two_agreeing_parameters_pin_one_empty_binding() {
+    run_and_check_registers!(
+        "
+        fn fill(xs: int[]) {
+            xs.push(1);
+        }
+        fn add(xs: int[]) {
+            xs.push(2);
+        }
+        fn main() {
+            let xs = [];
+            fill(xs);
+            add(xs);
+            print(xs[0] + xs[1]);
+        }
+        ",
+        3.into()
+    );
+}
+
+/// The first call pins the binding, so a later call that declares another type
+/// is the ordinary argument mismatch, reported where that call passes it.
+#[test]
+pub fn a_second_disagreeing_parameter_is_reported() {
+    let src = "fn ints(m: {string: int}) { m.insert(\"a\", 1); }
+fn texts(m: {string: string}) { m.insert(\"b\", \"x\"); }
+fn main() {
+    let m = {};
+    ints(m);
+    texts(m);
+}";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "argument_type_mismatch");
+    let second_call = src.find("texts(m);").unwrap();
+    assert!(
+        d.span.start >= second_call,
+        "reported before the call: {d:?}"
+    );
+}
+
+/// The pin outlives the call that made it: a match written after it dispatches
+/// on the enum the parameter declared, and its payload binder has a type.
+#[test]
+pub fn a_pinned_binding_matches_on_an_enum_payload() {
+    run_and_check_registers!(
+        "
+        enum Value { Num(int), Text(string) }
+        fn fill(m: {string: Value}) {
+            m.insert(\"a\", Value::Text(\"abcd\"));
+        }
+        fn main() {
+            let m = {};
+            fill(m);
+            let sum = 0;
+            match m.get(\"a\") {
+                Value::Num(n) => { sum = n; }
+                Value::Text(t) => { sum = t.len(); }
+            }
+            print(sum);
+        }
+        ",
+        4.into()
+    );
+}
+
 /// A diagnostic names a user type the way the program declared it. A
 /// `DataType` carries only an enum's id, so `Display` prints the bare word
 /// `enum` and a program with two enums reports the same word for both; the
