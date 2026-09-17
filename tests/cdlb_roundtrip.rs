@@ -623,3 +623,66 @@ fn the_call_depth_limit_holds_for_an_artifact_run() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The character-boundary checks belong to the VM, so an artifact run stops at
+/// a position inside a character the same way a source run does, and a catch
+/// reaches it there too. Skips if `candela-vm` is not built alongside
+/// `candela`.
+#[test]
+fn a_position_inside_a_character_is_caught_in_an_artifact_run() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping a_position_inside_a_character_is_caught_in_an_artifact_run: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("char_boundary");
+    let app = dir.join("app.cdl");
+    std::fs::write(
+        &app,
+        "
+fn main() {
+    let word = \"caf\u{e9}\";
+    try {
+        print(word[3..4]);
+    } catch \"not_a_char_boundary\" {
+        print(\"slice\");
+    }
+    try {
+        print(word[3]);
+    } catch \"not_a_char_boundary\" {
+        print(\"index\");
+    }
+    print(word[0..3]);
+    print(word[3..5]);
+}
+",
+    )
+    .unwrap();
+
+    let cdlb = dir.join("app.cdlb");
+    let mut build_cmd = std::process::Command::new(candela);
+    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+    let build = common::output_with_deadline(&mut build_cmd, "candela build");
+    assert!(build.status.success(), "candela build failed");
+
+    let mut vm_cmd = std::process::Command::new(&candela_vm);
+    vm_cmd.arg(&cdlb);
+    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+    assert!(vm_out.status.success(), "candela-vm run failed");
+    assert_eq!(
+        String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
+        "slice\nindex\ncaf\n\u{e9}\n",
+        "the artifact run catches both, and whole-character slices still work"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

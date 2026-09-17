@@ -15,8 +15,9 @@ and are listed in [built-in functions](builtins.md).
 
 Indices and lengths count bytes, not characters, so a string of non-ASCII text
 does not index by character. A four-letter word ending in an accented vowel has a
-length of 5, and slicing it by character position cuts the accented letter in
-half. Use `chars` to walk such a string one character at a time.
+length of 5, and a position that lands in the accented letter raises
+`not_a_char_boundary` instead of cutting it in half. Use `chars` to walk such a
+string one character at a time.
 
 Slicing raises `slice_out_of_bounds` when the end runs past the string, and also
 when the start index reaches the length. Every method here that slices therefore
@@ -35,7 +36,8 @@ s.substring(start, count)
 - `count`: how many bytes to take.
 - Returns: the substring spanning `count` bytes from `start`.
 - Raises: `slice_out_of_bounds` when `start + count` runs past the end, when
-  `start` reaches the length, or when `s` is empty.
+  `start` reaches the length, or when `s` is empty. `not_a_char_boundary` when
+  either end lands in a character taking more than one byte.
 
 ```rust
 import "std/string";
@@ -54,7 +56,8 @@ s.char_at(i)
 - `i`: the 0-based index.
 - Returns: the character at `i`, as a one-character string.
 - Raises: `slice_out_of_bounds` when `i` reaches the length, or when `s` is
-  empty.
+  empty. `not_a_char_boundary` when `i` lands in a character taking more than
+  one byte, which has no one-byte answer to give.
 
 ## is_empty
 
@@ -72,6 +75,8 @@ s.capitalize()
 
 - Returns: `s` with its first character upper-cased and the rest left as it is.
   An empty string returns unchanged.
+- Raises: `not_a_char_boundary` when `s` starts with a character taking more
+  than one byte, since the first byte is cut from it.
 
 ## chars
 
@@ -149,5 +154,7 @@ s.count(needle)
 - `needle`: the string to look for.
 - Returns: the number of non-overlapping occurrences of `needle` in `s`, as an
   int. An empty `needle` returns 0.
+- Raises: `not_a_char_boundary` when the walk reaches a character taking more
+  than one byte, since it compares `needle` at every byte position.
 
 Occurrences are counted without overlap, so `"aaaa".count("aa")` is 2.

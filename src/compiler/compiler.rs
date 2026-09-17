@@ -2440,6 +2440,9 @@ fn compile_for_loop(
     if real_var {
         if is_str {
             output.push(Instr::GetIndexString(array, index_id, current_element_id));
+            // A string is walked by byte, so this is the one loop whose element
+            // read can raise: the span points the report at what is iterated.
+            state.add_to_src(ctx, output, span);
         } else {
             output.push(Instr::GetIndexArray(array, index_id, current_element_id));
         }

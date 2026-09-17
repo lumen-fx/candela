@@ -169,8 +169,10 @@ print(word[0]);      // c
 print(word[0..4]);   // cand
 ```
 
-Strings index and slice by byte, so a multi-byte character does not survive
-being taken apart this way.
+Strings index and slice by byte. A position that lands in a character taking
+more than one byte raises the catchable `not_a_char_boundary` rather than
+handing back a piece of one, so `word[0..4]` on a four-letter word ending in an
+accented vowel stops instead of cutting the vowel in half.
 
 Maps are not indexed with `[]`. Use the `get` method; see
 [collections](../language/collections.md).
