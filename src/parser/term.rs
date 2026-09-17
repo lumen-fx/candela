@@ -353,7 +353,9 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             );
             let mut args: Vec<SmolStr> = Vec::with_capacity(2);
             // let mut args: Vec<(SmolStr, SmolStr)> = Vec::with_capacity(2);
-            loop {
+            // `fn()` takes nothing, the empty list a declaration accepts too.
+            // The names are read only once there is one to read.
+            while parser.peek_token() != Token::RParen {
                 let (next_token, next_token_span) = parser.next_token();
                 let Token::Identifier(arg_name) = next_token else {
                     cold_path();

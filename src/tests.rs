@@ -4708,6 +4708,34 @@ pub fn hof_anonymous_function() {
     );
 }
 
+/// A closure that takes nothing is the shape of a thunk, and it is written
+/// and called like any other.
+#[test]
+pub fn zero_parameter_closure_through_a_variable() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let answer = fn() { return 42; };
+            print(answer());
+        }
+        ",
+        42.into()
+    );
+}
+
+/// The same closure handed to a higher-order function, which calls it with no
+/// arguments the way it received it.
+#[test]
+pub fn zero_parameter_closure_through_a_hof() {
+    run_and_check_registers!(
+        "
+        fn twice(f) { return f() + f(); }
+        fn main() { print(twice(fn() { return 21; })); }
+        ",
+        42.into()
+    );
+}
+
 #[test]
 pub fn hof_specialization_is_per_function() {
     // The same higher-order function called with two different functions must
