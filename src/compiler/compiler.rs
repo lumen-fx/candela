@@ -44,6 +44,7 @@ use compiler_data::Variable;
 use expr::Expr;
 use expr::METHOD_SEP;
 use expr::Span;
+use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use functions::handle_functions;
 use functions::handle_value_call;
@@ -1022,6 +1023,7 @@ fn compile_enum_match(
     v.push(Variable {
         name: SmolStr::new_static("[MATCH SCRUT]"),
         register_id: scrut_reg,
+        cell: false,
         var_type: DataType::Enum(enum_id),
     });
 
@@ -1053,9 +1055,18 @@ fn compile_enum_match(
                 output.push(Instr::GetFieldStruct(scrut_reg, (i + 1) as u16, binder_reg));
                 let payload_type =
                     state.enums[enum_id as usize].variants[variant_idx as usize].payload[i].clone();
+                let captured = code_captures_variable(binder, body);
+                let binder_reg = if captured {
+                    let cell_id = state.alloc_reg();
+                    output.push(Instr::NewCell(binder_reg, cell_id));
+                    cell_id
+                } else {
+                    binder_reg
+                };
                 v.push(Variable {
                     name: binder.clone(),
                     register_id: binder_reg,
+                    cell: captured,
                     var_type: payload_type,
                 });
             }
@@ -1697,6 +1708,7 @@ fn compile_add_op(
             }
         }
         && let Some(src_var) = v.iter().rfind(|x| x.name == *src_name)
+        && !src_var.cell
     {
         let src_id = src_var.register_id;
         let id = tgt_id.unwrap_or_else(|| state.alloc_reg());
@@ -1760,6 +1772,7 @@ fn compile_sub_op(
         && matches!(r, Expr::Int(1))
         && let Expr::Var(src_name, _) = l
         && let Some(src_var) = v.iter().rfind(|x| x.name == *src_name)
+        && !src_var.cell
     {
         let src_id = src_var.register_id;
         let id = tgt_id.unwrap_or_else(|| state.alloc_reg());
@@ -2479,6 +2492,12 @@ fn compile_for_loop(
     // set up the variable for the current element (for current_element_id in ... {}) => current_element_id = array[index]
     let current_element_id = if real_var { state.alloc_reg() } else { 0 };
 
+    // A closure written in the body takes the element of the turn it was
+    // written on, so the cell is allocated inside the loop and the body reads
+    // the variable through it.
+    let captured = real_var && code_captures_variable(var_name, code);
+    let element_cell_id = if captured { state.alloc_reg() } else { 0 };
+
     let v_len = v.len();
 
     let is_str = array_type == DataType::String;
@@ -2486,7 +2505,12 @@ fn compile_for_loop(
     if real_var {
         v.push(Variable {
             name: var_name.clone(),
-            register_id: current_element_id,
+            register_id: if captured {
+                element_cell_id
+            } else {
+                current_element_id
+            },
+            cell: captured,
             var_type: match array_type {
                 DataType::String => DataType::String,
                 DataType::Array(a_type) => a_type.map_or(DataType::Null, |t| *t),
@@ -2507,8 +2531,9 @@ fn compile_for_loop(
     }
     let loop_id = ctx.block_id + 1;
 
-    // accounts for the GetIndexArray/GetIndexString instruction
-    let pending = real_var as u16;
+    // accounts for the GetIndexArray/GetIndexString instruction and, where the
+    // body captures the element, the cell it goes into
+    let pending = u16::from(real_var) + u16::from(captured);
 
     let regs_before = state.registers.len() as u16;
     let mut cond_code = compile_expr(
@@ -2536,6 +2561,9 @@ fn compile_for_loop(
             state.add_to_src(ctx, output, span);
         } else {
             output.push(Instr::GetIndexArray(array, index_id, current_element_id));
+        }
+        if captured {
+            output.push(Instr::NewCell(current_element_id, element_cell_id));
         }
     }
     parse_loop_flow_control(&mut cond_code, loop_id, len, true, false);
@@ -2614,10 +2642,16 @@ fn compile_int_for_loop(
     // elem_id is a fresh mutable register -> remove from const_registers just in case
     state.const_registers.retain(|_, &mut v| v != elem_id);
 
+    // A closure written in the body takes the counter of the turn it was
+    // written on, so the cell is filled at the top of each turn.
+    let captured = code_captures_variable(var_name, code);
+    let elem_cell_id = if captured { state.alloc_reg() } else { 0 };
+
     let v_len = v.len();
     v.push(Variable {
         name: var_name.clone(),
-        register_id: elem_id,
+        register_id: if captured { elem_cell_id } else { elem_id },
+        cell: captured,
         var_type: DataType::Int,
     });
     let loop_id = ctx.block_id + 1;
@@ -2625,6 +2659,9 @@ fn compile_int_for_loop(
     // (1) if i >= end_elem jump out -> push placeholder first so that compile_expr sees the correct offset
     let jmp_idx = output.len();
     output.push(Instr::SupEqIntJmp(elem_id, end_elem_id, 0));
+    if captured {
+        output.push(Instr::NewCell(elem_id, elem_cell_id));
+    }
 
     let regs_before = state.registers.len() as u16;
     let compiled_loop_code = compile_expr(
@@ -2642,11 +2679,12 @@ fn compile_int_for_loop(
     // (3) i+= 1
     output.push(Instr::IncInt(elem_id));
 
-    // (4) if i < end_elem jump back to body
+    // (4) if i < end_elem jump back to the top of the turn, which is the cell
+    // where a body that captures the counter reads it from
     output.push(Instr::InfIntJmpBack(
         elem_id,
         end_elem_id,
-        compiled_loop_code_len + 1,
+        compiled_loop_code_len + 1 + u16::from(captured),
     ));
 
     let exit_size = (output.len() - jmp_idx) as u16;
@@ -2707,13 +2745,21 @@ fn compile_try_catch_block(
 
     let v_len = v.len();
     let err_reg_id = state.alloc_reg();
+    // The handler starts where the catch jumps to, so a cell for a caught
+    // error a closure reads is filled there, once per error caught.
+    let captured = code_captures_variable(err_var, catch_code);
+    let err_cell_id = if captured { state.alloc_reg() } else { 0 };
     v.push(Variable {
         name: err_var.clone(),
-        register_id: err_reg_id,
+        register_id: if captured { err_cell_id } else { err_reg_id },
+        cell: captured,
         var_type: DataType::String,
     });
     output[err_catch_instr] =
         Instr::StartErrorCatch((output.len() - err_catch_instr) as u16, err_reg_id);
+    if captured {
+        output.push(Instr::NewCell(err_reg_id, err_cell_id));
+    }
     let catch_code = compile_expr(
         catch_code,
         v,
@@ -2726,6 +2772,33 @@ fn compile_try_catch_block(
     state.free_reg(err_reg_id, v);
 }
 
+/// The register holding the cell of a variable a closure captures.
+///
+/// Every binding a closure can reach puts a captured variable in a cell where
+/// it is bound, so that each turn around a loop and each call of the declaring
+/// function gets its own. A binding the analysis did not reach is moved into a
+/// cell here instead, where the closure is written.
+fn capture_cell(
+    name: &SmolStr,
+    span: Span,
+    v: &mut [Variable],
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let Some(pos) = v.iter().rposition(|var| var.name == *name) else {
+        compiler_errors::error_unknown_variable(name, span, v, ctx.file_idx, state.sources);
+    };
+    if v[pos].cell {
+        return v[pos].register_id;
+    }
+    let cell_id = state.alloc_reg();
+    output.push(Instr::NewCell(v[pos].register_id, cell_id));
+    v[pos].register_id = cell_id;
+    v[pos].cell = true;
+    cell_id
+}
+
 fn compile_var_declaration(
     name: &SmolStr,
     value: &Expr,
@@ -2736,6 +2809,11 @@ fn compile_var_declaration(
     output: &mut Vec<Instr>,
 ) {
     let var_type = value.infer_type(v, ctx, state);
+    // A variable a closure reads lives in a cell instead of a register, so the
+    // scope that declared it and the closures that took it share one slot. The
+    // cell is allocated where the declaration runs, which gives each turn
+    // around a loop and each call of the declaring function its own.
+    let captured = code_captures_variable(name, remaining_code);
 
     let var_id = if ctx.single_run {
         value
@@ -2745,13 +2823,21 @@ fn compile_var_declaration(
         let src_id = value
             .compile(v, ctx, state, output, None, false, true)
             .unwrap_id();
-        if code_modifies_variable(name, remaining_code) {
+        if !captured && code_modifies_variable(name, remaining_code) {
             let mutable_id = state.alloc_reg();
             move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
             mutable_id
         } else {
             src_id
         }
+    };
+    let var_id = if captured {
+        let cell_id = state.alloc_reg();
+        output.push(Instr::NewCell(var_id, cell_id));
+        state.free_reg(var_id, v);
+        cell_id
+    } else {
+        var_id
     };
 
     if let DataType::Fn(fn_id) = &var_type {
@@ -2764,6 +2850,7 @@ fn compile_var_declaration(
     v.push(Variable {
         name: name.clone(),
         register_id: var_id,
+        cell: captured,
         var_type,
     });
 }
@@ -2783,6 +2870,18 @@ fn compile_var_assignment(
     });
     let id = v[var_pos].register_id;
 
+    // A captured variable is written through its cell, which is the slot the
+    // closures that took it read.
+    if v[var_pos].cell {
+        let value_id = value
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id();
+        output.push(Instr::StoreCell(id, value_id));
+        state.free_reg(value_id, v);
+        v[var_pos].var_type = var_type;
+        return;
+    }
+
     if var_type == DataType::Int {
         // (is_inc, src_var_name)
         let inc_dec: Option<(bool, &str)> = match value {
@@ -2799,7 +2898,7 @@ fn compile_var_assignment(
                     if let Expr::Var(src_name, _) = e {
                         v.iter()
                             .rfind(|x| x.name == *src_name)
-                            .filter(|x| x.var_type == DataType::Int)
+                            .filter(|x| x.var_type == DataType::Int && !x.cell)
                             .map(|_| (true, src_name.as_str()))
                     } else {
                         None
@@ -2812,7 +2911,7 @@ fn compile_var_assignment(
                     if let Expr::Var(src_name, _) = l.as_ref() {
                         v.iter()
                             .rfind(|x| x.name == *src_name)
-                            .filter(|x| x.var_type == DataType::Int)
+                            .filter(|x| x.var_type == DataType::Int && !x.cell)
                             .map(|_| (false, src_name.as_str()))
                     } else {
                         None
@@ -2972,6 +3071,7 @@ fn compile_function_definition(
         name_span: span,
         return_type,
         generics,
+        captures: Box::from([]),
     });
 }
 
@@ -3201,13 +3301,17 @@ impl Expr {
             }
             Self::Var(name, span) => {
                 debug_assert!(uses_id);
-                if let Some(Variable {
-                    name: _,
-                    register_id,
-                    var_type: _,
-                }) = v.iter().rfind(|v_temp| *name == v_temp.name)
-                {
-                    Some(*register_id)
+                if let Some(var) = v.iter().rfind(|v_temp| *name == v_temp.name) {
+                    if var.cell {
+                        // A captured variable holds a cell; its value is what
+                        // the cell holds now, which a closure may have written.
+                        let cell = var.register_id;
+                        let dest = state.alloc_reg_tgt(tgt_id);
+                        output.push(Instr::LoadCell(cell, dest));
+                        Some(dest)
+                    } else {
+                        Some(var.register_id)
+                    }
                 } else if let Some((enum_id, variant_idx)) =
                     variant_constructor(std::slice::from_ref(name), &[], *span, v, ctx, state)
                 {
@@ -3513,15 +3617,37 @@ impl Expr {
                     }
                 }),
             ),
-            Self::AnonymousFunction(_, _, _) => {
+            Self::AnonymousFunction(_, _, span) => {
                 debug_assert!(uses_id);
-                if let Some(&id) = state.const_registers.get(&NULL) {
-                    Some(id)
+                let captures = match self.infer_type(v, ctx, state) {
+                    DataType::Fn(fn_id) => state.fns[fn_id as usize].captures.clone(),
+                    _ => unsafe { unreachable_unchecked() },
+                };
+                if captures.is_empty() {
+                    // A closure that reads nothing around it is the id of a
+                    // function and nothing else, which is what it was before
+                    // capture existed: no environment is built and no register
+                    // is read at the call.
+                    if let Some(&id) = state.const_registers.get(&NULL) {
+                        Some(id)
+                    } else {
+                        let id = state.registers.len() as u16;
+                        state.const_registers.insert(NULL, id);
+                        state.registers.push(NULL);
+                        Some(id)
+                    }
                 } else {
-                    let id = state.registers.len() as u16;
-                    state.const_registers.insert(NULL, id);
-                    state.registers.push(NULL);
-                    Some(id)
+                    // The value of a closure that captures is its environment:
+                    // the cells of the variables its body reads, in the order
+                    // the body expects them. Two closures written in one scope
+                    // take the same cells, so what one writes the other reads.
+                    let env_id = state.alloc_reg_tgt(tgt_id);
+                    output.push(Instr::EmptyArray(env_id));
+                    for (name, _) in &captures {
+                        let cell_id = capture_cell(name, *span, v, ctx, state, output);
+                        output.push(Instr::Push(env_id, cell_id));
+                    }
+                    Some(env_id)
                 }
             }
 
@@ -4394,6 +4520,7 @@ fn parse_toplevel(
                     // Resolved with the argument types once every file's
                     // namespace is known; see the `pending_fns` drain.
                     return_type: None,
+                    captures: Box::from([]),
                     generics: (!type_params.is_empty()).then(|| {
                         Box::new(FnGenerics {
                             params: type_params.clone(),

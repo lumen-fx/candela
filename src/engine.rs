@@ -490,6 +490,7 @@ impl Program {
                 seed_vars.push(Variable {
                     name: name.clone(),
                     register_id,
+                    cell: false,
                     var_type: value_datatype(v),
                 });
                 arg_exprs.push(Expr::Var(name, dummy));

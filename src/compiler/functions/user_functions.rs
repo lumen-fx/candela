@@ -33,6 +33,29 @@ use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
+/// The register holding the closure value a call by name reaches: the variable
+/// of that name, read out of its cell where the variable is itself captured.
+///
+/// `None` where the name is a declared function rather than a variable, which
+/// is a callee with no environment to pass.
+fn closure_value_register(
+    fn_name: &str,
+    v: &[Variable],
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Option<u16> {
+    let var = v
+        .iter()
+        .rfind(|var| var.name.as_str() == fn_name && matches!(var.var_type, DataType::Fn(_)))?;
+    if !var.cell {
+        return Some(var.register_id);
+    }
+    let cell_id = var.register_id;
+    let value_id = state.alloc_reg();
+    output.push(Instr::LoadCell(cell_id, value_id));
+    Some(value_id)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn handle_user_function(
     fn_name: &str,
@@ -47,6 +70,9 @@ pub fn handle_user_function(
     args_indexes: &[Span],
     // The type arguments a generic call named, empty for every other call.
     type_args: &[DataType],
+    // The register the callee expression left the closure value in, for a call
+    // whose callee is an expression rather than a name.
+    env_id: Option<u16>,
 ) -> Option<u16> {
     // Lazily resolve mutual recursion the first time this function is compiled
     let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
@@ -249,7 +275,12 @@ pub fn handle_user_function(
     for i in 0..args_loc_len {
         let tgt_id = state.fns[fn_id].impls[fn_impl_idx].args_loc[i];
 
-        if matches!(infered_arg_types[i], DataType::Fn(_)) {
+        // A function argument is settled at compile time, so nothing is
+        // moved for it unless it is a closure that captures: that one carries
+        // an environment, and the environment is a value like any other.
+        if let DataType::Fn(callee_id) = infered_arg_types[i]
+            && state.fns[callee_id as usize].captures.is_empty()
+        {
             continue;
         }
 
@@ -259,6 +290,16 @@ pub fn handle_user_function(
             .unwrap_id();
         if output.len() == start_len || !move_to_id(output, tgt_id) {
             output.push(Instr::Mov(arg_id, tgt_id));
+        }
+    }
+    // Hand the callee its environment. The register holding the closure value
+    // is the one the callee expression compiled into, or the one the variable
+    // the call names holds.
+    if let Some(env_loc) = state.fns[fn_id].impls[fn_impl_idx].env_loc {
+        let src_id = env_id.or_else(|| closure_value_register(fn_name, v, state, output));
+        if let Some(src_id) = src_id {
+            output.push(Instr::Mov(src_id, env_loc));
+            state.free_reg(src_id, v);
         }
     }
     let return_register_id = if fn_returns_null {
@@ -319,6 +360,7 @@ fn compile_function(
             Variable {
                 name: x.clone(),
                 register_id: (state.registers.len() - 1) as u16,
+                cell: false,
                 var_type: infered_arg_types[i].clone(),
             }
         })
@@ -336,7 +378,44 @@ fn compile_function(
     let fn_start = output.len();
     let loc = fn_start as u16 + ctx.offset;
 
+    // A closure that captures reads its environment out of one register the
+    // call site fills, and takes the cells out of it once, on entry, so the
+    // body reads a captured variable through a cell exactly as the scope that
+    // declared it does. The captures come first in scope, so a parameter of
+    // the same name shadows one.
+    let captures = state.fns[function_id].captures.clone();
+    let env_loc = (!captures.is_empty()).then(|| state.alloc_reg());
+    let mut capture_regs: Vec<u16> = Vec::with_capacity(captures.len());
+    if let Some(env_loc) = env_loc {
+        let mut with_captures = Vec::with_capacity(captures.len() + v_temp.len());
+        for (i, (name, capture_type)) in captures.iter().enumerate() {
+            let idx_id = state.const_int_register(i as i64);
+            let cell_id = state.alloc_reg();
+            output.push(Instr::GetIndexArray(env_loc, idx_id, cell_id));
+            capture_regs.push(cell_id);
+            with_captures.push(Variable {
+                name: name.clone(),
+                register_id: cell_id,
+                cell: true,
+                var_type: capture_type.clone(),
+            });
+        }
+        with_captures.append(&mut v_temp);
+        v_temp = with_captures;
+    }
+
     let v_len_before_args = v.len();
+    // The body's return type is tracked in the scope the body compiles in, so
+    // what a closure captures is declared there too, before its parameters,
+    // which shadow a capture of the same name.
+    for (name, capture_type) in &captures {
+        v.push(Variable {
+            name: name.clone(),
+            register_id: 0,
+            cell: true,
+            var_type: capture_type.clone(),
+        });
+    }
     let mut anon_fns: Vec<usize> = Vec::new();
     infered_arg_types
         .iter()
@@ -354,6 +433,7 @@ fn compile_function(
                 v.push(Variable {
                     name: fn_args[i].clone(),
                     register_id: 0,
+                    cell: false,
                     var_type: DataType::Fn(*fn_id),
                 });
             } else {
@@ -361,6 +441,7 @@ fn compile_function(
                 v.push(Variable {
                     name: fn_args[i].clone(),
                     register_id: 0,
+                    cell: false,
                     var_type: infered_type.clone(),
                 });
             }
@@ -417,6 +498,7 @@ fn compile_function(
     // Add this func specialization to the func's metadata
     let func = state.fns.get_mut(function_id).unwrap();
     func.impls.push(FunctionImpl {
+        env_loc,
         loc,
         args_loc: Box::from(args_loc.as_slice()),
         arg_types: Box::from(infered_arg_types),
@@ -453,6 +535,11 @@ fn compile_function(
 
     let mut reserved_registers = get_tgt_ids(&parsed);
     reserved_registers.extend(args_loc);
+    // The environment register and the cells taken out of it are written on
+    // entry and read for the whole body, so the allocator must not hand them
+    // to anything else.
+    reserved_registers.extend(env_loc);
+    reserved_registers.extend(capture_regs.iter().copied());
     for instr in &parsed {
         match instr {
             Instr::CloneArray(template_reg, _, _)
@@ -472,7 +559,13 @@ fn compile_function(
         .retain(|reg| !state.reserved_registers.contains(reg));
 
     if is_recursive {
-        let all_written_regs: Vec<u16> = get_tgt_ids(&parsed);
+        // The cells the entry took out of the environment count as written by
+        // the body: a recursive call fills them again for its own environment,
+        // so the caller has to get its own back.
+        let mut all_written_regs: Vec<u16> = get_tgt_ids(&parsed);
+        all_written_regs.extend(capture_regs.iter().copied());
+        all_written_regs.sort_unstable();
+        all_written_regs.dedup();
 
         // For each recursive call, only save registers that are read between that call's return and the end of the function
         for (pos, instr) in parsed.iter().enumerate() {

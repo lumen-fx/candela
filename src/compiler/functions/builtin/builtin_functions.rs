@@ -46,6 +46,7 @@ pub fn builtin_functions(
             span,
             args_indexes,
             &[],
+            None,
         );
     }
     match name {

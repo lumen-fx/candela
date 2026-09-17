@@ -178,6 +178,7 @@ fn compile_entry_point(
         seed_vars.push(Variable {
             name: var_name.clone(),
             register_id,
+            cell: false,
             var_type: var_type.clone(),
         });
         arg_exprs.push(Expr::Var(var_name, dummy));
