@@ -431,10 +431,7 @@ module.exports = grammar({
       prec(
         PREC.postfix,
         choice(
-          seq(
-            field('function', choice($.identifier, $.qualified_identifier)),
-            field('arguments', $.arguments),
-          ),
+          seq(field('function', $._callee), field('arguments', $.arguments)),
           prec.dynamic(
             PREC.type_arguments,
             seq(
@@ -444,6 +441,19 @@ module.exports = grammar({
             ),
           ),
         ),
+      ),
+
+    // What a call applies to. A call attaches to the expression in front of it,
+    // so what another call or an index handed back is called where it stands.
+    // A type argument list only reads on a name, so that branch keeps its own
+    // narrower callee.
+    _callee: ($) =>
+      choice(
+        $.identifier,
+        $.qualified_identifier,
+        $.call_expression,
+        $.index_expression,
+        $.parenthesized_expression,
       ),
 
     method_call_expression: ($) =>

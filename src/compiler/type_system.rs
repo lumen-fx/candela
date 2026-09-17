@@ -33,6 +33,7 @@ use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
+use crate::compiler::functions::callee_fn_id;
 use crate::compiler::methods::dyn_lib_receiver;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -1638,6 +1639,10 @@ pub fn collect_direct_fn_calls(
                 expr_stack.push(obj);
                 expr_stack.extend(args.iter());
             }
+            Expr::CallValue(callee, args, _, _) => {
+                expr_stack.push(callee);
+                expr_stack.extend(args.iter());
+            }
             Expr::ElseBlock(x) | Expr::EvalBlock(x) | Expr::LoopBlock(x) => {
                 expr_stack.extend(x.iter());
             }
@@ -2587,6 +2592,18 @@ impl Expr {
                     state.type_names(),
                 ),
             },
+            // The return type of an indirect call is the return type of the
+            // function the callee's type names, at the argument types this
+            // call site passes.
+            Self::CallValue(callee, args, span, _) => {
+                let fn_id = callee_fn_id(callee, *span, v, ctx, state);
+                let infered_arg_types = args
+                    .iter()
+                    .map(|x| x.infer_type(v, ctx, state))
+                    .collect::<Vec<DataType>>();
+                let fn_name = state.fns[fn_id].name.clone();
+                infer_user_fn_return_type(fn_id, &infered_arg_types, &[], &fn_name, v, ctx, state)
+            }
             Self::FunctionCall(args, namespace, span, _, type_args) => {
                 // A call written with type arguments names either a variant of a
                 // generic enum (`Slot<int>::Filled(x)`) or a generic function,

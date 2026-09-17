@@ -2222,17 +2222,8 @@
                 "type": "FIELD",
                 "name": "function",
                 "content": {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "SYMBOL",
-                      "name": "identifier"
-                    },
-                    {
-                      "type": "SYMBOL",
-                      "name": "qualified_identifier"
-                    }
-                  ]
+                  "type": "SYMBOL",
+                  "name": "_callee"
                 }
               },
               {
@@ -2289,6 +2280,31 @@
           }
         ]
       }
+    },
+    "_callee": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "qualified_identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "call_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "index_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "parenthesized_expression"
+        }
+      ]
     },
     "method_call_expression": {
       "type": "PREC",

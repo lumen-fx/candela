@@ -44,6 +44,7 @@ use expr::METHOD_SEP;
 use expr::Span;
 use expr::code_modifies_variable;
 use functions::handle_functions;
+use functions::handle_value_call;
 use methods::handle_method_calls;
 use registers::move_reg_to_reg;
 use registers::move_to_id;
@@ -3391,6 +3392,29 @@ impl Expr {
                     }),
                 )
             }
+            Self::CallValue(callee, args, span, args_indexes) if uses_id => Some(
+                handle_value_call(
+                    output,
+                    v,
+                    ctx,
+                    state,
+                    tgt_id,
+                    callee,
+                    args,
+                    *span,
+                    args_indexes,
+                )
+                .unwrap_or_else(|| {
+                    if let Some(&id) = state.const_registers.get(&NULL) {
+                        id
+                    } else {
+                        let id = state.registers.len() as u16;
+                        state.const_registers.insert(NULL, id);
+                        state.registers.push(NULL);
+                        id
+                    }
+                }),
+            ),
             Self::AnonymousFunction(_, _, _) => {
                 debug_assert!(uses_id);
                 if let Some(&id) = state.const_registers.get(&NULL) {
@@ -3552,6 +3576,23 @@ impl Expr {
                         state.sources,
                     );
                 }
+            }
+            Self::CallValue(callee, args, span, args_indexes) if !uses_id => {
+                let output_id = handle_value_call(
+                    output,
+                    v,
+                    ctx,
+                    state,
+                    tgt_id,
+                    callee,
+                    args,
+                    *span,
+                    args_indexes,
+                );
+                if let Some(id) = output_id {
+                    state.free_reg(id, v);
+                }
+                None
             }
             Self::FunctionCall(args, namespace, markers, args_indexes, type_args) if !uses_id => {
                 let output_id = handle_functions(

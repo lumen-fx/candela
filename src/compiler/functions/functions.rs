@@ -11,6 +11,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type_multiple;
+use crate::compiler::compiler_errors::error_type_not_callable;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::instr::Instr;
 use builtin_functions::builtin_functions;
@@ -119,6 +120,67 @@ pub fn check_arg_type(
             state.type_names(),
         )
     }
+}
+
+/// The function a callee expression names, or a compile error where its type
+/// is not a function.
+///
+/// A closure is a compile-time entity: its type carries the id of the function
+/// it is, so an indirect call resolves to the same entry a name would.
+pub fn callee_fn_id(
+    callee: &Expr,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> usize {
+    match callee.infer_type(v, ctx, state) {
+        DataType::Fn(fn_id) => fn_id as usize,
+        t => error_type_not_callable(&t, span, ctx.file_idx, state.sources, state.type_names()),
+    }
+}
+
+/// Lowers a call whose callee is an expression: `adder(1)(2)`, `fs[0](x)`.
+///
+/// The callee is compiled first and its register released. Nothing reads the
+/// value, since the function is settled at compile time, but the expression
+/// that produced it is part of the program and runs where it was written.
+#[allow(clippy::too_many_arguments)]
+pub fn handle_value_call(
+    output: &mut Vec<Instr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    tgt_id: Option<u16>,
+    callee: &Expr,
+    args: &[Expr],
+    span: Span,
+    args_indexes: &[Span],
+) -> Option<u16> {
+    let fn_id = callee_fn_id(callee, span, v, ctx, state);
+    if let Some(id) = callee.compile(v, ctx, state, output, None, false, true) {
+        state.free_reg(id, v);
+    }
+    // The callee as it was written is the name a report can point the reader
+    // at, since an anonymous function has no name of its own.
+    let fn_name = state.sources[ctx.file_idx as usize]
+        .contents
+        .get(span.start as usize..span.end as usize)
+        .unwrap_or("this function")
+        .to_owned();
+    handle_user_function(
+        &fn_name,
+        fn_id,
+        output,
+        v,
+        ctx,
+        state,
+        tgt_id,
+        args,
+        span,
+        args_indexes,
+        &[],
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

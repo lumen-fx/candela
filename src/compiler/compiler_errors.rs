@@ -223,6 +223,46 @@ pub fn error_cannot_push_type_to_array(
     );
 }
 
+/// Raised where a call is written on an expression that holds no function.
+///
+/// A closure's type names the function it is, so a callee whose type is
+/// anything else has nothing to call.
+#[inline(never)]
+#[cold]
+pub fn error_type_not_callable(
+    t: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let named = types.of(t);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Invalid type")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This expression's type is {}. Only a function can be called.",
+                        red(&named),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("This expression's type is {named}, which cannot be called"),
+        "type_not_callable",
+    );
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_type_not_indexable(

@@ -3897,6 +3897,17 @@ pub fn diagnostics_float_exponent_without_digits() {
     assert_eq!(&src[d.span], "1e");
 }
 
+/// A callee that holds no function is a compile error naming the type that
+/// cannot be called.
+#[test]
+pub fn diagnostics_calling_a_value_that_is_not_a_function() {
+    let src = "fn one() { return 1; }\nfn main() { print(one()(2)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "type_not_callable");
+    assert!(d.message.contains("int"), "{}", d.message);
+}
+
 #[test]
 pub fn diagnostics_compile_error_span() {
     let src = "fn main() { let x = 1 + \"a\"; }";
@@ -4772,6 +4783,33 @@ pub fn zero_parameter_closure_through_a_variable() {
     );
 }
 
+/// A closure is an ordinary value, so the one a call hands back is called
+/// where it stands rather than through a `let`.
+#[test]
+pub fn call_the_value_a_call_returns() {
+    run_and_check_registers!(
+        "
+        fn pick() { return fn(x) { return x * 2; }; }
+        fn main() { print(pick()(21)); }
+        ",
+        42.into()
+    );
+}
+
+/// The same for an element of a list of closures.
+#[test]
+pub fn call_an_element_of_a_list_of_functions() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let fs = [fn(x) { return x + 1; }];
+            print(fs[0](41));
+        }
+        ",
+        42.into()
+    );
+}
+
 /// The same closure handed to a higher-order function, which calls it with no
 /// arguments the way it received it.
 #[test]
@@ -4780,6 +4818,19 @@ pub fn zero_parameter_closure_through_a_hof() {
         "
         fn twice(f) { return f() + f(); }
         fn main() { print(twice(fn() { return 21; })); }
+        ",
+        42.into()
+    );
+}
+
+/// And for the two chained: a call, an index into what it returned, then a
+/// call of the element.
+#[test]
+pub fn call_an_element_of_the_list_a_call_returns() {
+    run_and_check_registers!(
+        "
+        fn make() { return [fn(x) { return x * 2; }]; }
+        fn main() { print(make()[0](21)); }
         ",
         42.into()
     );

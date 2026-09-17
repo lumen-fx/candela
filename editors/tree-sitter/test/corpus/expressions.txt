@@ -237,6 +237,57 @@ fn main() {
         (float_literal)))))
 
 ================================================================================
+A call applies to what a call or an index returned (docs/docs/reference/operators.md)
+================================================================================
+
+fn main() {
+    print(adder(1)(2));
+    print(fs[0](x));
+    print(make()[0](x));
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (call_expression
+                (identifier)
+                (arguments
+                  (integer_literal)))
+              (arguments
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (index_expression
+                (identifier)
+                (integer_literal))
+              (arguments
+                (identifier))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (index_expression
+                (call_expression
+                  (identifier)
+                  (arguments))
+                (integer_literal))
+              (arguments
+                (identifier)))))))))
+
+================================================================================
 Literals (examples/nbody/nbody_lua.cdl, docs/docs/language/collections.md)
 ================================================================================
 

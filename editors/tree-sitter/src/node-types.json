@@ -869,7 +869,19 @@
         "required": true,
         "types": [
           {
+            "type": "call_expression",
+            "named": true
+          },
+          {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
             "named": true
           },
           {

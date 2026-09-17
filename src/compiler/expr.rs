@@ -124,6 +124,13 @@ pub enum Expr {
         Box<[Span]>,
         Box<[TypeExpr]>,
     ),
+    /// CallValue(callee, args, callee_span, arg_markers)
+    ///
+    /// A call whose callee is an expression rather than a name: what another
+    /// call handed back, an element of a list, a value read out of a map. The
+    /// callee's static `Fn` type names the function the same way the type of a
+    /// `let`-bound closure does.
+    CallValue(Box<Self>, Box<[Self]>, Span, Box<[Span]>),
     /// FunctionDecl(name, args, code, name_span, return_type, type_params)
     ///
     /// `return_type` carries the optional `-> Type` annotation together with the
