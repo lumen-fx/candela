@@ -3886,6 +3886,15 @@ pub fn diagnostics_int_literal_past_64_bits() {
     assert_eq!(&src[d.span], "9223372036854775807");
 }
 
+/// Two literals fold at parse time, and the fold wraps the way the runtime
+/// does, so a debug build of the compiler agrees with a release one.
+#[test]
+pub fn folding_an_overflowing_constant_wraps() {
+    run_and_check_registers!("fn main() { print(2147483647 + 1); }", i32::MIN.into());
+    run_and_check_registers!("fn main() { print(-2147483648 - 1); }", i32::MAX.into());
+    run_and_check_registers!("fn main() { print(65536 * 65536); }", 0.into());
+}
+
 /// An exponent with no digits after it is an error that names what is
 /// missing, rather than a number followed by a stray name.
 #[test]
