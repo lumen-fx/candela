@@ -74,8 +74,8 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// added the map/json/any library functions (`Keys`/`Values`/`JsonParse`/
 /// `JsonStringify` and the `is_*`/`as_*` value ops). Version 5 added the export
 /// table (`exports`), the call trampolines that back
-/// [`RuntimeProgram::call`].
-const FORMAT_VERSION: u8 = 5;
+/// [`RuntimeProgram::call`]. Version 6 added the `MapRemove` instruction.
+const FORMAT_VERSION: u8 = 6;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

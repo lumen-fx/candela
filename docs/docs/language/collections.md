@@ -218,12 +218,16 @@ fn main() {
     scores.insert("a", 10);
     print(scores.get("a"), scores.len());
     print(scores.contains("b"), scores.keys(), scores.values());
+    scores.remove("b");
+    print(scores.len());
 }
 ```
 
-`insert` adds a pair or replaces the value of an existing key. `get` raises when
-the key is absent, so test with `contains` first, or use the `get_or` method
-from the standard library's `map` module to supply a fallback.
+`insert` adds a pair or replaces the value of an existing key. `remove` takes
+the entry under a key back out, and a key the map does not hold leaves it as it
+was. `get` raises when the key is absent, so test with `contains` first, or use
+the `get_or` method from the standard library's `map` module to supply a
+fallback.
 
 ### Iterating
 

@@ -7,9 +7,9 @@ import "std/map";
 ```
 
 A map holds key-value pairs. The core operations are built-in methods on a map
-value (`m.len()`, `m.get(k)`, `m.insert(k, v)`, `m.contains(k)`, `m.keys()`,
-`m.values()`; listed in [built-in functions](builtins.md)), and a map iterates
-its keys:
+value (`m.len()`, `m.get(k)`, `m.insert(k, v)`, `m.remove(k)`, `m.contains(k)`,
+`m.keys()`, `m.values()`; listed in [built-in functions](builtins.md)), and a
+map iterates its keys:
 
 ```rust
 fn main() {

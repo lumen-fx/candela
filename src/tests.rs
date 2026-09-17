@@ -6099,6 +6099,77 @@ pub fn map_contains_absent() {
 }
 
 #[test]
+pub fn map_remove_drops_the_entry() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {\"a\": 1, \"b\": 2};
+            m.remove(\"a\");
+            print(m.len());
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn map_remove_leaves_the_key_absent() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {\"a\": 1, \"b\": 2};
+            m.remove(\"a\");
+            print(m.contains(\"a\"));
+        }
+        ",
+        false.into()
+    );
+}
+
+#[test]
+pub fn map_remove_absent_key_changes_nothing() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {\"a\": 1};
+            m.remove(\"z\");
+            print(m.len());
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn map_remove_takes_a_typed_key() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {};
+            m.insert(1, 10);
+            m.insert(2, 20);
+            m.remove(1);
+            print(m.get(2));
+        }
+        ",
+        20.into()
+    );
+}
+
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn remove_rejects_a_receiver_that_is_neither_list_nor_map() {
+    run!(
+        "
+        fn main() {
+            let s = \"abc\";
+            s.remove(0);
+        }
+        "
+    );
+}
+
+#[test]
 pub fn map_keys_values_len() {
     run_and_check_registers!(
         "

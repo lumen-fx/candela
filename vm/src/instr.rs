@@ -182,6 +182,8 @@ pub enum Instr {
     MapInsert(u16, u16, u16),
     /// MapSet(map_reg_id, key_reg_id, val_reg_id)
     MapInsertReg(u16, u16, u16),
+    /// MapRemove(map_reg_id, key_reg_id)
+    MapRemove(u16, u16),
     CloneMap(u16, u16),
 
     /// Exits the program with the i32 code if it's != 0
@@ -297,6 +299,7 @@ impl Instr {
             | Self::SetFieldStruct(_, _, _)
             | Self::MapInsert(_, _, _)
             | Self::MapInsertReg(_, _, _)
+            | Self::MapRemove(_, _)
             | Self::ObjElemMov(_, _, _)
             | Self::Push(_, _)
             | Self::Return(_) // Modifies a register, but this function doesn't know which one
@@ -428,6 +431,7 @@ impl Instr {
             | Self::SetFieldStruct(a, b, _)
             | Self::MapGet(a, b, _)
             | Self::MapInsert(_, a, b)
+            | Self::MapRemove(a, b)
             | Self::Remove(a, b) => {
                 f(a);
                 f(b);

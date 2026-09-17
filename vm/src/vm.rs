@@ -1237,6 +1237,11 @@ pub fn execute(
             Instr::MapInsertReg(map_reg_id, key_reg_id, val_reg_id) => unsafe {
                 map_pool[r[map_reg_id].as_map()].insert(r[key_reg_id], r[val_reg_id]);
             },
+            // A key that is not in the map leaves it as it was: taking an entry
+            // out is a request for the key to be absent, and it already is.
+            Instr::MapRemove(map_reg_id, key_reg_id) => unsafe {
+                map_pool[r[map_reg_id].as_map()].remove(&r[key_reg_id]);
+            },
             Instr::CloneMap(src_reg, dest_reg) => {
                 let new_map = map_pool[r[src_reg].as_map()].clone();
                 let new_id = alloc_map(

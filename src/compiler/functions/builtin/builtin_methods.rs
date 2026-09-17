@@ -55,7 +55,9 @@ pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
             "remove",
             "sort",
         ],
-        "map" => &["len", "keys", "values", "contains", "get", "insert"],
+        "map" => &[
+            "len", "keys", "values", "contains", "get", "insert", "remove",
+        ],
         "int" => &["abs"],
         "float" => &["abs", "sqrt", "round", "floor"],
         _ => &[],
@@ -554,13 +556,41 @@ pub fn builtin_methods(
             Some(output_id)
         }
         "remove" => {
-            check!(DataType::Array(_), &[DataType::Array(None)], name, 1);
-            check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
-            let arg_id = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            state.free_reg(arg_id, v);
-            output.push(Instr::Remove(id, arg_id));
+            // One name, two receivers: a list drops the element at an index, a
+            // map drops the entry under a key. A union receiver has to be one
+            // or the other throughout, because the two lower to different
+            // instructions.
+            let expected = &[
+                DataType::Array(None),
+                DataType::Map(Box::from((None, None))),
+            ];
+            let on_map = match &obj_type {
+                DataType::Map(_) => true,
+                DataType::Union(types) => types.iter().all(|t| matches!(t, DataType::Map(_))),
+                _ => false,
+            };
+            if on_map {
+                check!(DataType::Map(_), expected, name, 1);
+                if let DataType::Map(m) = &obj_type
+                    && let Some(key_type) = &m.0
+                {
+                    let key_type = key_type.clone();
+                    check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[key_type]);
+                }
+                let key_id = args[0]
+                    .compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id();
+                state.free_reg(key_id, v);
+                output.push(Instr::MapRemove(id, key_id));
+            } else {
+                check!(DataType::Array(_), expected, name, 1);
+                check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
+                let arg_id = args[0]
+                    .compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id();
+                state.free_reg(arg_id, v);
+                output.push(Instr::Remove(id, arg_id));
+            }
             state.add_to_src(ctx, output, fn_span);
             None
         }

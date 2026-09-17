@@ -354,13 +354,15 @@ prelude.
 
 ## Map methods
 
-Called on a map receiver.
+Called on a map receiver. `insert` and `remove` change the map in place and
+return nothing.
 
 | Method | Returns | Behaviour |
 | --- | --- | --- |
 | `m.len()` | int | The number of entries |
 | `m.get(k)` | value | The value stored under `k`; raises `unknown_map_key` when the key is absent |
 | `m.insert(k, v)` | nothing | Stores `v` under `k`, replacing any existing value |
+| `m.remove(k)` | nothing | Drops the entry under `k`; a key the map does not hold changes nothing |
 | `m.contains(k)` | bool | True when `k` is a key in `m` |
 | `m.keys()` | list | The keys |
 | `m.values()` | list | The values |
