@@ -8745,6 +8745,99 @@ pub fn generic_enum_variant_construction() {
     );
 }
 
+/// A constructor written without a type argument instantiates the enum at what
+/// its payload holds, so a struct put into a `Some` comes back out as that
+/// struct.
+#[test]
+pub fn a_bare_constructor_binds_the_payload_type() {
+    run_and_check_registers!(
+        "
+        enum Opt<T> { Some(T), None }
+        struct P { x: int }
+        fn find(n: int) {
+            if n > 0 {
+                return Some(P { x: n });
+            }
+            return None;
+        }
+        fn main() {
+            match find(4) {
+                Some(p) => { print(p.x); }
+                None => { print(0); }
+            }
+        }
+        ",
+        4.into()
+    );
+}
+
+/// The instantiation follows the payload, not whichever instantiation happens
+/// to be registered first.
+#[test]
+pub fn bare_constructors_reach_their_own_instantiation() {
+    run_and_check_registers!(
+        "
+        enum Opt<T> { Some(T), None }
+        struct P { x: int }
+        fn boxed(p: P) -> Opt<P> { return Some(p); }
+        fn counted(n: int) -> Opt<int> { return Some(n); }
+        fn main() {
+            let total = 0;
+            match boxed(P { x: 3 }) { Some(p) => { total += p.x; } None => { } }
+            match counted(5) { Some(n) => { total += n; } None => { } }
+            print(total);
+        }
+        ",
+        8.into()
+    );
+}
+
+/// A constructor names only the parameters its payload mentions, so the two
+/// sides a body returns are the one type between them.
+#[test]
+pub fn the_two_sides_of_a_result_merge_into_one_type() {
+    run_and_check_registers!(
+        "
+        enum Res<T, E> { Ok(T), Err(E) }
+        fn parse(text: string) {
+            if text.is_int() {
+                return Ok(int(text));
+            }
+            return Err(\"not a number\");
+        }
+        fn main() {
+            let total = 0;
+            match parse(\"7\") { Ok(n) => { total += n; } Err(e) => { total += e.len(); } }
+            match parse(\"x\") { Ok(n) => { total += n; } Err(e) => { total += e.len(); } }
+            print(total);
+        }
+        ",
+        19.into()
+    );
+}
+
+/// `None` names no payload, so it is an `Opt<any>`, and that goes where a named
+/// instantiation is expected.
+#[test]
+pub fn a_payloadless_variant_goes_where_an_instantiation_is_expected() {
+    run_and_check_registers!(
+        "
+        enum Opt<T> { Some(T), None }
+        struct P { x: int }
+        fn take(o: Opt<P>) -> int {
+            match o {
+                Some(p) => { return p.x; }
+                None => { return -1; }
+            }
+        }
+        fn main() {
+            print(take(None));
+        }
+        ",
+        (-1).into()
+    );
+}
+
 #[test]
 pub fn generic_type_in_a_struct_field() {
     run_and_check_registers!(

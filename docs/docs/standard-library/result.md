@@ -8,12 +8,12 @@ import "std/result";
 
 ## The type
 
-`Result` is an ordinary candela enum:
+`Result` is an ordinary candela enum with a type parameter for each side:
 
 ```rust
-enum Result {
-    Ok(any),
-    Err(any),
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
 }
 ```
 
@@ -32,9 +32,36 @@ fn main() {
 }
 ```
 
-Both payloads are typed `any`, so read one back with a downcast (`as_int`,
-`as_str`) or work on it through type-agnostic operations such as `str`. See
-[enums](../language/enums.md) for the enum and match syntax.
+Neither constructor needs a type argument: `Ok(v)` decides the success type and
+`Err(e)` the error type, so a function that returns both hands back a `Result`
+with each side typed, and the value bound in an arm keeps the type that went in.
+
+```rust
+import "std/result";
+
+struct Config {
+    port: int,
+}
+
+fn load(text: string) -> Result<Config, string> {
+    if text.is_int() {
+        return Ok(Config { port: int(text) });
+    }
+    return Err("not a port: " + text);
+}
+
+fn main() {
+    match load("8080") {
+        Ok(config) => { print(config.port); }
+        Err(reason) => { print(reason); }
+    }
+}
+```
+
+A constructor names only its own side, so `Ok(2)` on its own is a
+`Result<int, any>` and goes wherever a `Result<int, E>` is expected. See
+[enums](../language/enums.md) for the enum and match syntax, and
+[generics](../language/generics.md) for type parameters.
 
 A `Result` is a value you pass around and inspect. It is separate from the
 language's raised errors, which unwind to a `try`/`catch`; see
@@ -45,8 +72,8 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 
 ## Methods
 
-The helpers are methods on the result value, defined in an `impl Result` block;
-importing the module brings them in.
+The helpers are methods on the result value, defined in an `impl Result<T, E>`
+block; importing the module brings them in.
 
 ### is_ok
 
@@ -89,7 +116,8 @@ r.unwrap_err()
 r.unwrap_or(default)
 ```
 
-- `default`: the value to return when the result is `Err`.
+- `default`: the value to return when the result is `Err`. It has the result's
+  own success type.
 - Returns: the success value, or `default`.
 - Raises: nothing.
 

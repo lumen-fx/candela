@@ -339,9 +339,12 @@ pub fn builtin_functions(
             None
         }
         fn_name => {
-            if let Some((enum_id, variant_idx)) = crate::compiler::resolve_enum_variant(
+            if let Some((enum_id, variant_idx)) = crate::compiler::variant_constructor(
                 std::slice::from_ref(&SmolStr::new(fn_name)),
-                ctx.file_idx,
+                args,
+                span,
+                v,
+                ctx,
                 state,
             ) {
                 // An otherwise-unknown call whose name is an enum variant

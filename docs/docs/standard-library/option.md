@@ -8,11 +8,11 @@ import "std/option";
 
 ## The type
 
-`Option` is an ordinary candela enum:
+`Option` is an ordinary candela enum with a type parameter for what it holds:
 
 ```rust
-enum Option {
-    Some(any),
+enum Option<T> {
+    Some(T),
     None,
 }
 ```
@@ -32,18 +32,45 @@ fn main() {
 }
 ```
 
-The payload is typed `any`, so read it back with a downcast (`as_int`, `as_str`)
-or work on it through type-agnostic operations such as `str`. See
-[enums](../language/enums.md) for the enum and match syntax, and
-[built-in functions](builtins.md) for the downcasts.
+`Some(x)` needs no type argument: the value it is given decides the option's
+type, so `Some(5)` is an `Option<int>` and the value bound in a `Some` arm comes
+back with the type that went in.
+
+```rust
+import "std/option";
+
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn nearest(points: Point[]) -> Option<Point> {
+    if points.len() == 0 {
+        return None;
+    }
+    return Some(points[0]);
+}
+
+fn main() {
+    match nearest([Point { x: 1, y: 2 }]) {
+        Some(p) => { print(p.x, p.y); }
+        None => { print("no points"); }
+    }
+}
+```
+
+`None` names no payload, so on its own it is an `Option<any>`, which goes
+wherever an `Option<T>` is expected. Name the argument (`Option<Point>`) where
+you want the check. See [enums](../language/enums.md) for the enum and match
+syntax, and [generics](../language/generics.md) for type parameters.
 
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
 ## Methods
 
-The helpers are methods on the option value, defined in an `impl Option` block;
-importing the module brings them in.
+The helpers are methods on the option value, defined in an `impl Option<T>`
+block; importing the module brings them in.
 
 ### is_some
 
@@ -76,7 +103,8 @@ o.unwrap()
 o.unwrap_or(default)
 ```
 
-- `default`: the value to return when the option is `None`.
+- `default`: the value to return when the option is `None`. It has the option's
+  own payload type.
 - Returns: the contained value, or `default`.
 - Raises: nothing.
 
