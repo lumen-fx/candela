@@ -7,6 +7,7 @@ use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
+use super::super::type_system::instantiations_line_up;
 use super::super::type_system::param_type_matches;
 use super::super::type_system::pin_empty_literal_bindings;
 use super::super::type_system::pinned_arg_types;
@@ -143,7 +144,7 @@ pub fn handle_user_function(
     let declared_arg_types = specialized_arg_types(fn_id, type_args, ctx, state);
     for (i, declared) in declared_arg_types.iter().enumerate() {
         if let Some(declared) = declared
-            && !param_type_matches(declared, &infered_arg_types[i])
+            && !param_type_matches(declared, &infered_arg_types[i], state.generics)
         {
             error_function_arg_invalid_type(
                 &infered_arg_types[i],
@@ -155,6 +156,20 @@ pub fn handle_user_function(
                 state.sources,
                 state.type_names(),
             );
+        }
+    }
+
+    // A constructor names only the type parameters its payload mentions, so an
+    // argument can arrive at a more open instantiation than the parameter
+    // declares: `None` is an `Option<any>` where the parameter says
+    // `Option<P>`. The declaration is what the body is compiled against, so the
+    // payload a match arm binds has the type the parameter names.
+    for (i, declared) in declared_arg_types.iter().enumerate() {
+        if let Some(declared) = declared
+            && infered_arg_types[i] != *declared
+            && instantiations_line_up(declared, &infered_arg_types[i], state.generics)
+        {
+            infered_arg_types[i] = declared.clone();
         }
     }
 
@@ -379,7 +394,7 @@ fn compile_function(
     // specialisation is checked separately, so an un-annotated parameter that
     // makes one call site return a different type is caught at that call site.
     if let Some((declared, declared_span)) = specialized_return_type(function_id, ctx, state)
-        && !param_type_matches(&declared, &return_type)
+        && !param_type_matches(&declared, &return_type, state.generics)
     {
         let types = state.type_names();
         error_invalid_type(

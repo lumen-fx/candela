@@ -4,6 +4,15 @@
 import "std/result";
 import "std/assert" as assert;
 
+struct Config { port: int }
+
+fn load(text: string) -> Result<Config, string> {
+    if text.is_int() {
+        return Ok(Config { port: int(text) });
+    }
+    return Err("not a port: " + text);
+}
+
 fn main() {
     let ok = Ok(5);
     let err = Err("boom");
@@ -17,6 +26,17 @@ fn main() {
     assert::assert_eq(err.unwrap_err(), "boom");
     assert::assert_eq(err.unwrap_or(42), 42);
     assert::assert_eq(ok.unwrap_or(42), 5);
+
+    // A struct payload comes back out as the struct, not as `any`, and both
+    // sides of one function's result keep their own type.
+    match load("8080") {
+        Ok(config) => { assert::assert_eq(config.port, 8080); }
+        Err(reason) => { assert::assert_true(false); }
+    }
+    match load("http") {
+        Ok(config) => { assert::assert_true(false); }
+        Err(reason) => { assert::assert_eq(reason, "not a port: http"); }
+    }
 
     print("result ok");
 }

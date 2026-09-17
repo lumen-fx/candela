@@ -4,10 +4,18 @@
 import "std/option";
 import "std/assert" as assert;
 
-// An `Option` payload is dynamically typed (`any`), so a mapper works on it
-// through type-agnostic operations like `str`; direct arithmetic on an `any`
-// value needs a concrete type and is not available here.
+// The payload keeps the type that went in, so a mapper reads it back at that
+// type.
 fn describe(x) { return str(x); }
+
+struct Point { x: int }
+
+fn first(points: Point[]) -> Option<Point> {
+    if points.len() == 0 {
+        return None;
+    }
+    return Some(points[0]);
+}
 
 fn main() {
     let s = Some(5);
@@ -27,6 +35,13 @@ fn main() {
     assert::assert_eq(m.unwrap(), "5");
     let mn = n.map(describe);
     assert::assert_true(mn.is_none());
+
+    // A struct payload comes back out as the struct, not as `any`.
+    match first([Point { x: 7 }]) {
+        Some(p) => { assert::assert_eq(p.x, 7); }
+        None => { assert::assert_true(false); }
+    }
+    assert::assert_true(first([]).is_none());
 
     print("option ok");
 }

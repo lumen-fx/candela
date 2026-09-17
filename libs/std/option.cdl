@@ -1,8 +1,9 @@
 /// The `Option` type: a value that is either present (`Some`) or absent
 /// (`None`), built on candela's native enums.
 ///
-/// `Option` is an ordinary enum, so `Some(x)` and `None` are constructed
-/// directly and matched with payload binding:
+/// `Option` is an ordinary generic enum, so `Some(x)` and `None` are
+/// constructed directly, without a type argument, and matched with payload
+/// binding:
 ///
 ///     import "std/option";
 ///     let o = Some(5);
@@ -15,12 +16,12 @@
 /// module is pure candela and inlines into a `.cdlb`, so it runs under
 /// `candela-vm` with no source tree.
 
-enum Option {
-    Some(any),
+enum Option<T> {
+    Some(T),
     None,
 }
 
-impl Option {
+impl Option<T> {
     /// True when the option holds a value.
     fn is_some(self) {
         match self {
@@ -38,7 +39,7 @@ impl Option {
     }
 
     /// Returns the contained value, or raises when the option is `None`.
-    fn unwrap(self) {
+    fn unwrap(self) -> T {
         let value = null;
         match self {
             Some(v) => { value = v; }
@@ -48,7 +49,7 @@ impl Option {
     }
 
     /// Returns the contained value, or `default` when the option is `None`.
-    fn unwrap_or(self, default) {
+    fn unwrap_or(self, default: T) -> T {
         let value = default;
         match self {
             Some(v) => { value = v; }

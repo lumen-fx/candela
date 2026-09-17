@@ -250,6 +250,18 @@ struct TypeTemplate {
     body: TemplateBody,
 }
 
+/// One type made from a generic declaration: which declaration, the name it is
+/// registered under, the type it became, and the arguments it was made with.
+/// The arguments are what lets an instantiation left open (`Option<any>`) be
+/// recognised as the same declaration as `Option<P>`.
+#[derive(Debug)]
+struct Instantiation {
+    template: usize,
+    name: SmolStr,
+    instantiated: DataType,
+    args: Box<[DataType]>,
+}
+
 #[derive(Debug, Clone)]
 enum TemplateBody {
     Struct(Box<[(SmolStr, TypeExpr, Span)]>),
@@ -308,11 +320,12 @@ impl BindingFrame {
 pub struct Generics {
     templates: Vec<TypeTemplate>,
     impls: Vec<ImplTemplate>,
-    /// Instantiations by the declaration they came from and their rendered
-    /// name, so `Cell<int>` written twice is one struct and two modules each
-    /// declaring `Cell<T>` keep their own. `<` and `>` cannot occur in an
-    /// identifier, so a rendered name never collides with a user-written one.
-    instantiations: Vec<(usize, SmolStr, DataType)>,
+    /// Instantiations by the declaration they came from, their rendered name
+    /// and the arguments they were made with, so `Cell<int>` written twice is
+    /// one struct and two modules each declaring `Cell<T>` keep their own.
+    /// `<` and `>` cannot occur in an identifier, so a rendered name never
+    /// collides with a user-written one.
+    instantiations: Vec<Instantiation>,
     /// Type parameters bound for the body being compiled. Only the top frame is
     /// in scope: the parameters of a function never reach the body of a
     /// function it calls.
@@ -413,6 +426,58 @@ impl Generics {
     /// written in registers no template by that name.
     fn last_template_named(&self, name: &str) -> Option<usize> {
         self.templates.iter().rposition(|t| t.name == name)
+    }
+
+    /// The declaration an instantiated type came from and the arguments it was
+    /// made with, for a type that came from one.
+    #[must_use]
+    pub fn instantiation_of(&self, t: &DataType) -> Option<(usize, &[DataType])> {
+        if !matches!(t, DataType::Struct(_) | DataType::Enum(_)) {
+            return None;
+        }
+        self.instantiations
+            .iter()
+            .find(|i| &i.instantiated == t)
+            .map(|i| (i.template, &*i.args))
+    }
+
+    /// The generic enum declaration that declares a variant of this name, and
+    /// the payload types the variant declares.
+    ///
+    /// A generic enum has no registered type until something names one, so a
+    /// bare `Some(x)` is looked up here rather than among the enums already
+    /// registered. The last declaration of the name wins, the same as
+    /// [`find_template`] does for a type name.
+    #[must_use]
+    pub fn enum_template_with_variant(&self, variant: &str) -> Option<usize> {
+        self.templates.iter().rposition(|t| match &t.body {
+            TemplateBody::Enum(variants) => variants.iter().any(|(name, _, _)| name == variant),
+            TemplateBody::Struct(_) => false,
+        })
+    }
+
+    /// The payload a variant of a generic enum declares, unresolved.
+    #[must_use]
+    fn variant_payload(&self, template: usize, variant: &str) -> Option<&[TypeExpr]> {
+        let TemplateBody::Enum(variants) = &self.templates[template].body else {
+            return None;
+        };
+        variants
+            .iter()
+            .find(|(name, _, _)| name == variant)
+            .map(|(_, payload, _)| &**payload)
+    }
+
+    /// The parameters a generic declaration takes.
+    #[must_use]
+    fn params(&self, template: usize) -> &[SmolStr] {
+        &self.templates[template].params
+    }
+
+    /// The name a generic declaration was written under.
+    #[must_use]
+    fn template_name(&self, template: usize) -> &SmolStr {
+        &self.templates[template].name
     }
 
     /// Records a generic `struct` declaration and returns the index the
@@ -858,13 +923,13 @@ pub fn instantiate(
         )
     });
     let name = render_instantiation(qualifier.as_deref(), base, args, ctx.structs, ctx.enums);
-    if let Some((_, _, t)) = ctx
+    if let Some(existing) = ctx
         .generics
         .instantiations
         .iter()
-        .find(|(idx, n, _)| *idx == template_idx && n == &name)
+        .find(|i| i.template == template_idx && i.name == name)
     {
-        return t.clone();
+        return existing.instantiated.clone();
     }
     if ctx.generics.templates[template_idx].params.len() != args.len() {
         error_type_arg_count(
@@ -914,9 +979,12 @@ pub fn instantiate(
         });
         DataType::Enum(id)
     };
-    ctx.generics
-        .instantiations
-        .push((template_idx, name.clone(), instantiated.clone()));
+    ctx.generics.instantiations.push(Instantiation {
+        template: template_idx,
+        name: name.clone(),
+        instantiated: instantiated.clone(),
+        args: args.into(),
+    });
 
     let body = ctx.generics.templates[template_idx].body.clone();
     ctx.generics.depth += 1;
@@ -1217,6 +1285,104 @@ pub fn type_args_name_a_variant(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -
             .is_some()
 }
 
+/// Resolves a variant constructor to the enum it names and the index of the
+/// variant, instantiating a generic enum at the types its payload names.
+///
+/// A plain enum resolves by name, the way it always has. A generic enum has no
+/// registered type until something names one, so the constructor makes it: the
+/// arguments bind the parameters the variant declares, and a parameter the
+/// payload does not mention stands for `any`. `Ok(2)` is therefore a
+/// `Result<int, any>` and `None` on its own an `Option<any>`, and
+/// [`param_type_matches`] is what lets those go where a fully named
+/// instantiation is expected.
+///
+/// Returns `None` when no generic enum declares a variant of that name, which
+/// is what leaves plain enums and ordinary calls to the paths that follow.
+pub fn resolve_variant_constructor(
+    path: &[SmolStr],
+    arg_types: &[DataType],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(u16, u16)> {
+    let variant = path.last()?.clone();
+    let (namespace, template) = if path.len() >= 2 {
+        let namespace = &path[..path.len() - 2];
+        let base = &path[path.len() - 2];
+        let template = find_template(namespace, base, state.scope(ctx.file_idx), state.generics)?;
+        (namespace, template)
+    } else {
+        (
+            &path[..0],
+            state.generics.enum_template_with_variant(&variant)?,
+        )
+    };
+    let params: Vec<SmolStr> = state.generics.params(template).to_vec();
+    let payload: Vec<TypeExpr> = state.generics.variant_payload(template, &variant)?.to_vec();
+    let mut bound: Vec<Option<DataType>> = vec![None; params.len()];
+    for (declared, found) in payload.iter().zip(arg_types) {
+        bind_params_from_payload(declared, found, &params, &mut bound);
+    }
+    let args: Vec<DataType> = bound
+        .into_iter()
+        .map(|b| b.unwrap_or(DataType::Unknown))
+        .collect();
+    let base = state.generics.template_name(template).clone();
+    let namespace: Box<[SmolStr]> = namespace.into();
+    let DataType::Enum(enum_id) = instantiate(
+        &namespace,
+        &base,
+        &args,
+        span,
+        &mut state.type_ctx(ctx.file_idx),
+    ) else {
+        return None;
+    };
+    let variant_idx = state.enums[enum_id as usize]
+        .variants
+        .iter()
+        .position(|vt| vt.name == variant)? as u16;
+    Some((enum_id, variant_idx))
+}
+
+/// Binds the type parameters a variant's declared payload mentions to the types
+/// the constructor was handed. A parameter the payload does not mention, and one
+/// whose argument carries no type of its own, is left for the caller to fill
+/// with `any`.
+fn bind_params_from_payload(
+    declared: &TypeExpr,
+    found: &DataType,
+    params: &[SmolStr],
+    bound: &mut [Option<DataType>],
+) {
+    match declared {
+        TypeExpr::Identifier(name, _) => {
+            if *found != DataType::Unknown
+                && let Some(i) = params.iter().position(|p| p == name)
+                && bound[i].is_none()
+            {
+                bound[i] = Some(found.clone());
+            }
+        }
+        TypeExpr::Array(inner) => {
+            if let DataType::Array(Some(element)) = found {
+                bind_params_from_payload(inner, element, params, bound);
+            }
+        }
+        TypeExpr::Map(key, value) => {
+            if let DataType::Map(entry) = found {
+                if let Some(t) = &entry.0 {
+                    bind_params_from_payload(key, t, params, bound);
+                }
+                if let Some(t) = &entry.1 {
+                    bind_params_from_payload(value, t, params, bound);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolves a variant of a generic enum named with its arguments
 /// (`Slot<int>::Empty`) to the instantiated enum and the variant's index.
 pub fn resolve_generic_variant(
@@ -1485,10 +1651,36 @@ pub fn struct_field_type_matches(expected: &DataType, received: &DataType) -> bo
 /// either side, so annotating a parameter `any` keeps the parameter dynamic and
 /// passing a dynamic value to a typed parameter is still allowed. Every other
 /// pair uses the ordinary type equality.
+///
+/// The same rule reaches inside an instantiation: a constructor names only the
+/// parameters its payload mentions, so `Ok(2)` is a `Result<int, any>` and
+/// `None` is an `Option<any>`. Two instantiations of one declaration line up
+/// when every pair of arguments does, which is what lets those values be
+/// passed and returned where a fully named instantiation is expected.
 #[inline(always)]
 #[must_use]
-pub fn param_type_matches(expected: &DataType, received: &DataType) -> bool {
-    *expected == DataType::Unknown || *received == DataType::Unknown || expected == received
+pub fn param_type_matches(expected: &DataType, received: &DataType, generics: &Generics) -> bool {
+    *expected == DataType::Unknown
+        || *received == DataType::Unknown
+        || expected == received
+        || instantiations_line_up(expected, received, generics)
+}
+
+/// Whether two instantiations come from one declaration and every pair of their
+/// type arguments lines up.
+#[must_use]
+pub(crate) fn instantiations_line_up(a: &DataType, b: &DataType, generics: &Generics) -> bool {
+    let (Some((ta, args_a)), Some((tb, args_b))) =
+        (generics.instantiation_of(a), generics.instantiation_of(b))
+    else {
+        return false;
+    };
+    ta == tb
+        && args_a.len() == args_b.len()
+        && args_a
+            .iter()
+            .zip(args_b)
+            .all(|(x, y)| param_type_matches(x, y, generics))
 }
 
 /// Fills in element types a value left open, taking them from the type that was
@@ -1810,19 +2002,82 @@ pub fn check_if_returns_void(content: &[Expr]) -> bool {
 }
 
 macro_rules! add_return_type {
-    ($return_types: expr, $return_type: expr) => {
-        if $return_type != DataType::Unknown && !($return_types).contains(&($return_type)) {
-            ($return_types).push($return_type);
-        }
+    ($return_types: expr, $return_type: expr, $ctx: expr, $state: expr) => {
+        add_return_type($return_types, $return_type, $ctx, $state);
     };
 }
 
 macro_rules! extend_return_types {
-    ($return_types: expr, $new_types: expr) => {
+    ($return_types: expr, $new_types: expr, $ctx: expr, $state: expr) => {
         for return_type in $new_types {
-            add_return_type!($return_types, return_type);
+            add_return_type!($return_types, return_type, $ctx, $state);
         }
     };
+}
+
+/// Adds one of a body's return types to the set the function produces.
+///
+/// `any` says nothing about what comes back and is dropped. Two instantiations
+/// of one generic declaration merge instead of making a union: a constructor
+/// names only the parameters its payload mentions, so a body that returns
+/// `Ok(2)` on one path and `Err("no")` on another produces a `Result<int, any>`
+/// and a `Result<any, string>`, and those are the one type `Result<int,
+/// string>`.
+fn add_return_type(
+    return_types: &mut Vec<DataType>,
+    return_type: DataType,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    if return_type == DataType::Unknown || return_types.contains(&return_type) {
+        return;
+    }
+    let mut replacement = None;
+    for (i, existing) in return_types.iter().enumerate() {
+        if let Some(merged) = merge_instantiations(existing, &return_type, ctx, state) {
+            replacement = Some((i, merged));
+            break;
+        }
+    }
+    if let Some((i, merged)) = replacement {
+        return_types[i] = merged;
+        return;
+    }
+    return_types.push(return_type);
+}
+
+/// The one type two instantiations of a declaration make, when every pair of
+/// their arguments lines up. An argument left at `any` takes the other side's
+/// type. Answers `None` for anything else, which keeps two unrelated types the
+/// union they are.
+fn merge_instantiations(
+    a: &DataType,
+    b: &DataType,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<DataType> {
+    let (template, args_a) = state.generics.instantiation_of(a)?;
+    let args_a: Vec<DataType> = args_a.to_vec();
+    let (template_b, args_b) = state.generics.instantiation_of(b)?;
+    if template != template_b || args_a.len() != args_b.len() {
+        return None;
+    }
+    let mut merged = Vec::with_capacity(args_a.len());
+    for (x, y) in args_a.iter().zip(args_b) {
+        merged.push(match (x, y) {
+            (DataType::Unknown, other) | (other, DataType::Unknown) => other.clone(),
+            (x, y) if x == y => x.clone(),
+            _ => return None,
+        });
+    }
+    let base = state.generics.template_name(template).clone();
+    Some(instantiate(
+        &[],
+        &base,
+        &merged,
+        (0u32, 0u32).into(),
+        &mut state.type_ctx(ctx.file_idx),
+    ))
 }
 
 pub fn track_returns(
@@ -1834,7 +2089,7 @@ pub fn track_returns(
 ) -> Vec<DataType> {
     let mut flow = track_return_flow(content, v, ctx, state, fn_name);
     if !flow.always_returns && !flow.types.is_empty() {
-        add_return_type!(&mut flow.types, DataType::Null);
+        add_return_type!(&mut flow.types, DataType::Null, ctx, state);
     }
     flow.types
 }
@@ -1873,20 +2128,20 @@ fn track_condition_returns(
     let first_flow = track_scoped_returns(&code[..first_branch_end], v, ctx, state, fn_name);
     let mut all_branches_return = first_flow.always_returns;
     let mut has_else = false;
-    extend_return_types!(&mut return_types, first_flow.types);
+    extend_return_types!(&mut return_types, first_flow.types, ctx, state);
 
     for expr in &code[first_branch_end..] {
         match expr {
             Expr::ElseIfBlock(_, branch_code, _) => {
                 let flow = track_scoped_returns(branch_code, v, ctx, state, fn_name);
                 all_branches_return &= flow.always_returns;
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
             }
             Expr::ElseBlock(branch_code) => {
                 has_else = true;
                 let flow = track_scoped_returns(branch_code, v, ctx, state, fn_name);
                 all_branches_return &= flow.always_returns;
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
             }
             _ => {}
         }
@@ -1910,7 +2165,7 @@ fn track_return_flow(
         match expr {
             Expr::Condition(_, code, _, _) | Expr::InlineCondition(_, code, _, _) => {
                 let flow = track_condition_returns(code, v, ctx, state, fn_name);
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
                 if flow.always_returns {
                     return FnReturnFlow {
                         types: return_types,
@@ -1923,7 +2178,7 @@ fn track_return_flow(
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
                 if flow.always_returns {
                     return FnReturnFlow {
                         types: return_types,
@@ -1947,7 +2202,7 @@ fn track_return_flow(
             }
             Expr::WhileBlock(_, code, _) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
             }
             Expr::IntForLoop(var_name, _, _, code, _, _) => {
                 let v_len = v.len();
@@ -1957,7 +2212,7 @@ fn track_return_flow(
                     var_type: DataType::Int,
                 });
                 let flow = track_return_flow(code, v, ctx, state, fn_name);
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
                 v.truncate(v_len);
             }
             Expr::ForLoop(var_name, array_expr, array_code, span) => {
@@ -1990,7 +2245,7 @@ fn track_return_flow(
                     });
                 }
                 let flow = track_return_flow(array_code, v, ctx, state, fn_name);
-                extend_return_types!(&mut return_types, flow.types);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
                 v.truncate(v_len);
             }
             // The statements that say what a collection a `let` left empty
@@ -2055,13 +2310,13 @@ fn track_return_flow(
                     let flow = track_return_flow(body, v, ctx, state, fn_name);
                     v.truncate(v_len);
                     all_return &= flow.always_returns;
-                    extend_return_types!(&mut return_types, flow.types);
+                    extend_return_types!(&mut return_types, flow.types, ctx, state);
                 }
                 let exhaustive = if wildcard.is_some() {
                     if let Some(w) = wildcard {
                         let flow = track_scoped_returns(w, v, ctx, state, fn_name);
                         all_return &= flow.always_returns;
-                        extend_return_types!(&mut return_types, flow.types);
+                        extend_return_types!(&mut return_types, flow.types, ctx, state);
                     }
                     true
                 } else {
@@ -2078,9 +2333,9 @@ fn track_return_flow(
             Expr::ReturnVal(return_val) => {
                 if let Some(val) = return_val.as_ref() {
                     let infered = val.infer_type(v, ctx, state);
-                    add_return_type!(&mut return_types, infered);
+                    add_return_type!(&mut return_types, infered, ctx, state);
                 } else {
-                    add_return_type!(&mut return_types, DataType::Null);
+                    add_return_type!(&mut return_types, DataType::Null, ctx, state);
                 }
                 return FnReturnFlow {
                     types: return_types,
@@ -2407,11 +2662,16 @@ impl Expr {
                     // reference (a compile-time value passed to a higher-order
                     // function). Its static type is the callee's Fn id.
                     DataType::Fn(fn_id as u16)
-                } else if let Some((enum_id, _)) = crate::compiler::resolve_enum_variant(
-                    std::slice::from_ref(name),
-                    ctx.file_idx,
-                    state,
-                ) {
+                } else if let Some((enum_id, _)) =
+                    resolve_variant_constructor(std::slice::from_ref(name), &[], *span, ctx, state)
+                        .or_else(|| {
+                            crate::compiler::resolve_enum_variant(
+                                std::slice::from_ref(name),
+                                ctx.file_idx,
+                                state,
+                            )
+                        })
+                {
                     DataType::Enum(enum_id)
                 } else {
                     error_unknown_variable(name, *span, v, ctx.file_idx, state.sources);
@@ -2683,11 +2943,23 @@ impl Expr {
                 // A qualified enum-variant construction (`Color::Red(x)`) has an
                 // enum type; intercept before the function paths, which is where
                 // `handle_functions` intercepts it too.
-                if namespace.len() >= 2
-                    && let Some((enum_id, _)) =
-                        crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
-                {
-                    return DataType::Enum(enum_id);
+                if namespace.len() >= 2 {
+                    let arg_types = args
+                        .iter()
+                        .map(|x| x.infer_type(v, ctx, state))
+                        .collect::<Vec<DataType>>();
+                    if let Some((enum_id, _)) =
+                        resolve_variant_constructor(namespace, &arg_types, *span, ctx, state)
+                            .or_else(|| {
+                                crate::compiler::resolve_enum_variant(
+                                    namespace,
+                                    ctx.file_idx,
+                                    state,
+                                )
+                            })
+                    {
+                        return DataType::Enum(enum_id);
+                    }
                 }
                 // What follows resolves the name in the order `handle_functions`
                 // lowers it: the path picks the family, and inside a family a
@@ -2776,8 +3048,11 @@ impl Expr {
                 }
                 // An unqualified call whose name is an enum variant (`Some(x)`)
                 // constructs that variant. Functions above keep priority.
-                if let Some((enum_id, _)) =
-                    crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
+                let arg_types = infered_args(v, state);
+                if let Some((enum_id, _)) = resolve_variant_constructor(
+                    namespace, &arg_types, *span, ctx, state,
+                )
+                .or_else(|| crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state))
                 {
                     return DataType::Enum(enum_id);
                 }
@@ -3033,7 +3308,9 @@ impl Expr {
                     return DataType::Enum(enum_id);
                 }
                 if let Some((enum_id, _)) =
-                    crate::compiler::resolve_enum_variant(path, ctx.file_idx, state)
+                    resolve_variant_constructor(path, &[], *span, ctx, state).or_else(|| {
+                        crate::compiler::resolve_enum_variant(path, ctx.file_idx, state)
+                    })
                 {
                     DataType::Enum(enum_id)
                 } else {

@@ -69,6 +69,7 @@ use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
+use type_system::resolve_variant_constructor;
 use type_system::struct_field_type_matches;
 use type_system::struct_literal_id;
 
@@ -694,6 +695,24 @@ pub(crate) fn resolve_enum_variant(
     } else {
         None
     }
+}
+
+/// The enum and variant a constructor names, for the lowering.
+///
+/// A generic enum has no registered type until something names one, so the
+/// arguments are typed first and the enum is instantiated at what its payload
+/// binds; see [`resolve_variant_constructor`]. A plain enum resolves by name.
+pub(crate) fn variant_constructor(
+    path: &[SmolStr],
+    args: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(u16, u16)> {
+    let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
+    resolve_variant_constructor(path, &arg_types, span, ctx, state)
+        .or_else(|| resolve_enum_variant(path, ctx.file_idx, state))
 }
 
 /// Lowers an enum-variant construction (`Color::Red`, `Some(x)`) to a fresh
@@ -3188,7 +3207,7 @@ impl Expr {
                 {
                     Some(*register_id)
                 } else if let Some((enum_id, variant_idx)) =
-                    resolve_enum_variant(std::slice::from_ref(name), ctx.file_idx, state)
+                    variant_constructor(std::slice::from_ref(name), &[], *span, v, ctx, state)
                 {
                     Some(compile_enum_construction(
                         enum_id,
@@ -3631,7 +3650,7 @@ impl Expr {
                     ));
                 }
                 if let Some((enum_id, variant_idx)) =
-                    resolve_enum_variant(path, ctx.file_idx, state)
+                    variant_constructor(path, &[], *span, v, ctx, state)
                 {
                     Some(compile_enum_construction(
                         enum_id,

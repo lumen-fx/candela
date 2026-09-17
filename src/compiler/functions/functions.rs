@@ -241,7 +241,7 @@ pub fn handle_functions(
     // would otherwise treat the enum name as a module namespace and error.
     if namespace.len() >= 2
         && let Some((enum_id, variant_idx)) =
-            crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state)
+            crate::compiler::variant_constructor(namespace, args, span, v, ctx, state)
     {
         return Some(crate::compiler::compile_enum_construction(
             enum_id,

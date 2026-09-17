@@ -12,12 +12,12 @@
 /// module is pure candela and inlines into a `.cdlb`, so it runs under
 /// `candela-vm` with no source tree.
 
-enum Result {
-    Ok(any),
-    Err(any),
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
 }
 
-impl Result {
+impl Result<T, E> {
     /// True when the result is `Ok`.
     fn is_ok(self) {
         match self {
@@ -35,7 +35,7 @@ impl Result {
     }
 
     /// Returns the success value, or raises when the result is `Err`.
-    fn unwrap(self) {
+    fn unwrap(self) -> T {
         let value = null;
         match self {
             Ok(v) => { value = v; }
@@ -45,7 +45,7 @@ impl Result {
     }
 
     /// Returns the error value, or raises when the result is `Ok`.
-    fn unwrap_err(self) {
+    fn unwrap_err(self) -> E {
         let value = null;
         match self {
             Ok(v) => { throw("called unwrap_err on an Ok result"); }
@@ -55,7 +55,7 @@ impl Result {
     }
 
     /// Returns the success value, or `default` when the result is `Err`.
-    fn unwrap_or(self, default) {
+    fn unwrap_or(self, default: T) -> T {
         let value = default;
         match self {
             Ok(v) => { value = v; }
