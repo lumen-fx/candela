@@ -1622,10 +1622,10 @@ pub fn collect_direct_fn_calls(
                 calls.push(namespace.last().unwrap().clone());
                 expr_stack.extend(args.iter());
             }
-            Expr::Condition(x, y, _)
-            | Expr::InlineCondition(x, y, _)
-            | Expr::ElseIfBlock(x, y)
-            | Expr::WhileBlock(x, y) => {
+            Expr::Condition(x, y, _, _)
+            | Expr::InlineCondition(x, y, _, _)
+            | Expr::ElseIfBlock(x, y, _)
+            | Expr::WhileBlock(x, y, _) => {
                 expr_stack.push(x);
                 expr_stack.extend(y.iter());
             }
@@ -1742,11 +1742,11 @@ pub fn can_reach<S: std::hash::BuildHasher>(
 pub fn check_if_returns_void(content: &[Expr]) -> bool {
     for content in content {
         match content {
-            Expr::ElseIfBlock(_, code)
+            Expr::ElseIfBlock(_, code, _)
             | Expr::ElseBlock(code)
-            | Expr::Condition(_, code, _)
-            | Expr::InlineCondition(_, code, _)
-            | Expr::WhileBlock(_, code)
+            | Expr::Condition(_, code, _, _)
+            | Expr::InlineCondition(_, code, _, _)
+            | Expr::WhileBlock(_, code, _)
             | Expr::ForLoop(_, _, code, _)
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code)
@@ -1834,7 +1834,7 @@ fn track_condition_returns(
     let mut return_types = Vec::new();
     let first_branch_end = code
         .iter()
-        .position(|expr| matches!(expr, Expr::ElseIfBlock(_, _) | Expr::ElseBlock(_)))
+        .position(|expr| matches!(expr, Expr::ElseIfBlock(_, _, _) | Expr::ElseBlock(_)))
         .unwrap_or(code.len());
 
     let first_flow = track_scoped_returns(&code[..first_branch_end], v, ctx, state, fn_name);
@@ -1844,7 +1844,7 @@ fn track_condition_returns(
 
     for expr in &code[first_branch_end..] {
         match expr {
-            Expr::ElseIfBlock(_, branch_code) => {
+            Expr::ElseIfBlock(_, branch_code, _) => {
                 let flow = track_scoped_returns(branch_code, v, ctx, state, fn_name);
                 all_branches_return &= flow.always_returns;
                 extend_return_types!(&mut return_types, flow.types);
@@ -1875,7 +1875,7 @@ fn track_return_flow(
     let mut return_types: Vec<DataType> = Vec::new();
     for expr in content {
         match expr {
-            Expr::Condition(_, code, _) | Expr::InlineCondition(_, code, _) => {
+            Expr::Condition(_, code, _, _) | Expr::InlineCondition(_, code, _, _) => {
                 let flow = track_condition_returns(code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types);
                 if flow.always_returns {
@@ -1885,7 +1885,7 @@ fn track_return_flow(
                     };
                 }
             }
-            Expr::ElseIfBlock(_, code)
+            Expr::ElseIfBlock(_, code, _)
             | Expr::ElseBlock(code)
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code) => {
@@ -1912,7 +1912,7 @@ fn track_return_flow(
                     var.var_type = var_type;
                 }
             }
-            Expr::WhileBlock(_, code) => {
+            Expr::WhileBlock(_, code, _) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types);
             }
@@ -2968,11 +2968,11 @@ impl Expr {
                     ),
                 }
             }
-            Self::InlineCondition(_, code, _) => {
+            Self::InlineCondition(_, code, _, _) => {
                 let mut types: Vec<DataType> = Vec::with_capacity(code.len());
                 types.push(code[0].infer_type(v, ctx, state));
                 for t in &code[0..] {
-                    if let Self::ElseIfBlock(_, code) = t {
+                    if let Self::ElseIfBlock(_, code, _) = t {
                         let infered = code[0].infer_type(v, ctx, state);
                         if !types.contains(&infered) {
                             types.push(infered);

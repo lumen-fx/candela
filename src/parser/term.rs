@@ -298,7 +298,9 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         }
         // Inline condition
         Token::If => {
+            let condition_start = parser.peek_token_span().start;
             let condition = parse_expr_no_struct(parser);
+            let condition_span: Span = (condition_start, parser.last_token_end as u32).into();
             let mut output_code: Vec<Expr> = Vec::with_capacity(2);
             output_code.push(parse_block_expr(parser));
             loop {
@@ -313,13 +315,16 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 let next_token = parser.peek_token_opt();
                 if next_token == Some(Token::If) {
                     parser.next_token();
+                    let else_if_start = parser.peek_token_span().start;
                     let else_if_condition = parse_expr_no_struct(parser);
+                    let else_if_span: Span = (else_if_start, parser.last_token_end as u32).into();
                     parser.next_token_expect(Token::LBrace, "Blocks must begin with a '{'.");
                     let else_if_value = parse_expr(parser);
                     parser.next_token_expect(Token::RBrace, "Unmatched '}'");
                     output_code.push(Expr::ElseIfBlock(
                         Box::new(else_if_condition),
                         Box::new([else_if_value]),
+                        else_if_span,
                     ));
                 } else if next_token == Some(Token::LBrace) {
                     parser.next_token();
@@ -342,6 +347,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 Box::new(condition),
                 Box::from(output_code),
                 (t_span.start, parser.last_token_end as u32).into(),
+                condition_span,
             )
         }
         // anonymous function

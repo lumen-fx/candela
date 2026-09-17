@@ -6944,61 +6944,62 @@ pub fn nested_fn_reports_a_parse_error() {
 // ---------------------------------------------------------------------------
 // NON-BOOL CONDITIONS
 //
-// candela is gradually typed: a condition of any type compiles. Only the
-// boolean `false` fails a test, so every other value takes the true branch.
+// A condition is a bool. Every other known type is reported at the condition,
+// and a condition typed `any` is checked when it runs.
 // ---------------------------------------------------------------------------
 
 #[test]
-pub fn if_accepts_int_condition_and_takes_the_true_branch() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn if_rejects_int_condition() {
+    run!(
         "
         fn main() {
             if 0 { print(1); } else { print(2); }
         }
-        ",
-        1.into()
+        "
     );
 }
 
 #[test]
-pub fn if_accepts_null_condition_and_takes_the_true_branch() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn if_rejects_null_condition() {
+    run!(
         "
         fn main() {
             if null { print(1); } else { print(2); }
         }
-        ",
-        1.into()
+        "
     );
 }
 
 #[test]
-pub fn if_accepts_string_condition_and_takes_the_true_branch() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn if_rejects_string_condition() {
+    run!(
         "
         fn main() {
             if \"s\" { print(1); } else { print(2); }
         }
-        ",
-        1.into()
+        "
     );
 }
 
 #[test]
-pub fn else_if_accepts_non_bool_condition() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn else_if_rejects_non_bool_condition() {
+    run!(
         "
         fn main() {
             if false { print(0); } else if 3 { print(1); } else { print(2); }
         }
-        ",
-        1.into()
+        "
     );
 }
 
 #[test]
-pub fn while_accepts_non_bool_condition() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn while_rejects_non_bool_condition() {
+    run!(
         "
         fn main() {
             let n = 0;
@@ -7008,21 +7009,91 @@ pub fn while_accepts_non_bool_condition() {
             }
             print(n);
         }
-        ",
-        1.into()
+        "
     );
 }
 
 #[test]
-pub fn inline_if_accepts_non_bool_condition() {
-    run_and_check_registers!(
+#[should_panic(expected = "explicit panic")]
+pub fn inline_if_rejects_non_bool_condition() {
+    run!(
         "
         fn main() {
             let x = if 1 { 7 } else { 8 };
             print(x);
         }
+        "
+    );
+}
+
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn bool_operand_of_and_rejects_non_bool() {
+    run!(
+        "
+        fn main() {
+            if true && 1 { print(1); }
+        }
+        "
+    );
+}
+
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn specialised_body_rejects_non_bool_condition() {
+    // The closure returns an int, so the condition in the body compiled for it
+    // is an int. A comparator written this way is what #134 was found through.
+    run!(
+        "
+        fn pick(f) {
+            if f(2, 1) {
+                return \"a\";
+            }
+            return \"b\";
+        }
+
+        fn main() {
+            print(pick(fn(a, b) { return a - b; }));
+        }
+        "
+    );
+}
+
+#[test]
+pub fn any_condition_raises_on_a_non_bool() {
+    // Nothing pins the type of a parsed json value, so the check happens when
+    // the condition runs and raises a catchable `bad_downcast`.
+    run_and_check_registers!(
+        "
+        fn main() {
+            let r = 0;
+            try {
+                if json_parse(\"1\") {
+                    r = 1;
+                }
+            } catch e {
+                r = 2;
+            }
+            print(r);
+        }
         ",
-        7.into()
+        2.into()
+    );
+}
+
+#[test]
+pub fn any_condition_takes_a_bool() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let r = 0;
+            if json_parse(\"true\") {
+                r = 1;
+            }
+            print(r);
+        }
+        ",
+        1.into()
     );
 }
 

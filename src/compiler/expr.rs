@@ -85,17 +85,23 @@ pub enum Expr {
     VarDeclare(SmolStr, Box<Self>),
     /// VarDeclare(name, value, start, end)
     VarAssign(SmolStr, Box<Self>, Span),
-    /// Condition(condition, code (contains else_if_blocks and potentially else_block), start, end)
-    Condition(Box<Self>, Box<[Self]>, Span),
+    /// Condition(condition, code (contains else_if_blocks and potentially
+    /// else_block), span, condition_span)
+    ///
+    /// The condition carries its own span so a condition whose type is not
+    /// `bool` is reported against the condition rather than the whole `if`.
+    Condition(Box<Self>, Box<[Self]>, Span, Span),
     /// InlineCondition - expression-form if/else, always produces a value, must have an else branch
-    InlineCondition(Box<Self>, Box<[Self]>, Span),
-    ElseIfBlock(Box<Self>, Box<[Self]>),
+    InlineCondition(Box<Self>, Box<[Self]>, Span, Span),
+    /// ElseIfBlock(condition, code, condition_span)
+    ElseIfBlock(Box<Self>, Box<[Self]>, Span),
     ElseBlock(Box<[Self]>),
 
     /// AnonymousFunction(args, code, span)
     AnonymousFunction(Box<[SmolStr]>, Box<[Self]>, Span),
     // AnonymousFunction(Box<[(SmolStr, SmolStr)]>, SmolStr, Box<[Self]>, Span),
-    WhileBlock(Box<Self>, Box<[Self]>),
+    /// WhileBlock(condition, code, condition_span)
+    WhileBlock(Box<Self>, Box<[Self]>, Span),
     /// FunctionCall(args, (optional namespace + name), span, (arg_start,arg_end), type_args)
     ///
     /// `type_args` holds the type arguments of a call written with them
@@ -247,7 +253,7 @@ impl Expr {
                 | Self::Struct(..)
                 | Self::NamespacedRef(_, _, _)
                 | Self::GetStructField(_, _, _, _)
-                | Self::InlineCondition(_, _, _)
+                | Self::InlineCondition(_, _, _, _)
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
                 | Self::ArrayGetSlice(..)
@@ -298,12 +304,12 @@ pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
     code.iter().any(|expr| match expr {
         Expr::VarAssign(n, _, _) => n == var_name,
-        Expr::Condition(_, body, _)
-        | Expr::WhileBlock(_, body)
+        Expr::Condition(_, body, _, _)
+        | Expr::WhileBlock(_, body, _)
         | Expr::EvalBlock(body)
         | Expr::LoopBlock(body)
-        | Expr::InlineCondition(_, body, _)
-        | Expr::ElseIfBlock(_, body)
+        | Expr::InlineCondition(_, body, _, _)
+        | Expr::ElseIfBlock(_, body, _)
         | Expr::ElseBlock(body)
         | Expr::ForLoop(_, _, body, _)
         | Expr::IntForLoop(_, _, _, body, _, _) => code_modifies_variable(var_name, body),

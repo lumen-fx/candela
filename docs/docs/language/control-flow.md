@@ -20,9 +20,10 @@ fn main() {
 
 The condition is not parenthesised. It is a `bool` expression: candela has no
 truthiness, so compare explicitly rather than testing a number or a string. A
-condition of another type compiles but is not interpreted, and takes the true
-branch for every value except the boolean `false`. The same holds for `else if`,
-for `while`, and for the expression form below.
+condition of another type is a compile error naming the type it has, and a
+condition typed `any` is checked when it runs and raises `bad_downcast` on
+anything but a bool; see [errors](../reference/errors.md). The same holds for
+`else if`, for `while`, and for the expression form below.
 
 ### if as an expression
 
@@ -40,8 +41,8 @@ fn main() {
 ## while
 
 `while` repeats a block for as long as its condition holds. The condition is a
-`bool`, exactly as in an `if`, and a value of another type behaves the same way
-it does there.
+`bool`, exactly as in an `if`, and a value of another type is rejected the same
+way it is there.
 
 ```rust
 fn main() {

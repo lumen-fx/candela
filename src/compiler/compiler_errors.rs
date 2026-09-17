@@ -507,6 +507,42 @@ pub fn error_map_diff_types(
 
 #[inline(never)]
 #[cold]
+pub fn error_non_bool_condition(
+    span: Span,
+    condition_type: &DataType,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let found = types.of(condition_type);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Invalid condition type")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("This condition is of type {}", red(&found)))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "A condition is a bool: candela has no truthiness, so write the comparison out",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Invalid condition type: a condition is a bool, but this one is of type {found}"),
+        "non_bool_condition",
+    );
+}
+
+#[inline(never)]
+#[cold]
 pub fn error_unknown_struct(
     struct_name: &SmolStr,
     struct_span: Span,
