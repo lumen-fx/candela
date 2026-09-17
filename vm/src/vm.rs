@@ -6,6 +6,7 @@ use crate::data::DataHash;
 use crate::data::FALSE;
 use crate::data::NULL;
 use crate::data::TRUE;
+use crate::data::format_float;
 use crate::embed::HostDispatch;
 use crate::embed::Value;
 use crate::errors::ErrType;
@@ -1016,7 +1017,7 @@ pub fn execute(
                 } else if tgt.is_int() {
                     outln!(handle, "{}", tgt.as_int());
                 } else if tgt.is_float() {
-                    outln!(handle, "{}", tgt.as_float());
+                    outln!(handle, "{}", format_float(tgt.as_float()));
                 } else if tgt.is_bool() {
                     outln!(handle, "{}", tgt.as_bool());
                 } else if tgt.is_array() {
@@ -1415,7 +1416,7 @@ pub fn execute(
                     let digits = lexical_core::write(value.as_int(), &mut buffer);
                     string!(unsafe { str::from_utf8_unchecked(digits) })
                 } else if value.is_float() {
-                    string!(zmij::Buffer::new().format(value.as_float()))
+                    string!(format_float(value.as_float()).as_str())
                 } else if value.is_bool() {
                     Data::small_str(if value.as_bool() { "true" } else { "false" })
                 } else if value.is_string() {

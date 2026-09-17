@@ -402,7 +402,7 @@ impl Data {
         show_str: bool,
     ) -> SmolStr {
         if self.is_float() {
-            self.as_float().to_smolstr()
+            format_float(self.as_float())
         } else if self.is_int() {
             self.as_int().to_smolstr()
         } else if self.is_bool() {
@@ -494,6 +494,17 @@ impl Data {
             unsafe { unreachable_unchecked() }
         }
     }
+}
+
+/// How candela writes a float: with a decimal point or an exponent, so a whole
+/// float reads as a float rather than as an int. An infinity and a
+/// not-a-number have no such form and print as themselves.
+///
+/// Every float goes through here on its way to text: `str`, `print`, and a
+/// float inside a printed array, map, struct or enum.
+#[must_use]
+pub fn format_float(value: f64) -> SmolStr {
+    SmolStr::from(zmij::Buffer::new().format(value))
 }
 
 impl From<f64> for Data {
