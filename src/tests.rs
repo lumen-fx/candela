@@ -3898,6 +3898,21 @@ pub fn smallest_int_literal_is_read_through_its_sign() {
     );
 }
 
+/// The same literal without the sign in front of it is out of range like its
+/// neighbours, rather than reading as the minimum.
+#[test]
+pub fn diagnostics_int_literal_one_past_the_top_needs_its_sign() {
+    let src = "fn main() { print(9223372036854775808); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "int_literal_out_of_range");
+    assert_eq!(&src[d.span], "9223372036854775808");
+    run_and_check_registers!(
+        "fn main() { print(- 9223372036854775808 + 1); }",
+        (i64::MIN + 1).into()
+    );
+}
+
 /// Two literals fold at parse time, and the fold wraps the way the runtime
 /// does, so a debug build of the compiler agrees with a release one.
 #[test]

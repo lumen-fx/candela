@@ -144,6 +144,10 @@ pub fn parse_term(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
 fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
     let (t, t_span) = parser.next_token();
     match t {
+        // The lexer reads one value past the top of the range so the smallest
+        // `int` can be written with a minus in front; on its own that literal
+        // is out of range like its neighbours.
+        Token::Int(i64::MIN) => parser.error(t_span, ParserErr::IntLiteralOutOfRange),
         Token::Int(i) => Expr::Int(i),
         Token::Float(f) => Expr::Float(f),
         Token::String(s) => Expr::String(parse_string(s)),
@@ -273,6 +277,10 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         }
         // - Expr
         Token::OpSub => {
+            if parser.peek_token() == Token::Int(i64::MIN) {
+                parser.next_token();
+                return Expr::Int(i64::MIN);
+            }
             let expr_start = parser.peek_token_span().start;
             match parse_expr_with_precedence(parser, 8, allow_struct) {
                 Expr::Int(i) => Expr::Int(i.wrapping_neg()),
