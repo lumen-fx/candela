@@ -175,22 +175,25 @@ fn main() {
 }
 ```
 
-An anonymous function does not capture the variables around it. Its body sees
-only its own parameters, so pass in everything it needs.
+An anonymous function captures: its body reads the parameters and the
+variables of the function it is written in, and an assignment inside it writes
+the same variable that function reads. A closure written in a loop body
+captures that turn of the loop.
 
 ```rust
-fn scale(factor, xs) {
-    let out = [];
-    for x in xs {
-        out.push(x * factor);
-    }
-    return out;
-}
-
 fn main() {
-    print(scale(3, [1, 2]));
+    let total = 0;
+    let add = fn(x) { total = total + x; };
+    add(3);
+    add(4);
+    print(total);
 }
 ```
+
+A captured variable lives as long as the closures that hold it, so a closure
+that outlives the call it was made in goes on reading and writing what it
+captured, every closure written in one scope shares that variable, and each
+call of the surrounding function captures a fresh one.
 
 ## Functions as arguments
 

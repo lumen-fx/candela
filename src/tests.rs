@@ -9488,3 +9488,264 @@ pub fn a_statement_that_is_only_an_unknown_name_reports_it() {
     assert_eq!(d.code, "unknown_variable");
     assert_eq!(d.message, "Cannot find variable nosuch in this scope");
 }
+
+/// A closure reads and writes the variables of the function it is written in:
+/// both calls land on the one `total` the caller goes on to print.
+#[test]
+pub fn a_closure_writes_the_variable_of_the_scope_it_was_written_in() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let total = 0;
+            let add = fn(x) { total = total + x; };
+            add(3);
+            add(4);
+            print(total);
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A captured variable outlives the call that declared it, and each call of the
+/// factory makes its own: the first counter reaches 3 while the second is still
+/// on 1.
+#[test]
+pub fn two_counters_from_one_factory_count_apart() {
+    run_and_check_registers!(
+        "
+        fn make() {
+            let n = 0;
+            return fn() { n = n + 1; return n; };
+        }
+
+        fn main() {
+            let first = make();
+            let second = make();
+            let acc = 0;
+            acc = acc * 10 + first();
+            acc = acc * 10 + first();
+            acc = acc * 10 + first();
+            acc = acc * 10 + second();
+            print(acc);
+        }
+        ",
+        1231.into()
+    );
+}
+
+/// A closure reads a parameter of the function it is written in, through a
+/// higher-order function that calls it from somewhere else entirely.
+#[test]
+pub fn a_closure_reads_the_parameter_of_the_function_it_sits_in() {
+    run_and_check_registers!(
+        "
+        fn apply_all(f, xs) {
+            let out = [];
+            for x in xs {
+                out.push(f(x));
+            }
+            return out;
+        }
+
+        fn scale(k, xs) {
+            return apply_all(fn(x) { return x * k; }, xs);
+        }
+
+        fn main() {
+            let scaled = scale(3, [1, 2]);
+            print(scaled[0] + scaled[1]);
+        }
+        ",
+        9.into()
+    );
+}
+
+/// A comparator reads the threshold the scope around it holds.
+#[test]
+pub fn a_comparator_reads_the_threshold_around_it() {
+    run_and_check_registers!(
+        "
+        fn count_matching(f, xs) {
+            let n = 0;
+            for x in xs {
+                if f(x) {
+                    n = n + 1;
+                }
+            }
+            return n;
+        }
+
+        fn main() {
+            let threshold = 2;
+            print(count_matching(fn(x) { return x > threshold; }, [1, 2, 3, 4]));
+        }
+        ",
+        2.into()
+    );
+}
+
+/// A closure inside a closure reads from two levels up: the innermost body sees
+/// the outermost parameter and the one in between.
+#[test]
+pub fn a_closure_inside_a_closure_reads_two_levels_up() {
+    run_and_check_registers!(
+        "
+        fn adder(a) {
+            return fn(b) { return fn(c) { return a + b + c; }; };
+        }
+
+        fn main() {
+            print(adder(1)(20)(300));
+        }
+        ",
+        321.into()
+    );
+}
+
+/// A closure written in a loop body takes the variable of the turn it was
+/// written on, so the closures a loop leaves behind hand back what each turn
+/// held rather than what the last one did.
+#[test]
+pub fn a_closure_in_a_loop_body_takes_that_turn_of_the_loop() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let fs = [];
+            for i in 0..3 {
+                let doubled = i * 2;
+                fs.push(fn() { return i + doubled; });
+            }
+            print(fs[0]() * 100 + fs[1]() * 10 + fs[2]());
+        }
+        ",
+        36.into()
+    );
+}
+
+/// A captured list is one list: what the closure pushes onto it the scope that
+/// declared it reads back.
+#[test]
+pub fn a_captured_list_is_mutated_through_the_closure() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let bag = [1];
+            let add = fn(x) { bag.push(x); };
+            add(2);
+            add(3);
+            print(bag[0] + bag[1] + bag[2]);
+        }
+        ",
+        6.into()
+    );
+}
+
+/// The same for a captured struct: the field the closure writes is the field
+/// the declaring scope reads.
+#[test]
+pub fn a_captured_struct_is_mutated_through_the_closure() {
+    run_and_check_registers!(
+        "
+        struct Counter { n: int }
+
+        fn main() {
+            let c = Counter { n: 0 };
+            let bump = fn() { c.n = c.n + 1; };
+            bump();
+            bump();
+            print(c.n);
+        }
+        ",
+        2.into()
+    );
+}
+
+/// A closure kept in a list still reads its captures after the call that
+/// created it has returned.
+#[test]
+pub fn a_closure_kept_in_a_list_outlives_the_call_that_made_it() {
+    run_and_check_registers!(
+        "
+        fn make(greeting) {
+            let fs = [];
+            fs.push(fn(name) { return greeting + name; });
+            return fs;
+        }
+
+        fn main() {
+            let fs = make(\"hi \");
+            print(fs[0](\"you\"));
+        }
+        ",
+        crate::data::Data::small_str("hi you")
+    );
+}
+
+/// Only a captured variable moves into a cell. A function that declares
+/// closures keeps every other local in a plain register, so a program with one
+/// captured variable allocates exactly one cell and the rest of the body is the
+/// code it was before.
+#[test]
+pub fn an_uncaptured_local_stays_in_a_plain_register() {
+    let out = compile(
+        String::from(
+            "
+        fn main() {
+            let total = 0;
+            let step = 5;
+            let scratch = step * 2;
+            let add = fn(x) { total = total + x; };
+            add(step);
+            add(scratch);
+            print(total);
+        }
+        ",
+        ),
+        "cells.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let cells = out
+        .instructions
+        .iter()
+        .filter(|instr| matches!(instr, Instr::NewCell(_, _)))
+        .count();
+    assert_eq!(cells, 1, "only the captured variable takes a cell");
+    // The uncaptured locals are read straight out of their registers: nothing
+    // loads them from a cell on the way into the call.
+    let loads = out
+        .instructions
+        .iter()
+        .filter(|instr| matches!(instr, Instr::LoadCell(_, _)))
+        .count();
+    assert_eq!(
+        loads, 2,
+        "the cell is read once in the closure body and once by the print"
+    );
+}
+
+/// A closure that reads nothing around it carries no environment, so it lowers
+/// to the code it did before capture existed: no cell, no environment list.
+#[test]
+pub fn a_closure_that_captures_nothing_allocates_nothing() {
+    let out = compile(
+        String::from(
+            "
+        fn apply(f, n) { return f(n); }
+        fn main() {
+            print(apply(fn(x) { return x * 2; }, 21));
+        }
+        ",
+        ),
+        "nocapture.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    assert!(
+        !out.instructions
+            .iter()
+            .any(|instr| matches!(instr, Instr::NewCell(_, _) | Instr::LoadCell(_, _))),
+        "a closure with no captures allocates no cell"
+    );
+}

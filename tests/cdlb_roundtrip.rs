@@ -756,3 +756,103 @@ fn main() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Closures that read the scope around them: an accumulator, a counter factory
+/// called twice, a closure over a parameter, one written in a loop body, one
+/// kept in a list past the call that made it, and a closure inside a closure.
+const CLOSURE_PROGRAM: &str = "
+fn make_counter() {
+    let n = 0;
+    return fn() { n = n + 1; return n; };
+}
+
+fn scale(k, xs) {
+    let out = [];
+    for x in xs {
+        out.push(fn(v) { return v * k; }(x));
+    }
+    return out;
+}
+
+fn adder(a) {
+    return fn(b) { return fn(c) { return a + b + c; }; };
+}
+
+fn main() {
+    let total = 0;
+    let add = fn(x) { total = total + x; };
+    add(3);
+    add(4);
+    print(total);
+
+    let first = make_counter();
+    let second = make_counter();
+    print(first());
+    print(first());
+    print(second());
+
+    let scaled = scale(3, [1, 2]);
+    print(scaled[0] + scaled[1]);
+
+    let fs = [];
+    for i in 0..3 {
+        fs.push(fn() { return i; });
+    }
+    print(fs[0]() * 100 + fs[1]() * 10 + fs[2]());
+
+    print(adder(1)(20)(300));
+}
+";
+
+/// A captured variable reads the same through `candela <file>` and through
+/// `candela build` plus `candela-vm`: the artifact carries the cell
+/// instructions and the environment each closure was built with. Skips if
+/// `candela-vm` is not built alongside `candela`.
+#[test]
+fn closures_agree_across_source_and_artifact() {
+    let candela = env!("CARGO_BIN_EXE_candela");
+    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
+        "candela-vm.exe"
+    } else {
+        "candela-vm"
+    });
+    if !candela_vm.exists() {
+        eprintln!(
+            "skipping closures_agree_across_source_and_artifact: {} not built",
+            candela_vm.display()
+        );
+        return;
+    }
+
+    let dir = scratch_dir("closures");
+    let app = dir.join("app.cdl");
+    std::fs::write(&app, CLOSURE_PROGRAM).unwrap();
+
+    let mut src_cmd = std::process::Command::new(candela);
+    src_cmd.arg(&app);
+    let src_out = common::output_with_deadline(&mut src_cmd, "source run");
+    assert!(src_out.status.success(), "candela source run failed");
+    assert_eq!(
+        String::from_utf8_lossy(&src_out.stdout).replace("\r\n", "\n"),
+        "7\n1\n2\n1\n9\n12\n321\n",
+        "a closure reads and writes the scope it was written in"
+    );
+
+    let cdlb = dir.join("app.cdlb");
+    let mut build_cmd = std::process::Command::new(candela);
+    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
+    let build = common::output_with_deadline(&mut build_cmd, "candela build");
+    assert!(build.status.success(), "candela build failed");
+    std::fs::remove_file(&app).unwrap();
+
+    let mut vm_cmd = std::process::Command::new(&candela_vm);
+    vm_cmd.arg(&cdlb);
+    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+    assert!(vm_out.status.success(), "candela-vm run failed");
+    assert_eq!(
+        vm_out.stdout, src_out.stdout,
+        "candela-vm must reach the same answers as the source run"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
