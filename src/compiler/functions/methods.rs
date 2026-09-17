@@ -177,6 +177,7 @@ pub fn handle_method_calls(
                 fn_span,
                 &call_arg_spans,
                 &call_type_args,
+                None,
             );
         }
         // No method of that name: a field holding a function is called through
@@ -232,6 +233,7 @@ pub fn handle_method_calls(
                 fn_span,
                 &call_arg_spans,
                 &call_type_args,
+                None,
             );
         }
         error_no_such_method(name, &enum_name, fn_span, ctx.file_idx, state.sources);
@@ -267,6 +269,7 @@ pub fn handle_method_calls(
             fn_span,
             &call_arg_spans,
             &call_type_args,
+            None,
         );
     }
 

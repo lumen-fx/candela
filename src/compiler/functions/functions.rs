@@ -158,9 +158,10 @@ pub fn handle_value_call(
     args_indexes: &[Span],
 ) -> Option<u16> {
     let fn_id = callee_fn_id(callee, span, v, ctx, state);
-    if let Some(id) = callee.compile(v, ctx, state, output, None, false, true) {
-        state.free_reg(id, v);
-    }
+    // The value the callee expression produces is the environment of the
+    // closure it names; the register stays allocated until the call has taken
+    // it, so an argument compiled in between cannot land on top of it.
+    let env_id = callee.compile(v, ctx, state, output, None, false, true);
     // The callee as it was written is the name a report can point the reader
     // at, since an anonymous function has no name of its own.
     let fn_name = state.sources[ctx.file_idx as usize]
@@ -168,7 +169,7 @@ pub fn handle_value_call(
         .get(span.start as usize..span.end as usize)
         .unwrap_or("this function")
         .to_owned();
-    handle_user_function(
+    let result = handle_user_function(
         &fn_name,
         fn_id,
         output,
@@ -180,7 +181,12 @@ pub fn handle_value_call(
         span,
         args_indexes,
         &[],
-    )
+        env_id,
+    );
+    if let Some(id) = env_id {
+        state.free_reg(id, v);
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -234,6 +240,7 @@ pub fn handle_functions(
             span,
             args_indexes,
             &call_type_args,
+            None,
         );
     }
     // A qualified enum-variant construction (`Color::Red(x)`, `Option::Some(v)`)
@@ -365,6 +372,7 @@ pub fn handle_functions(
             span,
             args_indexes,
             &[],
+            None,
         )
     } else {
         error_unknown_function_in_namespace(fn_name, namespace, span, ctx.file_idx, state);

@@ -121,6 +121,12 @@ pub struct Function {
     /// or that came from an `impl` block on a generic type. `None` for an
     /// ordinary function.
     pub generics: Option<Box<FnGenerics>>,
+    /// The variables an anonymous function reads from the scope it was written
+    /// in, with the type each had there, in the order the environment records
+    /// them. Empty for a declared function and for a closure that reads only
+    /// its own parameters, which is what keeps that closure lowering the way
+    /// it did before capture existed.
+    pub captures: Box<[(SmolStr, DataType)]>,
 }
 
 /// The generic side of a function: what its annotations mean once the type
@@ -157,6 +163,10 @@ pub struct FunctionImpl {
     /// what makes two calls with the same argument types distinct
     /// specialisations.
     pub type_args: Box<[DataType]>,
+    /// The register this specialisation reads its environment out of, for a
+    /// closure that captures. The call site puts the closure value there
+    /// before it jumps.
+    pub env_loc: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -304,6 +314,21 @@ impl State<'_> {
             (self.registers.len() - 1) as u16
         }
     }
+    /// The register a constant integer lives in, allocated on first use.
+    ///
+    /// A constant register is written once by the compiler and read by the
+    /// instructions that name it, so every use of the same constant shares
+    /// one.
+    pub fn const_int_register(&mut self, n: i64) -> u16 {
+        let data = Data::int(n);
+        if let Some(&id) = self.const_registers.get(&data) {
+            return id;
+        }
+        let id = self.registers.len() as u16;
+        self.const_registers.insert(data, id);
+        self.registers.push(data);
+        id
+    }
     /// Allocates a register, reusing `tgt_id` if it holds some register id.
     /// If `tgt_id == None`, it calls `alloc_reg()`.
     #[inline(always)]
@@ -376,4 +401,9 @@ pub struct Variable {
     pub name: SmolStr,
     pub register_id: u16,
     pub var_type: DataType,
+    /// Set for a variable a closure captures. Its register holds a cell rather
+    /// than the value, so a read goes through [`Instr::LoadCell`] and a write
+    /// through [`Instr::StoreCell`], and the closure that took it writes the
+    /// slot this scope reads.
+    pub cell: bool,
 }

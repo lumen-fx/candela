@@ -33,6 +33,7 @@ use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
+use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::callee_fn_id;
 use crate::compiler::methods::dyn_lib_receiver;
 use rustc_hash::FxHashMap;
@@ -1172,6 +1173,7 @@ fn lower_method(
         direct_calls: callees.into_boxed_slice(),
         name_span: *name_span,
         return_type: resolved_return,
+        captures: Box::from([]),
         generics: Some(Box::new(FnGenerics {
             params: params.clone(),
             arg_types: args.iter().map(|(_, t)| t.clone()).collect(),
@@ -2191,6 +2193,7 @@ fn track_return_flow(
                 v.push(Variable {
                     name: name.clone(),
                     register_id: 0,
+                    cell: false,
                     var_type,
                 });
             }
@@ -2209,6 +2212,7 @@ fn track_return_flow(
                 v.push(Variable {
                     name: var_name.clone(),
                     register_id: 0,
+                    cell: false,
                     var_type: DataType::Int,
                 });
                 let flow = track_return_flow(code, v, ctx, state, fn_name);
@@ -2241,6 +2245,7 @@ fn track_return_flow(
                     v.push(Variable {
                         name: var_name.clone(),
                         register_id: 0,
+                        cell: false,
                         var_type: elem_type,
                     });
                 }
@@ -2302,6 +2307,7 @@ fn track_return_flow(
                                 v.push(Variable {
                                     name: binder.clone(),
                                     register_id: 0,
+                                    cell: false,
                                     var_type: payload_type,
                                 });
                             }
@@ -2396,12 +2402,25 @@ fn infer_user_fn_return_type(
     let fn_args = func.args.clone();
     let fn_code = func.code.clone();
     let fn_src_file = func.src_file;
+    let fn_captures = func.captures.clone();
     let v_len_before_args = v.len();
+    // A closure body reads what the closure captured, so those names are in
+    // scope while its return type is worked out, ahead of its parameters,
+    // which shadow a capture of the same name.
+    for (name, capture_type) in &fn_captures {
+        v.push(Variable {
+            name: name.clone(),
+            register_id: 0,
+            cell: true,
+            var_type: capture_type.clone(),
+        });
+    }
     for (i, infered_type) in infered_arg_types.iter().cloned().enumerate() {
         // 0 => placeholder id, it's never used
         v.push(Variable {
             name: fn_args[i].0.clone(),
             register_id: 0,
+            cell: false,
             var_type: infered_type,
         });
     }
@@ -3382,6 +3401,20 @@ impl Expr {
                 let returns_null = check_if_returns_void(code);
                 let mut callees = Vec::new();
                 collect_direct_fn_calls(code, None, &mut callees);
+                // The scope the literal is written in is the one its body
+                // reads, and this is where that scope is in hand: the body
+                // itself compiles later, at the first call, which can sit in
+                // another function entirely. A free name that resolves to no
+                // variable here names a declared function, which the body
+                // reaches the same way any other code does.
+                let captures: Box<[(SmolStr, DataType)]> = closure_free_names(args, code)
+                    .into_iter()
+                    .filter_map(|name| {
+                        v.iter()
+                            .rfind(|var| var.name == name)
+                            .map(|var| (name, var.var_type.clone()))
+                    })
+                    .collect();
                 let id = state.fns.len() as u16;
                 state.fns.push(Function {
                     name: fn_name,
@@ -3397,6 +3430,7 @@ impl Expr {
                     // An anonymous function takes no return annotation.
                     return_type: None,
                     generics: None,
+                    captures,
                 });
                 DataType::Fn(id)
             }

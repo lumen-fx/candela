@@ -343,3 +343,228 @@ pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) 
         unsafe { unreachable_unchecked() }
     }
 }
+
+/// Records a name the code read or wrote without binding it first, when the
+/// walk is inside an anonymous function.
+fn use_free_name(name: &SmolStr, depth: u32, bound: &[SmolStr], out: &mut Vec<SmolStr>) {
+    if depth > 0 && !bound.contains(name) && !out.contains(name) {
+        out.push(name.clone());
+    }
+}
+
+/// Walks a block in its own scope: the names it declares go out of scope with
+/// it, so a closure written after it does not see them.
+fn scan_block_free_names(
+    code: &[Expr],
+    depth: u32,
+    bound: &mut Vec<SmolStr>,
+    out: &mut Vec<SmolStr>,
+) {
+    let bound_len = bound.len();
+    for expr in code {
+        scan_free_names(expr, depth, bound, out);
+    }
+    bound.truncate(bound_len);
+}
+
+/// Collects, in the order they first appear, the names the anonymous
+/// functions in `expr` read or write from the scope around them.
+///
+/// `bound` holds what is in scope at the point being walked, so a name it does
+/// not hold comes from further out, which is what a closure captures. `depth`
+/// counts the anonymous functions the walk is inside: a name used outside one
+/// is resolved where it stands and is not recorded. A call name counts as a
+/// use, since the callee may be a closure held in a variable; a name that
+/// turns out to name a declared function is dropped by the caller, which keeps
+/// only the names that resolve to variables. A nested function declaration has
+/// a scope of its own and reads nothing from around it, so its body is
+/// skipped.
+fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut Vec<SmolStr>) {
+    match expr {
+        Expr::Var(name, _) => use_free_name(name, depth, bound, out),
+        Expr::VarAssign(name, value, _) => {
+            scan_free_names(value, depth, bound, out);
+            use_free_name(name, depth, bound, out);
+        }
+        Expr::VarDeclare(name, value) => {
+            scan_free_names(value, depth, bound, out);
+            bound.push(name.clone());
+        }
+        Expr::AnonymousFunction(params, body, _) => {
+            let bound_len = bound.len();
+            bound.extend(params.iter().cloned());
+            scan_block_free_names(body, depth + 1, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::FunctionCall(args, namespace, _, _, _) => {
+            for arg in args {
+                scan_free_names(arg, depth, bound, out);
+            }
+            if let [name] = &**namespace {
+                use_free_name(name, depth, bound, out);
+            }
+        }
+        Expr::ObjFunctionCall(obj, args, _, _, _, _, _) => {
+            scan_free_names(obj, depth, bound, out);
+            for arg in args {
+                scan_free_names(arg, depth, bound, out);
+            }
+        }
+        Expr::CallValue(callee, args, _, _) => {
+            scan_free_names(callee, depth, bound, out);
+            for arg in args {
+                scan_free_names(arg, depth, bound, out);
+            }
+        }
+        Expr::Array(items, _) => {
+            for item in items {
+                scan_free_names(item, depth, bound, out);
+            }
+        }
+        Expr::Map(pairs, _) => {
+            for (key, _, value, _) in pairs {
+                scan_free_names(key, depth, bound, out);
+                scan_free_names(value, depth, bound, out);
+            }
+        }
+        Expr::Struct(_, fields, _, _) => {
+            for (_, value, _, _) in fields {
+                scan_free_names(value, depth, bound, out);
+            }
+        }
+        Expr::Match(scrutinee, arms, wildcard, _) => {
+            scan_free_names(scrutinee, depth, bound, out);
+            for (pattern, body) in arms {
+                let bound_len = bound.len();
+                // An enum pattern binds its payload for the arm body; any
+                // other pattern is a value the scrutinee is compared against.
+                if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
+                    for binder in binders {
+                        if let Expr::Var(name, _) = binder {
+                            bound.push(name.clone());
+                        }
+                    }
+                } else {
+                    scan_free_names(pattern, depth, bound, out);
+                }
+                scan_block_free_names(body, depth, bound, out);
+                bound.truncate(bound_len);
+            }
+            if let Some(body) = wildcard {
+                scan_block_free_names(body, depth, bound, out);
+            }
+        }
+        Expr::Condition(condition, body, ..)
+        | Expr::InlineCondition(condition, body, ..)
+        | Expr::ElseIfBlock(condition, body, ..)
+        | Expr::WhileBlock(condition, body, ..) => {
+            scan_free_names(condition, depth, bound, out);
+            scan_block_free_names(body, depth, bound, out);
+        }
+        Expr::ElseBlock(body) | Expr::EvalBlock(body) | Expr::LoopBlock(body) => {
+            scan_block_free_names(body, depth, bound, out);
+        }
+        Expr::ForLoop(var_name, iterated, body, _) => {
+            scan_free_names(iterated, depth, bound, out);
+            let bound_len = bound.len();
+            bound.push(var_name.clone());
+            scan_block_free_names(body, depth, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::IntForLoop(var_name, start, end, body, _, _) => {
+            scan_free_names(start, depth, bound, out);
+            scan_free_names(end, depth, bound, out);
+            let bound_len = bound.len();
+            bound.push(var_name.clone());
+            scan_block_free_names(body, depth, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+            scan_block_free_names(try_code, depth, bound, out);
+            let bound_len = bound.len();
+            bound.push(err_var.clone());
+            scan_block_free_names(catch_code, depth, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::ReturnVal(value) => {
+            if let Some(value) = value.as_ref() {
+                scan_free_names(value, depth, bound, out);
+            }
+        }
+        Expr::GetStructField(obj, _, _, _) | Expr::BoolNeg(obj, _, _) | Expr::Neg(obj, _, _) => {
+            scan_free_names(obj, depth, bound, out);
+        }
+        Expr::SetStructField(obj, _, value, _, _, _) => {
+            scan_free_names(obj, depth, bound, out);
+            scan_free_names(value, depth, bound, out);
+        }
+        Expr::ArrayGetIndex(base, index, _) => {
+            scan_free_names(base, depth, bound, out);
+            scan_free_names(index, depth, bound, out);
+        }
+        Expr::ArrayGetSlice(base, start, end, _) | Expr::ArrayModify(base, start, end, _, _) => {
+            scan_free_names(base, depth, bound, out);
+            scan_free_names(start, depth, bound, out);
+            scan_free_names(end, depth, bound, out);
+        }
+        Expr::Mul(l, r, _, _)
+        | Expr::Div(l, r, _, _)
+        | Expr::Add(l, r, _, _)
+        | Expr::Sub(l, r, _, _)
+        | Expr::Mod(l, r, _, _)
+        | Expr::Pow(l, r, _, _)
+        | Expr::Eq(l, r)
+        | Expr::NotEq(l, r)
+        | Expr::Sup(l, r, _, _)
+        | Expr::SupEq(l, r, _, _)
+        | Expr::Inf(l, r, _, _)
+        | Expr::InfEq(l, r, _, _)
+        | Expr::BoolAnd(l, r, _, _)
+        | Expr::BoolOr(l, r, _, _) => {
+            scan_free_names(l, depth, bound, out);
+            scan_free_names(r, depth, bound, out);
+        }
+        // A literal, a type declaration, an import and a nested function
+        // declaration read nothing from the scope around them.
+        Expr::Float(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::String(_)
+        | Expr::NamespacedRef(_, _, _)
+        | Expr::StructDeclare(_, _, _, _)
+        | Expr::EnumDeclare(_, _, _, _)
+        | Expr::FunctionDecl(_, _, _, _, _, _)
+        | Expr::ImportDylib(_, _, _)
+        | Expr::HostBlock(_, _, _)
+        | Expr::ImportFile(_, _, _, _)
+        | Expr::Break
+        | Expr::Continue => {}
+    }
+}
+
+/// The names an anonymous function reads or writes from the scope it is
+/// written in, in the order they first appear.
+///
+/// The caller keeps the ones that name a variable there: those are the
+/// closure's captures, and the rest name declared functions or nothing at all.
+#[must_use]
+pub fn closure_free_names(params: &[SmolStr], body: &[Expr]) -> Vec<SmolStr> {
+    let mut bound: Vec<SmolStr> = params.to_vec();
+    let mut out = Vec::new();
+    scan_block_free_names(body, 1, &mut bound, &mut out);
+    out
+}
+
+/// Whether an anonymous function written anywhere in `code` reads or writes
+/// `name` from the scope around it.
+///
+/// This is what decides whether a variable lives in a cell: one no closure
+/// names keeps its register and costs what it costs today.
+#[must_use]
+pub fn code_captures_variable(name: &SmolStr, code: &[Expr]) -> bool {
+    let mut bound = Vec::new();
+    let mut out = Vec::new();
+    scan_block_free_names(code, 0, &mut bound, &mut out);
+    out.contains(name)
+}
