@@ -108,7 +108,7 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
                     .collect()
             })
             .collect(),
-        strings: out.pools.strings.0.clone(),
+        strings: out.pools.strings.iter().cloned().collect(),
         instr_src: out
             .instr_src
             .iter()

@@ -73,9 +73,7 @@ fn main() {
 ```
 
 Iterating a list binds each element in turn; iterating a map binds each key.
-Iterating a string binds each byte as a one-character string, so a character
-taking more than one byte raises `not_a_char_boundary`; see
-[errors](../reference/errors.md).
+Iterating a string binds each character as a one-character string.
 
 ```rust
 fn main() {

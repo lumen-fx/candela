@@ -422,7 +422,7 @@ mod json_tests {
     use crate::vm::{MapPool, ObjectPool, Pool, StringPool};
 
     fn pools() -> (ObjectPool, MapPool, StringPool) {
-        (Pool(Vec::new()), Pool(Vec::new()), Pool(Vec::new()))
+        (Pool(Vec::new()), Pool(Vec::new()), StringPool::default())
     }
 
     #[test]

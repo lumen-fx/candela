@@ -301,13 +301,13 @@ Called on a string receiver.
 
 | Method | Returns | Behaviour |
 | --- | --- | --- |
-| `s.len()` | int | The length in bytes |
+| `s.len()` | int | The number of characters |
 | `s.uppercase()` | string | `s` with every character upper-cased |
 | `s.lowercase()` | string | `s` with every character lower-cased |
 | `s.starts_with(prefix)` | bool | True when `s` begins with the string `prefix` |
 | `s.ends_with(suffix)` | bool | True when `s` ends with the string `suffix` |
 | `s.contains(needle)` | bool | True when the string `needle` occurs in `s` |
-| `s.find(needle)` | int | The byte offset of the first occurrence of `needle`, or -1 |
+| `s.find(needle)` | int | The position of the first occurrence of `needle`, or -1 |
 | `s.replace(from, to)` | string | `s` with every occurrence of `from` replaced by `to` |
 | `s.split(separator)` | string[] | `s` cut at each occurrence of the string `separator`; an empty `separator` answers the characters |
 | `s.trim()` | string | `s` without leading or trailing whitespace |
@@ -321,11 +321,11 @@ Called on a string receiver.
 | `s.repeat(n)` | string | `s` joined to itself `n` times |
 | `s.reverse()` | string | A new string with the characters in reverse order |
 
-`len` and `find` count bytes, and indexing and slicing a string are byte-based,
-so a string of non-ASCII text does not index by character. `split` with an empty
-separator is the exception: it cuts by character, so a multi-byte character
-arrives whole. The `chars` method in the [string module](string.md) is the same
-split under a name that says so.
+Every position on a string counts characters: `len`, `find`, indexing, slicing,
+and `split` with an empty separator, which answers the characters one at a time.
+A character is a Unicode scalar value, so an accented letter or an emoji is one
+position and arrives whole. The `chars` method in the [string module](string.md)
+is that empty-separator split under a name that says so.
 
 ## List methods
 

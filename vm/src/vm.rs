@@ -29,6 +29,7 @@ use crate::rt::Struct;
 use lexical_core::FormattedSize;
 use memchr::memmem;
 use smol_strc::ToSmolStr;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use std::hash::BuildHasherDefault;
@@ -54,7 +55,203 @@ pub const CALL_DEPTH_LIMIT: usize = 1_000_000;
 
 pub type ObjectPool = Pool<Vec<Data>>;
 pub type MapPool = Pool<HashMap<Data, Data, BuildHasherDefault<DataHash>>>;
-pub type StringPool = Pool<String>;
+
+/// The character count a slot has not been asked for yet.
+const UNCOUNTED: u32 = u32::MAX;
+/// The slot id a cursor that points at no string carries.
+const NO_STRING: u32 = u32::MAX;
+
+/// Where a walk over a pooled string stopped.
+#[derive(Clone, Copy)]
+struct StrCursor {
+    id: u32,
+    char_idx: u32,
+    byte_off: u32,
+}
+
+/// One pooled string and what has been worked out about it. The count sits
+/// next to the string's own header so reading both costs one cache line.
+struct PooledStr {
+    text: String,
+    char_len: Cell<u32>,
+}
+
+/// Every string too long to sit inside a [`Data`], with the character count of
+/// each one remembered.
+///
+/// A position on a string counts characters, so an index or a slice has to find
+/// where character `i` starts. Counting a long string's characters for every
+/// one of those would turn a loop over it into quadratic work, so a slot's
+/// count is taken once and kept until the slot holds a different string. A
+/// string whose character count equals its byte length holds nothing but
+/// single-byte characters, and on it a character position is a byte position;
+/// that is the route indexing and slicing take. The cursor remembers where the
+/// last walk stopped, so stepping through a multi-byte string forwards resumes
+/// there instead of restarting at its first byte.
+pub struct StringPool {
+    strings: Vec<PooledStr>,
+    cursor: Cell<StrCursor>,
+}
+
+impl Default for StringPool {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+impl StringPool {
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            strings: Vec::with_capacity(capacity),
+            cursor: Cell::new(NO_CURSOR),
+        }
+    }
+    #[must_use]
+    pub fn from_strings(strings: Vec<String>) -> Self {
+        Self {
+            strings: strings
+                .into_iter()
+                .map(|text| PooledStr {
+                    text,
+                    char_len: Cell::new(UNCOUNTED),
+                })
+                .collect(),
+            cursor: Cell::new(NO_CURSOR),
+        }
+    }
+    #[inline(always)]
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.strings.len()
+    }
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.strings.is_empty()
+    }
+    #[inline(always)]
+    pub fn push(&mut self, value: String) {
+        self.strings.push(PooledStr {
+            text: value,
+            char_len: Cell::new(UNCOUNTED),
+        });
+    }
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &String> {
+        self.strings.iter().map(|s| &s.text)
+    }
+    /// A slot to write a different string into. What was worked out about the
+    /// slot describes the string being replaced, so it goes.
+    #[inline(always)]
+    pub fn get_mut(&mut self, index: usize) -> &mut String {
+        if self.cursor.get().id as usize == index {
+            self.cursor.set(NO_CURSOR);
+        }
+        let slot = unsafe { self.strings.get_unchecked_mut(index) };
+        slot.char_len.set(UNCOUNTED);
+        &mut slot.text
+    }
+    /// How many characters the string in `id` has.
+    #[inline(always)]
+    #[must_use]
+    pub fn char_len(&self, id: usize) -> usize {
+        let slot = unsafe { self.strings.get_unchecked(id) };
+        let remembered = slot.char_len.get();
+        if remembered == UNCOUNTED {
+            count_and_remember(slot)
+        } else {
+            remembered as usize
+        }
+    }
+    /// True when every character in `id` takes a single byte.
+    #[inline(always)]
+    #[must_use]
+    pub fn is_ascii(&self, id: usize) -> bool {
+        self.char_len(id) == self[id].len()
+    }
+    /// The byte offset character `char_idx` starts at. The string has at least
+    /// `char_idx` characters; at exactly that many the answer is its byte
+    /// length, which is what a slice bound on the end of the string asks for.
+    #[must_use]
+    pub fn byte_offset(&self, id: usize, char_idx: usize) -> usize {
+        let bytes = self[id].as_bytes();
+        let cursor = self.cursor.get();
+        let (mut at_char, mut at_byte) =
+            if cursor.id as usize == id && cursor.char_idx as usize <= char_idx {
+                (cursor.char_idx as usize, cursor.byte_off as usize)
+            } else {
+                (0, 0)
+            };
+        while at_char < char_idx {
+            at_byte += utf8_width(bytes[at_byte]);
+            at_char += 1;
+        }
+        self.cursor.set(StrCursor {
+            id: id as u32,
+            char_idx: at_char as u32,
+            byte_off: at_byte as u32,
+        });
+        at_byte
+    }
+}
+
+/// A cursor standing on no string at all.
+const NO_CURSOR: StrCursor = StrCursor {
+    id: NO_STRING,
+    char_idx: 0,
+    byte_off: 0,
+};
+
+impl Index<usize> for StringPool {
+    type Output = String;
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe { &self.strings.get_unchecked(index).text }
+    }
+}
+
+/// How many bytes the character starting with `first` takes. A byte below
+/// `0x80` stands for itself; every other character says how many bytes it
+/// spans in the leading one bits of its first byte.
+#[inline(always)]
+pub(crate) const fn utf8_width(first: u8) -> usize {
+    let leading = first.leading_ones() as usize;
+    if leading == 0 { 1 } else { leading }
+}
+
+/// Counts a slot's characters the first time anything asks, which happens once
+/// per string. Out of line so the instructions that read the count stay small.
+#[cold]
+#[inline(never)]
+fn count_and_remember(slot: &PooledStr) -> usize {
+    let counted = count_chars(&slot.text);
+    if counted < UNCOUNTED as usize {
+        slot.char_len.set(counted as u32);
+    }
+    counted
+}
+
+/// The number of characters in `s`. A continuation byte matches `0b10xx_xxxx`,
+/// which as a signed byte is below `-0x40`; every other byte starts a
+/// character.
+#[must_use]
+pub(crate) fn count_chars(s: &str) -> usize {
+    s.as_bytes().iter().filter(|&&b| (b as i8) >= -0x40).count()
+}
+
+/// The byte offset character `char_idx` starts at in `s`, for a `char_idx` no
+/// greater than the number of characters in `s`.
+#[inline(always)]
+#[must_use]
+pub(crate) fn char_byte_offset(s: &str, char_idx: usize) -> usize {
+    let bytes = s.as_bytes();
+    let mut at_byte = 0;
+    for _ in 0..char_idx {
+        at_byte += utf8_width(bytes[at_byte]);
+    }
+    at_byte
+}
 
 /// The buffers every collection reuses, kept together for the length of a run.
 ///
@@ -145,22 +342,6 @@ fn obj_eq(
         return true;
     }
     false
-}
-
-/// The character a byte position lands in, for the error that reports it.
-/// Walking back to where the character starts is what lets the report name the
-/// whole character rather than the byte the position points at.
-#[cold]
-#[inline(never)]
-fn character_at(s: &str, position: usize) -> char {
-    let mut start = position.min(s.len());
-    while start > 0 && !s.is_char_boundary(start) {
-        start -= 1;
-    }
-    s[start..]
-        .chars()
-        .next()
-        .unwrap_or(char::REPLACEMENT_CHARACTER)
 }
 
 struct CallFrame {
@@ -1216,54 +1397,65 @@ pub fn execute(
                 }
                 r[dest_reg_id] = Data::array(new_array_id);
             }
-            // A string is indexed by byte, so a position can land in a character
-            // that takes several of them. One byte of such a character is not a
-            // string, so the index raises instead of answering with a piece of
-            // one.
+            // A string is indexed by character, so the position has to be
+            // turned into the byte offset that character starts at. On a
+            // string of single-byte characters the two are the same and the
+            // index reads straight out of the bytes.
             Instr::GetIndexString(tgt, index, dest) => {
                 let idx = r[index].as_int();
                 let tgt_data = r[tgt];
-                let text = tgt_data.as_str(str_pool);
-                let bytes = text.as_bytes();
-                if idx < 0 || (idx as u64) >= bytes.len() as u64 {
-                    error_with_catch!(ErrType::IndexOutOfBounds(bytes.len(), idx));
+                let char_len = tgt_data.str_char_len(str_pool);
+                if idx < 0 || (idx as u64) >= char_len as u64 {
+                    error_with_catch!(ErrType::IndexOutOfBounds(char_len, idx));
                 }
-                // The bound above makes the read safe, and a byte outside
-                // ASCII is part of a character no single byte can stand for.
-                if unsafe { *bytes.get_unchecked(idx as usize) } >= 0x80 {
-                    let character = character_at(text, idx as usize);
-                    error_with_catch!(ErrType::NotACharBoundary(idx, character));
-                }
-                r[dest] = string!(unsafe {
-                    std::str::from_utf8_unchecked(std::slice::from_ref(
-                        bytes.get_unchecked(idx as usize),
-                    ))
+                let bytes = tgt_data.as_str(str_pool).as_bytes();
+                // As many characters as bytes means every character takes one
+                // of them, so the position is already the offset and the
+                // character it names is that one byte. A character takes at
+                // most four bytes either way, so the answer always fits the
+                // inlined string form.
+                let (start, end) = if char_len == bytes.len() {
+                    (idx as usize, idx as usize + 1)
+                } else {
+                    let start = tgt_data.str_byte_offset(idx as usize, str_pool);
+                    (
+                        start,
+                        start + utf8_width(unsafe { *bytes.get_unchecked(start) }),
+                    )
+                };
+                r[dest] = Data::small_str(unsafe {
+                    std::str::from_utf8_unchecked(bytes.get_unchecked(start..end))
                 });
             }
             Instr::GetSliceString(str_reg_id, idx_start, dest_reg_id) => {
                 let idx_start = r[idx_start].as_int();
                 let idx_end = r[args.pop_unchecked()].as_int();
-                let s = r[str_reg_id].as_str(str_pool).to_smolstr();
+                let src = r[str_reg_id];
+                let char_len = src.str_char_len(str_pool);
                 // Same rule as a list slice: a start on the end of the string is
                 // in range and yields "".
-                if (idx_end as u64) > s.len() as u64
-                    || (idx_start as u64) > s.len() as u64
+                if (idx_end as u64) > char_len as u64
+                    || (idx_start as u64) > char_len as u64
                     || idx_start > idx_end
                 {
-                    error_with_catch!(ErrType::SliceOutOfBounds(s.len(), idx_start, idx_end));
+                    error_with_catch!(ErrType::SliceOutOfBounds(char_len, idx_start, idx_end));
                 }
-                // Both ends have to sit between characters. A cut through one
-                // would leave a piece of it on each side, so the slice raises
-                // and names where it stopped.
-                if !s.is_char_boundary(idx_start as usize) {
-                    let character = character_at(&s, idx_start as usize);
-                    error_with_catch!(ErrType::NotACharBoundary(idx_start, character));
-                }
-                if !s.is_char_boundary(idx_end as usize) {
-                    let character = character_at(&s, idx_end as usize);
-                    error_with_catch!(ErrType::NotACharBoundary(idx_end, character));
-                }
-                r[dest_reg_id] = string!(&s[(idx_start as usize)..(idx_end as usize)]);
+                let (start, end) = if char_len == src.as_str(str_pool).len() {
+                    (idx_start as usize, idx_end as usize)
+                } else {
+                    // The end is found by walking on from the start rather
+                    // than from the first byte again, which is also what
+                    // leaves a walk over the string standing at the start of
+                    // this cut for the next one.
+                    let start = src.str_byte_offset(idx_start as usize, str_pool);
+                    let text = src.as_str(str_pool);
+                    let span = char_byte_offset(&text[start..], (idx_end - idx_start) as usize);
+                    (start, start + span)
+                };
+                // The cut is copied out before the pool is written to, because
+                // storing the result can move the string it was taken from.
+                let part = src.as_str(str_pool)[start..end].to_smolstr();
+                r[dest_reg_id] = string!(part.as_str());
             }
             Instr::Push(array, element) => {
                 obj_pool.get_mut(r[array].as_array()).push(r[element]);
@@ -1356,13 +1548,22 @@ pub fn execute(
                     let str = reg.as_str(str_pool);
                     let temp_elem = r[args.pop_unchecked()];
                     let element = temp_elem.as_str(str_pool);
-                    r[dest] = if let Some(idx) = memmem::find(str.as_bytes(), element.as_bytes()) {
-                        idx as i64
-                    } else {
-                        cold_path();
-                        -1
-                    }
-                    .into();
+                    r[dest] =
+                        if let Some(byte_idx) = memmem::find(str.as_bytes(), element.as_bytes()) {
+                            // The search works in bytes, and the answer is a
+                            // character position: on a string of single-byte
+                            // characters they are the same, otherwise count the
+                            // characters the match sits past.
+                            if reg.str_is_ascii(str_pool) {
+                                byte_idx as i64
+                            } else {
+                                count_chars(&str[..byte_idx]) as i64
+                            }
+                        } else {
+                            cold_path();
+                            -1
+                        }
+                        .into();
                 } else if reg.is_array() {
                     let arr_id = reg.as_array();
                     let element = r[args.pop_unchecked()];
@@ -1529,7 +1730,7 @@ pub fn execute(
                 if reg.is_array() {
                     r[dest] = (obj_pool[reg.as_array()].len() as i64).into();
                 } else if reg.is_string() {
-                    r[dest] = (reg.as_str(str_pool).len() as i64).into();
+                    r[dest] = (reg.str_char_len(str_pool) as i64).into();
                 } else if reg.is_map() {
                     r[dest] = (map_pool[reg.as_map()].len() as i64).into();
                 } else {
@@ -1713,7 +1914,7 @@ pub fn execute(
                                 if part.len() <= 6 {
                                     Data::small_str(part)
                                 } else if let Some(id) = free_strings.pop() {
-                                    part.clone_into(&mut str_pool[id as usize]);
+                                    part.clone_into(str_pool.get_mut(id as usize));
                                     Data::large_str_id(id as u64)
                                 } else {
                                     let id = str_pool.len() as u64;
@@ -1728,7 +1929,7 @@ pub fn execute(
                             if part.len() <= 6 {
                                 Data::small_str(part)
                             } else if let Some(id) = free_strings.pop() {
-                                part.clone_into(&mut str_pool[id as usize]);
+                                part.clone_into(str_pool.get_mut(id as usize));
                                 Data::large_str_id(id as u64)
                             } else {
                                 let id = str_pool.len() as u64;

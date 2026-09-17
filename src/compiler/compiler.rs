@@ -26,6 +26,7 @@ use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
 use crate::rt::resolve_library_filename;
 use crate::vm::Pool;
+use crate::vm::StringPool;
 use crate::{data::Data, instr::Instr};
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
@@ -2529,8 +2530,9 @@ fn compile_for_loop(
     if real_var {
         if is_str {
             output.push(Instr::GetIndexString(array, index_id, current_element_id));
-            // A string is walked by byte, so this is the one loop whose element
-            // read can raise: the span points the report at what is iterated.
+            // A body that assigns a shorter string to what is being walked
+            // leaves the index past its end, so this is the one loop whose
+            // element read can raise: the span points the report at it.
             state.add_to_src(ctx, output, span);
         } else {
             output.push(Instr::GetIndexArray(array, index_id, current_element_id));
@@ -5088,7 +5090,7 @@ pub fn compile(
     let mut pools: Pools = Pools::new(
         Pool::with_capacity(10),
         Pool::with_capacity(2),
-        Pool::with_capacity(10),
+        StringPool::with_capacity(10),
     );
     let mut instr_src: Vec<InstrSrc> = Vec::new();
     let mut callsite_registers: Vec<Vec<u16>> = Vec::new();

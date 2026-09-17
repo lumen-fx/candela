@@ -1131,72 +1131,156 @@ fn main() {
     assert_eq!(out, ["100000"]);
 }
 
-/// Positions count bytes, so one can land in the middle of a character. Every
-/// operation that takes one used to reach a Rust slice that panicked and took
-/// the VM down with it; each now raises an error a `catch` reaches.
+/// Positions count characters, so every operation that takes or answers one
+/// works on a string whose characters take more than a byte each: an accented
+/// letter, an emoji, and a script outside latin.
 #[test]
-fn a_position_inside_a_character_is_catchable() {
+fn string_positions_count_characters() {
     let out = run(
-        "inside_a_character",
+        "positions_count_characters",
         "
 import \"std/string\";
 
 fn main() {
     let word = \"caf\u{e9}\";
-    try {
-        print(word[3..4]);
-    } catch \"not_a_char_boundary\" {
-        print(\"slice\");
-    }
-    try {
-        print(word[4]);
-    } catch \"not_a_char_boundary\" {
-        print(\"index\");
-    }
-    try {
-        print(word.substring(0, 4));
-    } catch \"not_a_char_boundary\" {
-        print(\"substring\");
-    }
-    try {
-        print(word.char_at(3));
-    } catch \"not_a_char_boundary\" {
-        print(\"char_at\");
-    }
-    print(word[0..3]);
+    print(word.len());
+    print(word[3]);
+    print(word[0..4]);
+    print(word[..2]);
+    print(word.substring(0, 4));
+    print(word.char_at(3));
+    print(word.capitalize());
+    print(word.reverse());
+    print(word.pad_left(6, \"-\"));
+    print(word.pad_right(6, \"-\"));
+    print(word.chars());
+
+    let mixed = \"a\u{1f600}b\u{4e2d}\";
+    print(mixed.len());
+    print(mixed[1]);
+    print(mixed[3]);
+    print(mixed.substring(1, 2));
+    print(mixed.count(\"\u{1f600}\"));
+
+    let lines = \"caf\u{e9}\\nth\u{e9}\";
+    print(lines.lines());
+
+    let plain = \"candela\";
+    print(plain.len());
+    print(plain[3]);
+    print(plain[0..4]);
 }
 ",
     );
-    assert_eq!(out, ["slice", "index", "substring", "char_at", "caf"]);
+    assert_eq!(
+        out,
+        [
+            "4",
+            "\u{e9}",
+            "caf\u{e9}",
+            "ca",
+            "caf\u{e9}",
+            "\u{e9}",
+            "Caf\u{e9}",
+            "\u{e9}fac",
+            "--caf\u{e9}",
+            "caf\u{e9}--",
+            "[\"c\",\"a\",\"f\",\"\u{e9}\"]",
+            "4",
+            "\u{1f600}",
+            "\u{4e2d}",
+            "\u{1f600}b",
+            "1",
+            "[\"caf\u{e9}\",\"th\u{e9}\"]",
+            "7",
+            "d",
+            "cand",
+        ]
+    );
 }
 
-/// An index that lands on a character wider than one byte has no one-byte
-/// answer to give, so it raises rather than handing back half of it.
+/// Iterating a string yields whole characters, one per position.
 #[test]
-fn an_index_on_a_wide_character_raises_instead_of_half_of_it() {
-    let said = refuse(
-        "index_a_wide_character",
-        "fn main() {\n    let word = \"caf\u{e9}\";\n    print(word[3]);\n}\n",
+fn iterating_a_string_yields_whole_characters() {
+    let out = run(
+        "iterate_characters",
+        "
+fn main() {
+    let count = 0;
+    for c in \"caf\u{e9} \u{1f600}\u{4e2d}\" {
+        print(c);
+        count = count + 1;
+    }
+    print(count);
+}
+",
     );
-    assert!(
-        said.contains('3') && said.contains('\u{e9}'),
-        "the report names the position and the character: {said}"
-    );
-    assert!(
-        !said.contains('\u{fffd}'),
-        "no half a character reaches the output: {said}"
+    assert_eq!(
+        out,
+        ["c", "a", "f", "\u{e9}", " ", "\u{1f600}", "\u{4e2d}", "7"]
     );
 }
 
-/// The uncaught report names the position and the character it lands in.
+/// `find` answers a character position, so the position it hands back is the
+/// one `substring` and a slice take.
 #[test]
-fn a_slice_report_names_the_position_and_the_character() {
+fn find_and_substring_agree_on_positions() {
+    let out = run(
+        "find_agrees_with_substring",
+        "
+import \"std/string\";
+
+fn main() {
+    let line = \"caf\u{e9} au lait\u{1f600} now\";
+    let at = line.find(\"lait\");
+    print(at);
+    print(line.substring(at, 4));
+    print(line[at..at + 4]);
+    print(line.find(\"\u{1f600}\"));
+    print(line[line.find(\"\u{1f600}\")]);
+    print(line.find(\"tea\"));
+}
+",
+    );
+    assert_eq!(out, ["8", "lait", "lait", "12", "\u{1f600}", "-1"]);
+}
+
+/// A position past the last character is the ordinary index error, on a string
+/// of wide characters as much as on a plain one.
+#[test]
+fn a_position_past_the_character_count_is_an_index_error() {
+    let out = run(
+        "past_the_character_count",
+        "
+fn main() {
+    let word = \"caf\u{e9}\";
+    try {
+        print(word[4]);
+    } catch \"index_out_of_bounds\" {
+        print(\"index\");
+    }
+    try {
+        print(word[0..5]);
+    } catch \"slice_out_of_bounds\" {
+        print(\"slice\");
+    }
+    print(word[0..4]);
+}
+",
+    );
+    assert_eq!(out, ["index", "slice", "caf\u{e9}"]);
+}
+
+/// The uncaught report counts characters too: it names the position asked for
+/// and how many characters the string has, not how many bytes.
+#[test]
+fn an_index_report_counts_characters() {
     let said = refuse(
-        "slice_a_wide_character",
-        "fn main() {\n    let word = \"caf\u{e9}\";\n    print(word[3..4]);\n}\n",
+        "index_past_the_characters",
+        "fn main() {\n    let word = \"caf\u{e9}\";\n    print(word[4]);\n}\n",
     );
     assert!(
-        said.contains('4') && said.contains('\u{e9}'),
-        "the report names the position and the character: {said}"
+        said.contains("index 4 but the length is 4"),
+        "the report names the position and the character count: {said}"
     );
 }

@@ -1,10 +1,11 @@
 use crate::rt::EnumType;
 use crate::rt::Struct;
-use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool};
+use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool, char_byte_offset, count_chars};
 use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hash::Hasher;
+use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
 
 const NAN_BASE: u64 =
@@ -35,6 +36,9 @@ const NAN_ENUM: u64 = NAN_BASE;
 /// observable.
 const CANONICAL_NAN: u64 =
     0b0111_1111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
+/// The top bit of each of the six bytes an inlined string packs. A string
+/// with none of them set holds nothing but single-byte characters.
+const SMALL_STR_HIGH_BITS: u64 = 0x0000_8080_8080_8080;
 pub const NULL: Data = Data::tagged(NAN_NULL);
 pub const FALSE: Data = Data::tagged(NAN_BOOL);
 pub const TRUE: Data = Data::tagged(NAN_BOOL | 1);
@@ -306,8 +310,7 @@ impl Data {
     pub fn as_str(&self, string_pool: &StringPool) -> &str {
         debug_assert!(self.is_string());
         if (self.boxed & !PAYLOAD_MASK) == NAN_STRING_SMALL {
-            let payload = self.boxed & PAYLOAD_MASK;
-            let len = ((64 - payload.leading_zeros()) as usize + 7) >> 3;
+            let len = self.small_str_len();
             let ptr = self as *const Self as *const u8;
             unsafe {
                 let slice = std::slice::from_raw_parts(ptr, len);
@@ -318,6 +321,54 @@ impl Data {
             unsafe { &*(string_pool[payload].as_str() as *const str) }
         }
     }
+    /// True when every character of this string takes a single byte. A
+    /// character position on such a string is a byte position, which is the
+    /// route indexing and slicing take when they can.
+    #[inline(always)]
+    pub fn str_is_ascii(&self, string_pool: &StringPool) -> bool {
+        if self.is_large_str() {
+            string_pool.is_ascii(self.get_str_pool_id())
+        } else {
+            self.boxed & SMALL_STR_HIGH_BITS == 0
+        }
+    }
+
+    /// How many characters this string has. Positions on a string count
+    /// characters, so this is what `len` answers and what an index or a slice
+    /// bound is checked against.
+    #[inline(always)]
+    pub fn str_char_len(&self, string_pool: &StringPool) -> usize {
+        if self.is_large_str() {
+            string_pool.char_len(self.get_str_pool_id())
+        } else if self.boxed & SMALL_STR_HIGH_BITS == 0 {
+            self.small_str_len()
+        } else {
+            cold_path();
+            count_chars(self.as_str(string_pool))
+        }
+    }
+
+    /// The byte offset character `char_idx` starts at. The string has at least
+    /// `char_idx` characters; at exactly that many the answer is its byte
+    /// length, which is what a slice bound on the end of the string asks for.
+    #[inline(always)]
+    pub fn str_byte_offset(&self, char_idx: usize, string_pool: &StringPool) -> usize {
+        if self.str_is_ascii(string_pool) {
+            char_idx
+        } else if self.is_large_str() {
+            string_pool.byte_offset(self.get_str_pool_id(), char_idx)
+        } else {
+            char_byte_offset(self.as_str(string_pool), char_idx)
+        }
+    }
+
+    /// How many bytes an inlined string takes.
+    #[inline(always)]
+    const fn small_str_len(&self) -> usize {
+        let payload = self.boxed & PAYLOAD_MASK;
+        ((64 - payload.leading_zeros()) as usize + 7) >> 3
+    }
+
     #[inline(always)]
     pub const fn is_string(self) -> bool {
         // this works because NAN_TAG_STRING_LARGE == NAN_TAG_STRING_SMALL + (1 << 48)
@@ -622,7 +673,7 @@ mod format_tests {
         ]);
         let rendered = Data::array(1).format(
             &obj_pool,
-            &Pool(Vec::new()),
+            &StringPool::default(),
             &Pool(Vec::new()),
             &[],
             &enums,
@@ -637,7 +688,7 @@ mod format_tests {
     #[test]
     fn an_entry_with_no_readable_tag_formats_as_the_bare_type() {
         let enums = one_enum();
-        let string_pool: StringPool = Pool(Vec::new());
+        let string_pool = StringPool::default();
         let map_pool: MapPool = Pool(Vec::new());
         for entry in [
             // An array of enum values, read as if it were an enum value.
