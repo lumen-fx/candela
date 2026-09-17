@@ -234,6 +234,27 @@ pub struct ErrorCtx {
     pub sources: Vec<Source>,
 }
 
+/// The name a call site wrote for the function it calls: its source text up to
+/// the arguments. The VM holds no table of function names, so an error about a
+/// call reads the name back out of the source the call was compiled from.
+#[cold]
+#[inline(never)]
+#[must_use]
+pub fn call_site_name(ctx: &ErrorCtx, instr: Instr) -> &str {
+    let name = ctx
+        .instr_src
+        .iter()
+        .find(|s| s.instr == instr)
+        .and_then(|src| {
+            let contents = &ctx.sources.get(src.file_id as usize)?.contents;
+            contents.get((src.span.start as usize)..(src.span.end as usize))
+        })
+        .and_then(|text| text.split(['(', '<']).next())
+        .map(str::trim)
+        .unwrap_or_default();
+    if name.is_empty() { "a function" } else { name }
+}
+
 impl From<std::io::ErrorKind> for ErrType<'_> {
     fn from(value: std::io::ErrorKind) -> Self {
         match value {
@@ -318,6 +339,9 @@ pub enum ErrType<'a> {
     /// happens when a value arrived typed as a string and is not one. Carries
     /// the type name it turned out to have.
     NotAString(&'static str),
+    /// A call that would stand one frame past the call-depth limit. Carries the
+    /// name the call site wrote and the limit it reached.
+    CallDepthExceeded(&'a str, usize),
 }
 
 impl From<ErrType<'_>> for SmolStr {
@@ -354,6 +378,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::BadDowncast(want, got) => format_args!("Cannot read this {RED}{BOLD}{got}{RESET} value as {BLUE}{BOLD}{want}{RESET}").to_smolstr(),
             ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
             ErrType::NotAString(got) => format_args!("Cannot join this {RED}{BOLD}{got}{RESET} value onto a {BLUE}{BOLD}string{RESET}").to_smolstr(),
+            ErrType::CallDepthExceeded(name, limit) => format_args!("The call to {RED}{BOLD}{name}{RESET} stands {BLUE}{BOLD}{limit}{RESET} calls deep, which is the call depth limit").to_smolstr(),
         }
     }
 }
@@ -392,6 +417,7 @@ impl ErrType<'_> {
             ErrType::BadDowncast(_, _) => "bad_downcast",
             ErrType::HostFn(_, _) => "host_fn_error",
             ErrType::NotAString(_) => "not_a_string",
+            ErrType::CallDepthExceeded(_, _) => "call_depth_exceeded",
         }
     }
 }

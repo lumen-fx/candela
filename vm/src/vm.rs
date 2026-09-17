@@ -11,6 +11,7 @@ use crate::embed::HostDispatch;
 use crate::embed::Value;
 use crate::errors::ErrType;
 use crate::errors::ErrorCtx;
+use crate::errors::call_site_name;
 use crate::errors::throw_error;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
@@ -42,6 +43,14 @@ mod ffi;
 
 #[cfg(target_arch = "wasm32")]
 use crate::errors::wasm_error;
+
+/// How many calls may stand at once. A recursion that never returns pushes a
+/// frame per call, so an unbounded one grows the frame stack until the
+/// operating system kills the process; the call past this many frames raises
+/// `call_depth_exceeded` instead. The limit sits far above what a working
+/// recursion needs, and the frames a run this deep stands on stay within a few
+/// hundred megabytes even for a function that saves many registers per level.
+pub const CALL_DEPTH_LIMIT: usize = 1_000_000;
 
 pub type ObjectPool = Pool<Vec<Data>>;
 pub type MapPool = Pool<HashMap<Data, Data, BuildHasherDefault<DataHash>>>;
@@ -464,6 +473,12 @@ pub fn execute(
             Instr::SetInt(dest, n) => r[dest] = n.into(),
             Instr::SetBool(b, dest) => r[dest] = b.into(),
             Instr::CallFunc(new_loc, return_id) => {
+                if call_frames.len() == CALL_DEPTH_LIMIT {
+                    error_with_catch!(ErrType::CallDepthExceeded(
+                        call_site_name(err_ctx, unsafe { *instructions.get_unchecked(i) }),
+                        CALL_DEPTH_LIMIT
+                    ));
+                }
                 call_frames.push(CallFrame {
                     return_addr: i as u16,
                     return_reg: return_id,
@@ -491,6 +506,12 @@ pub fn execute(
                 i = call_frame.return_addr as usize;
             }
             Instr::SaveFrame(relative_func_loc, return_register, callsite_id) => {
+                if call_frames.len() == CALL_DEPTH_LIMIT {
+                    error_with_catch!(ErrType::CallDepthExceeded(
+                        call_site_name(err_ctx, unsafe { *instructions.get_unchecked(i) }),
+                        CALL_DEPTH_LIMIT
+                    ));
+                }
                 call_frames.push(CallFrame {
                     return_addr: (i as u16) + relative_func_loc,
                     return_reg: return_register,

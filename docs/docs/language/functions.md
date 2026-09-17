@@ -148,6 +148,11 @@ fn main() {
 }
 ```
 
+Calls stand up to 1000000 deep. A recursion that goes further raises
+`call_depth_exceeded`, naming the call it stopped at, so a recursion that never
+reaches its base case ends with an error a `catch` can take rather than eating
+memory until the machine stops it. See [errors](../reference/errors.md).
+
 ## Anonymous functions
 
 `fn(params) { ... }` written in expression position is a value you can store in
