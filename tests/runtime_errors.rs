@@ -491,7 +491,7 @@ fn main() {
             "text",
             "9",
             "2.5",
-            "3",
+            "3.0",
             "false",
             "[1,2,3]",
             "[[1,2],[3]]",
@@ -501,6 +501,28 @@ fn main() {
             "{\"only\":1}",
         ]
     );
+}
+
+/// A float carries its decimal point wherever it is written, so a whole float
+/// never reads as an int. `str` has always answered `2.0`; `print` and the
+/// collection printers say the same. A value with no decimal form to show, an
+/// infinity or a not-a-number, prints as itself.
+#[test]
+fn a_whole_float_keeps_its_decimal_point_wherever_it_prints() {
+    let out = run(
+        "print_whole_float",
+        r#"
+fn main() {
+    print(2.0);
+    print(str(2.0));
+    print([2.0]);
+    print({"a": 2.0});
+    print(-0.0);
+    print(1.0 / 0.0);
+}
+"#,
+    );
+    assert_eq!(out, ["2.0", "2.0", "[2.0]", "{\"a\":2.0}", "-0.0", "inf"]);
 }
 
 /// A map with more than one entry separates them with a comma. The order they
