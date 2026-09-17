@@ -215,6 +215,16 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                     }
                 }
             }
+            // A call attaches to the expression in front of it, so the
+            // closure another call or an index hands back is called where it
+            // stands instead of having to be bound first.
+            Some(Token::LParen) => {
+                parser.next_token();
+                let (args, arg_markers, end) = parse_args(parser);
+                let call = Expr::CallValue(Box::new(base), args, base_span, arg_markers);
+                base_span.end = end;
+                base = call;
+            }
             // Struct field access or ObjfunctionCall
             Some(Token::Dot) => {
                 parser.next_token();

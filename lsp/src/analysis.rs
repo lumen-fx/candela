@@ -435,6 +435,14 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             visit_expr(b, src_file, out);
         }
         Expr::BoolNeg(a, _, _) | Expr::Neg(a, _, _) => visit_expr(a, src_file, out),
+        // An indirect call names no function, so it records no reference of
+        // its own; the callee and the arguments still hold names to resolve.
+        Expr::CallValue(callee, args, _, _) => {
+            visit_expr(callee, src_file, out);
+            for a in args.iter() {
+                visit_expr(a, src_file, out);
+            }
+        }
     }
 }
 

@@ -23,7 +23,8 @@ except `^`.
 Four forms bind tighter than every binary operator: a function call `f(x)`, an
 index or slice `a[i]`, a field access `p.x`, and a method call `p.len()`. They
 attach to the term they follow, so `a.b[0] ^ 2` raises `a.b[0]` to the power of
-two.
+two, and they chain: `adder(1)(2)` calls what `adder(1)` returned, and
+`fs[0](x)` calls the element it indexed.
 
 The prefix operators `-` and `!` bind tighter than `^` and looser than the
 postfix forms. `-a ^ 2` is `(-a) ^ 2` and `!ok == done` is `(!ok) == done`. Use

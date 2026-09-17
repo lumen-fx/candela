@@ -211,6 +211,21 @@ fn main() {
 }
 ```
 
+A function that returns an anonymous function, or a list that holds one, is
+called where it stands; there is no need to bind it with `let` first.
+
+```rust
+fn doubler() {
+    return fn(x) { return x * 2; };
+}
+
+fn main() {
+    print(doubler()(21));
+    let fs = [fn(x) { return x + 1; }];
+    print(fs[0](41));
+}
+```
+
 Both forms work as arguments: the name of a declared function, and an anonymous
 function written at the call site. A declared function's name is usable as a
 value only in an argument position; to keep one in a variable, wrap it in an
