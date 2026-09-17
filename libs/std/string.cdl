@@ -33,6 +33,11 @@ impl string {
         return self[0..1].uppercase() + self[1..self.len()];
     }
 
+    /// The characters of the string, each as a one-character string.
+    fn chars(self) {
+        return self.split("");
+    }
+
     /// The lines of the string, split on newline boundaries.
     fn lines(self) {
         return self.split("\n");

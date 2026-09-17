@@ -1,7 +1,7 @@
 # string
 
-Substrings, padding, capitalisation, line splitting, and counting, as methods
-on strings.
+Substrings, characters, padding, capitalisation, line splitting, and counting,
+as methods on strings.
 
 ```rust
 import "std/string";
@@ -16,7 +16,7 @@ and are listed in [built-in functions](builtins.md).
 Indices and lengths count bytes, not characters, so a string of non-ASCII text
 does not index by character. A four-letter word ending in an accented vowel has a
 length of 5, and slicing it by character position cuts the accented letter in
-half.
+half. Use `chars` to walk such a string one character at a time.
 
 Slicing raises `slice_out_of_bounds` when the end runs past the string, and also
 when the start index reaches the length. Every method here that slices therefore
@@ -72,6 +72,30 @@ s.capitalize()
 
 - Returns: `s` with its first character upper-cased and the rest left as it is.
   An empty string returns unchanged.
+
+## chars
+
+```rust
+s.chars()
+```
+
+- Returns: a list of the characters of `s`, each as a one-character string. An
+  empty string returns an empty list.
+
+```rust
+import "std/string";
+
+fn main() {
+    for c in "abc".chars() {
+        print(c);
+    }
+}
+```
+
+A character here is a Unicode scalar value, so a multi-byte character is one
+entry and arrives whole. This is the one place in the module that works by
+character rather than by byte; `chars` is `split("")` under a name that says
+what it does.
 
 ## lines
 

@@ -308,7 +308,7 @@ Called on a string receiver.
 | `s.contains(needle)` | bool | True when the string `needle` occurs in `s` |
 | `s.find(needle)` | int | The byte offset of the first occurrence of `needle`, or -1 |
 | `s.replace(from, to)` | string | `s` with every occurrence of `from` replaced by `to` |
-| `s.split(separator)` | string[] | `s` cut at each occurrence of the string `separator` |
+| `s.split(separator)` | string[] | `s` cut at each occurrence of the string `separator`; an empty `separator` answers the characters |
 | `s.trim()` | string | `s` without leading or trailing whitespace |
 | `s.trim_left()` | string | `s` without leading whitespace |
 | `s.trim_right()` | string | `s` without trailing whitespace |
@@ -321,7 +321,10 @@ Called on a string receiver.
 | `s.reverse()` | string | A new string with the characters in reverse order |
 
 `len` and `find` count bytes, and indexing and slicing a string are byte-based,
-so a string of non-ASCII text does not index by character.
+so a string of non-ASCII text does not index by character. `split` with an empty
+separator is the exception: it cuts by character, so a multi-byte character
+arrives whole. The `chars` method in the [string module](string.md) is the same
+split under a name that says so.
 
 ## List methods
 
