@@ -118,7 +118,10 @@ not find, not a surprise at the first call.
 Building a `.cdlb` artifact records the library name, the symbol and the
 signature, never the library's bytes. Loading the artifact re-opens the library
 and re-resolves the symbol, so the library has to be present wherever the
-artifact runs. See [artifacts](../reference/artifacts.md).
+artifact runs. A standard-library module's own library is the exception: it is
+recorded relative to the `libs` directory rather than to the module, so the
+runtime finds it through the toolchain. See
+[artifacts](../reference/artifacts.md).
 
 Dynamic libraries are not available when candela is compiled to WebAssembly.
 

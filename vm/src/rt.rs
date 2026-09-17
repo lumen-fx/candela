@@ -20,6 +20,7 @@ use smol_strc::SmolStr;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::hint::unreachable_unchecked;
+use std::path::Path;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
@@ -219,16 +220,36 @@ impl HostFnSig {
     }
 }
 
+/// Where a recorded `dylib` spec is resolved from when an artifact loads.
+///
+/// A program names its own libraries, and those keep the spec the source wrote
+/// and the search it has always had. A standard-library module names its
+/// library by a path relative to its own file, which the runtime never sees, so
+/// such a spec is recorded relative to the `libs` directory the toolchain lays
+/// out and resolved through [`std_lib_dir`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LibraryOrigin {
+    /// A library the program itself names.
+    Program,
+    /// A library the shipped standard library names, recorded relative to the
+    /// `libs` directory.
+    StandardLibrary,
+}
+
 #[derive(Debug)]
 #[allow(clippy::pub_underscore_fields)]
 pub struct DynamicLibFn {
     /// [ return_type, arg_types... ]
     pub types: Box<[DataType]>,
-    /// The library spec exactly as written in the source `dylib "..."` block: a
-    /// bare logical name (`z`, `sqlite3`) or a path. Recorded so a `.cdlb`
-    /// artifact can re-resolve the library by name at load time; it is not read
-    /// on the live call path (the resolved `_lib`/`ptr`/`cif` below are).
+    /// The library spec recorded for this binding: a bare logical name (`z`,
+    /// `sqlite3`) or a path, as the source wrote it, or, for a
+    /// [`LibraryOrigin::StandardLibrary`] binding, that path made relative to
+    /// the `libs` directory. Recorded so a `.cdlb` artifact can re-resolve the
+    /// library by name at load time; it is not read on the live call path (the
+    /// resolved `_lib`/`ptr`/`cif` below are).
     pub library: SmolStr,
+    /// Which search the spec is resolved through.
+    pub origin: LibraryOrigin,
     /// The C symbol this binding resolves to. Recorded alongside `library` so a
     /// `.cdlb` can re-bind the symbol at load without the source tree.
     pub symbol: SmolStr,
@@ -303,7 +324,7 @@ impl TargetOs {
 #[must_use]
 pub fn resolve_library_filename(spec: &str, os: TargetOs) -> String {
     let has_separator = spec.contains('/') || spec.contains('\\');
-    let has_extension = std::path::Path::new(spec).extension().is_some();
+    let has_extension = Path::new(spec).extension().is_some();
     if has_extension {
         spec.to_owned()
     } else if has_separator {
@@ -372,17 +393,48 @@ pub fn argv_skip() -> usize {
     ARGV_SKIP.get()
 }
 
-/// Opens `filename` under each [`dylib_dirs`] directory in turn, and hands the
-/// name to the OS loader when it is under none of them.
+/// The directory the standard library ships in: `CANDELA_LIB_PATH` when it is
+/// set, and `libs/` beside the running executable otherwise, which is where the
+/// toolchain installs it next to `candela` and `candela-vm`.
+///
+/// This is the one answer to "where is `libs`", read by the compiler resolving
+/// a library import and by an artifact load re-opening a standard-library
+/// dynamic library.
+#[must_use]
+pub fn std_lib_dir() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
+        return Some(PathBuf::from(base));
+    }
+    std::env::current_exe().ok().map(|exe| {
+        exe.canonicalize()
+            .unwrap_or(exe)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("libs")
+    })
+}
+
+/// Opens `filename` under each [`dylib_dirs`] directory in turn, then, for a
+/// standard-library file, under [`std_lib_dir`], and hands the name to the OS
+/// loader when it is under none of them.
 ///
 /// The loader's own error comes back, so a caller reports the same message it
 /// did before a directory was ever set.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn open_library(filename: &str) -> Result<Library, libloading::Error> {
+pub(crate) fn open_library(
+    filename: &str,
+    origin: LibraryOrigin,
+) -> Result<Library, libloading::Error> {
     for dir in dylib_dirs() {
         if let Ok(lib) = unsafe { Library::new(dir.join(filename)) } {
             return Ok(lib);
         }
+    }
+    if matches!(origin, LibraryOrigin::StandardLibrary)
+        && let Some(dir) = std_lib_dir()
+        && let Ok(lib) = unsafe { Library::new(dir.join(filename)) }
+    {
+        return Ok(lib);
     }
     unsafe { Library::new(filename) }
 }

@@ -36,8 +36,10 @@ The artifact produces the same output as running the source through `candela`.
 - The source text of every file that went into the program, along with the span
   each instruction came from. This is what lets a runtime error from an artifact
   print the same underlined source report you get when running from source.
-- A recipe for each dynamic-library binding: the library name exactly as written
-  in the `dylib` block, the C symbol, and the marshalling signature.
+- A recipe for each dynamic-library binding: the library name, the C symbol, and
+  the marshalling signature. A library your program names is recorded exactly as
+  the `dylib` block wrote it; one a standard-library module names is recorded
+  relative to the `libs` directory, and marked as the library's own.
 - A recipe for each `host` function: its namespace, name, signature, and whether
   it is variadic.
 - An export table: one entry per host-callable function, with the call
@@ -55,7 +57,10 @@ libraries](../integration/c-libraries.md).
 The same applies to the standard library. A program that imports only
 pure-candela modules is self-contained. The `math`, `random` and `time` modules
 bind a dynamic library, so an artifact using them needs that library at run
-time. See [the standard library overview](../standard-library/overview.md).
+time, and `candela-vm` looks for it where the toolchain keeps it: the directory
+`CANDELA_LIB_PATH` names, or `libs/` beside the binary, which is where an
+install puts it. Such an artifact therefore runs from any working directory. See
+[the standard library overview](../standard-library/overview.md).
 
 ## The export table
 
@@ -97,7 +102,8 @@ rather than risk decoding it wrongly.
 The version is raised whenever the shape of what is recorded changes: adding the
 dynamic-library and host-function tables, adding the enum type table, adding the
 map, JSON and `any` operations, adding the export table, and adding the map
-`remove` instruction each raised it. There is no forward or backward
+`remove` instruction together with the mark on the dynamic libraries the
+standard library owns each raised it. There is no forward or backward
 compatibility across a change, and there is no conversion tool.
 
 In practice this means: build the artifact with the toolchain whose `candela-vm`

@@ -42,6 +42,7 @@ use crate::rt::EnumType;
 use crate::rt::EnumVariant;
 use crate::rt::HostFnSig;
 use crate::rt::InstrSrc;
+use crate::rt::LibraryOrigin;
 use crate::rt::Pools;
 use crate::rt::Source;
 use crate::rt::Span;
@@ -74,7 +75,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// added the map/json/any library functions (`Keys`/`Values`/`JsonParse`/
 /// `JsonStringify` and the `is_*`/`as_*` value ops). Version 5 added the export
 /// table (`exports`), the call trampolines that back
-/// [`RuntimeProgram::call`]. Version 6 added the `MapRemove` instruction.
+/// [`RuntimeProgram::call`]. Version 6 added the `MapRemove` instruction and
+/// the origin of each dynamic-library recipe, which says whether its spec is
+/// the program's own or a path into the standard library's `libs` directory.
 const FORMAT_VERSION: u8 = 6;
 
 /// Serializable mirror of a compiled program's runtime state.
@@ -119,13 +122,16 @@ pub struct ProgramImage {
 /// library and re-resolve the symbol by name at load, with no embedded bytes.
 #[derive(Serialize, Deserialize)]
 pub struct DynLibFnImage {
-    /// Logical library name (`z`, `sqlite3`) or path, exactly as written in the
-    /// source `dylib "..."` block.
+    /// Logical library name (`z`, `sqlite3`) or path. A program's own binding
+    /// records it exactly as the source `dylib "..."` block wrote it; a
+    /// standard-library one records it relative to the `libs` directory.
     pub library: String,
     /// The C symbol resolved within `library`.
     pub symbol: String,
     /// `[ return_type, arg_types... ]`, driving the rebuilt libffi CIF.
     pub types: Vec<DataType>,
+    /// Which search `library` is resolved through at load.
+    pub origin: LibraryOrigin,
 }
 
 /// Serializable recipe for one `host` function: its fully-qualified name and
@@ -599,7 +605,9 @@ impl RuntimeProgram {
 /// right file on another. The directories a host named with
 /// [`set_dylib_dirs`](crate::rt::set_dylib_dirs) are searched before the
 /// loader's own paths, which is how an application ships its libraries in a
-/// directory of its own.
+/// directory of its own. A recipe the standard library owns is searched for
+/// under the toolchain's `libs` directory as well, so an artifact that imports
+/// `std/math` runs from any working directory.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_dyn_lib_fns(
     recipes: &[DynLibFnImage],
@@ -609,20 +617,25 @@ fn resolve_dyn_lib_fns(
     use libloading::Library;
     use std::rc::Rc;
 
-    let mut libs: HashMap<String, Rc<Library>> = HashMap::default();
+    // Keyed by origin as well as filename: the same relative path means one
+    // file under the toolchain's `libs` and another beside the program.
+    let mut libs: HashMap<(LibraryOrigin, String), Rc<Library>> = HashMap::default();
     let mut out: Vec<DynamicLibFn> = Vec::with_capacity(recipes.len());
 
     for recipe in recipes {
         let filename = resolve_library_filename(&recipe.library, TargetOs::CURRENT);
-        let lib = if let Some(lib) = libs.get(&filename) {
+        let key = (recipe.origin, filename.clone());
+        let lib = if let Some(lib) = libs.get(&key) {
             Rc::clone(lib)
         } else {
-            let lib = Rc::new(open_library(&filename).map_err(|e| LoadError::LibraryOpen {
-                spec: recipe.library.clone(),
-                filename: filename.clone(),
-                message: e.to_string(),
+            let lib = Rc::new(open_library(&filename, recipe.origin).map_err(|e| {
+                LoadError::LibraryOpen {
+                    spec: recipe.library.clone(),
+                    filename: filename.clone(),
+                    message: e.to_string(),
+                }
             })?);
-            libs.insert(filename.clone(), Rc::clone(&lib));
+            libs.insert(key, Rc::clone(&lib));
             lib
         };
 
@@ -651,6 +664,7 @@ fn resolve_dyn_lib_fns(
         out.push(DynamicLibFn {
             types: recipe.types.clone().into_boxed_slice(),
             library: SmolStr::from(recipe.library.as_str()),
+            origin: recipe.origin,
             symbol: SmolStr::from(recipe.symbol.as_str()),
             _lib: lib,
             ptr,

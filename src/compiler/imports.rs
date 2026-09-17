@@ -156,17 +156,12 @@ fn split_first_segment(path: &str) -> (&str, Option<&str>) {
 /// The standard library directory a resolver starts with: `CANDELA_LIB_PATH`
 /// when it is set, and `libs/` beside the running executable otherwise, which
 /// is where the toolchain installs it.
+///
+/// The runtime answers the same question when an artifact re-opens one of the
+/// library's own dynamic libraries, so the answer lives there and a compile
+/// reads it from the same place.
 fn default_lib_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("CANDELA_LIB_PATH") {
-        return Some(PathBuf::from(base));
-    }
-    std::env::current_exe().ok().map(|exe| {
-        exe.canonicalize()
-            .unwrap_or(exe)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("libs")
-    })
+    crate::rt::std_lib_dir()
 }
 
 #[cfg(test)]
