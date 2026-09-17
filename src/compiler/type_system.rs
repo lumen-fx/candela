@@ -1,4 +1,5 @@
 use super::expr::Expr;
+use super::expr::METHOD_SEP;
 use super::expr::Span;
 use super::expr::mangle_method;
 use super::expr::symbol_of_expr;
@@ -33,6 +34,7 @@ use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
 use crate::compiler::methods::dyn_lib_receiver;
+use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -625,21 +627,158 @@ fn render_instantiation(
     }
 }
 
-/// The module name a file is known by: its path with the directories and the
-/// `.cdl` taken off, which is what an `import` writes.
+/// The path segments a file is known by: its path with the `.cdl` taken off,
+/// split on the directory separator, which is what an `import` writes.
 #[must_use]
-fn module_name(file_idx: u16, sources: &[Source]) -> SmolStr {
+fn module_segments(file_idx: u16, sources: &[Source]) -> Vec<&str> {
     let Some(source) = sources.get(file_idx as usize) else {
-        return SmolStr::default();
+        return Vec::new();
     };
-    let path: &str = &source.filename;
-    let stem = path
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
+    let path: &str = source
+        .filename
         .strip_suffix(".cdl")
-        .unwrap_or(path);
-    SmolStr::from(stem)
+        .unwrap_or(&source.filename);
+    path.split(['/', '\\']).filter(|s| !s.is_empty()).collect()
+}
+
+/// The module prefix a type declared in `file_idx` takes when the modules in
+/// `declarers` declare that name too: the fewest trailing path segments that
+/// tell this file apart from the others. One `plain.cdl` gives `plain`; two of
+/// them, one per package, give `strutil::plain` and `sqlite::plain`, so a
+/// qualified name is one type and no more.
+#[must_use]
+fn module_qualifier(file_idx: u16, declarers: &[u16], sources: &[Source]) -> SmolStr {
+    let mine = module_segments(file_idx, sources);
+    let others: Vec<Vec<&str>> = declarers
+        .iter()
+        .filter(|other| **other != file_idx)
+        .map(|other| module_segments(*other, sources))
+        .collect();
+    for take in 1..=mine.len() {
+        let tail = &mine[mine.len() - take..];
+        if others
+            .iter()
+            .all(|other| other.len() < take || &other[other.len() - take..] != tail)
+        {
+            return tail.join("::").into();
+        }
+    }
+    mine.join("::").into()
+}
+
+/// Puts the declaring module in front of every plain `struct` or `enum` name
+/// that more than one module declares, so a package's types never collide with
+/// a consumer's types of the same name.
+///
+/// Plain types share one program-wide table keyed by name, and a method lowers
+/// to a free function named after its type (`Plain#get`), so two modules each
+/// declaring `Plain` leave one `Plain#get` answering calls on both. The name a
+/// duplicate is registered under becomes `right::Plain`, which is what a
+/// diagnostic prints and what a method on it is mangled under; a generic type
+/// two modules declare is qualified the same way, see `render_instantiation`.
+/// A name only one module declares is left as it was written.
+///
+/// Every `impl` method is re-mangled against the name its receiver ended up
+/// with, resolved in the scope the `impl` block was written in, and so are the
+/// calls a method makes on its own receiver, which the recursion check reads.
+pub fn qualify_duplicate_type_names(
+    structs: &mut [Struct],
+    enums: &mut [EnumType],
+    fns: &mut [Function],
+    struct_files: &[(u16, u16)],
+    enum_files: &[(u16, u16)],
+    namespaces: &FileNamespaces,
+    sources: &[Source],
+) {
+    // The modules that declare each name. A struct and an enum of one name are
+    // as much two types as two structs are: both mangle their methods against
+    // that one name.
+    let mut declarers: FxHashMap<SmolStr, Vec<u16>> = FxHashMap::default();
+    for (name, file_idx) in struct_files
+        .iter()
+        .filter_map(|(id, file_idx)| Some((&structs.get(*id as usize)?.name, *file_idx)))
+        .chain(
+            enum_files
+                .iter()
+                .filter_map(|(id, file_idx)| Some((&enums.get(*id as usize)?.name, *file_idx))),
+        )
+    {
+        declarers.entry(name.clone()).or_default().push(file_idx);
+    }
+    if declarers.values().all(|files| files.len() <= 1) {
+        return;
+    }
+
+    for &(struct_id, file_idx) in struct_files {
+        let Some(declared) = structs.get_mut(struct_id as usize) else {
+            continue;
+        };
+        if let Some(files) = declarers.get(&declared.name)
+            && files.len() > 1
+        {
+            declared.name = qualified_type_name(file_idx, files, &declared.name, sources);
+        }
+    }
+    for &(enum_id, file_idx) in enum_files {
+        let Some(declared) = enums.get_mut(enum_id as usize) else {
+            continue;
+        };
+        if let Some(files) = declarers.get(&declared.name)
+            && files.len() > 1
+        {
+            declared.name = qualified_type_name(file_idx, files, &declared.name, sources);
+        }
+    }
+
+    for func in fns.iter_mut() {
+        let scope = namespaces.get(func.src_file);
+        if let Some(mangled) = requalify_method(&func.name, scope, structs, enums) {
+            func.name = mangled;
+        }
+        for callee in &mut func.direct_calls {
+            if let Some(mangled) = requalify_method(callee, scope, structs, enums) {
+                *callee = mangled;
+            }
+        }
+    }
+}
+
+/// The name a type declared in `file_idx` is registered under once the modules
+/// in `declarers` declare that name too.
+#[must_use]
+fn qualified_type_name(
+    file_idx: u16,
+    declarers: &[u16],
+    name: &str,
+    sources: &[Source],
+) -> SmolStr {
+    format_args!("{}::{name}", module_qualifier(file_idx, declarers, sources)).to_smolstr()
+}
+
+/// The mangled symbol a method ends up with, when the type its `impl` block
+/// named was qualified. `None` when `name` is not a method, when the type it
+/// names is not a plain type in `scope` (a builtin receiver, or a generic
+/// instantiation, which carries its own qualifier already), or when that type
+/// kept the name it was written with.
+#[must_use]
+fn requalify_method(
+    name: &str,
+    scope: &Namespace,
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> Option<SmolStr> {
+    let (type_name, method) = name.split_once(METHOD_SEP)?;
+    let declared = scope.symbols.iter().find_map(|(symbol, kind)| {
+        if symbol.as_str() != type_name {
+            return None;
+        }
+        match kind {
+            SymbolKind::Struct(id) => structs.get(*id as usize).map(|s| &s.name),
+            SymbolKind::Enum(id) => enums.get(*id as usize).map(|e| &e.name),
+            SymbolKind::Fn(_) | SymbolKind::Template(_) => None,
+        }
+    })?;
+    (declared != type_name).then(|| mangle_method(declared, method))
 }
 
 /// The generic declaration `namespace::name` names, as an index into
@@ -703,14 +842,20 @@ pub fn instantiate(
     };
     // Another module declaring the same name makes the two separate types, and
     // the name has to say so; see `render_instantiation`.
-    let qualifier = (ctx
+    let declarers: Vec<u16> = ctx
         .generics
         .templates
         .iter()
         .filter(|t| t.name == base)
-        .count()
-        > 1)
-    .then(|| module_name(ctx.generics.templates[template_idx].file_idx, ctx.sources));
+        .map(|t| t.file_idx)
+        .collect();
+    let qualifier = (declarers.len() > 1).then(|| {
+        module_qualifier(
+            ctx.generics.templates[template_idx].file_idx,
+            &declarers,
+            ctx.sources,
+        )
+    });
     let name = render_instantiation(qualifier.as_deref(), base, args, ctx.structs, ctx.enums);
     if let Some((_, _, t)) = ctx
         .generics

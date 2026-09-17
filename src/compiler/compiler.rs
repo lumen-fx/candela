@@ -63,6 +63,7 @@ use type_system::TypeExpr;
 use type_system::TypeParams;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
+use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
 use type_system::struct_literal_id;
@@ -4961,6 +4962,23 @@ pub fn compile(
         resolver,
     );
     file_namespaces.insert(0, namespace);
+    // Before any type is resolved: a name two modules both declare is renamed
+    // here, and everything downstream reads the name it ended up with.
+    qualify_duplicate_type_names(
+        &mut structs,
+        &mut enums,
+        &mut functions,
+        &pending_structs
+            .iter()
+            .map(|(struct_id, file_idx, _)| (*struct_id, *file_idx))
+            .collect::<Vec<(u16, u16)>>(),
+        &pending_enums
+            .iter()
+            .map(|(enum_id, file_idx, _)| (*enum_id, *file_idx))
+            .collect::<Vec<(u16, u16)>>(),
+        &file_namespaces,
+        &sources,
+    );
     resolve_types(
         &mut structs,
         &mut enums,
