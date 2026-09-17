@@ -1516,6 +1516,51 @@ fn pin_open_element_types(inferred: &mut DataType, declared: &DataType) {
     }
 }
 
+/// Pins a caller's binding that still holds an empty literal to the type the
+/// parameter it is passed to declares.
+///
+/// `let` takes no annotation, so a binding that starts out as `[]` or `{}`
+/// holds nothing until something says what it holds. The first `push` or
+/// `insert` on it is one such statement; handing it to a parameter that
+/// declares a collection type is another, and it is often the first one the
+/// caller writes, because the callee is what fills the collection. Pinning it
+/// here gives the caller's later reads the element or value type the callee
+/// put in.
+///
+/// Only a binding that is still the empty-literal placeholder is pinned. One
+/// that already names what it holds keeps its type, so a parameter declaring
+/// something else stays the argument mismatch the call site reports.
+pub(crate) fn pin_empty_literal_bindings(
+    args: &[Expr],
+    declared_arg_types: &[Option<DataType>],
+    v: &mut [Variable],
+) {
+    for (arg, declared) in args.iter().zip(declared_arg_types) {
+        let (Expr::Var(name, _), Some(declared)) = (arg, declared) else {
+            continue;
+        };
+        let Some(var) = v.iter_mut().rfind(|var| &var.name == name) else {
+            continue;
+        };
+        if is_empty_literal_type(&var.var_type) {
+            pin_open_element_types(&mut var.var_type, declared);
+        }
+    }
+}
+
+/// Whether a type is what an empty literal leaves behind: an array with no
+/// element type, or a map with neither a key nor a value type. A downcast
+/// (`as_map`) hands back entries of `any`, which names a type and is left
+/// alone.
+#[must_use]
+fn is_empty_literal_type(ty: &DataType) -> bool {
+    match ty {
+        DataType::Array(element) => element.is_none(),
+        DataType::Map(entry) => entry.0.is_none() && entry.1.is_none(),
+        _ => false,
+    }
+}
+
 /// One half of a map's type: its keys or its values. An open slot takes the
 /// declared type, a slot that names a type is descended into so a nested empty
 /// literal is pinned as well, and a declaration that is itself open leaves the

@@ -60,7 +60,9 @@ fn main() {
 
 A list that does name an element type is still checked against the annotation,
 so `width([1, 2])` does not compile. A `let` takes no annotation, so a local
-that starts empty and is never pushed to keeps elements of no type.
+that starts empty and is never pushed to keeps elements of no type. Handing such
+a local to a parameter that declares its elements pins it as well, so what the
+function pushes into it reads back at that type.
 
 ### Indexing and slicing
 
@@ -203,7 +205,9 @@ fn main() {
 
 A map that does name its types is still checked against the annotation, so
 `width({"a": 1})` does not compile. A `let` takes no annotation, so a local that
-starts empty and is never inserted into keeps keys and values of no type.
+starts empty and is never inserted into keeps keys and values of no type. Handing
+such a local to a parameter that declares what the map holds pins it as well, so
+what the function inserts reads back at that type.
 
 ### Reading and writing
 
