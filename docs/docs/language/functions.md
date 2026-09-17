@@ -160,6 +160,16 @@ fn main() {
 }
 ```
 
+The parameter list may be empty. `fn() { ... }` is the shape of a callback that
+takes nothing, and it is called the same way.
+
+```rust
+fn main() {
+    let answer = fn() { return 42; };
+    print(answer());
+}
+```
+
 An anonymous function does not capture the variables around it. Its body sees
 only its own parameters, so pass in everything it needs.
 
