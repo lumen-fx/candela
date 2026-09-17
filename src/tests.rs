@@ -8838,6 +8838,56 @@ pub fn a_payloadless_variant_goes_where_an_instantiation_is_expected() {
     );
 }
 
+/// A field holding a function is called through the same dot a method call
+/// uses. The field's type carries the function that went into it, so the call
+/// lowers the way `fs[0](x)` does.
+#[test]
+pub fn a_struct_field_holding_a_function_is_callable() {
+    run_and_check_registers!(
+        "
+        struct Button<T> { label: string, on_press: T }
+        fn main() {
+            let b = Button { label: \"ok\", on_press: fn(x) { return x * 2; } };
+            print(b.on_press(21));
+        }
+        ",
+        42.into()
+    );
+}
+
+/// A method of that name wins, so adding one never changes which call an
+/// existing program makes.
+#[test]
+pub fn a_method_wins_over_a_field_of_the_same_name() {
+    run_and_check_registers!(
+        "
+        struct S<T> { cb: T }
+        impl S<T> { fn cb(self, n) { return 7; } }
+        fn main() {
+            let s = S { cb: fn(x) { return x * 2; } };
+            print(s.cb(21));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A field that holds no function is still a missing method, reported against
+/// the receiver's type.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn calling_a_field_that_holds_no_function_is_an_error() {
+    run!(
+        "
+        struct S { x: int }
+        fn main() {
+            let s = S { x: 1 };
+            print(s.x(2));
+        }
+        "
+    );
+}
+
 #[test]
 pub fn generic_type_in_a_struct_field() {
     run_and_check_registers!(

@@ -6,10 +6,12 @@ use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
 use crate::compiler::expr::mangle_method;
 use crate::compiler::functions::handle_functions;
+use crate::compiler::functions::handle_value_call;
 use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
 use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::resolve_call_type_args;
+use crate::compiler::type_system::struct_field_fn;
 use crate::instr::Instr;
 use builtin_methods::builtin_methods;
 use builtin_methods::is_builtin_method;
@@ -177,7 +179,25 @@ pub fn handle_method_calls(
                 &call_type_args,
             );
         }
-        // A struct value with no matching impl method: builtin methods only
+        // No method of that name: a field holding a function is called through
+        // the same dot, so `obj.field(x)` calls what the field holds. The
+        // method lookup above wins, so a field never shadows one.
+        if struct_field_fn(struct_id, name, state).is_some() {
+            let callee =
+                Expr::GetStructField(Box::new(obj.clone()), SmolStr::new(name), obj_span, fn_span);
+            return handle_value_call(
+                output,
+                v,
+                ctx,
+                state,
+                tgt_id,
+                &callee,
+                args,
+                fn_span,
+                args_indexes,
+            );
+        }
+        // Neither a method nor a field holding a function: builtin methods only
         // apply to strings/arrays/maps/numbers, so this is unambiguously a
         // missing method rather than a mistyped builtin.
         error_no_such_method(name, &struct_name, fn_span, ctx.file_idx, state.sources);
