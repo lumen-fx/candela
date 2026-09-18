@@ -381,7 +381,9 @@ list in place and return nothing; the rest return a new value.
 | `arr.partition(x)` | list[] | `arr` cut into sub-lists at each element equal to `x` |
 
 `sort` picks its ordering from the first element: ints, floats, and strings sort
-ascending, and a list of any other element type is left unchanged.
+ascending, and a list of any other element type is left unchanged. Strings sort
+by their bytes, the order `<` gives them; see
+[operators](../reference/operators.md).
 
 `arr.find(x)` is the index search. The same spelling with a function argument,
 `arr.find(predicate)`, is the [list module](list.md) helper that returns the

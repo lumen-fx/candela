@@ -86,8 +86,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// read and written through. Version 9 added the indirect call, which dispatches
 /// on the function a value carries. Version 10 added the instruction that
 /// builds a function value, which tells a function from the list it is built
-/// as wherever one becomes text.
-const FORMAT_VERSION: u8 = 10;
+/// as wherever one becomes text. Version 11 added the four string comparison
+/// instructions, which sit among the other comparisons and so renumber the
+/// instructions after them.
+const FORMAT_VERSION: u8 = 11;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

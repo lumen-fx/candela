@@ -335,9 +335,9 @@ pub enum ErrType<'a> {
     /// A registered host function returned an error. Carries the name the
     /// script calls it by and the message the host reported.
     HostFn(&'a str, &'a str),
-    /// A string concatenation reached a value that is not a string, which only
-    /// happens when a value arrived typed as a string and is not one. Carries
-    /// the type name it turned out to have.
+    /// A string operation, a join or an ordering comparison, reached a value
+    /// that is not a string, which only happens when a value arrived typed as
+    /// a string and is not one. Carries the type name it turned out to have.
     NotAString(&'static str),
     /// A call that would stand one frame past the call-depth limit. Carries the
     /// name the call site wrote and the limit it reached.
@@ -377,7 +377,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::JsonParse(reason) => format_args!("Invalid JSON: {RED}{BOLD}{reason}{RESET}").to_smolstr(),
             ErrType::BadDowncast(want, got) => format_args!("Cannot read this {RED}{BOLD}{got}{RESET} value as {BLUE}{BOLD}{want}{RESET}").to_smolstr(),
             ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
-            ErrType::NotAString(got) => format_args!("Cannot join this {RED}{BOLD}{got}{RESET} value onto a {BLUE}{BOLD}string{RESET}").to_smolstr(),
+            ErrType::NotAString(got) => format_args!("Cannot use this {RED}{BOLD}{got}{RESET} value as a {BLUE}{BOLD}string{RESET}").to_smolstr(),
             ErrType::CallDepthExceeded(name, limit) => format_args!("The call to {RED}{BOLD}{name}{RESET} stands {BLUE}{BOLD}{limit}{RESET} calls deep, which is the call depth limit").to_smolstr(),
         }
     }

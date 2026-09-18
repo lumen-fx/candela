@@ -701,6 +701,135 @@ pub fn string_repeat() {
         6.into()
     );
 }
+
+/// `<`, `<=`, `>` and `>=` order two strings by their bytes, so a shorter
+/// string sorts before the longer one it prefixes, uppercase sorts before
+/// lowercase, and a multi-byte character sorts after every ASCII one.
+#[test]
+pub fn string_ordering_operators() {
+    let printed = run_output(
+        r#"
+        fn main() {
+            print("apple" < "banana");
+            print("banana" < "apple");
+            print("apple" <= "banana");
+            print("banana" >= "apple");
+            print("banana" > "apple");
+            print("apple" > "banana");
+            print("apple" <= "apple");
+            print("apple" >= "apple");
+            print("apple" < "apple");
+            print("" < "a");
+            print("" >= "");
+            print("ab" < "abc");
+            print("Z" < "a");
+        }
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "true\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\n"
+    );
+}
+
+/// The order is over bytes, not over where a reader would file a letter in an
+/// alphabet: every ASCII character sorts before a character that needs more
+/// than one byte, whatever its accent.
+#[test]
+pub fn string_ordering_is_over_bytes() {
+    let src = format!(
+        r#"
+        fn main() {{
+            print("a" < "{e}");
+            print("z" < "{e}");
+            print("{e}" < "b");
+        }}
+        "#,
+        e = '\u{e9}'
+    );
+    let printed = run_output(&src);
+    assert_eq!(printed, "true\ntrue\nfalse\n");
+}
+
+/// A string comparison reads as a condition, in an `if` and in a `while`
+/// alike. Neither fuses into a comparing jump, so both go through the bool the
+/// comparison leaves in its register.
+#[test]
+pub fn string_ordering_as_a_condition() {
+    let printed = run_output(
+        r#"
+        fn main() {
+            if "fig" < "pear" {
+                print("before");
+            } else {
+                print("after");
+            }
+            let names = ["apple", "fig", "pear"];
+            let i = 0;
+            while names[i] < "pear" {
+                i = i + 1;
+            }
+            print(i);
+        }
+        "#,
+    );
+    assert_eq!(printed, "before\n2\n");
+}
+
+/// The ordering is the same one reached through a generic function and through
+/// a closure, where the operand types arrive from the call site.
+#[test]
+pub fn string_ordering_through_a_generic_and_a_closure() {
+    let printed = run_output(
+        r#"
+        fn smaller<T>(a: T, b: T) -> T {
+            if a < b {
+                return a;
+            }
+            return b;
+        }
+
+        fn main() {
+            print(smaller("pear", "fig"));
+            print(smaller(4, 9));
+            let larger = fn(a, b) {
+                if a > b {
+                    return a;
+                }
+                return b;
+            };
+            print(larger("ant", "bee"));
+        }
+        "#,
+    );
+    assert_eq!(printed, "fig\n4\nbee\n");
+}
+
+/// `sort` orders a list of strings the same way the operators do, so every
+/// neighbouring pair of a sorted list compares as ordered.
+#[test]
+pub fn string_ordering_matches_sort() {
+    let printed = run_output(
+        r#"
+        fn main() {
+            let names = ["pear", "Apple", "fig", "apple", "Fig"];
+            names.sort();
+            print(names);
+            let ordered = true;
+            for i in 1..names.len() {
+                if names[i - 1] > names[i] {
+                    ordered = false;
+                }
+            }
+            print(ordered);
+        }
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "[\"Apple\",\"Fig\",\"apple\",\"fig\",\"pear\"]\ntrue\n"
+    );
+}
 #[test]
 pub fn array_repeat() {
     run_and_check_registers!(
@@ -4153,6 +4282,19 @@ pub fn diagnostics_compile_error_span() {
     assert_eq!(d.code, "invalid_operation");
     // The span covers the whole offending operation
     assert_eq!(&src[d.span], "1 + \"a\"");
+}
+
+/// Ordering is per type, so a string next to an int is still a compile error,
+/// and the note names the three types the operator does order.
+#[test]
+pub fn diagnostics_comparing_a_string_with_an_int() {
+    let src = "fn main() { print(\"a\" < 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation string < int");
+    let report = strip_ansi(&compile_report(src, "diag.kl"));
+    assert!(report.contains("string < string"), "{report}");
 }
 
 #[test]

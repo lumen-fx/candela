@@ -96,6 +96,10 @@ arr.min()
 - Returns: the smallest element, compared with `<`.
 - Raises: `index_out_of_bounds` on an empty list.
 
+The element type has to be one `<` orders: `int`, `float`, or `string`. A list
+of strings answers with the first one in byte order, the same order `sort`
+uses; see [operators](../reference/operators.md).
+
 ### max
 
 ```rust
@@ -104,6 +108,8 @@ arr.max()
 
 - Returns: the largest element, compared with `>`.
 - Raises: `index_out_of_bounds` on an empty list.
+
+The element type has to be one `>` orders, as for `min`.
 
 ## Slicing and reshaping
 

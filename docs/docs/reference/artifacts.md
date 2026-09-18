@@ -113,6 +113,8 @@ been raised for:
 - the indirect call, which dispatches on the function a value holds
 - the instruction that builds a function value, which tells a function from the
   list it is built as
+- the string comparison instructions, which sit among the other comparisons and
+  so renumber the instructions after them
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.
