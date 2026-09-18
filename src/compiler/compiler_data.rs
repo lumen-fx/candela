@@ -12,6 +12,7 @@ use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
+use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
@@ -127,6 +128,12 @@ pub struct Function {
     /// its own parameters, which is what keeps that closure lowering the way
     /// it did before capture existed.
     pub captures: Box<[(SmolStr, DataType)]>,
+    /// The register holding where this function's body starts, for a function
+    /// that becomes a value. It is the first slot of every value built for the
+    /// function, and an indirect call jumps to what it holds. `None` for a
+    /// function no value is ever made of, which is every function a program
+    /// only calls by name.
+    pub entry_register: Option<u16>,
 }
 
 /// The generic side of a function: what its annotations mean once the type
@@ -167,6 +174,12 @@ pub struct FunctionImpl {
     /// closure that captures. The call site puts the closure value there
     /// before it jumps.
     pub env_loc: Option<u16>,
+    /// Set for a specialisation a call through a value can reach. It takes its
+    /// arguments from the shared registers every indirect call writes, so a
+    /// call site that does not know which function it reaches still knows where
+    /// to put them, and it returns the way a recursive call does, since the
+    /// caller saved its registers on the way in.
+    pub indirect: bool,
 }
 
 #[derive(Debug)]
@@ -234,6 +247,39 @@ impl Ctx {
     }
 }
 
+/// The registers an indirect call passes its arguments and the callee's
+/// environment in.
+///
+/// Every function reachable through a value takes its parameters from these, so
+/// a call site that only learns which function it reaches at run time still
+/// knows where to put the arguments. They are allocated once, on first use, and
+/// never handed to anything else.
+#[derive(Debug, Default)]
+pub struct IndirectRegisters {
+    /// One register per parameter position, grown as wider signatures appear.
+    pub args: Vec<u16>,
+    /// Where the callee finds the value it was called through, which is its
+    /// environment.
+    pub env: Option<u16>,
+    /// The functions each variable that holds a function value may hold, one
+    /// entry per such variable.
+    pub value_sets: Vec<FnValueSet>,
+}
+
+/// The functions one variable holding a function value may hold.
+///
+/// A variable grows its set as the code writes more functions into it, and a
+/// closure that captured the variable reads the set rather than the copy it
+/// took, so a function written in after the closure still reaches it.
+#[derive(Debug, Default)]
+pub struct FnValueSet {
+    pub candidates: Vec<u16>,
+    /// The argument types a call through the set has already been compiled
+    /// for. A function joining the set later is compiled for each of them, so
+    /// a call compiled before it arrived still reaches a body.
+    pub used_at: Vec<Box<[DataType]>>,
+}
+
 pub struct State<'a> {
     pub registers: &'a mut Vec<Data>,
     pub fns: &'a mut Vec<Function>,
@@ -251,6 +297,7 @@ pub struct State<'a> {
     pub reserved_registers: FxHashSet<u16>,
     pub namespaces: &'a mut FileNamespaces,
     pub generics: &'a mut Generics,
+    pub indirect_registers: &'a mut IndirectRegisters,
 }
 
 impl State<'_> {
@@ -327,6 +374,77 @@ impl State<'_> {
         let id = self.registers.len() as u16;
         self.const_registers.insert(data, id);
         self.registers.push(data);
+        id
+    }
+    /// The register the argument at `idx` of an indirect call travels in.
+    ///
+    /// Reserved on first use, so the allocator never hands it to anything else:
+    /// the caller writes it and the callee reads it as its parameter, and the
+    /// two never meet at compile time.
+    pub fn indirect_arg_register(&mut self, idx: usize) -> u16 {
+        while self.indirect_registers.args.len() <= idx {
+            self.registers.push(NULL);
+            let id = (self.registers.len() - 1) as u16;
+            self.indirect_registers.args.push(id);
+        }
+        let id = self.indirect_registers.args[idx];
+        self.reserved_registers.insert(id);
+        self.free_registers.retain(|reg| *reg != id);
+        id
+    }
+    /// A fresh set of the functions one variable may hold, starting with
+    /// `fn_id`.
+    pub fn new_fn_value_set(&mut self, fn_id: u16) -> u32 {
+        self.indirect_registers.value_sets.push(FnValueSet {
+            candidates: vec![fn_id],
+            used_at: Vec::new(),
+        });
+        (self.indirect_registers.value_sets.len() - 1) as u32
+    }
+    /// The functions a call through `fn_type` may reach.
+    #[must_use]
+    pub fn fn_value_candidates(&self, fn_type: &FnValue) -> Vec<u16> {
+        let mut candidates = fn_type.candidates.to_vec();
+        if let Some(set) = fn_type.set
+            && let Some(set) = self.indirect_registers.value_sets.get(set as usize)
+        {
+            for id in &set.candidates {
+                if !candidates.contains(id) {
+                    candidates.push(*id);
+                }
+            }
+        }
+        candidates
+    }
+    /// The register an indirect call leaves the callee's environment in.
+    pub fn indirect_env_register(&mut self) -> u16 {
+        let id = if let Some(id) = self.indirect_registers.env {
+            id
+        } else {
+            self.registers.push(NULL);
+            let id = (self.registers.len() - 1) as u16;
+            self.indirect_registers.env = Some(id);
+            id
+        };
+        self.reserved_registers.insert(id);
+        self.free_registers.retain(|reg| *reg != id);
+        id
+    }
+    /// The register holding where `fn_id`'s body starts, allocated the first
+    /// time the function becomes a value. Every value built for the function
+    /// carries it, and the compiler writes the location into it once the
+    /// function's indirect specialisation is compiled.
+    pub fn fn_entry_register(&mut self, fn_id: usize) -> u16 {
+        let id = if let Some(id) = self.fns[fn_id].entry_register {
+            id
+        } else {
+            self.registers.push(NULL);
+            let id = (self.registers.len() - 1) as u16;
+            self.fns[fn_id].entry_register = Some(id);
+            id
+        };
+        self.reserved_registers.insert(id);
+        self.free_registers.retain(|reg| *reg != id);
         id
     }
     /// Allocates a register, reusing `tgt_id` if it holds some register id.

@@ -228,6 +228,7 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         const_registers: &mut out.const_registers,
         free_registers: &mut out.free_registers,
         generics: &mut out.generics,
+        indirect_registers: &mut out.indirect_registers,
         sources: &mut out.sources,
         reserved_registers: FxHashSet::default(),
         namespaces: &mut out.namespaces,

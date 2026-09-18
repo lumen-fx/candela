@@ -22,6 +22,7 @@ use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
 use crate::instr::LibFunc;
 use crate::parser;
+use crate::rt::FnValue;
 use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
 use crate::rt::resolve_library_filename;
@@ -37,6 +38,7 @@ use compiler_data::FnGenerics;
 use compiler_data::FnSignature;
 use compiler_data::Function;
 use compiler_data::HostFnSig;
+use compiler_data::IndirectRegisters;
 use compiler_data::Pools;
 use compiler_data::State;
 use compiler_data::Struct;
@@ -48,6 +50,9 @@ use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use functions::handle_functions;
 use functions::handle_value_call;
+use functions::user_functions::check_declared_fn;
+use functions::user_functions::declared_holds_fn_signature;
+use functions::user_functions::ensure_indirect_impl;
 use methods::handle_method_calls;
 use registers::int_immediate;
 use registers::move_reg_to_reg;
@@ -69,6 +74,7 @@ use type_system::TypeExpr;
 use type_system::TypeParams;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
+use type_system::merge_fn_types;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::resolve_variant_constructor;
@@ -359,6 +365,51 @@ fn parse_loop_flow_control(
 }
 
 #[inline(always)]
+/// Compiles `expr` as a function value: a list whose first slot says where the
+/// function's body starts, followed by the cells it captured.
+///
+/// A closure that captures already compiles to exactly that, and so does a
+/// value read out of a position that holds one, so a value is built here only
+/// for a function that captures nothing.
+pub fn compile_fn_value(
+    expr: &Expr,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+    tgt_id: Option<u16>,
+) -> u16 {
+    if let DataType::Fn(fn_id) = expr.infer_type(v, ctx, state)
+        && state.fns[fn_id as usize].captures.is_empty()
+    {
+        let entry_id = state.fn_entry_register(fn_id as usize);
+        let value_id = state.alloc_reg_tgt(tgt_id);
+        output.push(Instr::EmptyArray(value_id));
+        output.push(Instr::Push(value_id, entry_id));
+        return value_id;
+    }
+    expr.compile(v, ctx, state, output, tgt_id, false, true)
+        .unwrap_id()
+}
+
+/// Compiles one element of a collection literal, as a function value where the
+/// collection holds functions and as itself everywhere else.
+fn compile_element(
+    elem: &Expr,
+    as_fn_value: bool,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    if as_fn_value {
+        compile_fn_value(elem, v, ctx, state, output, None)
+    } else {
+        elem.compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    }
+}
+
 fn compile_array_literal(
     array_items: &[Expr],
     spans: &[Span],
@@ -387,6 +438,14 @@ fn compile_array_literal(
             )
         }
     }
+    // A list that holds more than one function holds function values: no
+    // element is the function the list holds, so each one carries its own
+    // identity for a call through the list to dispatch on.
+    let elem_types = array_items
+        .iter()
+        .map(|elem| elem.infer_type(v, ctx, state))
+        .collect::<Vec<DataType>>();
+    let as_fn_values = merge_fn_types(&elem_types).is_some();
     let array_id = {
         state.pools.objs.push(Vec::with_capacity(array_items.len()));
         state.pools.objs.len() - 1
@@ -401,9 +460,7 @@ fn compile_array_literal(
     }
     if ctx.single_run {
         for elem in array_items {
-            let id = elem
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let id = compile_element(elem, as_fn_values, v, ctx, state, output);
             if elem.is_constant_literal() {
                 state
                     .pools
@@ -426,9 +483,7 @@ fn compile_array_literal(
         let mut constant_array = true;
         let mut elem_ids: Vec<u16> = Vec::with_capacity(array_items.len());
         for elem in array_items {
-            let id = elem
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let id = compile_element(elem, as_fn_values, v, ctx, state, output);
             if elem.is_constant_literal() {
                 state
                     .pools
@@ -525,6 +580,26 @@ fn compile_struct_literal(
                 .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
             {
                 let field_type = field_expr.infer_type(v, ctx, state);
+                // A field declared `fn(...)` holds a function value, so the
+                // function written into it is compiled at the types the field
+                // declares, and the value carries which function it is.
+                let declared = state.structs[expected_struct_idx].fields[field_idx]
+                    .1
+                    .clone();
+                let as_fn_value = declared_holds_fn_signature(&declared);
+                if as_fn_value {
+                    check_declared_fn(
+                        field_expr,
+                        &declared,
+                        *field_value_span,
+                        output,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
+                let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
+                let field_type = if as_fn_value { declared } else { field_type };
                 let field = &state.structs[expected_struct_idx].fields[field_idx];
                 if !struct_field_type_matches(&field.1, &field_type) {
                     compiler_errors::error_struct_field_invalid_type(
@@ -542,9 +617,7 @@ fn compile_struct_literal(
                         },
                     );
                 }
-                let id = field_expr
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
+                let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
                 if field_expr.is_constant_literal() {
                     state
                         .pools
@@ -591,6 +664,26 @@ fn compile_struct_literal(
                 .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
             {
                 let field_type = field_expr.infer_type(v, ctx, state);
+                // A field declared `fn(...)` holds a function value, so the
+                // function written into it is compiled at the types the field
+                // declares, and the value carries which function it is.
+                let declared = state.structs[expected_struct_idx].fields[field_idx]
+                    .1
+                    .clone();
+                let as_fn_value = declared_holds_fn_signature(&declared);
+                if as_fn_value {
+                    check_declared_fn(
+                        field_expr,
+                        &declared,
+                        *field_value_span,
+                        output,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
+                let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
+                let field_type = if as_fn_value { declared } else { field_type };
                 let field = &state.structs[expected_struct_idx].fields[field_idx];
                 if !struct_field_type_matches(&field.1, &field_type) {
                     compiler_errors::error_struct_field_invalid_type(
@@ -608,9 +701,7 @@ fn compile_struct_literal(
                         },
                     );
                 }
-                let id = field_expr
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
+                let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
                 if field_expr.is_constant_literal() {
                     state
                         .pools
@@ -1248,6 +1339,14 @@ fn compile_map_literal(
 ) -> u16 {
     let mut global_key_type: DataType = DataType::Unknown;
     let mut global_val_type: DataType = DataType::Unknown;
+    // A map whose values are more than one function holds function values, the
+    // same as a list does: no value is the function the map holds, so a call
+    // through a key dispatches on what came out of it.
+    let value_types = kv_pairs
+        .iter()
+        .map(|(_, _, val, _)| val.infer_type(v, ctx, state))
+        .collect::<Vec<DataType>>();
+    let as_fn_values = merge_fn_types(&value_types).is_some();
     let map_id = state.pools.maps.len();
     state.pools.maps.push(HashMap::with_capacity_and_hasher(
         kv_pairs.len(),
@@ -1305,9 +1404,7 @@ fn compile_map_literal(
                 error_not_literal_map_key(*key_span, map_span, ctx.file_idx, state.sources);
             }
             let key_val = state.registers[key_val_id as usize];
-            let id = val
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let id = compile_element(val, as_fn_values, v, ctx, state, output);
             if val.is_constant_literal() {
                 state.pools.maps[map_id].insert(key_val, state.registers[id as usize]);
             } else {
@@ -1376,9 +1473,7 @@ fn compile_map_literal(
                 error_not_literal_map_key(*key_span, map_span, ctx.file_idx, state.sources);
             }
             let key_val = state.registers[key_val_id as usize];
-            let val_id = val
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let val_id = compile_element(val, as_fn_values, v, ctx, state, output);
             if val.is_constant_literal() {
                 state.pools.maps[map_id].insert(key_val, state.registers[val_id as usize]);
             } else {
@@ -2809,6 +2904,18 @@ fn compile_var_declaration(
     output: &mut Vec<Instr>,
 ) {
     let var_type = value.infer_type(v, ctx, state);
+    // A variable a later assignment writes a function into holds a function
+    // value: the name no longer says which function, so a call through it
+    // dispatches on what the variable holds by then. The assignment is looked
+    // for in the code, not in the types, because a closure written further down
+    // reads the scope where it is written, not the scope here.
+    let var_type = match &var_type {
+        DataType::Fn(fn_id) if code_modifies_variable(name, remaining_code) => {
+            DataType::FnValue(Box::new(FnValue::from_set(state.new_fn_value_set(*fn_id))))
+        }
+        _ => var_type,
+    };
+    let as_fn_value = matches!(var_type, DataType::FnValue(_));
     // A variable a closure reads lives in a cell instead of a register, so the
     // scope that declared it and the closures that took it share one slot. The
     // cell is allocated where the declaration runs, which gives each turn
@@ -2816,13 +2923,21 @@ fn compile_var_declaration(
     let captured = code_captures_variable(name, remaining_code);
 
     let var_id = if ctx.single_run {
-        value
-            .compile(v, ctx, state, output, None, true, true)
-            .unwrap_id()
+        if as_fn_value {
+            compile_fn_value(value, v, ctx, state, output, None)
+        } else {
+            value
+                .compile(v, ctx, state, output, None, true, true)
+                .unwrap_id()
+        }
     } else {
-        let src_id = value
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
+        let src_id = if as_fn_value {
+            compile_fn_value(value, v, ctx, state, output, None)
+        } else {
+            value
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id()
+        };
         if !captured && code_modifies_variable(name, remaining_code) {
             let mutable_id = state.alloc_reg();
             move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
@@ -2841,7 +2956,16 @@ fn compile_var_declaration(
     };
 
     if let DataType::Fn(fn_id) = &var_type {
-        let fn_symbol = SymbolKind::Fn(*fn_id);
+        let fn_id = *fn_id as usize;
+        // A closure has no name of its own, so the one it is bound to is the
+        // one its body calls itself by. The binding is what makes that call
+        // reach the closure being built rather than whatever else the name
+        // resolved to, and what makes it a recursive call, which is what saves
+        // the registers the closure still reads once it returns.
+        if state.fns[fn_id].direct_calls.contains(name) {
+            state.fns[fn_id].is_recursive = Some(true);
+        }
+        let fn_symbol = SymbolKind::Fn(fn_id as u16);
         state
             .scope_mut(ctx.file_idx)
             .symbols
@@ -2853,6 +2977,36 @@ fn compile_var_declaration(
         cell: captured,
         var_type,
     });
+}
+
+/// Adds `fn_id` to the set a variable of type `held` dispatches over, and
+/// compiles it for every call already made through that set.
+fn join_fn_value_set(
+    held: &FnValue,
+    fn_id: u16,
+    output: &mut Vec<Instr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    let Some(set_idx) = held.set else {
+        return;
+    };
+    let Some(set) = state
+        .indirect_registers
+        .value_sets
+        .get_mut(set_idx as usize)
+    else {
+        return;
+    };
+    if set.candidates.contains(&fn_id) {
+        return;
+    }
+    set.candidates.push(fn_id);
+    let used_at = set.used_at.clone();
+    for arg_types in used_at {
+        ensure_indirect_impl(fn_id as usize, &arg_types, output, v, ctx, state);
+    }
 }
 
 fn compile_var_assignment(
@@ -2870,12 +3024,29 @@ fn compile_var_assignment(
     });
     let id = v[var_pos].register_id;
 
+    // Writing a function into a variable that holds function values adds it to
+    // the set a call through the variable dispatches over, and compiles it for
+    // every call already made through that set.
+    let var_type = match (&v[var_pos].var_type, &var_type) {
+        (DataType::FnValue(held), DataType::Fn(fn_id)) if held.sig.is_none() => {
+            let held = held.clone();
+            join_fn_value_set(&held, *fn_id, output, v, ctx, state);
+            DataType::FnValue(held)
+        }
+        _ => var_type,
+    };
+    let as_fn_value = matches!(var_type, DataType::FnValue(_));
+
     // A captured variable is written through its cell, which is the slot the
     // closures that took it read.
     if v[var_pos].cell {
-        let value_id = value
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
+        let value_id = if as_fn_value {
+            compile_fn_value(value, v, ctx, state, output, None)
+        } else {
+            value
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id()
+        };
         output.push(Instr::StoreCell(id, value_id));
         state.free_reg(value_id, v);
         v[var_pos].var_type = var_type;
@@ -3072,6 +3243,7 @@ fn compile_function_definition(
         return_type,
         generics,
         captures: Box::from([]),
+        entry_register: None,
     });
 }
 
@@ -3637,12 +3809,19 @@ impl Expr {
                         Some(id)
                     }
                 } else {
-                    // The value of a closure that captures is its environment:
-                    // the cells of the variables its body reads, in the order
-                    // the body expects them. Two closures written in one scope
-                    // take the same cells, so what one writes the other reads.
+                    // The value of a closure that captures is where its body
+                    // starts followed by its environment: the cells of the
+                    // variables its body reads, in the order the body expects
+                    // them. Two closures written in one scope take the same
+                    // cells, so what one writes the other reads.
+                    let fn_id = match self.infer_type(v, ctx, state) {
+                        DataType::Fn(fn_id) => fn_id as usize,
+                        _ => unsafe { unreachable_unchecked() },
+                    };
+                    let entry_id = state.fn_entry_register(fn_id);
                     let env_id = state.alloc_reg_tgt(tgt_id);
                     output.push(Instr::EmptyArray(env_id));
+                    output.push(Instr::Push(env_id, entry_id));
                     for (name, _) in &captures {
                         let cell_id = capture_cell(name, *span, v, ctx, state, output);
                         output.push(Instr::Push(env_id, cell_id));
@@ -4530,6 +4709,7 @@ fn parse_toplevel(
                             file_idx: src_file_idx,
                         })
                     }),
+                    entry_register: None,
                 });
                 pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type, type_params));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
@@ -5158,6 +5338,9 @@ pub struct CompileOutput {
     pub namespaces: FileNamespaces,
     pub const_registers: FxHashMap<Data, u16>,
     pub free_registers: Vec<u16>,
+    /// The registers an indirect call passes its arguments in, kept so a later
+    /// compile against this program uses the same ones.
+    pub indirect_registers: IndirectRegisters,
     /// The generic declarations and the instantiations made from them, kept so
     /// a later compile against this program (an embedding host calling in, a
     /// REPL line) resolves them the same way.
@@ -5325,6 +5508,7 @@ pub fn compile(
         in_function: false,
         offset: 0,
     };
+    let mut indirect_registers = IndirectRegisters::default();
     let mut state = State {
         registers: &mut registers,
         fns: &mut functions,
@@ -5342,6 +5526,7 @@ pub fn compile(
         reserved_registers: FxHashSet::default(),
         namespaces: &mut file_namespaces,
         generics: &mut generics,
+        indirect_registers: &mut indirect_registers,
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are
@@ -5410,6 +5595,7 @@ pub fn compile(
         namespaces: file_namespaces,
         const_registers,
         free_registers,
+        indirect_registers,
         generics,
     }
 }

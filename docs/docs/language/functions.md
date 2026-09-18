@@ -235,13 +235,13 @@ fn main() {
 ```
 
 A struct field holds one the same way, and calling the field is the same dot a
-method call uses. Declare the field with a type parameter, since the field's
-type is the function that went into it; see [Generics](generics.md).
+method call uses. Declare the field `fn(params) -> result`; see
+[Function types](#function-types) below.
 
 ```rust
-struct Button<T> {
+struct Button {
     label: string,
-    on_press: T,
+    on_press: fn(int) -> int,
 }
 
 fn main() {
@@ -255,8 +255,9 @@ has no such method, so adding a method never changes which call an existing
 program makes. See [Methods](methods.md).
 
 Both forms work as arguments: the name of a declared function, and an anonymous
-function written at the call site. A declared function's name is usable as a
-value only in an argument position; to keep one in a variable, wrap it in an
+function written at the call site. A declared function's name reaches anywhere a
+`fn(...)` type says a function goes, an argument position included. A `let`
+takes no annotation, so to keep a declared function in a variable, wrap it in an
 anonymous function.
 
 ```rust
@@ -272,3 +273,64 @@ fn main() {
 
 The standard library's list helpers take functions this way, so `map`, `filter`,
 and `reduce` are ordinary calls; see [Collections](collections.md).
+
+## Function types
+
+`fn(A, B) -> R` is the type of a position that holds a function taking an `A`
+and a `B` and returning an `R`. Leave the arrow off for one that returns
+nothing: `fn()` and `fn(int)`. Write it wherever a type goes: on a parameter, on
+a struct field, as a type argument, or as the element type of a list.
+
+```rust
+fn apply(f: fn(int) -> int, x: int) -> int {
+    return f(x);
+}
+
+fn double(n: int) -> int {
+    return n * 2;
+}
+
+fn main() {
+    print(apply(double, 21));
+    print(apply(fn(y) { return y + 1; }, 41));
+}
+```
+
+Any function of that shape fits: an anonymous one written at the call site, one
+bound to a variable, or the name of a declared function. The declaration is what
+the body is compiled against, so a function whose body does not work at those
+parameter types, or hands back something else, is reported where it was written
+rather than where it is called.
+
+A list, a map or a variable that holds more than one function needs no
+annotation. Each value carries which function it is, so the call goes to the one
+the index, the key or the last assignment put there.
+
+```rust
+fn main() {
+    let fs = [fn(x) { return x + 1; }, fn(x) { return x * 10; }];
+    print(fs[0](4), fs[1](4));
+
+    let ops = {"inc": fn(x) { return x + 1; }, "ten": fn(x) { return x * 10; }};
+    print(ops.get("ten")(4));
+}
+```
+
+A closure calls itself by the name it is bound to, and two closures call each
+other through the variables they captured.
+
+```rust
+fn main() {
+    let fact = fn(n) {
+        if n <= 1 {
+            return 1;
+        }
+        return n * fact(n - 1);
+    };
+    print(fact(5));
+}
+```
+
+Where the compiler can still name the function a call reaches, it does, so a
+closure in a variable, a list holding one function, and a higher-order call all
+compile to the same jump they always did.
