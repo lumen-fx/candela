@@ -427,7 +427,7 @@ pub fn builtin_methods(
             let arg_id = args[0]
                 .compile(v, ctx, state, output, None, false, true)
                 .unwrap_id();
-            state.free_reg(id, v);
+            state.free_reg(arg_id, v);
             output.push(Instr::Push(id, arg_id));
             None
         }
@@ -611,6 +611,7 @@ pub fn builtin_methods(
                 .compile(v, ctx, state, output, None, false, true)
                 .unwrap_id();
             let output_id = state.alloc_reg_tgt(tgt_id);
+            state.free_reg(arg_id, v);
             output.push(Instr::MapGet(id, arg_id, output_id));
             state.add_to_src(ctx, output, args_indexes[0]);
             Some(output_id)
@@ -645,6 +646,8 @@ pub fn builtin_methods(
             let val_id = args[1]
                 .compile(v, ctx, state, output, None, false, true)
                 .unwrap_id();
+            state.free_reg(key_id, v);
+            state.free_reg(val_id, v);
             output.push(Instr::MapInsertReg(id, key_id, val_id));
             None
         }

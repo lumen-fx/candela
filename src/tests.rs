@@ -10251,3 +10251,220 @@ pub fn a_try_whose_catch_returns_meets_the_declared_type() {
     );
     assert_eq!(printed, "1\n0\n4\n0\n6\n1\n1\n3\n1\n");
 }
+
+/// A builtin method's arguments are compiled after its receiver, and the
+/// receiver's register used to be released before that happened. The allocator
+/// then handed the same register to an argument that needed one, so
+/// `s.items.push(s.n)` wrote `s.n` over the list the push was meant to grow and
+/// pushed onto an int instead.
+#[test]
+pub fn push_keeps_its_receiver_while_the_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { items: int[], n: int }
+
+        fn main() {
+            let s = S { items: [1, 2, 3], n: 3 };
+            s.items.push(s.n);
+            print(str(s.items) == \"[1,2,3,3]\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// `insert` compiles two arguments after the receiver, so both had to miss it.
+#[test]
+pub fn insert_keeps_its_receiver_while_its_arguments_compile() {
+    run_and_check_registers!(
+        "
+        struct S { m: {string: int}, text: string, n: int }
+
+        fn main() {
+            let s = S { m: {\"a\": 1}, text: \"a\", n: 3 };
+            s.m.insert(s.text, s.n);
+            print(str(s.m) == \"{\\\"a\\\":3}\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn contains_keeps_its_receiver_while_the_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { items: int[], n: int }
+
+        fn main() {
+            let s = S { items: [1, 2, 3], n: 3 };
+            print(s.items.contains(s.n));
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn find_keeps_its_receiver_while_the_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { items: int[], n: int }
+
+        fn main() {
+            let s = S { items: [1, 2, 3], n: 3 };
+            print(s.items.find(s.n));
+        }
+        ",
+        2.into()
+    );
+}
+
+#[test]
+pub fn repeat_keeps_its_receiver_while_the_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { items: int[], n: int }
+
+        fn main() {
+            let s = S { items: [1, 2, 3], n: 3 };
+            print(s.items.repeat(s.n).len());
+        }
+        ",
+        9.into()
+    );
+}
+
+#[test]
+pub fn join_keeps_its_receiver_while_the_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { words: string[], text: string }
+
+        fn main() {
+            let s = S { words: [\"x\", \"y\"], text: \"a\" };
+            print(s.words.join(s.text) == \"xay\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn a_map_get_keeps_its_receiver_while_the_key_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { m: {string: int}, text: string }
+
+        fn main() {
+            let s = S { m: {\"a\": 7}, text: \"a\" };
+            print(s.m.get(s.text));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// The argument is a method call on the receiver itself, which is the shape
+/// that used to leave the struct in the receiver's register: the remove then
+/// read the struct's field count as the list's length.
+#[test]
+pub fn remove_keeps_its_receiver_while_a_call_argument_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { items: int[], n: int }
+
+        fn main() {
+            let s = S { items: [1, 2, 3], n: 3 };
+            s.items.remove(s.items.len() - 1);
+            print(str(s.items) == \"[1,2]\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn a_map_remove_keeps_its_receiver_while_the_key_compiles() {
+    run_and_check_registers!(
+        "
+        struct S { m: {string: int}, text: string }
+
+        fn main() {
+            let s = S { m: {\"a\": 1, \"b\": 2}, text: \"a\" };
+            s.m.remove(s.text);
+            print(str(s.m) == \"{\\\"b\\\":2}\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// A string method takes the same path, and `replace` compiles two arguments
+/// that both read a field of the receiver's struct.
+#[test]
+pub fn a_string_method_keeps_its_field_receiver() {
+    run_and_check_registers!(
+        "
+        struct T { text: string, sep: string }
+
+        fn main() {
+            let t = T { text: \"a-b\", sep: \"-\" };
+            print(t.text.replace(t.sep, t.text) == \"aa-bb\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// An indexed receiver is a scratch register too, and so is an indexed
+/// argument.
+#[test]
+pub fn an_indexed_receiver_keeps_its_register() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let xs = [[1], [2]];
+            xs[0].push(xs[1][0]);
+            print(str(xs) == \"[[1,2],[2]]\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// A receiver reached through an index and a field, with arguments that walk
+/// the same path.
+#[test]
+pub fn a_nested_receiver_keeps_its_register() {
+    run_and_check_registers!(
+        "
+        struct Row { m: {string: int}, key: string, n: int }
+
+        fn main() {
+            let rows = [Row { m: {\"a\": 1}, key: \"k\", n: 7 }];
+            rows[0].m.insert(rows[0].key, rows[0].n);
+            print(rows[0].m.get(rows[0].key));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A call result is a scratch register the same way a field read is.
+#[test]
+pub fn a_call_result_receiver_keeps_its_register() {
+    run_and_check_registers!(
+        "
+        struct S { n: int }
+
+        fn nums() { return [1, 2, 3]; }
+
+        fn main() {
+            let s = S { n: 3 };
+            print(nums().find(s.n));
+        }
+        ",
+        2.into()
+    );
+}
