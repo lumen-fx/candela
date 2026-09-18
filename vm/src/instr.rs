@@ -102,6 +102,14 @@ pub enum Instr {
     /// SaveFrame(function_location, return_register, function_id)
     SaveFrame(u16, u16, u16),
 
+    /// CallIndirect(callee_register_id)\
+    /// Jumps to the instruction the function value in callee_register_id names
+    /// in its first slot. The frame is pushed by the `SaveFrame` that precedes
+    /// this instruction, which also carries the register the return lands in,
+    /// so a call whose callee is only known at run time keeps the caller's
+    /// registers across it.
+    CallIndirect(u16),
+
     /// CallDynamicLibFunc(fn_id, dest_register_id)
     CallDynamicLibFunc(u16, u16),
 
@@ -328,6 +336,7 @@ impl Instr {
             | Self::StopErrorCatch
             | Self::ThrowError(_)
             | Self::StoreCell(_, _)
+            | Self::CallIndirect(_) // The preceding SaveFrame carries the return register
             => None,
 
             Self::StartErrorCatch(_, y) if y == u16::MAX => None,
@@ -485,6 +494,7 @@ impl Instr {
             | Self::NegBool(a, _)
             | Self::NewCell(a, _)
             | Self::LoadCell(a, _)
+            | Self::CallIndirect(a)
             | Self::ObjElemMov(a, _, _) => f(a),
 
             Self::CallLibFuncVoid(func, a, b) => {
@@ -517,5 +527,18 @@ impl Instr {
             | Self::StopErrorCatch
             | Self::SetBool(_, _) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Instr;
+
+    /// One instruction is one word. A fourth operand would make it two, which
+    /// doubles the bytecode a program carries and the bytes each dispatch
+    /// reads.
+    #[test]
+    fn instruction_is_one_word() {
+        assert_eq!(size_of::<Instr>(), 8);
     }
 }

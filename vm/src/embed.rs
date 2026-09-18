@@ -268,7 +268,7 @@ pub fn is_host_callable_type(ty: &DataType) -> bool {
                 && kv.1.as_ref().is_none_or(is_host_callable_type)
         }
         DataType::Union(members) => members.iter().all(is_host_callable_type),
-        DataType::Fn(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+        DataType::Fn(_) | DataType::FnValue(_) | DataType::Struct(_) | DataType::Enum(_) => false,
     }
 }
 
@@ -342,7 +342,7 @@ pub fn value_matches_type(value: &Value, ty: &DataType) -> bool {
         DataType::Union(members) => members
             .iter()
             .any(|member| value_matches_type(value, member)),
-        DataType::Fn(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+        DataType::Fn(_) | DataType::FnValue(_) | DataType::Struct(_) | DataType::Enum(_) => false,
     }
 }
 

@@ -108,9 +108,78 @@ pub enum DataType {
     Unknown,
     Union(Box<[Self]>),
     Fn(u16),
+    /// A function held as a value, spelled `fn(A, B) -> R`. A call through one
+    /// dispatches on the function the value carries rather than on a function
+    /// the compiler picked, which is what lets one slot hold a different
+    /// function each time.
+    FnValue(Box<FnValue>),
     Struct(u16),
     Enum(u16),
     Map(Box<(Option<Self>, Option<Self>)>),
+}
+
+/// What a `fn(...)` type says about the functions that may reach it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FnValue {
+    /// Parameter types and return type, from a `fn(A, B) -> R` annotation.
+    /// `None` where the type came from the functions written into the position
+    /// instead, and the first call through it settles the types.
+    pub sig: Option<(Box<[DataType]>, DataType)>,
+    /// The functions the compiler watched reach this position, in the order it
+    /// saw them. A call through the value compiles each one at the call's
+    /// argument types. Empty for a declared type, where the annotation already
+    /// says what to compile against.
+    pub candidates: Box<[u16]>,
+    /// The set of functions a variable of this type may hold, by its index in
+    /// the compiler's table of such sets. A variable grows its set as the code
+    /// writes more functions into it, and a closure that captured the variable
+    /// reads the set rather than the copy it took, so a function written in
+    /// after the closure still reaches it. `None` for a position whose
+    /// candidates are settled where it is built, such as a list literal.
+    pub set: Option<u32>,
+}
+
+impl FnValue {
+    /// The type of a position that holds one of `candidates` and takes its
+    /// argument types from the call.
+    #[must_use]
+    pub fn inferred(candidates: Box<[u16]>) -> Self {
+        Self {
+            sig: None,
+            candidates,
+            set: None,
+        }
+    }
+
+    /// The type of a variable whose functions are collected in `set`.
+    #[must_use]
+    pub fn from_set(set: u32) -> Self {
+        Self {
+            sig: None,
+            candidates: Box::from([]),
+            set: Some(set),
+        }
+    }
+}
+
+impl std::fmt::Display for FnValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some((args, return_type)) = &self.sig else {
+            return write!(f, "function");
+        };
+        write!(f, "fn(")?;
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{arg}")?;
+        }
+        write!(f, ")")?;
+        if !matches!(return_type, DataType::Null) {
+            write!(f, " -> {return_type}")?;
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for DataType {
@@ -144,6 +213,7 @@ impl std::fmt::Display for DataType {
                 m.1.as_ref().unwrap_or(&Self::Unknown)
             ),
             Self::Fn(_) => write!(f, "function"),
+            Self::FnValue(sig) => write!(f, "{sig}"),
         }
     }
 }
@@ -677,6 +747,10 @@ impl PartialEq for DataType {
             (Self::Struct(a), Self::Struct(b)) => a == b,
             (Self::Enum(a), Self::Enum(b)) => a == b,
             (Self::Fn(_), Self::Fn(_)) => true,
+            (Self::FnValue(a), Self::FnValue(b)) => match (&a.sig, &b.sig) {
+                (Some(a), Some(b)) => a.0 == b.0 && a.1 == b.1,
+                _ => true,
+            },
             (Self::Map(a), Self::Map(b)) => {
                 (a.0.is_none() || b.0.is_none() || a.0 == b.0)
                     && (a.1.is_none() || b.1.is_none() || a.1 == b.1)
@@ -706,6 +780,9 @@ impl std::hash::Hash for DataType {
                 9u8.hash(state);
                 f.hash(state);
             }
+            // Every function type hashes alike: two that compare equal must,
+            // and a signature is compared field by field rather than by id.
+            Self::FnValue(_) => 13u8.hash(state),
             Self::Struct(s) => {
                 10u8.hash(state);
                 s.hash(state);

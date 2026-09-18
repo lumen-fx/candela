@@ -83,8 +83,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// the program's own or a path into the standard library's `libs` directory.
 /// Version 7 widened `int` to 64 bits, so every recorded value carries a
 /// second word. Version 8 added the cell instructions a captured variable is
-/// read and written through.
-const FORMAT_VERSION: u8 = 8;
+/// read and written through. Version 9 added the indirect call, which dispatches
+/// on the function a value carries.
+const FORMAT_VERSION: u8 = 9;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

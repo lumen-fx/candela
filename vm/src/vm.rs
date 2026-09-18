@@ -688,6 +688,14 @@ pub fn execute(
                 i = new_loc as usize;
                 continue;
             }
+            Instr::CallIndirect(callee) => {
+                // The first slot of a function value is where its body starts.
+                // The `SaveFrame` just above pushed the frame, so the jump is
+                // all that is left to do.
+                let value_id = r[callee].as_array();
+                i = unsafe { obj_pool[value_id].get_unchecked(0) }.as_int() as usize;
+                continue;
+            }
             Instr::VoidReturn => {
                 // Nothing to return, but a recursive call still has to hand the
                 // caller back the registers the call overwrote before jumping.
