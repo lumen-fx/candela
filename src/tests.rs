@@ -3900,6 +3900,35 @@ pub fn diagnostics_int_literal_past_64_bits() {
     assert_eq!(&src[d.span], "99999999999999999999999");
 }
 
+/// A `float` literal whose value is past what double precision holds is a
+/// compile error at the literal, the way an out-of-range `int` literal is. The
+/// sign is a token of its own, so both ends of the range are refused.
+#[test]
+pub fn diagnostics_float_literal_past_the_range() {
+    let src = "fn main() { print(1e400); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "float_literal_out_of_range");
+    assert!(d.message.contains("float"), "{}", d.message);
+    assert_eq!(&src[d.span], "1e400");
+
+    let src = "fn main() { print(-1.8e308); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "float_literal_out_of_range");
+    assert_eq!(&src[d.span], "1.8e308");
+}
+
+/// The largest `float` there is still reads, so the check refuses only what
+/// overflows.
+#[test]
+pub fn the_largest_float_literal_is_read() {
+    run_and_check_registers!(
+        "fn main() { print(1.7976931348623157e308); }",
+        f64::MAX.into()
+    );
+}
+
 /// The literal one past the top of the range is read, because negating it is
 /// the only way to write the smallest `int`.
 #[test]
