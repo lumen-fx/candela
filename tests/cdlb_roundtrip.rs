@@ -298,16 +298,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_nine_and_v2_is_rejected() {
-    // The version byte was bumped to 9 when the indirect call joined the
-    // instruction set. A freshly built artifact must carry version 9.
+fn current_format_version_is_ten_and_v2_is_rejected() {
+    // The version byte was bumped to 10 when the instruction that builds a
+    // function value joined the instruction set. A freshly built artifact must
+    // carry version 10.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 9, "current .cdlb format version must be 9");
+    assert_eq!(bytes[4], 10, "current .cdlb format version must be 10");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -338,7 +339,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 9);
+    assert_eq!(bytes[4], 10);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
@@ -787,6 +788,44 @@ fn main() {
     print(pick(false)(10));
 }
 ";
+
+/// A function turned into text every way a program can hold one: written out
+/// where it is printed, capturing the scope around it, named as a value, and
+/// read back out of a list, a map and a struct field.
+const FUNCTION_TEXT_PROGRAM: &str = "
+struct Button { on_press: fn(int) -> int }
+
+fn double(x: int) -> int { return x * 2; }
+
+fn main() {
+    print(fn(x) { return x; });
+    print(str(fn(x) { return x; }));
+    let n = 1;
+    let bump = fn(x) { return x + n; };
+    print(bump);
+    let f = double;
+    print(f);
+    print(str(f));
+    print([double, bump]);
+    print({\"k\": double});
+    print(Button { on_press: double });
+    print(f(4));
+}
+";
+
+/// Every function value reads `<fn>`, through `candela <file>` and through
+/// `candela build` plus `candela-vm` alike, and the call through one still
+/// reaches its body. Skips if `candela-vm` is not built alongside `candela`.
+#[test]
+fn function_text_agrees_across_source_and_artifact() {
+    agrees_across_source_and_artifact(
+        "function_text_agrees_across_source_and_artifact",
+        "function_text",
+        FUNCTION_TEXT_PROGRAM,
+        "<fn>\n<fn>\n<fn>\n<fn>\n<fn>\n[<fn>,<fn>]\n{\"k\":<fn>}\nButton {on_press:<fn>}\n8\n",
+        "one spelling for a function value, and a call through one still works",
+    );
+}
 
 /// A struct turned into text every way a program can ask for it: on its own,
 /// through `str`, inside a list, a map and an enum payload, and with a type

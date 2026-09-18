@@ -111,6 +111,8 @@ been raised for:
 - `int` widening to 64 bits, which gave every recorded value a second word
 - the cell instructions a captured variable is read and written through
 - the indirect call, which dispatches on the function a value holds
+- the instruction that builds a function value, which tells a function from the
+  list it is built as
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

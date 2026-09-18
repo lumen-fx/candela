@@ -75,7 +75,6 @@ use type_system::TypeParams;
 use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
-use type_system::merge_fn_types;
 use type_system::param_type_matches;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
@@ -389,8 +388,8 @@ pub(crate) fn compile_fn_value(
         .unwrap_id()
 }
 
-/// Builds the value of a function that captures nothing: a list whose one slot
-/// says where the body starts, which is what a call through the value jumps to.
+/// Builds the value of a function that captures nothing: one slot saying where
+/// the body starts, which is what a call through the value jumps to.
 pub(crate) fn compile_fn_entry_value(
     fn_id: usize,
     state: &mut State<'_>,
@@ -399,9 +398,19 @@ pub(crate) fn compile_fn_entry_value(
 ) -> u16 {
     let entry_id = state.fn_entry_register(fn_id);
     let value_id = state.alloc_reg_tgt(tgt_id);
-    output.push(Instr::EmptyArray(value_id));
+    output.push(Instr::EmptyFnValue(value_id));
     output.push(Instr::Push(value_id, entry_id));
     value_id
+}
+
+/// Whether a collection literal builds its elements as function values: it
+/// holds a function at all. A single one is enough, since a function only ever
+/// called by its name leaves nothing in a register for the collection to carry,
+/// and what the collection holds is what a program reads back out of it.
+fn holds_functions(types: &[DataType]) -> bool {
+    types
+        .iter()
+        .any(|t| matches!(t, DataType::Fn(_) | DataType::FnValue(_)))
 }
 
 /// Compiles one element of a collection literal, as a function value where the
@@ -451,14 +460,14 @@ fn compile_array_literal(
             )
         }
     }
-    // A list that holds more than one function holds function values: no
-    // element is the function the list holds, so each one carries its own
-    // identity for a call through the list to dispatch on.
+    // A list that holds functions holds function values: no element is the
+    // function the list holds, so each one carries its own identity for a call
+    // through the list to dispatch on and for a print to read it by.
     let elem_types = array_items
         .iter()
         .map(|elem| elem.infer_type(v, ctx, state))
         .collect::<Vec<DataType>>();
-    let as_fn_values = merge_fn_types(&elem_types).is_some();
+    let as_fn_values = holds_functions(&elem_types);
     let array_id = {
         state.pools.objs.push(Vec::with_capacity(array_items.len()));
         state.pools.objs.len() - 1
@@ -1354,14 +1363,14 @@ fn compile_map_literal(
 ) -> u16 {
     let mut global_key_type: DataType = DataType::Unknown;
     let mut global_val_type: DataType = DataType::Unknown;
-    // A map whose values are more than one function holds function values, the
-    // same as a list does: no value is the function the map holds, so a call
-    // through a key dispatches on what came out of it.
+    // A map whose values are functions holds function values, the same as a
+    // list does: no value is the function the map holds, so a call through a
+    // key dispatches on what came out of it.
     let value_types = kv_pairs
         .iter()
         .map(|(_, _, val, _)| val.infer_type(v, ctx, state))
         .collect::<Vec<DataType>>();
-    let as_fn_values = merge_fn_types(&value_types).is_some();
+    let as_fn_values = holds_functions(&value_types);
     let map_id = state.pools.maps.len();
     state.pools.maps.push(HashMap::with_capacity_and_hasher(
         kv_pairs.len(),
@@ -3842,7 +3851,7 @@ impl Expr {
                     // cells, so what one writes the other reads.
                     let entry_id = state.fn_entry_register(fn_id);
                     let env_id = state.alloc_reg_tgt(tgt_id);
-                    output.push(Instr::EmptyArray(env_id));
+                    output.push(Instr::EmptyFnValue(env_id));
                     output.push(Instr::Push(env_id, entry_id));
                     for (name, _) in &captures {
                         let cell_id = capture_cell(name, *span, v, ctx, state, output);

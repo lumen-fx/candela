@@ -142,6 +142,14 @@ pub enum Instr {
     /// Allocates a fresh empty array and stores its address in array_reg_id
     EmptyArray(u16),
 
+    /// EmptyFnValue(value_reg_id)\
+    /// Allocates a fresh entry like `EmptyArray` and stores a function value
+    /// naming it in value_reg_id. The pushes that follow fill it with where
+    /// the body starts and the cells the function captured; the value is a
+    /// function rather than the list it is built as, which is what makes it
+    /// read as one wherever it becomes text.
+    EmptyFnValue(u16),
+
     /// CloneArray(src_reg, dest_reg, len)
     /// Allocates a fresh array with exact capacity len and clones the array in src_reg to dest_reg
     CloneArray(u16, u16, u16),
@@ -379,6 +387,7 @@ impl Instr {
             | Self::BoolOr(_, _, y)
             | Self::NegBool(_, y)
             | Self::EmptyArray(y)
+            | Self::EmptyFnValue(y)
             | Self::NegFloat(_, y)
             | Self::NegInt(_, y)
             | Self::CallLibFunc(_, _, y)
@@ -522,6 +531,7 @@ impl Instr {
             | Self::CallDynamicLibFunc(_, _)
             | Self::CallHostFunc(_, _)
             | Self::EmptyArray(_)
+            | Self::EmptyFnValue(_)
             | Self::SetInt(_, _)
             | Self::StartErrorCatch(_, _)
             | Self::StopErrorCatch

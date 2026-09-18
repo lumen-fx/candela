@@ -5,6 +5,7 @@ use super::super::type_system::format_detailed;
 use super::check_arg_type;
 use super::user_functions::handle_user_function;
 use crate::compiler::UnwrapId;
+use crate::compiler::compile_fn_value;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
@@ -15,6 +16,35 @@ use crate::data::Data;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use smol_strc::SmolStr;
+
+/// Compiles an argument on its way to text. A function called only by its name
+/// leaves nothing in a register to render, so one written or named here is
+/// built into the value that says it is a function; every other argument
+/// compiles as itself.
+fn compile_text_arg(
+    arg: &Expr,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    // Only a name or a function written out where the argument goes can reach
+    // here with nothing in its register; every other expression has already
+    // built whatever it hands on. They are also the only ones safe to ask for a
+    // type first: asking a call would report its errors before the call itself
+    // does, and in the other order.
+    if matches!(arg, Expr::Var(..) | Expr::AnonymousFunction(..))
+        && matches!(
+            arg.infer_type(v, ctx, state),
+            DataType::Fn(_) | DataType::FnValue(_)
+        )
+    {
+        compile_fn_value(arg, v, ctx, state, output, None)
+    } else {
+        arg.compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    }
+}
 
 pub fn builtin_functions(
     name: &str,
@@ -52,9 +82,7 @@ pub fn builtin_functions(
     match name {
         "print" => {
             for arg in args {
-                let id = arg
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
+                let id = compile_text_arg(arg, v, ctx, state, output);
                 output.push(Instr::Print(id));
                 state.free_reg(id, v);
             }
@@ -113,9 +141,7 @@ pub fn builtin_functions(
         }
         "str" => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
-            let id = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let id = compile_text_arg(&args[0], v, ctx, state, output);
             state.free_reg(id, v);
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::Str, id, output_id));

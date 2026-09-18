@@ -40,6 +40,16 @@ const CANONICAL_NAN: u64 =
 /// The top bit of each of the six bytes an inlined string packs. A string
 /// with none of them set holds nothing but single-byte characters.
 const SMALL_STR_HIGH_BITS: u64 = 0x0000_8080_8080_8080;
+/// The bit that tells a function value from the list it is built as. A
+/// function value is an array: its slots are where the body starts and the
+/// cells it captured, and the object pool holds it and the collector walks it
+/// like any other. The bit is free in an array's payload, since a pool index
+/// spans the low 32, so carrying it costs the value nothing and costs a
+/// program that never makes one nothing at all.
+const NAN_FN_MARK: u64 = 1 << 47;
+/// How a function value reads wherever one becomes text. A function carries no
+/// signature at run time, so every function reads alike.
+pub const FUNCTION_TEXT: &str = "<fn>";
 pub const NULL: Data = Data::tagged(NAN_NULL);
 pub const FALSE: Data = Data::tagged(NAN_BOOL);
 pub const TRUE: Data = Data::tagged(NAN_BOOL | 1);
@@ -58,6 +68,10 @@ pub const TRUE: Data = Data::tagged(NAN_BOOL | 1);
 /// - INT = 110
 /// - STRUCT = 111
 /// - MAP = 1111
+///
+/// ### Functions
+/// A function value is an ARRAY with the top payload bit set, which is what
+/// tells it from the list it is built as.
 ///
 /// ### Strings
 /// Strings are inlined if they're 6 bytes long or less.
@@ -239,6 +253,20 @@ impl Data {
     #[inline(always)]
     pub const fn is_array(self) -> bool {
         (self.boxed & !PAYLOAD_MASK) == NAN_ARRAY
+    }
+    /// A function value over the pool entry `id`: the array a call reads the
+    /// body location and the captured cells out of, marked as the function it
+    /// is.
+    #[inline(always)]
+    pub const fn function(id: u32) -> Self {
+        Self::tagged(NAN_ARRAY | NAN_FN_MARK | id as u64)
+    }
+    /// Whether this value is a function. A function value answers
+    /// [`Self::is_array`] too, since everything that holds, walks and frees an
+    /// array holds, walks and frees this one.
+    #[inline(always)]
+    pub const fn is_function(self) -> bool {
+        (self.boxed & !PAYLOAD_MASK) == NAN_ARRAY && (self.boxed & NAN_FN_MARK) != 0
     }
     /// This will create a new inlined string.
     /// In debug it'll panic (just in case).
@@ -506,6 +534,8 @@ impl Data {
             } else {
                 format_args!("\"{}\"", self.as_str(string_pool)).to_smolstr()
             }
+        } else if self.is_function() {
+            SmolStr::new_static(FUNCTION_TEXT)
         } else if self.is_array() {
             format_args!(
                 "[{}]",
@@ -710,6 +740,43 @@ mod format_tests {
             true,
         );
         assert_eq!(rendered, "struct {1,2}");
+    }
+
+    /// A function value reads alike wherever it becomes text, on its own and
+    /// inside a list, since a function carries no signature to tell one from
+    /// another at run time.
+    #[test]
+    fn a_function_value_formats_as_the_function_marker() {
+        let obj_pool: ObjectPool = Pool(vec![
+            vec![Data::int(12)],
+            vec![Data::function(0)],
+            vec![Data::int(12)],
+        ]);
+        let rendered = |value: Data| {
+            value.format(
+                &obj_pool,
+                &StringPool::default(),
+                &Pool(Vec::new()),
+                &[],
+                &[],
+                true,
+            )
+        };
+        assert_eq!(rendered(Data::function(0)), "<fn>");
+        assert_eq!(rendered(Data::array(1)), "[<fn>]");
+        // The list the value is built as reads as a list, mark or no mark.
+        assert_eq!(rendered(Data::array(2)), "[12]");
+    }
+
+    /// Everything that holds, walks and frees an array does the same for a
+    /// function value: the mark rides in a bit the pool index leaves free.
+    #[test]
+    fn a_function_value_is_an_array_underneath() {
+        let value = Data::function(7);
+        assert!(value.is_array());
+        assert!(value.is_function());
+        assert_eq!(value.as_array(), 7);
+        assert!(!Data::array(7).is_function());
     }
 
     fn one_enum() -> Vec<EnumType> {

@@ -4,6 +4,7 @@ use crate::captured_output::outln;
 use crate::data::Data;
 use crate::data::DataHash;
 use crate::data::FALSE;
+use crate::data::FUNCTION_TEXT;
 use crate::data::NULL;
 use crate::data::TRUE;
 use crate::data::format_float;
@@ -950,6 +951,18 @@ pub fn execute(
                 );
                 r[arr_reg_id] = Data::array(array_id);
             }
+            Instr::EmptyFnValue(value_reg_id) => {
+                let array_id = alloc_array(
+                    obj_pool,
+                    map_pool,
+                    free_arrays,
+                    r,
+                    &recursion_stack,
+                    gc_array_threshold,
+                    gc,
+                );
+                r[value_reg_id] = Data::function(array_id);
+            }
             Instr::CloneArray(src_reg, dest_reg, len) => {
                 let src_id = r[src_reg].as_array();
                 let new_id = alloc_array(
@@ -1248,6 +1261,8 @@ pub fn execute(
                     outln!(handle, "{}", format_float(tgt.as_float()));
                 } else if tgt.is_bool() {
                     outln!(handle, "{}", tgt.as_bool());
+                } else if tgt.is_function() {
+                    outln!(handle, "{FUNCTION_TEXT}");
                 } else if tgt.is_array() {
                     let array = &obj_pool[tgt.as_array()];
                     out!(handle, "[");

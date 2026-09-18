@@ -355,6 +355,10 @@ Where the compiler can name the function a call reaches, it emits a direct
 call rather than dispatching on the value. A closure held in a variable, a list
 holding one function, and a higher-order call are all included.
 
+A function value prints as `<fn>`, on its own and inside a list, a map or a
+struct field, since a function carries no signature at run time to tell one from
+another.
+
 A function held in a value carries one body, so it is compiled for one set of
 argument types. Calling the same value with an `int` in one place and a
 `string` in another is a compile error naming the types it was compiled for;
