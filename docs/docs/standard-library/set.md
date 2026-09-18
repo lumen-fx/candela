@@ -38,6 +38,15 @@ set::add(s, x)
 - `x`: the member to add.
 - Returns: nothing. A member already present leaves the set unchanged.
 
+## remove
+
+```rust
+set::remove(s, x)
+```
+
+- `x`: the member to take out.
+- Returns: nothing. A member the set does not hold leaves it unchanged.
+
 ## contains
 
 ```rust

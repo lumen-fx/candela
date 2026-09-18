@@ -65,4 +65,35 @@ impl Option<T> {
             None => { return None; }
         }
     }
+
+    /// Applies `f`, which returns an option of its own, to the contained
+    /// value. A `None` passes through without calling `f`.
+    fn and_then(self, f) {
+        match self {
+            Some(v) => { return f(v); }
+            None => { return None; }
+        }
+    }
+
+    /// This option when it holds a value, and `other` when it is empty.
+    fn or(self, other) {
+        match self {
+            Some(v) => { return Some(v); }
+            None => { return other; }
+        }
+    }
+
+    /// This option when `pred` answers true for the contained value, and an
+    /// empty one otherwise.
+    fn filter(self, pred) {
+        match self {
+            Some(v) => {
+                if pred(v) {
+                    return Some(v);
+                }
+                return None;
+            }
+            None => { return None; }
+        }
+    }
 }

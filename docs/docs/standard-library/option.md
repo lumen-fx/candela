@@ -118,6 +118,36 @@ o.map(f)
 - Returns: `Some(f(v))` when the option holds `v`, and `None` when it is empty.
   `f` is not called on a `None`.
 
+### and_then
+
+```rust
+o.and_then(f)
+```
+
+- `f`: takes the contained value and returns an option of its own.
+- Returns: `f(v)` when the option holds `v`, and `None` when it is empty. `f` is
+  not called on a `None`. Use it to chain steps that may each come back empty,
+  where `map` would give you an option inside an option.
+
+### or
+
+```rust
+o.or(other)
+```
+
+- `other`: the option to fall back on. It has the same payload type.
+- Returns: this option when it holds a value, and `other` when it is empty.
+
+### filter
+
+```rust
+o.filter(pred)
+```
+
+- `pred`: takes the contained value and returns a bool.
+- Returns: this option when it holds a value `pred` answers true for, and `None`
+  otherwise. `pred` is not called on a `None`.
+
 ```rust
 import "std/option";
 
