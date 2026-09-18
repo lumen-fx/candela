@@ -10608,3 +10608,63 @@ pub fn a_dynamic_value_does_not_go_into_a_typed_field() {
         "
     );
 }
+
+/// A closure calls the function its enclosing function was handed. The body of
+/// the closure compiles at the call through the value, by which time the
+/// enclosing call has finished and its parameters have left the file scope, so
+/// the name has to resolve through the capture the closure carries.
+#[test]
+pub fn a_closure_calls_the_function_its_enclosing_function_was_handed() {
+    run_and_check_registers!(
+        "
+        fn compose(f, g) {
+            return fn(x) { return f(g(x)); };
+        }
+
+        fn main() {
+            let inc = fn(x) { return x + 1; };
+            let dbl = fn(x) { return x * 2; };
+            print(compose(inc, dbl)(5));
+        }
+        ",
+        11.into()
+    );
+}
+
+/// The same when the parameter says what it holds, and the closure calls it
+/// twice over.
+#[test]
+pub fn a_closure_calls_an_annotated_function_parameter() {
+    run_and_check_registers!(
+        "
+        fn twice(f: fn(int) -> int) {
+            return fn(x) { return f(f(x)); };
+        }
+
+        fn main() {
+            let inc = fn(x) { return x + 1; };
+            print(twice(inc)(5));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A local that took the function reaches the closure the same way the
+/// parameter does.
+#[test]
+pub fn a_closure_calls_a_local_holding_the_function_handed_in() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let inc = fn(x) { return x + 1; };
+            let k = fn(h) {
+                let hh = h;
+                return fn(y) { return hh(y); };
+            };
+            print(k(inc)(7));
+        }
+        ",
+        8.into()
+    );
+}

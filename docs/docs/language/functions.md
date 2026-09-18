@@ -219,6 +219,22 @@ fn main() {
 }
 ```
 
+A closure written inside such a function calls the function it was handed, and
+goes on calling it after the enclosing call has returned: the parameter is one
+of the variables the closure captured.
+
+```rust
+fn compose(f, g) {
+    return fn(x) { return f(g(x)); };
+}
+
+fn main() {
+    let inc = fn(x) { return x + 1; };
+    let dbl = fn(x) { return x * 2; };
+    print(compose(inc, dbl)(5));
+}
+```
+
 A function that returns an anonymous function, or a list that holds one, is
 called where it stands; there is no need to bind it with `let` first.
 

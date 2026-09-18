@@ -316,6 +316,34 @@ pub fn handle_functions(
             args_indexes,
         );
     }
+    // A name that holds one function is called at that function: a parameter
+    // the enclosing call was handed, or a local that took one. The variable is
+    // asked before the file scope, so this resolves the name the way
+    // `Expr::infer_type` does. That is what lets a closure call a function its
+    // enclosing function was handed: the closure body compiles at the call
+    // through the value, long after the enclosing body's parameters left the
+    // scope, and by then the name lives only in the capture the closure carries.
+    if len == 0
+        && let Some(DataType::Fn(fn_id)) = v
+            .iter()
+            .rfind(|var| var.name.as_str() == fn_name)
+            .map(|var| var.var_type.clone())
+    {
+        return handle_user_function(
+            fn_name,
+            fn_id as usize,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            args,
+            span,
+            args_indexes,
+            &[],
+            None,
+        );
+    }
     let namespace = &namespace[0..len];
     if namespace.is_empty() {
         builtin_functions(
