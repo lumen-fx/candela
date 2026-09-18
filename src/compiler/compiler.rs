@@ -49,6 +49,7 @@ use compiler_data::Variable;
 use expr::Expr;
 use expr::METHOD_SEP;
 use expr::Span;
+use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use functions::handle_functions;
@@ -56,6 +57,7 @@ use functions::handle_value_call;
 use functions::user_functions::check_declared_fn;
 use functions::user_functions::declared_holds_fn_signature;
 use functions::user_functions::ensure_indirect_impl;
+use methods::compile_operator_method;
 use methods::handle_method_calls;
 use registers::int_immediate;
 use registers::move_reg_to_reg;
@@ -76,6 +78,7 @@ use type_system::TypeExpr;
 use type_system::TypeParams;
 use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
+use type_system::check_operator_method;
 use type_system::collect_direct_fn_calls;
 use type_system::param_type_matches;
 use type_system::qualify_duplicate_type_names;
@@ -1723,6 +1726,22 @@ fn uniform_op2(
 ) -> u16 {
     let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
     if !((&t_l == t_1 && &t_r == t_1) || (&t_l == t_2 && &t_r == t_2)) {
+        if let Some(id) = compile_operator_method(
+            symbol,
+            l,
+            Some(r),
+            &t_l,
+            &t_r,
+            span_l,
+            span_r,
+            tgt_id,
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            return id;
+        }
         compiler_errors::error_op(
             &t_l,
             &t_r,
@@ -1773,6 +1792,22 @@ fn compile_cmp_op(
 ) -> u16 {
     let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
     if t_l != t_r || !matches!(t_l, DataType::Float | DataType::Int | DataType::String) {
+        if let Some(id) = compile_operator_method(
+            symbol,
+            l,
+            Some(r),
+            &t_l,
+            &t_r,
+            span_l,
+            span_r,
+            tgt_id,
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            return id;
+        }
         compiler_errors::error_op(
             &t_l,
             &t_r,
@@ -1819,7 +1854,9 @@ fn compile_div_op(
     // makes this integer division, which does not divide by zero.
     if let Expr::Int(n) = r
         && *n == 0
-        && l.infer_type(v, ctx, state) != DataType::Float
+        && let t_l = l.infer_type(v, ctx, state)
+        && t_l != DataType::Float
+        && !matches!(t_l, DataType::Struct(_) | DataType::Enum(_))
     {
         error_division_by_zero(false, span_l.extend(span_r), ctx.file_idx, state.sources);
     }
@@ -1864,6 +1901,22 @@ fn compile_add_op(
             DataType::String | DataType::Array(_) | DataType::Float | DataType::Int
         )
     {
+        if let Some(id) = compile_operator_method(
+            "+",
+            l,
+            Some(r),
+            &t_l,
+            &t_r,
+            span_l,
+            span_r,
+            tgt_id,
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            return id;
+        }
         compiler_errors::error_op(
             &t_l,
             &t_r,
@@ -1935,6 +1988,22 @@ fn compile_sub_op(
     if !((t_l == DataType::Float && t_r == DataType::Float)
         || (t_l == DataType::Int && t_r == DataType::Int))
     {
+        if let Some(id) = compile_operator_method(
+            "-",
+            l,
+            Some(r),
+            &t_l,
+            &t_r,
+            span_l,
+            span_r,
+            tgt_id,
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            return id;
+        }
         compiler_errors::error_op(
             &t_l,
             &t_r,
@@ -1994,7 +2063,9 @@ fn compile_mod_op(
     // rather than a remainder by zero.
     if let Expr::Int(n) = r
         && *n == 0
-        && l.infer_type(v, ctx, state) != DataType::Float
+        && let t_l = l.infer_type(v, ctx, state)
+        && t_l != DataType::Float
+        && !matches!(t_l, DataType::Struct(_) | DataType::Enum(_))
     {
         error_division_by_zero(true, span_l.extend(span_r), ctx.file_idx, state.sources);
     }
@@ -2103,6 +2174,8 @@ const fn compares_by_contents(l_type: &DataType, r_type: &DataType) -> bool {
 fn compile_eq_op(
     l: &Expr,
     r: &Expr,
+    span_l: Span,
+    span_r: Span,
     tgt_id: Option<u16>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -2111,6 +2184,24 @@ fn compile_eq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
+    // A type that defines `==` answers for its own values; without one, two
+    // structs still compare field by field, which is what they always did.
+    if let Some(id) = compile_operator_method(
+        "==",
+        l,
+        Some(r),
+        &l_type,
+        &r_type,
+        span_l,
+        span_r,
+        tgt_id,
+        v,
+        ctx,
+        state,
+        output,
+    ) {
+        return id;
+    }
     let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
@@ -2135,6 +2226,8 @@ fn compile_eq_op(
 fn compile_neq_op(
     l: &Expr,
     r: &Expr,
+    span_l: Span,
+    span_r: Span,
     tgt_id: Option<u16>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -2143,6 +2236,24 @@ fn compile_neq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
+    // `!=` has no method of its own: it is the type's `==` with the answer
+    // flipped.
+    if let Some(id) = compile_operator_method(
+        "!=",
+        l,
+        Some(r),
+        &l_type,
+        &r_type,
+        span_l,
+        span_r,
+        tgt_id,
+        v,
+        ctx,
+        state,
+        output,
+    ) {
+        return id;
+    }
     let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
@@ -2175,6 +2286,22 @@ fn compile_neg_op(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let operand_type = l.infer_type(v, ctx, state);
+    if let Some(id) = compile_operator_method(
+        UNARY_MINUS_METHOD,
+        l,
+        None,
+        &operand_type,
+        &operand_type,
+        span_l,
+        span_r,
+        tgt_id,
+        v,
+        ctx,
+        state,
+        output,
+    ) {
+        return id;
+    }
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
@@ -2221,6 +2348,22 @@ fn int_op2(
 ) -> u16 {
     let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
     if t_l != DataType::Int || t_r != DataType::Int {
+        if let Some(id) = compile_operator_method(
+            symbol,
+            l,
+            Some(r),
+            &t_l,
+            &t_r,
+            span_l,
+            span_r,
+            tgt_id,
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            return id;
+        }
         compiler_errors::error_op(
             &t_l,
             &t_r,
@@ -2264,6 +2407,10 @@ fn compile_shift_op(
 ) -> u16 {
     if let Expr::Int(count) = r
         && !shift_count_in_range(*count)
+        && !matches!(
+            l.infer_type(v, ctx, state),
+            DataType::Struct(_) | DataType::Enum(_)
+        )
     {
         error_shift_count_out_of_range(*count, span_l.extend(span_r), ctx.file_idx, state.sources);
     }
@@ -2284,6 +2431,22 @@ fn compile_bit_not_op(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let operand_type = l.infer_type(v, ctx, state);
+    if let Some(id) = compile_operator_method(
+        "~",
+        l,
+        None,
+        &operand_type,
+        &operand_type,
+        span_l,
+        span_r,
+        tgt_id,
+        v,
+        ctx,
+        state,
+        output,
+    ) {
+        return id;
+    }
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
@@ -3904,13 +4067,17 @@ impl Expr {
                     l, *span1, *span2, tgt_id, v, ctx, state, output,
                 ))
             }
-            Self::Eq(l, r, _, _) => {
+            Self::Eq(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(compile_eq_op(l, r, tgt_id, v, ctx, state, output))
+                Some(compile_eq_op(
+                    l, r, *span1, *span2, tgt_id, v, ctx, state, output,
+                ))
             }
-            Self::NotEq(l, r, _, _) => {
+            Self::NotEq(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(compile_neq_op(l, r, tgt_id, v, ctx, state, output))
+                Some(compile_neq_op(
+                    l, r, *span1, *span2, tgt_id, v, ctx, state, output,
+                ))
             }
             Self::Sup(l, r, span1, span2) => {
                 debug_assert!(uses_id);
@@ -4959,6 +5126,7 @@ fn parse_toplevel(
                         sources,
                     );
                 }
+                check_operator_method(&fn_name, &fn_args, span, src_file_idx, sources);
                 let returns_void = check_if_returns_void(&fn_code);
                 let mut callees = Vec::new();
                 collect_direct_fn_calls(&fn_code, self_type_of(&fn_name), &mut callees);

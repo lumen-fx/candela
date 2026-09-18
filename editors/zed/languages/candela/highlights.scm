@@ -55,6 +55,9 @@
 (function_signature
   name: (identifier) @function.definition)
 
+(operator_declaration
+  name: (operator_name) @function.definition)
+
 (call_expression
   function: (identifier) @function)
 

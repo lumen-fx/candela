@@ -135,6 +135,13 @@
     "function-declaration": {
       "patterns": [
         {
+          "match": "\\b(fn)\\s*(\\^\\^|<<|>>|==|<=|[-+*/%^&|<~])",
+          "captures": {
+            "1": { "name": "storage.type.function.candela" },
+            "2": { "name": "entity.name.function.candela" }
+          }
+        },
+        {
           "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.function.candela" },

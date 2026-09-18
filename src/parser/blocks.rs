@@ -6,6 +6,7 @@ use super::parser_expr::parse_expr_no_struct;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
+use crate::compiler::expr::UNARY_MINUS_METHOD;
 use crate::compiler::expr::mangle_method;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::ReturnAnnotation;
@@ -491,8 +492,61 @@ fn mangled_method(method: Expr, type_name: &SmolStr) -> Expr {
     )
 }
 
+/// The operator a method declaration names, for `fn +(self, other)` inside an
+/// `impl` block.
+///
+/// `Ok` is an operator a type defines. `Err` is an operator token that cannot
+/// be a method name, carried so the report can name it and say what derives it
+/// where something does. A token that is not an operator at all answers `None`
+/// and the name has to be an identifier, which is what `fn` takes everywhere
+/// else in the language.
+const fn operator_method_name(token: Token<'_>) -> Option<Result<&'static str, &'static str>> {
+    Some(match token {
+        Token::OpAdd => Ok("+"),
+        Token::OpSub => Ok("-"),
+        Token::OpMul => Ok("*"),
+        Token::OpDiv => Ok("/"),
+        Token::OpMod => Ok("%"),
+        Token::OpPow => Ok("^"),
+        Token::OpBitAnd => Ok("&"),
+        Token::Pipe => Ok("|"),
+        Token::OpBitXor => Ok("^^"),
+        Token::OpShl => Ok("<<"),
+        Token::OpShr => Ok(">>"),
+        Token::OpEq => Ok("=="),
+        Token::OpInf => Ok("<"),
+        Token::OpInfEq => Ok("<="),
+        Token::OpBitNot => Ok("~"),
+        Token::OpNEq => Err("!="),
+        Token::OpSup => Err(">"),
+        Token::OpSupEq => Err(">="),
+        Token::OpNot => Err("!"),
+        Token::OpAnd => Err("&&"),
+        Token::OpOr => Err("||"),
+        Token::Equals => Err("="),
+        Token::AssignOpAdd => Err("+="),
+        Token::AssignOpSub => Err("-="),
+        Token::AssignOpMul => Err("*="),
+        Token::AssignOpDiv => Err("/="),
+        Token::AssignOpMod => Err("%="),
+        Token::AssignOpPow => Err("^="),
+        Token::AssignOpBitAnd => Err("&="),
+        Token::AssignOpBitOr => Err("|="),
+        Token::AssignOpBitXor => Err("^^="),
+        Token::AssignOpShl => Err("<<="),
+        Token::AssignOpShr => Err(">>="),
+        _ => return None,
+    })
+}
+
 /// Parses a single `fn method(self, ...) [-> Type] { ... }` inside an impl block
 /// into an [`Expr::FunctionDecl`] carrying the plain method name.
+///
+/// The name is an identifier or, here alone, an operator symbol: a method
+/// named `+` is what `a + b` reaches when `a` is of the type the block
+/// implements. An operator method takes no type parameters of its own, so a
+/// `<` after the symbol is read as the start of the parameter list and
+/// reported there.
 fn parse_method(parser: &mut Parser<'_>) -> Expr {
     let (t, t_span) = parser.next_token();
     if t != Token::Function {
@@ -507,14 +561,27 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
         );
     }
     let (t_id, name_span) = parser.next_token();
-    let Token::Identifier(method_name) = t_id else {
-        cold_path();
-        parser.error(
-            name_span,
-            ParserErr::UnexpectedToken(Token::Identifier(""), t_id, "Invalid method name."),
-        );
+    let operator = operator_method_name(t_id);
+    let method_name = match (operator, t_id) {
+        (Some(Ok(symbol)), _) => symbol,
+        (Some(Err(symbol)), _) => {
+            cold_path();
+            parser.error(name_span, ParserErr::OperatorMethodUnknown(symbol));
+        }
+        (None, Token::Identifier(name)) => name,
+        (None, other) => {
+            cold_path();
+            parser.error(
+                name_span,
+                ParserErr::UnexpectedToken(Token::Identifier(""), other, "Invalid method name."),
+            );
+        }
     };
-    let type_params = parse_type_params(parser);
+    let type_params = if operator.is_some() {
+        Box::from([])
+    } else {
+        parse_type_params(parser)
+    };
     parser.next_token_expect(
         Token::LParen,
         "Method arguments must be delimited by parentheses",
@@ -558,6 +625,15 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
     }
     let return_type = parse_return_annotation(parser);
     let code = parse_block(parser);
+    // `-` has a binary and a unary form and a type may define both, so the
+    // parameter count picks which name this declaration takes. A count that
+    // fits neither keeps the symbol it was written with, and the arity check
+    // reports it against that symbol.
+    let method_name = if method_name == "-" && args.len() == 1 {
+        UNARY_MINUS_METHOD
+    } else {
+        method_name
+    };
     Expr::FunctionDecl(
         SmolStr::new(method_name),
         Box::from(args),

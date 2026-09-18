@@ -177,8 +177,42 @@ module.exports = grammar({
         field('type', $._type_identifier),
         optional(field('type_arguments', $.type_arguments)),
         '{',
-        repeat($.function_declaration),
+        repeat(choice($.function_declaration, $.operator_declaration)),
         '}',
+      ),
+
+    // A method named by an operator symbol is what that operator reaches on a
+    // value of the type. This is the one place `fn` takes something other than
+    // an identifier, and an operator method has no type parameters of its own.
+    operator_declaration: ($) =>
+      seq(
+        'fn',
+        field('name', $.operator_name),
+        field('parameters', $.parameter_list),
+        optional(field('return_type', $.return_type)),
+        field('body', $.block),
+      ),
+
+    // `-` stands for both subtraction and negation; the parameter count tells
+    // them apart. `!=`, `>` and `>=` are missing because a type gets them from
+    // the `==`, `<` and `<=` it defines.
+    operator_name: (_) =>
+      choice(
+        '+',
+        '-',
+        '*',
+        '/',
+        '%',
+        '^',
+        '&',
+        '|',
+        '^^',
+        '<<',
+        '>>',
+        '==',
+        '<',
+        '<=',
+        '~',
       ),
 
     dylib_block: ($) =>

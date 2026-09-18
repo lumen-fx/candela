@@ -2,6 +2,10 @@
   "fn" @context
   name: (identifier) @name) @item
 
+(operator_declaration
+  "fn" @context
+  name: (operator_name) @name) @item
+
 (struct_declaration
   "struct" @context
   name: (identifier) @name) @item

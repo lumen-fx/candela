@@ -83,6 +83,12 @@
 (function_signature
   name: (identifier) @function)
 
+; A method named by an operator symbol: `fn +(self, other)` inside an impl
+; block. The symbol is the method's name, so it reads as a definition rather
+; than as the operator it stands for.
+(operator_declaration
+  name: (operator_name) @function)
+
 (call_expression
   function: (identifier) @function.call)
 

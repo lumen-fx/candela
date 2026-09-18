@@ -318,6 +318,131 @@ pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
     }
 }
 
+/// The method name unary minus takes.
+///
+/// `-` is the one operator with two forms, and both may be defined on one
+/// type, so negation cannot share subtraction's symbol as a method name.
+/// Subtraction keeps `-` and negation takes this, which no identifier and no
+/// other operator spells.
+pub const UNARY_MINUS_METHOD: &str = "neg-";
+
+/// The operator symbols a method may be named after, as a diagnostic lists
+/// them. Unary minus is written `-` like subtraction; the parameter count
+/// tells the two apart.
+pub const OPERATOR_SYMBOLS: &str = "+ - * / % ^ & | ^^ << >> == < <= ~";
+
+/// How an operator reaches the method a type defines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorForm {
+    /// The method named by this operator, operands in the order they are
+    /// written.
+    Direct,
+    /// `a != b` is `a == b` negated: the `==` method, then the bool flipped.
+    Negated,
+    /// `a > b` is `b < a`: the `<` method with the operands swapped, which is
+    /// why the right operand is evaluated first.
+    Swapped,
+}
+
+/// The method an operator symbol resolves to on a type that defines one, and
+/// the form the call takes.
+///
+/// `!=`, `>` and `>=` have no method of their own: they are derived from `==`,
+/// `<` and `<=`, so a type defines three comparisons and gets six operators.
+/// `&&`, `||`, `!` and assignment are not overloadable and answer `None`.
+#[must_use]
+pub fn operator_method(symbol: &str) -> Option<(&'static str, OperatorForm)> {
+    Some(match symbol {
+        "+" => ("+", OperatorForm::Direct),
+        "-" => ("-", OperatorForm::Direct),
+        "*" => ("*", OperatorForm::Direct),
+        "/" => ("/", OperatorForm::Direct),
+        "%" => ("%", OperatorForm::Direct),
+        "^" => ("^", OperatorForm::Direct),
+        "&" => ("&", OperatorForm::Direct),
+        "|" => ("|", OperatorForm::Direct),
+        "^^" => ("^^", OperatorForm::Direct),
+        "<<" => ("<<", OperatorForm::Direct),
+        ">>" => (">>", OperatorForm::Direct),
+        "==" => ("==", OperatorForm::Direct),
+        "<" => ("<", OperatorForm::Direct),
+        "<=" => ("<=", OperatorForm::Direct),
+        "~" => ("~", OperatorForm::Direct),
+        UNARY_MINUS_METHOD => (UNARY_MINUS_METHOD, OperatorForm::Direct),
+        "!=" => ("==", OperatorForm::Negated),
+        ">" => ("<", OperatorForm::Swapped),
+        ">=" => ("<=", OperatorForm::Swapped),
+        _ => return None,
+    })
+}
+
+/// Whether a method name is one of the operators, so it is declared with an
+/// operator symbol rather than an identifier.
+#[must_use]
+pub fn is_operator_method(name: &str) -> bool {
+    matches!(operator_method(name), Some((_, OperatorForm::Direct)))
+}
+
+/// Whether an operator method takes one operand rather than two.
+#[must_use]
+pub fn is_unary_operator_method(name: &str) -> bool {
+    name == UNARY_MINUS_METHOD || name == "~"
+}
+
+/// Whether an operator method has to hand back a `bool`.
+///
+/// `==`, `<` and `<=` answer a question about two values, and `!=`, `>` and
+/// `>=` are derived from them, so a program reading one of the six as a
+/// condition has to get a `bool` whatever the operands are.
+#[must_use]
+pub fn operator_method_answers_bool(name: &str) -> bool {
+    matches!(name, "==" | "<" | "<=")
+}
+
+/// The operator method this node reaches on the body's own receiver, for a
+/// node whose receiver is `self`.
+///
+/// A method that applies its own operator to `self` calls itself, and the
+/// recursion check works off the names a body calls; without this a method
+/// like `fn +(self, o)` returning `self + o` under a guard is inlined into
+/// itself forever. The derived forms swap or negate, so `>` looks at the
+/// right operand and `!=` at the left.
+#[must_use]
+pub fn self_operator_method(expr: &Expr) -> Option<&'static str> {
+    fn is_self(expr: &Expr) -> bool {
+        matches!(expr, Expr::Var(name, _) if name.as_str() == "self")
+    }
+    let (symbol, receiver) = match expr {
+        Expr::Neg(x, _, _) => (UNARY_MINUS_METHOD, &**x),
+        Expr::BitNot(x, _, _) => ("~", &**x),
+        Expr::Mul(l, r, _, _)
+        | Expr::Div(l, r, _, _)
+        | Expr::Add(l, r, _, _)
+        | Expr::Sub(l, r, _, _)
+        | Expr::Mod(l, r, _, _)
+        | Expr::Pow(l, r, _, _)
+        | Expr::BitAnd(l, r, _, _)
+        | Expr::BitOr(l, r, _, _)
+        | Expr::BitXor(l, r, _, _)
+        | Expr::Shl(l, r, _, _)
+        | Expr::Shr(l, r, _, _)
+        | Expr::Eq(l, r, _, _)
+        | Expr::NotEq(l, r, _, _)
+        | Expr::Inf(l, r, _, _)
+        | Expr::InfEq(l, r, _, _)
+        | Expr::Sup(l, r, _, _)
+        | Expr::SupEq(l, r, _, _) => {
+            let symbol = symbol_of_expr(expr);
+            let (method, form) = operator_method(symbol)?;
+            let receiver = if form == OperatorForm::Swapped { r } else { l };
+            return is_self(receiver).then_some(method);
+        }
+        _ => return None,
+    };
+    let (method, _) = operator_method(symbol)?;
+    is_self(receiver).then_some(method)
+}
+
 #[must_use]
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
     code.iter().any(|expr| match expr {

@@ -2,6 +2,7 @@ use crate::BOLD;
 use crate::RED;
 use crate::RESET;
 use crate::compiler::compiler_data::Source;
+use crate::compiler::expr::OPERATOR_SYMBOLS;
 use crate::compiler::expr::{Expr, Span, var_assign};
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
@@ -127,6 +128,9 @@ enum ParserErr<'a> {
     MacroRecursionLimit(&'a str),
     /// Terms, blocks or types nested past [`MAX_NESTING_DEPTH`].
     NestingTooDeep,
+    /// An operator token after `fn` in an `impl` block that a type cannot
+    /// define. Carries the symbol that was written.
+    OperatorMethodUnknown(&'static str),
 }
 
 impl ParserErr<'_> {
@@ -161,6 +165,7 @@ impl ParserErr<'_> {
             ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
             ParserErr::NestingTooDeep => "nesting_too_deep",
+            ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
         }
     }
 }
@@ -249,6 +254,15 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::NestingTooDeep => &format!(
             "This is nested more than {MAX_NESTING_DEPTH} levels deep. Move the inner part into a variable or a function"
+        ),
+        ParserErr::OperatorMethodUnknown(symbol) => &format!(
+            "A type does not define {RED}{BOLD}{symbol}{RESET}. The operators it defines are {BLUE}{BOLD}{OPERATOR_SYMBOLS}{RESET}{}",
+            match symbol {
+                "!=" => ", and != comes from the == it defines",
+                ">" => ", and > comes from the < it defines",
+                ">=" => ", and >= comes from the <= it defines",
+                _ => "",
+            }
         ),
     };
     if crate::errors::diagnostics_enabled() {

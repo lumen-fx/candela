@@ -118,6 +118,74 @@ Calling a name the struct or enum has no method and no function-holding field
 for is a compile error at the call, naming the type, so a misspelling is caught
 before the program runs.
 
+## Operators on your own types
+
+A method named by an operator symbol is what that operator reaches on a value
+of the type. `a + b` calls the `+` method the type of `a` defines, with `b` as
+the other operand.
+
+```rust
+struct Vec2 {
+    x: float,
+    y: float,
+}
+
+impl Vec2 {
+    fn +(self, other: Vec2) -> Vec2 {
+        return Vec2 { x: self.x + other.x, y: self.y + other.y };
+    }
+
+    fn -(self) -> Vec2 {
+        return Vec2 { x: -self.x, y: -self.y };
+    }
+
+    fn ==(self, other: Vec2) -> bool {
+        return self.x == other.x && self.y == other.y;
+    }
+
+    fn <(self, other: Vec2) -> bool {
+        return self.x < other.x;
+    }
+}
+
+fn main() {
+    let a = Vec2 { x: 1.0, y: 2.0 };
+    let b = Vec2 { x: 3.0, y: 4.0 };
+    print((a + b).x);   // 4
+    print(a != b);      // true
+    print(b > a);       // true
+    a += b;             // a = a + b
+}
+```
+
+The operators a type defines are `+`, `-`, `*`, `/`, `%`, `^`, `&`, `|`, `^^`,
+`<<`, `>>`, `==`, `<` and `<=` between two values, and `-` and `~` in front of
+one. `-` is the one symbol with both forms: the parameter count says which is
+being declared, and a type may define both.
+
+`!=`, `>` and `>=` need no method. `!=` is the type's `==` with the answer
+flipped, `>` is its `<` with the operands swapped, and `>=` is its `<=` the same
+way. The swap is in the operands, so a derived comparison evaluates the right
+operand first. `==`, `<` and `<=` answer a question about two values, so each
+returns a `bool`.
+
+The other operand is of the receiver's type unless the method declares
+otherwise, so `fn *(self, k: float) -> Vec2` is what a vector scales by a
+number with. Only the left operand decides which method an operator reaches:
+`2.0 * v` is a type error however `Vec2` defines `*`, because there is one
+spelling of an operator method and it belongs to the type on the left.
+
+A compound assignment applies the matching operator, so `a += b` reaches `+`
+and needs nothing of its own. There is no method-call spelling of an operator:
+`a + b` is how the method is called.
+
+Built-in types are closed. What `+` means on an `int` or a `string` is part of
+the language, so an operator method inside `impl int` or `impl list` is a
+compile error; wrap the value in a type of your own instead. An operator a type
+does not define is the ordinary operator error, and the report names the method
+that would make the expression work. See [errors](../reference/errors.md) and
+[operators](../reference/operators.md).
+
 ## Methods on the built-in types
 
 An `impl` block can also name a built-in type, which is how the standard
@@ -151,7 +219,7 @@ These come with the language and need no import.
   `is_int`, `is_float`.
 - Lists: `len`, `push`, `remove`, `contains`, `find`, `sort`, `reverse`,
   `repeat`, `join`, `partition`.
-- Maps: `len`, `get`, `insert`, `contains`, `keys`, `values`.
+- Maps: `len`, `get`, `insert`, `remove`, `contains`, `keys`, `values`.
 - Integers: `abs`.
 - Floats: `abs`, `sqrt`, `round`, `floor`.
 
