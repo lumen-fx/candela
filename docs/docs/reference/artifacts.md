@@ -99,15 +99,21 @@ The file starts with a four-byte marker and a one-byte format version. The
 runtime accepts exactly the version it was built for and rejects anything else
 rather than risk decoding it wrongly.
 
-The version is raised whenever the shape of what is recorded changes: adding the
-dynamic-library and host-function tables, adding the enum type table, adding the
-map, JSON and `any` operations, adding the export table, adding the map
-`remove` instruction together with the mark on the dynamic libraries the
-standard library owns, widening `int` to 64 bits, which gave every recorded
-value a second word, adding the cell instructions a captured variable is read
-and written through, and adding the indirect call, which dispatches on the
-function a value holds, each raised it. There is no forward or backward
-compatibility across a change, and there is no conversion tool.
+The version is raised whenever the shape of what is recorded changes. It has
+been raised for:
+
+- the dynamic-library and host-function tables
+- the enum type table
+- the map, JSON and `any` operations
+- the export table
+- the map `remove` instruction, together with the mark on the dynamic libraries
+  the standard library owns
+- `int` widening to 64 bits, which gave every recorded value a second word
+- the cell instructions a captured variable is read and written through
+- the indirect call, which dispatches on the function a value holds
+
+There is no forward or backward compatibility across a change, and there is no
+conversion tool.
 
 In practice this means: build the artifact with the toolchain whose `candela-vm`
 will run it, and rebuild after a toolchain upgrade. The failure is loud, not

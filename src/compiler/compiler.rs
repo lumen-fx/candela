@@ -72,6 +72,7 @@ use type_system::ReturnAnnotation;
 use type_system::TypeCtx;
 use type_system::TypeExpr;
 use type_system::TypeParams;
+use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
 use type_system::merge_fn_types;
@@ -381,14 +382,25 @@ pub(crate) fn compile_fn_value(
     if let DataType::Fn(fn_id) = expr.infer_type(v, ctx, state)
         && state.fns[fn_id as usize].captures.is_empty()
     {
-        let entry_id = state.fn_entry_register(fn_id as usize);
-        let value_id = state.alloc_reg_tgt(tgt_id);
-        output.push(Instr::EmptyArray(value_id));
-        output.push(Instr::Push(value_id, entry_id));
-        return value_id;
+        return compile_fn_entry_value(fn_id as usize, state, output, tgt_id);
     }
     expr.compile(v, ctx, state, output, tgt_id, false, true)
         .unwrap_id()
+}
+
+/// Builds the value of a function that captures nothing: a list whose one slot
+/// says where the body starts, which is what a call through the value jumps to.
+pub(crate) fn compile_fn_entry_value(
+    fn_id: usize,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+    tgt_id: Option<u16>,
+) -> u16 {
+    let entry_id = state.fn_entry_register(fn_id);
+    let value_id = state.alloc_reg_tgt(tgt_id);
+    output.push(Instr::EmptyArray(value_id));
+    output.push(Instr::Push(value_id, entry_id));
+    value_id
 }
 
 /// Compiles one element of a collection literal, as a function value where the
@@ -2910,6 +2922,14 @@ fn compile_var_declaration(
         }
         _ => var_type,
     };
+    // A `let` has no annotation to read a function against, so the binding
+    // takes the function's own signature: the name stops naming one call target
+    // and holds a value the call dispatches on.
+    let var_type = if matches!(var_type, DataType::Fn(_)) {
+        bare_fn_value_type(value, v, ctx, state).unwrap_or(var_type)
+    } else {
+        var_type
+    };
     let as_fn_value = matches!(var_type, DataType::FnValue(_));
     // A variable a closure reads lives in a cell instead of a register, so the
     // scope that declared it and the closures that took it share one slot. The
@@ -3477,6 +3497,12 @@ impl Expr {
                     } else {
                         Some(var.register_id)
                     }
+                } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name) {
+                    // A bare name that names a function is the function itself
+                    // wherever it is read rather than called, so a `let`, a
+                    // return, a collection element and an argument all hand on
+                    // a value a later call can dispatch on.
+                    Some(compile_fn_entry_value(fn_id, state, output, tgt_id))
                 } else if let Some((enum_id, variant_idx)) =
                     variant_constructor(std::slice::from_ref(name), &[], *span, v, ctx, state)
                 {

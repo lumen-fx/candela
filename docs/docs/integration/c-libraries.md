@@ -151,9 +151,9 @@ EXPORT const char *format(int64_t timestamp, const char *fmt) {
 }
 ```
 
-Note the types: `int64_t` for candela's `int`, `double` for its `float`, and a
-`static` buffer for the returned string, since candela copies it out and the C
-side keeps ownership.
+candela's `int` is `int64_t` and its `float` is `double`. The returned string
+uses a `static` buffer, since candela copies it out and the C side keeps
+ownership.
 
 Build it as a shared library. The shipped ones are built like this:
 

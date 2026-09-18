@@ -175,10 +175,10 @@ fn main() {
 }
 ```
 
-An anonymous function captures: its body reads the parameters and the
+An anonymous function captures: its body reads its own parameters and the
 variables of the function it is written in, and an assignment inside it writes
-the same variable that function reads. A closure written in a loop body
-captures that turn of the loop.
+the same variable that function reads. An anonymous function that captures is a
+closure. One written in a loop body captures that turn of the loop.
 
 ```rust
 fn main() {
@@ -192,7 +192,7 @@ fn main() {
 
 A captured variable lives as long as the closures that hold it, so a closure
 that outlives the call it was made in goes on reading and writing what it
-captured, every closure written in one scope shares that variable, and each
+captured. Every closure written in one scope shares that variable, and each
 call of the surrounding function captures a fresh one.
 
 ## Functions as arguments
@@ -255,19 +255,23 @@ has no such method, so adding a method never changes which call an existing
 program makes. See [Methods](methods.md).
 
 Both forms work as arguments: the name of a declared function, and an anonymous
-function written at the call site. A declared function's name reaches anywhere a
-`fn(...)` type says a function goes, an argument position included. A `let`
-takes no annotation, so to keep a declared function in a variable, wrap it in an
-anonymous function.
+function written at the call site. A declared function's name is the function
+itself wherever a value goes, so a `let`, a return, a list or map element and a
+struct field each take it by name, and the call goes to what the name handed
+over. The value carries the signature the function was declared with, so the
+call is checked against it.
 
 ```rust
-fn twice(x) {
+fn twice(x: int) -> int {
     return x * 2;
 }
 
 fn main() {
-    let f = fn(x) { return twice(x); };
+    let f = twice;
     print(f(4));
+
+    let fs = [twice, fn(x) { return x + 1; }];
+    print(fs[1](4));
 }
 ```
 
@@ -331,9 +335,9 @@ fn main() {
 }
 ```
 
-Where the compiler can still name the function a call reaches, it does, so a
-closure in a variable, a list holding one function, and a higher-order call all
-compile to the same jump they always did.
+Where the compiler can name the function a call reaches, it emits a direct
+call rather than dispatching on the value. A closure held in a variable, a list
+holding one function, and a higher-order call are all included.
 
 A function held in a value carries one body, so it is compiled for one set of
 argument types. Calling the same value with an `int` in one place and a

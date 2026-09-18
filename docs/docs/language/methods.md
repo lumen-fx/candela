@@ -109,14 +109,14 @@ The receiver's type decides which function a call reaches. Two types may both
 define `len`, and neither collides with the other or with a free function of the
 same name.
 
-A field that holds a function is called through the same dot: when the receiver
-is a struct with no method of that name and a field that holds one, `obj.cb(x)`
-calls what the field holds. A method wins, so adding one never changes which
-call a program was already making. See [Functions](functions.md).
+A field that holds a function is called through the same dot: `obj.cb(x)` calls
+what the field `cb` holds, when the receiver's type has no method of that name.
+A method wins, so adding one never changes which call a program was already
+making. See [Functions](functions.md).
 
-Calling a name a struct or enum has neither a method nor a function-holding
-field for is a compile error naming the type, so a misspelling is caught before
-the program runs.
+Calling a name the struct or enum has no method and no function-holding field
+for is a compile error at the call, naming the type, so a misspelling is caught
+before the program runs.
 
 ## Methods on the built-in types
 

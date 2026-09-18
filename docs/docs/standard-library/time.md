@@ -45,5 +45,5 @@ fn main() {
 }
 ```
 
-The value `now` returns is a signed count of seconds wide enough to outlast the
-platform clock that produces it.
+The value `now` returns is a signed count of seconds, held in an `int`; see
+[types](../language/types.md).
