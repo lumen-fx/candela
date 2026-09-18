@@ -497,7 +497,7 @@ fn compile_function(
         file_idx: fn_file_idx,
         ..ctx
     };
-    let fn_type = track_returns(fn_code, v, fn_ctx, state, fn_name);
+    let fn_type = track_returns(fn_code, v, fn_ctx, state, fn_name, function_id);
     let return_type = if fn_type.is_empty() {
         // No tracked type means either no value is returned at all, or every
         // returned value was itself dynamic (return-type tracking records no

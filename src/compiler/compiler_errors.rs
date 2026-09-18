@@ -543,6 +543,47 @@ pub fn error_non_bool_condition(
 
 #[inline(never)]
 #[cold]
+pub fn error_missing_return(
+    fn_name: Option<&str>,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let subject = fn_name.map_or_else(
+        || String::from("This function"),
+        |name| format!("Function {name}"),
+    );
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Missing return")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} returns a value on some paths and nothing on others",
+                        red(&subject)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "A path that reaches the end of the body, or leaves through a bare `return;`, returns nothing",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Missing return: {subject} returns a value on some paths and nothing on others"),
+        "missing_return",
+    );
+}
+
+#[inline(never)]
+#[cold]
 pub fn error_unknown_struct(
     struct_name: &SmolStr,
     struct_span: Span,
