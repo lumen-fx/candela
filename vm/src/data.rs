@@ -519,20 +519,25 @@ impl Data {
         } else if self.is_null() {
             SmolStr::new_static("null")
         } else if self.is_struct() {
-            let s_name = structs
-                .get(self.struct_type_id() as usize)
-                .map_or("struct", |s| s.name.as_str());
+            let declared = structs.get(self.struct_type_id() as usize);
+            let s_name = declared.map_or("struct", |s| s.name.as_str());
             format_args!(
                 "{} {{{}}}",
                 s_name,
                 obj_pool[self.as_struct()]
                     .iter()
-                    .map(|x| {
-                        format_args!(
-                            "{}",
-                            x.format(obj_pool, string_pool, map_pool, structs, enums, false)
-                        )
-                        .to_smolstr()
+                    .enumerate()
+                    .map(|(idx, x)| {
+                        let value =
+                            x.format(obj_pool, string_pool, map_pool, structs, enums, false);
+                        // A slot the declaration does not name belongs to a
+                        // pool entry read as a struct it is not, and has no
+                        // name to give. The value it holds still says what is
+                        // there.
+                        match declared.and_then(|s| s.fields.get(idx)) {
+                            Some((field, ..)) => format_args!("{field}:{value}").to_smolstr(),
+                            None => value,
+                        }
                     })
                     .collect::<Vec<SmolStr>>()
                     .join(",")
@@ -642,9 +647,70 @@ impl From<Data> for bool {
 #[cfg(test)]
 mod format_tests {
     use super::Data;
-    use crate::rt::{DataType, EnumType, EnumVariant, Span};
+    use crate::rt::{DataType, EnumType, EnumVariant, Span, Struct};
     use crate::vm::{MapPool, ObjectPool, Pool, StringPool};
     use smol_strc::SmolStr;
+
+    fn one_struct() -> Vec<Struct> {
+        vec![Struct {
+            name: SmolStr::new_static("P"),
+            fields: Box::new([
+                (
+                    SmolStr::new_static("x"),
+                    DataType::Int,
+                    Span { start: 0, end: 0 },
+                ),
+                (
+                    SmolStr::new_static("y"),
+                    DataType::Int,
+                    Span { start: 0, end: 0 },
+                ),
+            ]),
+            id: 0,
+            name_span: Span { start: 0, end: 0 },
+        }]
+    }
+
+    /// A struct names its fields wherever it becomes text, nested in a list as
+    /// much as on its own, so `str` and a printed collection read the way
+    /// `print` does.
+    #[test]
+    fn a_struct_formats_with_its_field_names() {
+        let structs = one_struct();
+        let obj_pool: ObjectPool = Pool(vec![
+            vec![Data::int(1), Data::int(2)],
+            vec![Data::struct_instance(0, 0)],
+        ]);
+        let rendered = |value: Data| {
+            value.format(
+                &obj_pool,
+                &StringPool::default(),
+                &Pool(Vec::new()),
+                &structs,
+                &[],
+                true,
+            )
+        };
+        assert_eq!(rendered(Data::struct_instance(0, 0)), "P {x:1,y:2}");
+        assert_eq!(rendered(Data::array(1)), "[P {x:1,y:2}]");
+    }
+
+    /// A pool entry read as a struct the table does not declare has no names to
+    /// print, and still says what it holds instead of indexing the field list
+    /// with a slot that is not there.
+    #[test]
+    fn a_struct_with_no_declaration_formats_as_its_slots() {
+        let obj_pool: ObjectPool = Pool(vec![vec![Data::int(1), Data::int(2)]]);
+        let rendered = Data::struct_instance(0, 0).format(
+            &obj_pool,
+            &StringPool::default(),
+            &Pool(Vec::new()),
+            &[],
+            &[],
+            true,
+        );
+        assert_eq!(rendered, "struct {1,2}");
+    }
 
     fn one_enum() -> Vec<EnumType> {
         vec![EnumType {

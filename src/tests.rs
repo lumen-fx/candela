@@ -5306,7 +5306,7 @@ pub fn a_struct_destination_register_dumps_its_own_fields() {
     assert_eq!(
         dumped
             .iter()
-            .filter(|s| s.as_str() == "Point {null,2}")
+            .filter(|s| s.as_str() == "Point {x:null,y:2}")
             .count(),
         2,
         "{dumped:?}"
