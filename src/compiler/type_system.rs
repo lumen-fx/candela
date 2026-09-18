@@ -1608,14 +1608,16 @@ fn fs_fn_return_type(name: &str) -> Option<DataType> {
     })
 }
 
-/// Renders a [`DataType`] with full struct/function detail. This is what the
-/// `type` builtin hands back, so its output is a string the program can read.
+/// Renders a [`DataType`] the way a program spells it.
 ///
-/// Field and argument names are resolved against the compiler `State` by
-/// `Struct`/`Fn` id. The plain `Display` impl (in `candela-vm`) has no
-/// `State`, so it renders those variants opaquely; this is the compiler-side
-/// detailed form. A diagnostic wants the shorter name a type was declared
-/// under, which is [`TypeNames`] instead.
+/// This is what the `type` builtin hands back, so its output is a string the
+/// program can read, and every part of it is written the way the same type
+/// would be written in source: `any` for the dynamic slot, a struct or an enum
+/// by the name it was declared under, and a function as `fn(int) -> int`.
+///
+/// Names are resolved against the compiler `State` by `Struct`/`Fn` id. The
+/// plain `Display` impl (in `candela-vm`) has no `State`, so it renders those
+/// variants opaquely; a diagnostic names them through [`TypeNames`] instead.
 #[must_use]
 pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
     match t {
@@ -1627,11 +1629,17 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
             Some(array_type) => {
                 format_args!("{}[]", format_detailed(array_type, state)).to_smolstr()
             }
-            None => SmolStr::new_static("Unknown[]"),
+            None => SmolStr::new_static("any[]"),
         },
         DataType::Null => SmolStr::new_static("null"),
-        DataType::Unknown => SmolStr::new_static("Unknown"),
-        DataType::FnValue(sig) => sig.to_smolstr(),
+        DataType::Unknown => SmolStr::new_static("any"),
+        // A position that says what it holds is written the way it was
+        // declared. One whose functions the compiler collected names no
+        // signature, since the functions in it need not agree on one.
+        DataType::FnValue(fn_type) => match &fn_type.sig {
+            Some((params, returned)) => format_signature(params, returned, state),
+            None => SmolStr::new_static("function"),
+        },
         DataType::Union(types) => format_args!(
             "{}",
             types
@@ -1641,21 +1649,7 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
                 .join("|")
         )
         .to_smolstr(),
-        DataType::Struct(s) => {
-            let s = &state.structs[*s as usize];
-            format_args!(
-                "{} {{{}}}",
-                s.name,
-                s.fields
-                    .iter()
-                    .map(|(n, t, _)| {
-                        format_args!("{n}: {}", format_detailed(t, state)).to_smolstr()
-                    })
-                    .collect::<Vec<SmolStr>>()
-                    .join(", ")
-            )
-            .to_smolstr()
-        }
+        DataType::Struct(s) => state.structs[*s as usize].name.clone(),
         DataType::Enum(e) => state.enums[*e as usize].name.clone(),
         // Both halves are rendered through this same function, so a map of a
         // user type names that type the way a list of it does. Reaching for
@@ -1663,28 +1657,47 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
         // `{string: enum}`.
         DataType::Map(m) => format_args!(
             "{{{}: {}}}",
-            m.0.as_ref().map_or_else(
-                || SmolStr::new_static("Unknown"),
-                |k| format_detailed(k, state)
-            ),
+            m.0.as_ref()
+                .map_or_else(|| SmolStr::new_static("any"), |k| format_detailed(k, state)),
             m.1.as_ref().map_or_else(
-                || SmolStr::new_static("Unknown"),
+                || SmolStr::new_static("any"),
                 |val| format_detailed(val, state)
             )
         )
         .to_smolstr(),
+        // A declaration is what a function's type says: a parameter with no
+        // annotation takes `any`, and so does a return the declaration left to
+        // the body. A function that hands nothing back is written without the
+        // arrow, the way `fn()` is written in source.
         DataType::Fn(id) => {
             let f = &state.fns[*id as usize];
-            format_args!(
-                "fn ({})",
-                f.args
-                    .iter()
-                    .map(|(a, _)| a.clone())
-                    .collect::<Vec<SmolStr>>()
-                    .join(", ")
-            )
-            .to_smolstr()
+            let params: Box<[DataType]> = f
+                .args
+                .iter()
+                .map(|(_, declared)| declared.clone().unwrap_or(DataType::Unknown))
+                .collect();
+            let returned = match &f.return_type {
+                Some((declared, _)) => declared.clone(),
+                None if f.returns_null => DataType::Null,
+                None => DataType::Unknown,
+            };
+            format_signature(&params, &returned, state)
         }
+    }
+}
+
+/// A function type written the way a declaration writes it: `fn(int) -> int`,
+/// and `fn()` where it hands nothing back.
+fn format_signature(params: &[DataType], returned: &DataType, state: &State<'_>) -> SmolStr {
+    let params = params
+        .iter()
+        .map(|param| format_detailed(param, state))
+        .collect::<Vec<SmolStr>>()
+        .join(", ");
+    if matches!(returned, DataType::Null) {
+        format_args!("fn({params})").to_smolstr()
+    } else {
+        format_args!("fn({params}) -> {}", format_detailed(returned, state)).to_smolstr()
     }
 }
 

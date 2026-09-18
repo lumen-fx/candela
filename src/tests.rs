@@ -10737,3 +10737,71 @@ pub fn a_payload_of_the_wrong_type_is_still_reported() {
         "
     );
 }
+
+/// `type` names a struct the way a declaration and a diagnostic name it, with
+/// its type arguments and without its fields.
+#[test]
+pub fn type_names_a_struct_and_its_type_arguments() {
+    run_and_check_registers!(
+        "
+        struct Point { x: int, y: int }
+        struct Cell<T> { value: T }
+
+        fn main() {
+            print(type(Point { x: 1, y: 2 }) + type(Cell<int> { value: 1 })
+                == \"PointCell<int>\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// The dynamic slot is spelled `any`, the way a program writes it, wherever it
+/// appears in the answer.
+#[test]
+pub fn type_spells_the_dynamic_slot_any() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let xs = as_list([1, 2]);
+            print(type(xs[0]) + type(xs) == \"anyany[]\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// A function reads as its signature does in source: the declared types, and no
+/// arrow where it hands nothing back.
+#[test]
+pub fn type_writes_a_function_as_its_signature() {
+    run_and_check_registers!(
+        "
+        fn id(x: int) -> int { return x; }
+        fn greet(name: string) { print(name); }
+        fn nothing() { }
+
+        fn main() {
+            print(type(id) + type(greet) + type(nothing)
+                == \"fn(int) -> intfn(string)fn()\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// What a declaration leaves out is `any`: an un-annotated parameter, and a
+/// return the body settles.
+#[test]
+pub fn type_writes_an_unannotated_function_with_any() {
+    run_and_check_registers!(
+        "
+        fn add(a, b) { return a + b; }
+
+        fn main() {
+            print(type(add) == \"fn(any, any) -> any\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}

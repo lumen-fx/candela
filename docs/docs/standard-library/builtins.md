@@ -95,11 +95,41 @@ conversion from other types.
 type(value)
 ```
 
-Returns the static type of the expression as a string, resolved at compile time:
-`int`, `float`, `bool`, `string`, `null`, `int[]` for a list of ints,
-`{string: int}` for a map, `a|b` for a union, the enum's name for an enum value,
-and the field list for a struct. A list or a map names what it holds, so a map
-of your own enum reads `{string: Value}`.
+Returns the static type of the expression as a string, resolved at compile time.
+Every answer is spelled the way the same type is written in a program: `int`,
+`float`, `bool`, `string`, `null`, `any` for a dynamic value, `int[]` for a list
+of ints, `{string: int}` for a map, `a|b` for a union, the declared name for a
+struct or an enum, and `fn(int) -> int` for a function. A struct or an enum that
+takes type arguments carries them, as in `Cell<int>`. A list or a map names what
+it holds, so a map of your own enum reads `{string: Value}`.
+
+A function reads as its declaration does. A parameter with no annotation is
+`any`, as is a return type the declaration leaves to the body, and a function
+that hands nothing back is written without the arrow.
+
+```rust
+struct Point { x: int, y: int }
+
+fn id(x: int) -> int { return x; }
+fn greet(name: string) { print(name); }
+fn add(a, b) { return a + b; }
+
+fn main() {
+    print(type(Point { x: 1, y: 2 }));
+    print(type(id), type(greet), type(add));
+}
+```
+
+```
+Point
+fn(int) -> int
+fn(string)
+fn(any, any) -> any
+```
+
+The answer is the type the compiler inferred, not the tag the value carries when
+the program runs, so a value the compiler could not pin reads `any` whatever it
+turns out to hold. The `is_*` predicates below answer at run time.
 
 ## Sequences
 
