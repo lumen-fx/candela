@@ -77,7 +77,10 @@ expression whose type is not `bool`. See
 value of a different type is rejected, as is a duplicate map key or a map key
 that is not a literal.
 
-**Control-flow errors.** An `if` used as an expression with no `else` branch.
+**Control-flow errors.** An `if` used as an expression with no `else` branch,
+and a function that returns a value on some paths and nothing on others, whether
+through a bare `return;` or by reaching the end of its body. See
+[functions](../language/functions.md).
 
 **Enum and match errors.** An unknown variant, a variant pattern with the wrong
 number of payload bindings, a pattern that is not a variant when the scrutinee

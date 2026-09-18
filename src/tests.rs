@@ -10281,6 +10281,81 @@ pub fn a_try_whose_catch_returns_meets_the_declared_type() {
     assert_eq!(printed, "1\n0\n4\n0\n6\n1\n1\n3\n1\n");
 }
 
+/// A body that returns a value on one path and nothing on another, by reaching
+/// its end or through a bare `return;`, used to fold the empty path in as
+/// `null`, which the annotation check then dropped; the call read whatever the
+/// return register held from the call before. The function is reported
+/// instead, annotated or not, and a closure the same way.
+#[test]
+pub fn a_function_that_returns_on_some_paths_only_is_reported() {
+    for (name, src) in [
+        (
+            "b",
+            "fn b(n: int) -> int { if n > 0 { return n; } } fn main() { print(b(1)); }",
+        ),
+        (
+            "c",
+            "fn c(n) { if n > 0 { return n; } } fn main() { print(c(1)); }",
+        ),
+        (
+            "d",
+            "fn d(n) { while n > 0 { return n; } } fn main() { print(d(1)); }",
+        ),
+        (
+            "e",
+            "fn e(n) { match n { 1 => { return 1; } 2 => { return 2; } } } fn main() { print(e(1)); }",
+        ),
+        (
+            "g",
+            "fn g(n) { if n > 0 { return g(n - 1); } } fn main() { print(g(1)); }",
+        ),
+        (
+            "h",
+            "fn h(n) { loop { if n > 0 { break; } return n; } } fn main() { print(h(1)); }",
+        ),
+        (
+            "k",
+            "fn k(n: int) -> int { if n > 0 { return n; } return; } fn main() { print(k(1)); }",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "missing_return", "{}", d.message);
+        assert!(
+            d.message.contains(&format!("Function {name} ")),
+            "{}",
+            d.message
+        );
+    }
+    let src = "fn main() { let f = fn(n) { if n > 0 { return n; } }; print(f(1)); }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "missing_return", "{}", d.message);
+    assert!(d.message.contains("This function "), "{}", d.message);
+    let src = "fn apply(f: fn(int) -> int, x: int) -> int { return f(x); } fn main() { print(apply(fn(n) { if n > 0 { return n; } }, 1)); }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "missing_return", "{}", d.message);
+    assert!(d.message.contains("This function "), "{}", d.message);
+}
+
+/// A body that returns nothing anywhere still reaches its end freely, and a
+/// path that ends in `exit` or in an endless loop is one the function never
+/// comes back from.
+#[test]
+pub fn a_function_returns_on_every_path_it_comes_back_from() {
+    let printed = run_output(
+        "
+        fn a(n: int) { if n > 0 { print(n); } return; }
+        fn b(n: int) -> int { if n > 0 { return n; } exit(3); }
+        fn c(n: int) -> int { while true { if n > 2 { return n; } n += 1; } }
+        fn d(n: int) -> int { loop { if n > 2 { return n; } n += 1; } }
+        fn main() { a(1); print(c(0)); print(d(1)); print(b(2)); }
+        ",
+    );
+    assert_eq!(printed, "1\n3\n3\n2\n");
+}
+
 /// A builtin method's arguments are compiled after its receiver, and the
 /// receiver's register used to be released before that happened. The allocator
 /// then handed the same register to an argument that needed one, so

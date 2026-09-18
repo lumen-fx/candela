@@ -19,6 +19,7 @@ use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::error_instantiation_depth;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_invalid_type;
+use crate::compiler::compiler_errors::error_missing_return;
 use crate::compiler::compiler_errors::error_op;
 use crate::compiler::compiler_errors::error_struct_unknown_field;
 use crate::compiler::compiler_errors::error_type_arg_count;
@@ -2048,8 +2049,16 @@ pub fn can_reach<S: std::hash::BuildHasher>(
     false
 }
 
-#[must_use]
-pub fn check_if_returns_void(content: &[Expr]) -> bool {
+/// Which kinds of `return` a body writes, closures left out.
+#[derive(Default)]
+struct ReturnShapes {
+    /// A `return expr;` somewhere in the body.
+    value: bool,
+    /// A bare `return;` somewhere in the body.
+    bare: bool,
+}
+
+fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
     for content in content {
         match content {
             Expr::ElseIfBlock(_, code, _)
@@ -2060,35 +2069,36 @@ pub fn check_if_returns_void(content: &[Expr]) -> bool {
             | Expr::ForLoop(_, _, code, _)
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code)
-            | Expr::IntForLoop(_, _, _, code, _, _) => {
-                if !check_if_returns_void(code) {
-                    return false;
-                }
-            }
+            | Expr::IntForLoop(_, _, _, code, _, _) => collect_return_shapes(code, shapes),
             Expr::TryCatchBlock(try_code, _, catch_code) => {
-                if !check_if_returns_void(try_code) || !check_if_returns_void(catch_code) {
-                    return false;
-                }
+                collect_return_shapes(try_code, shapes);
+                collect_return_shapes(catch_code, shapes);
             }
             Expr::Match(_, arms, wildcard, _) => {
                 for (_, body) in arms {
-                    if !check_if_returns_void(body) {
-                        return false;
-                    }
+                    collect_return_shapes(body, shapes);
                 }
-                if let Some(w) = wildcard
-                    && !check_if_returns_void(w)
-                {
-                    return false;
+                if let Some(w) = wildcard {
+                    collect_return_shapes(w, shapes);
                 }
             }
-            Expr::ReturnVal(return_val) if return_val.is_some() => {
-                return false;
+            Expr::ReturnVal(value) => {
+                if value.is_some() {
+                    shapes.value = true;
+                } else {
+                    shapes.bare = true;
+                }
             }
             _ => {}
         }
     }
-    true
+}
+
+#[must_use]
+pub fn check_if_returns_void(content: &[Expr]) -> bool {
+    let mut shapes = ReturnShapes::default();
+    collect_return_shapes(content, &mut shapes);
+    !shapes.value
 }
 
 macro_rules! extend_return_types {
@@ -2181,16 +2191,30 @@ fn merge_instantiations(
     ))
 }
 
+/// The types a function body hands back.
+///
+/// A body that returns a value on one path has to return one on every path: a
+/// call that reaches the end of the body, or leaves through a bare `return;`,
+/// has nothing to hand back, and the value the caller would read is whatever
+/// the last call left behind. That is reported at the function rather than
+/// folded in as a `null` the caller cannot tell from one the body wrote.
 pub fn track_returns(
     content: &[Expr],
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     fn_name: &str,
+    fn_id: usize,
 ) -> Vec<DataType> {
-    let mut flow = track_return_flow(content, v, ctx, state, fn_name);
-    if !flow.always_returns && !flow.types.is_empty() {
-        add_return_type(&mut flow.types, DataType::Null, ctx, state);
+    let flow = track_return_flow(content, v, ctx, state, fn_name);
+    let mut shapes = ReturnShapes::default();
+    collect_return_shapes(content, &mut shapes);
+    if shapes.value && (shapes.bare || !flow.always_returns) {
+        // The report names the function as it was declared: a closure has no
+        // name of its own, whatever the call site bound it to.
+        let func = &state.fns[fn_id];
+        let declared = (!func.name.starts_with(ANON_FN_PREFIX)).then_some(func.name.as_str());
+        error_missing_return(declared, func.name_span, ctx.file_idx, state.sources);
     }
     flow.types
 }
@@ -2286,11 +2310,13 @@ fn track_return_flow(
                 }
             }
             // A `loop` is left through a `break` or a `return`, so one with no
-            // break of its own never falls through to what follows it.
+            // break of its own never falls through to what follows it. A body
+            // that returns at its end still leaves through a break written
+            // before that return, so the break alone decides.
             Expr::LoopBlock(code) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
-                if flow.always_returns || !block_breaks(code) {
+                if !block_breaks(code) {
                     return FnReturnFlow {
                         types: return_types,
                         always_returns: true,
@@ -2312,9 +2338,17 @@ fn track_return_flow(
                     var.var_type = var_type;
                 }
             }
-            Expr::WhileBlock(_, code, _) => {
+            // A `while true` is a `loop` under another spelling and is left
+            // the same way.
+            Expr::WhileBlock(condition, code, _) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
+                if matches!(**condition, Expr::Bool(true)) && !block_breaks(code) {
+                    return FnReturnFlow {
+                        types: return_types,
+                        always_returns: true,
+                    };
+                }
             }
             Expr::IntForLoop(var_name, _, _, code, _, _) => {
                 let v_len = v.len();
@@ -2380,14 +2414,14 @@ fn track_return_flow(
                 let value = args[1].infer_type(v, ctx, state);
                 pin_inserted_entry(obj, &key, &value, v);
             }
-            // A `throw` never comes back, so the path it ends is one the
-            // function returns on: a match arm or a catch that only raises
-            // leaves the other arms to answer. The walk goes on past it, since
-            // a return written after the throw still says what the function
-            // hands back. This comes before the arm that pins a call's
-            // empty-literal arguments, which matches every call.
+            // A `throw` or an `exit` never comes back, so the path it ends is
+            // one the function returns on: a match arm or a catch that only
+            // raises leaves the other arms to answer. The walk goes on past
+            // it, since a return written after the throw still says what the
+            // function hands back. This comes before the arm that pins a
+            // call's empty-literal arguments, which matches every call.
             Expr::FunctionCall(_, namespace, _, _, _)
-                if namespace.len() == 1 && namespace[0].as_str() == "throw" =>
+                if namespace.len() == 1 && matches!(namespace[0].as_str(), "throw" | "exit") =>
             {
                 threw = true;
             }
@@ -2621,7 +2655,7 @@ pub fn infer_user_fn_return_type(
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
-    let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name);
+    let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
     // Read while the bindings are still pushed, so a generic `-> T[]` resolves
     // to the element type this call named.
     let declared_return = specialized_return_type(fn_id, fn_ctx, state);

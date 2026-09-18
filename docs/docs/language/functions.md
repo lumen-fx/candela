@@ -99,8 +99,12 @@ to choose the exit status.
 
 ## Returning
 
-`return expr;` hands a value back. `return;` on its own, and reaching the end of
-the body, both return `null`.
+`return expr;` hands a value back. A function that returns no value anywhere
+returns `null`, whether it leaves through a bare `return;` or by reaching the end
+of its body. A function that returns a value on one path returns one on every
+path: a bare `return;` in such a body, or a path that reaches the end of it, is
+a compile error at the function. A path that ends in a `throw`, an `exit`, or a
+loop nothing breaks out of never comes back and needs no return.
 
 ```rust
 fn describe(n) {
