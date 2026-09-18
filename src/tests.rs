@@ -10668,3 +10668,72 @@ pub fn a_closure_calls_a_local_holding_the_function_handed_in() {
         8.into()
     );
 }
+
+/// A bare payload-less variant pins no type argument, so it is the most open
+/// instantiation of its enum. It reaches a payload slot that names one, the way
+/// it already reached a function parameter that names one.
+#[test]
+pub fn a_bare_variant_fills_a_payload_slot_of_a_named_instantiation() {
+    run_and_check_registers!(
+        "
+        enum Tree<T> { Leaf, Node(Tree<T>, T, Tree<T>) }
+
+        fn sum_tree(t: Tree<int>) -> int {
+            match t {
+                Leaf => { return 0; }
+                Node(l, x, r) => { return sum_tree(l) + x + sum_tree(r); }
+            }
+        }
+
+        fn main() {
+            print(sum_tree(Tree<int>::Node(Leaf, 7, Leaf)));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// The same where the tree is built from constructors nested inside one
+/// another, so a named instantiation and a bare variant sit in the same call.
+#[test]
+pub fn a_nested_generic_variant_constructor_takes_bare_leaves() {
+    run_and_check_registers!(
+        "
+        enum Tree<T> { Leaf, Node(Tree<T>, T, Tree<T>) }
+
+        fn depth(t: Tree<int>) -> int {
+            match t {
+                Leaf => { return 0; }
+                Node(l, x, r) => {
+                    let a = depth(l);
+                    let b = depth(r);
+                    if a > b { return a + 1; }
+                    return b + 1;
+                }
+            }
+        }
+
+        fn main() {
+            let t = Tree<int>::Node(Tree<int>::Node(Leaf, 1, Leaf), 2, Leaf);
+            print(depth(t) * 10 + 0);
+        }
+        ",
+        20.into()
+    );
+}
+
+/// A payload whose type is settled still has to match: the rule only opens the
+/// instantiation whose type arguments nothing pinned.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_payload_of_the_wrong_type_is_still_reported() {
+    run!(
+        "
+        enum Tree<T> { Leaf, Node(Tree<T>, T, Tree<T>) }
+
+        fn main() {
+            let t = Tree<int>::Node(Leaf, \"two\", Leaf);
+        }
+        "
+    );
+}

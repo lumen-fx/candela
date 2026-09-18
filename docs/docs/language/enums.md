@@ -45,6 +45,10 @@ fn main() {
 
 `type` on an enum value gives the enum's name; `str` gives the variant's name.
 
+A variant with no payload, written bare, names no type arguments of a
+[generic](generics.md) enum, and is accepted wherever an instantiation that
+names them is expected.
+
 An enum from a module bound with `as` is reached through the alias and then the
 enum, because a variant belongs to its enum rather than to the module:
 `shapes::Shape::Circle(1)`. A [generic](generics.md) enum carries its type

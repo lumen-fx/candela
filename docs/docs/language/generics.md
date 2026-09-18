@@ -139,6 +139,29 @@ when only one instantiation of the enum exists in the program. From a module
 bound with `as` the instantiation sits in the middle of the path,
 `g::Slot<int>::Filled(9)`, where a value is built and in a `match` arm alike.
 
+A payload-less variant written bare pins nothing, so its type arguments are
+`any`. It is accepted wherever a named instantiation is expected: as an argument
+of a function, and as the payload of another variant, which is what lets a
+recursive type be built without naming the instantiation at every leaf.
+
+```rust
+enum Tree<T> {
+    Leaf,
+    Node(Tree<T>, T, Tree<T>),
+}
+
+fn sum(t: Tree<int>) -> int {
+    match t {
+        Leaf => { return 0; }
+        Node(l, x, r) => { return sum(l) + x + sum(r); }
+    }
+}
+
+fn main() {
+    print(sum(Tree<int>::Node(Tree<int>::Node(Leaf, 1, Leaf), 2, Leaf)));
+}
+```
+
 ## impl blocks
 
 An `impl` block on a generic type names type arguments in its header, and there
