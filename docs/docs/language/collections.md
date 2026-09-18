@@ -250,37 +250,41 @@ fn main() {
 
 ## Sets
 
-A set holds each value at most once. It comes from the `set` module, which
-builds it out of a map.
+A set holds each value at most once. It comes from the `set` module as
+`Set<T>`, a struct built out of a map. Name the member type when you make one.
 
 ```rust
 import "std/set" as set;
 
 fn main() {
-    let s = set::new();
-    set::add(s, 1);
-    set::add(s, 2);
-    set::add(s, 2);
-    print(set::len(s), set::contains(s, 2), set::members(s));
+    let s = set::new<int>();
+    s.add(1);
+    s.add(2);
+    s.add(2);
+    print(s.len(), s.contains(2), s.members());
 }
 ```
 
-`union`, `intersection`, and `difference` combine two sets into a new one.
+`|`, `&`, `-`, and `^^` are union, intersection, difference, and symmetric
+difference; each combines two sets into a new one, and each has a named method
+too.
 
 ```rust
 import "std/set" as set;
 
 fn main() {
-    let a = set::new();
-    set::add(a, 1);
-    set::add(a, 2);
-    let b = set::new();
-    set::add(b, 2);
-    set::add(b, 3);
-    print(set::members(set::union(a, b)));
-    print(set::members(set::intersection(a, b)));
+    let a = set::new<int>();
+    a.add(1);
+    a.add(2);
+    let b = set::new<int>();
+    b.add(2);
+    b.add(3);
+    print((a | b).members());
+    print(a.intersection(b).members());
 }
 ```
 
-Because a set is a map underneath, `members` gives you a list to iterate, in
-the order the members were added.
+A set is a struct, so it is not iterable itself; `members` gives you a list to
+iterate, in the order the members were added. `a == b` compares the members and
+ignores that order. The module is covered in full in
+[set](../standard-library/set.md).

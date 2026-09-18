@@ -325,11 +325,16 @@ fn main() {
     print(as_int(obj.get("n")));
     print(as_list(obj.get("xs")).len());
     print(json::stringify(json::parse("[1,2,3]")));
-    let s = set::new();
-    set::add(s, 1);
-    set::add(s, 1);
-    set::add(s, 2);
-    print(set::len(s));
+    let s = set::new<int>();
+    s.add(1);
+    s.add(1);
+    s.add(2);
+    let t = set::new<int>();
+    t.add(2);
+    t.add(3);
+    print(s.len());
+    print((s | t).members());
+    print(json::stringify(s.members()));
 }
 "#;
     let filename = Path::new(env!("CARGO_MANIFEST_DIR"))

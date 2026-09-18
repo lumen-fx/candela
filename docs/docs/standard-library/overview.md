@@ -67,7 +67,7 @@ available under `candela-vm` with nothing installed. They are listed in
 Standard library modules are candela code layered on those built-ins. The
 collection, conversion, and enum modules define their helpers as methods in
 `impl` blocks (`xs.sum()`, `s.capitalize()`, `"42".to_int()`, `o.unwrap_or(0)`),
-and the rest are namespaced free functions (`set::union`, `math::sqrt`).
+and the rest are namespaced free functions (`json::parse`, `math::sqrt`).
 
 One module is special. `std/list` loads automatically, so its methods work on
 any array with no import at all:
@@ -97,7 +97,7 @@ when your file already binds the name `list`.
 | [option](option.md) | The `Option` enum: `Some(x)` or `None`, with methods |
 | [random](random.md) | A seedable pseudo-random generator for ints and floats |
 | [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with methods |
-| [set](set.md) | A set of unique values, with union, intersection, and difference |
+| [set](set.md) | `Set<T>`, a set of unique values, with union, intersection, difference, and symmetric difference |
 | [string](string.md) | Substrings, characters, padding, capitalisation, line splitting, counting |
 | [time](time.md) | The current unix time, and formatting a timestamp |
 
