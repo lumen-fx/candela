@@ -788,6 +788,51 @@ fn main() {
 }
 ";
 
+/// A struct turned into text every way a program can ask for it: on its own,
+/// through `str`, inside a list, a map and an enum payload, and with a type
+/// argument in its name.
+const STRUCT_TEXT_PROGRAM: &str = "
+struct P { x: int, name: string }
+struct Cell<T> { value: T }
+enum Shape { Boxed(P), Empty }
+
+fn main() {
+    let p = P { x: 1, name: \"n\" };
+    print(p);
+    print(str(p));
+    print([p]);
+    print(str([p]));
+    print({\"k\": p});
+    print(str({\"k\": p}));
+    print(Shape::Boxed(p));
+    print(str(Shape::Boxed(p)));
+    print(Cell { value: 3 });
+    print(str(Cell { value: 3 }));
+}
+";
+
+/// A struct reads as `Name {field:value}` everywhere it becomes text, through
+/// `candela <file>` and through `candela build` plus `candela-vm` alike: the
+/// artifact carries the field names the rendering reads. Skips if `candela-vm`
+/// is not built alongside `candela`.
+#[test]
+fn struct_text_agrees_across_source_and_artifact() {
+    let named = "P {x:1,name:\"n\"}";
+    let expected = format!(
+        "{named}\n{named}\n[{named}]\n[{named}]\n\
+         {{\"k\":{named}}}\n{{\"k\":{named}}}\n\
+         Boxed({named})\nBoxed({named})\n\
+         Cell<int> {{value:3}}\nCell<int> {{value:3}}\n"
+    );
+    agrees_across_source_and_artifact(
+        "struct_text_agrees_across_source_and_artifact",
+        "struct_text",
+        STRUCT_TEXT_PROGRAM,
+        &expected,
+        "one rendering, the named one, wherever a struct becomes text",
+    );
+}
+
 /// A function named where a value goes reaches the same body through `candela
 /// <file>` and through `candela build` plus `candela-vm`: the artifact carries
 /// the entry each name was compiled into. Skips if `candela-vm` is not built

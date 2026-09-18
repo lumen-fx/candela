@@ -77,7 +77,9 @@ str(value)
 
 Renders any value as a string. Ints and floats use their shortest exact decimal
 form, bools become `true` or `false`, a string is returned unchanged, and
-collections, structs, and enum values use their literal form.
+collections, structs, and enum values use their literal form. A struct reads as
+`Name {field:value}`, the spelling `print` writes, wherever it appears: on its
+own, inside a list or a map, and as an enum payload.
 
 ### bool
 
