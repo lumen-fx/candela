@@ -61,14 +61,42 @@ pub enum Token<'a> {
     AssignOpMod,
     #[token("^=")]
     AssignOpPow,
+    #[token("&=")]
+    AssignOpBitAnd,
+    #[token("|=")]
+    AssignOpBitOr,
+    #[token("^^=")]
+    AssignOpBitXor,
+    #[token("<<=")]
+    AssignOpShl,
+    #[token(">>=")]
+    AssignOpShr,
 
     // OPS
     #[token("||")]
     OpOr,
+    /// `|`: the separator between the members of a union type, and bitwise or
+    /// in an expression. A type and an expression are read by different
+    /// parsers, so the one token serves both.
     #[token("|")]
     Pipe,
     #[token("&&")]
     OpAnd,
+    #[token("&")]
+    OpBitAnd,
+    /// `^^`: bitwise xor. `^` is the power operator, so xor takes the doubled
+    /// spelling the way `&&` and `||` take theirs.
+    #[token("^^")]
+    OpBitXor,
+    #[token("~")]
+    OpBitNot,
+    #[token("<<")]
+    OpShl,
+    /// `>>`: shift right in an expression, and the two closing `>` of a nested
+    /// type-argument list such as `Box<Box<int>>`. The type parser splits it;
+    /// see `Parser::next_type_list_close`.
+    #[token(">>")]
+    OpShr,
     #[token("==")]
     OpEq,
     #[token("!=")]

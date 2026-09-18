@@ -208,6 +208,12 @@ pub enum Expr {
     Sub(Box<Self>, Box<Self>, Span, Span),
     Mod(Box<Self>, Box<Self>, Span, Span),
     Pow(Box<Self>, Box<Self>, Span, Span),
+    BitAnd(Box<Self>, Box<Self>, Span, Span),
+    BitOr(Box<Self>, Box<Self>, Span, Span),
+    BitXor(Box<Self>, Box<Self>, Span, Span),
+    Shl(Box<Self>, Box<Self>, Span, Span),
+    Shr(Box<Self>, Box<Self>, Span, Span),
+    BitNot(Box<Self>, Span, Span),
     Eq(Box<Self>, Box<Self>),
     NotEq(Box<Self>, Box<Self>),
     Sup(Box<Self>, Box<Self>, Span, Span),
@@ -263,6 +269,12 @@ impl Expr {
                 | Self::Sub(..)
                 | Self::Mod(..)
                 | Self::Pow(..)
+                | Self::BitAnd(..)
+                | Self::BitOr(..)
+                | Self::BitXor(..)
+                | Self::Shl(..)
+                | Self::Shr(..)
+                | Self::BitNot(_, _, _)
                 | Self::Eq(_, _)
                 | Self::NotEq(_, _)
                 | Self::Sup(..)
@@ -288,6 +300,12 @@ pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
         Expr::Sub(_, _, _, _) | Expr::Neg(_, _, _) => "-",
         Expr::Mod(_, _, _, _) => "%",
         Expr::Pow(_, _, _, _) => "^",
+        Expr::BitAnd(_, _, _, _) => "&",
+        Expr::BitOr(_, _, _, _) => "|",
+        Expr::BitXor(_, _, _, _) => "^^",
+        Expr::Shl(_, _, _, _) => "<<",
+        Expr::Shr(_, _, _, _) => ">>",
+        Expr::BitNot(_, _, _) => "~",
         Expr::Eq(_, _) => "==",
         Expr::NotEq(_, _) => "!=",
         Expr::Sup(_, _, _, _) => ">",
@@ -491,7 +509,10 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 scan_free_names(value, depth, bound, out);
             }
         }
-        Expr::GetStructField(obj, _, _, _) | Expr::BoolNeg(obj, _, _) | Expr::Neg(obj, _, _) => {
+        Expr::GetStructField(obj, _, _, _)
+        | Expr::BoolNeg(obj, _, _)
+        | Expr::Neg(obj, _, _)
+        | Expr::BitNot(obj, _, _) => {
             scan_free_names(obj, depth, bound, out);
         }
         Expr::SetStructField(obj, _, value, _, _, _) => {
@@ -513,6 +534,11 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::Sub(l, r, _, _)
         | Expr::Mod(l, r, _, _)
         | Expr::Pow(l, r, _, _)
+        | Expr::BitAnd(l, r, _, _)
+        | Expr::BitOr(l, r, _, _)
+        | Expr::BitXor(l, r, _, _)
+        | Expr::Shl(l, r, _, _)
+        | Expr::Shr(l, r, _, _)
         | Expr::Eq(l, r)
         | Expr::NotEq(l, r)
         | Expr::Sup(l, r, _, _)

@@ -1971,6 +1971,7 @@ pub fn collect_direct_fn_calls(
             Expr::VarDeclare(_, x)
             | Expr::VarAssign(_, x, _)
             | Expr::Neg(x, _, _)
+            | Expr::BitNot(x, _, _)
             | Expr::BoolNeg(x, _, _) => expr_stack.push(x),
             Expr::ForLoop(_, _, code, _) => expr_stack.extend(code.iter()),
             Expr::IntForLoop(_, start, end, code, _, _) => {
@@ -2013,6 +2014,11 @@ pub fn collect_direct_fn_calls(
             | Expr::Sub(x, y, _, _)
             | Expr::Mod(x, y, _, _)
             | Expr::Pow(x, y, _, _)
+            | Expr::BitAnd(x, y, _, _)
+            | Expr::BitOr(x, y, _, _)
+            | Expr::BitXor(x, y, _, _)
+            | Expr::Shl(x, y, _, _)
+            | Expr::Shr(x, y, _, _)
             | Expr::Eq(x, y)
             | Expr::NotEq(x, y)
             | Expr::Sup(x, y, _, _)
@@ -3023,6 +3029,32 @@ impl Expr {
                     }
                 }
             }
+            Self::BitAnd(x, y, span_l, span_r)
+            | Self::BitOr(x, y, span_l, span_r)
+            | Self::BitXor(x, y, span_l, span_r)
+            | Self::Shl(x, y, span_l, span_r)
+            | Self::Shr(x, y, span_l, span_r) => {
+                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                    (DataType::Unknown, t) | (t, DataType::Unknown)
+                        if matches!(t, DataType::Int | DataType::Unknown) =>
+                    {
+                        t
+                    }
+                    (DataType::Int, DataType::Int) => DataType::Int,
+                    (l, r) => {
+                        error_op(
+                            &l,
+                            &r,
+                            symbol_of_expr(self),
+                            *span_l,
+                            *span_r,
+                            ctx.file_idx,
+                            state.sources,
+                            state.type_names(),
+                        );
+                    }
+                }
+            }
             Self::Sup(x, y, span_l, span_r)
             | Self::SupEq(x, y, span_l, span_r)
             | Self::Inf(x, y, span_l, span_r)
@@ -3071,6 +3103,20 @@ impl Expr {
                     &DataType::Null,
                     &operand_type,
                     "-",
+                    *span_l,
+                    *span_r,
+                    ctx.file_idx,
+                    state.sources,
+                    state.type_names(),
+                ),
+            },
+            Self::BitNot(e, span_l, span_r) => match e.infer_type(v, ctx, state) {
+                DataType::Int => DataType::Int,
+                DataType::Unknown => DataType::Unknown,
+                operand_type => error_op(
+                    &DataType::Null,
+                    &operand_type,
+                    "~",
                     *span_l,
                     *span_r,
                     ctx.file_idx,

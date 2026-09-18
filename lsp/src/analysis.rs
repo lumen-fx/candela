@@ -421,6 +421,11 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         | Expr::Sub(a, b, _, _)
         | Expr::Mod(a, b, _, _)
         | Expr::Pow(a, b, _, _)
+        | Expr::BitAnd(a, b, _, _)
+        | Expr::BitOr(a, b, _, _)
+        | Expr::BitXor(a, b, _, _)
+        | Expr::Shl(a, b, _, _)
+        | Expr::Shr(a, b, _, _)
         | Expr::Sup(a, b, _, _)
         | Expr::SupEq(a, b, _, _)
         | Expr::Inf(a, b, _, _)
@@ -434,7 +439,9 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             visit_expr(a, src_file, out);
             visit_expr(b, src_file, out);
         }
-        Expr::BoolNeg(a, _, _) | Expr::Neg(a, _, _) => visit_expr(a, src_file, out),
+        Expr::BoolNeg(a, _, _) | Expr::Neg(a, _, _) | Expr::BitNot(a, _, _) => {
+            visit_expr(a, src_file, out);
+        }
         // An indirect call names no function, so it records no reference of
         // its own; the callee and the arguments still hold names to resolve.
         Expr::CallValue(callee, args, _, _) => {

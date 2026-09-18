@@ -37,7 +37,7 @@ Raised while the file is read, before any type is known.
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
-| Constant arithmetic | Integer division or remainder by a literal zero, or an integer raised to a negative literal exponent |
+| Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |
 | Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
@@ -131,11 +131,13 @@ clause matches and the string bound to the catch variable. See
 | `division_by_zero` | Integer division by zero |
 | `modulo_by_zero` | Integer remainder by zero |
 | `negative_exponent` | An `int` raised to a negative `int` power, which has no `int` result |
+| `shift_count_out_of_range` | An `int` shifted by a negative count, or by 64 or more. An `int` is 64 bits wide, so the count must be between 0 and 63 |
 
 Float division and remainder do not raise; they produce an infinity or `NaN`,
 and both print as such. A float raised to a negative power does not raise
 either. The parser rejects the all-literal forms of these before the program
-runs; the kinds above cover the cases where a value is only known at run time.
+runs, and a shift is refused wherever its count is a literal out of range; the
+kinds above cover the cases where a value is only known at run time.
 
 ### Calls
 

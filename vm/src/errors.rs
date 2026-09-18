@@ -327,6 +327,10 @@ pub enum ErrType<'a> {
     /// An `int` raised to a negative `int` power, which has no `int` result.
     /// The parser rejects the all-literal form; this is the run-time one.
     NegativeExponent(i64),
+    /// An `int` shifted by a negative count, or by 64 or more, which has no
+    /// `int` result. The parser and the compiler reject a count written as a
+    /// literal; this is the run-time one. Carries the count.
+    ShiftCountOutOfRange(i64),
     /// A json string could not be parsed. Carries a short static reason.
     JsonParse(&'static str),
     /// A downcast of an `any` value found a different runtime type than the
@@ -370,6 +374,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::DivisionByZero => "Division by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
             ErrType::ModuloByZero => "Modulo by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
             ErrType::NegativeExponent(exp) => format_args!("An integer cannot be raised to the negative power {RED}{BOLD}{exp}{RESET}. Use floats for a fractional result").to_smolstr(),
+            ErrType::ShiftCountOutOfRange(count) => format_args!("An {BLUE}{BOLD}int{RESET} is 64 bits wide, so it cannot be shifted by {RED}{BOLD}{count}{RESET}. The count must be between 0 and 63").to_smolstr(),
             ErrType::NullByteInString => "String passed to dynamic library function contains an interior null byte".into(),
             ErrType::InvalidReturnType(t) => format_args!("Invalid return type: {RED}{BOLD}{t}{RESET}").to_smolstr(),
             ErrType::CArrayReturnTypeNotSupported => "Array return types are not supported: C does not convey the length of a returned array".into(),
@@ -409,6 +414,7 @@ impl ErrType<'_> {
             ErrType::DivisionByZero => "division_by_zero",
             ErrType::ModuloByZero => "modulo_by_zero",
             ErrType::NegativeExponent(_) => "negative_exponent",
+            ErrType::ShiftCountOutOfRange(_) => "shift_count_out_of_range",
             ErrType::NullByteInString => "null_byte_in_string",
             ErrType::CArrayReturnTypeNotSupported => "c_array_return_type_not_supported",
             ErrType::InvalidReturnType(_) => "invalid_return_type",

@@ -14,11 +14,19 @@ except `^`.
 | 2 | `&&` | left |
 | 3 | `==` `!=` | left |
 | 4 | `<` `<=` `>` `>=` | left |
-| 5 | `+` `-` | left |
-| 6 | `*` `/` `%` | left |
-| 7 | `^` | right |
+| 5 | `\|` | left |
+| 6 | `^^` | left |
+| 7 | `&` | left |
+| 8 | `<<` `>>` | left |
+| 9 | `+` `-` | left |
+| 10 | `*` `/` `%` | left |
+| 11 | `^` | right |
 
 `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
+
+The order is Rust's. The bitwise operators bind tighter than a comparison, so
+`flags & mask == mask` asks whether `flags & mask` equals `mask`, and the shifts
+bind looser than `+`, so `1 << n + 1` shifts by `n + 1`.
 
 Four forms bind tighter than every binary operator: a function call `f(x)`, an
 index or slice `a[i]`, a field access `p.x`, and a method call `p.len()`. They
@@ -26,15 +34,15 @@ attach to the term they follow, so `a.b[0] ^ 2` raises `a.b[0]` to the power of
 two, and they chain: `adder(1)(2)` calls what `adder(1)` returned, and
 `fs[0](x)` calls the element it indexed.
 
-The prefix operators `-` and `!` bind tighter than `^` and looser than the
+The prefix operators `-`, `!` and `~` bind tighter than `^` and looser than the
 postfix forms. `-a ^ 2` is `(-a) ^ 2` and `!ok == done` is `(!ok) == done`. Use
 parentheses when you want the other reading.
 
 ## Types are never mixed
 
-Both operands of an arithmetic or comparison operator must already have the same
-type. candela does not promote `int` to `float`, so `1 + 2.0` is a compile
-error. Convert first with `float()` or `int()`:
+Both operands of an arithmetic, bitwise or comparison operator must already have
+the same type. candela does not promote `int` to `float`, so `1 + 2.0` is a
+compile error. Convert first with `float()` or `int()`:
 
 ```rust
 let total = float(count) + 2.0;
@@ -79,6 +87,41 @@ Integer arithmetic wraps on overflow.
 
 An `any` value cannot be used as an arithmetic operand. Narrow it first with
 `as_int()` or `as_float()`.
+
+## Bitwise
+
+`&`, `|`, `^^`, `~`, `<<` and `>>` work on the bits of an `int` and produce an
+`int`. `^` is the power operator, so xor takes the doubled spelling `^^`, the
+way `&&` and `||` take theirs.
+
+| Operator | Operand types | Result |
+| --- | --- | --- |
+| `&` | `int`, `int` | `int`, the bits set in both |
+| `\|` | `int`, `int` | `int`, the bits set in either |
+| `^^` | `int`, `int` | `int`, the bits set in one of the two |
+| `~` | `int` | `int`, every bit flipped |
+| `<<` | `int`, `int` | `int`, the bits moved up |
+| `>>` | `int`, `int` | `int`, the bits moved down |
+
+No other operand type is accepted, and the types are never mixed: `1.5 & 1` is
+the same compile error `1.5 * 1` is, and an `any` value has to be narrowed with
+`as_int()` first.
+
+```rust
+let read = 4;
+let write = 2;
+let mode = read | write;
+print(mode & read == read);   // true
+print(~0);                    // -1
+```
+
+`int` is signed, so `>>` is arithmetic: the vacated places take the sign bit,
+and `-16 >> 2` is `-4`. `<<` fills with zeroes and wraps like the rest of
+integer arithmetic, so `1 << 63` is the smallest `int`.
+
+An `int` holds 64 bits, so both shifts take a count between 0 and 63. A count
+written as a literal outside that range is refused before the program runs; a
+count only known at run time raises the catchable `shift_count_out_of_range`.
 
 ## Comparison
 
@@ -159,15 +202,16 @@ point.x = 3;
 Assignment is a statement, not an expression, so it produces no value and cannot
 be chained.
 
-The compound forms `+=`, `-=`, `*=`, `/=`, `%=` and `^=` apply the matching
-binary operator to the current value and assign the result. `x += 1` is
-`x = x + 1`, with the same type rules, and all three assignable targets are
-allowed:
+The compound forms `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `^^=`, `<<=`
+and `>>=` apply the matching binary operator to the current value and assign the
+result. `x += 1` is `x = x + 1`, with the same type rules, and all three
+assignable targets are allowed:
 
 ```rust
 total += price;
 counts[i] += 1;
 point.x *= 2;
+flags |= read;
 ```
 
 Use `let` to introduce a name and `=` to change one; see
@@ -234,8 +278,10 @@ See [control flow](../language/control-flow.md).
 
 ## Symbols that are not operators
 
-- `|` separates the members of a union type, as in `int | string`. It is not a
-  bitwise operator; candela has no bitwise operators.
+- `|` is not an operator where a type is read: it separates the members of a
+  union type, as in `int | string`. Where an expression is read it is bitwise
+  or. Nothing is ambiguous about that, because a type and an expression never
+  stand in the same place.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
 - `->` gives the return type in a `dylib` or `host` signature, and `=>`
@@ -248,8 +294,9 @@ costs nothing at run time. Folding applies the same type rule as everything
 else: `2.0 ^ 3` is rejected for mixing a `float` with an `int`, exactly as it
 would be if the operands were variables.
 
-Folding also turns three mistakes into compile errors rather than runtime ones:
-dividing by a literal `0`, taking the remainder by a literal `0`, and raising an
-integer to a negative literal exponent. Those apply to integer arithmetic. A
+Folding also turns four mistakes into compile errors rather than runtime ones:
+dividing by a literal `0`, taking the remainder by a literal `0`, raising an
+integer to a negative literal exponent, and shifting by a literal count outside
+0 to 63. Those apply to integer arithmetic. A
 `float` divided or remaindered by `0.0` follows IEEE 754 and produces an
 infinity or `NaN`, so it is folded rather than rejected.

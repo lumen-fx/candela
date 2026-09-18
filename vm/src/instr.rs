@@ -54,6 +54,20 @@ pub enum Instr {
     ModInt(u16, u16, u16),
     PowFloat(u16, u16, u16),
     PowInt(u16, u16, u16),
+    BitAndInt(u16, u16, u16),
+    BitOrInt(u16, u16, u16),
+    BitXorInt(u16, u16, u16),
+    /// BitNotInt(operand, dest)\
+    /// dest = every bit of operand flipped
+    BitNotInt(u16, u16),
+    /// ShlInt(value, count, dest)\
+    /// Raises `shift_count_out_of_range` for a count outside 0..64.
+    ShlInt(u16, u16, u16),
+    /// ShrInt(value, count, dest)\
+    /// Arithmetic: `int` is signed, so the sign bit is what the vacated places
+    /// are filled with. Raises `shift_count_out_of_range` for a count outside
+    /// 0..64.
+    ShrInt(u16, u16, u16),
     /// Increments the integer in-place by 1
     IncInt(u16),
     /// Decrements the integer in-place by 1
@@ -381,6 +395,12 @@ impl Instr {
             | Self::ModInt(_, _, y)
             | Self::PowFloat(_, _, y)
             | Self::PowInt(_, _, y)
+            | Self::BitAndInt(_, _, y)
+            | Self::BitOrInt(_, _, y)
+            | Self::BitXorInt(_, _, y)
+            | Self::BitNotInt(_, y)
+            | Self::ShlInt(_, _, y)
+            | Self::ShrInt(_, _, y)
             | Self::Eq(_, _, y)
             | Self::ObjEq(_, _, y)
             | Self::StrEq(_, _, y)
@@ -446,6 +466,11 @@ impl Instr {
             | Self::ModInt(a, b, _)
             | Self::PowFloat(a, b, _)
             | Self::PowInt(a, b, _)
+            | Self::BitAndInt(a, b, _)
+            | Self::BitOrInt(a, b, _)
+            | Self::BitXorInt(a, b, _)
+            | Self::ShlInt(a, b, _)
+            | Self::ShrInt(a, b, _)
             | Self::Eq(a, b, _)
             | Self::NotEq(a, b, _)
             | Self::ObjEq(a, b, _)
@@ -511,6 +536,7 @@ impl Instr {
             | Self::DecIntTo(a, _)
             | Self::NegFloat(a, _)
             | Self::NegInt(a, _)
+            | Self::BitNotInt(a, _)
             | Self::CallLibFunc(_, a, _)
             | Self::Print(a)
             | Self::StoreFuncArg(a)

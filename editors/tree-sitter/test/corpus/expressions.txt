@@ -1,4 +1,58 @@
 ================================================================================
+Bitwise operators (docs/docs/reference/operators.md)
+================================================================================
+
+fn main() {
+    print(flags & mask | other ^^ 1);
+    print(1 << n + 1 >> 2);
+    print(~0);
+    mode |= 4;
+    mode >>= 1;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (identifier))
+              (binary_expression
+                (identifier)
+                (integer_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (binary_expression
+                (integer_literal)
+                (binary_expression
+                  (identifier)
+                  (integer_literal)))
+              (integer_literal)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (unary_expression
+              (integer_literal)))))
+      (assignment_statement
+        (identifier)
+        (integer_literal))
+      (assignment_statement
+        (identifier)
+        (integer_literal)))))
+
+================================================================================
 Operator precedence (docs/docs/reference/operators.md)
 ================================================================================
 
@@ -581,6 +635,36 @@ fn main() {
             (binary_expression
               (identifier)
               (integer_literal))))))))
+
+================================================================================
+A nested type argument list closes with the shift token (docs/docs/language/generics.md)
+================================================================================
+
+fn main() {
+    let b = pick<Box<Box<int>>>(v);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (call_expression
+          (identifier)
+          (type_arguments
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (generic_type
+                  (type_identifier)
+                  (type_arguments
+                    (type_identifier))))))
+          (arguments
+            (identifier)))))))
 
 ================================================================================
 Type arguments at a call, a literal, and a variant (docs/docs/language/generics.md)

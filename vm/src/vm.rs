@@ -294,6 +294,17 @@ fn str_eq(x: Data, y: Data, string_pool: &StringPool) -> bool {
     }
 }
 
+/// Whether `count` is a number of bits an `int` can be shifted by.
+///
+/// `int` holds 64 bits, so a wider shift, or a negative one, names no result.
+/// The compiler asks the same question of a count written as a literal, so that
+/// one is reported before the program runs.
+#[inline(always)]
+#[must_use]
+pub const fn shift_count_in_range(count: i64) -> bool {
+    count >= 0 && count < i64::BITS as i64
+}
+
 fn obj_eq(
     x: Data,
     y: Data,
@@ -1119,6 +1130,32 @@ pub fn execute(
                     error_with_catch!(ErrType::NegativeExponent(exp));
                 }
                 r[dest] = (r[o1].as_int().pow(exp as u32)).into();
+            }
+            Instr::BitAndInt(o1, o2, dest) => {
+                r[dest] = (r[o1].as_int() & r[o2].as_int()).into();
+            }
+            Instr::BitOrInt(o1, o2, dest) => {
+                r[dest] = (r[o1].as_int() | r[o2].as_int()).into();
+            }
+            Instr::BitXorInt(o1, o2, dest) => {
+                r[dest] = (r[o1].as_int() ^ r[o2].as_int()).into();
+            }
+            Instr::BitNotInt(o1, dest) => {
+                r[dest] = (!r[o1].as_int()).into();
+            }
+            Instr::ShlInt(o1, o2, dest) => {
+                let count = r[o2].as_int();
+                if !shift_count_in_range(count) {
+                    error_with_catch!(ErrType::ShiftCountOutOfRange(count));
+                }
+                r[dest] = (r[o1].as_int() << count).into();
+            }
+            Instr::ShrInt(o1, o2, dest) => {
+                let count = r[o2].as_int();
+                if !shift_count_in_range(count) {
+                    error_with_catch!(ErrType::ShiftCountOutOfRange(count));
+                }
+                r[dest] = (r[o1].as_int() >> count).into();
             }
             Instr::IncInt(reg) => r[reg].inc_int(),
             Instr::DecInt(reg) => r[reg].dec_int(),

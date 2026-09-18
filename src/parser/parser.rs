@@ -67,6 +67,11 @@ struct Parser<'a> {
     /// level is one recursive descent frame, so this is what bounds the stack
     /// the parser (and the compiler walking the tree it builds) can use.
     nesting: u32,
+    /// The second `>` of a `>>` that closed one level of a nested type-argument
+    /// list, waiting to be read as a token of its own. `Box<Box<int>>` ends in
+    /// one token and closes two lists, so the inner list takes the first half
+    /// and leaves the second here for the list around it.
+    pending_gt: Option<Span>,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -96,6 +101,9 @@ enum ParserErr<'a> {
     DivisionByZero,
     ModuloByZero,
     IntegerNegativeExponent,
+    /// A literal shift by a negative count, or by 64 or more, which `int` has
+    /// no result for. Carries the count that was written.
+    ShiftCountOutOfRange(i64),
     ArgumentsMissingCommaSeparator,
     TryBlockNoCatch,
     MatchBlockNoNonWildcardArm,
@@ -139,6 +147,7 @@ impl ParserErr<'_> {
             ParserErr::DivisionByZero => "division_by_zero",
             ParserErr::ModuloByZero => "modulo_by_zero",
             ParserErr::IntegerNegativeExponent => "integer_negative_exponent",
+            ParserErr::ShiftCountOutOfRange(_) => "shift_count_out_of_range",
             ParserErr::ArgumentsMissingCommaSeparator => "arguments_missing_comma_separator",
             ParserErr::TryBlockNoCatch => "try_block_no_catch",
             ParserErr::MatchBlockNoNonWildcardArm => "match_block_no_non_wildcard_arm",
@@ -200,6 +209,10 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::DivisionByZero => "Division by zero",
         ParserErr::ModuloByZero => "Modulo by zero",
         ParserErr::IntegerNegativeExponent => "Integers cannot be raised to a negative exponent",
+        ParserErr::ShiftCountOutOfRange(count) => &format_args!(
+            "An {BLUE}{BOLD}int{RESET} is 64 bits wide, so it cannot be shifted by {RED}{BOLD}{count}{RESET}. The count must be between 0 and 63"
+        )
+        .to_string(),
         ParserErr::ArgumentsMissingCommaSeparator => "Arguments must be separated by a comma",
         ParserErr::TryBlockNoCatch => {
             "A {BLUE}{BOLD}try{RESET} block must have at least one {BLUE}{BOLD}catch{RESET} block"
@@ -318,6 +331,11 @@ impl<'a> Parser<'a> {
     }
     #[inline(always)]
     fn next_token(&mut self) -> (Token<'a>, Span) {
+        if let Some(span) = self.pending_gt.take() {
+            let span = self.placed(span);
+            self.last_token_end = span.end as usize;
+            return (Token::OpSup, span);
+        }
         let t = self.input.next().unwrap_or_else(
             #[cold]
             || {
@@ -336,6 +354,9 @@ impl<'a> Parser<'a> {
     }
     #[inline(always)]
     fn peek_token(&mut self) -> Token<'a> {
+        if self.pending_gt.is_some() {
+            return Token::OpSup;
+        }
         let Some((t, start, end)) = self
             .input
             .peek()
@@ -350,6 +371,9 @@ impl<'a> Parser<'a> {
     }
     #[inline(always)]
     fn peek_token_span(&mut self) -> Span {
+        if let Some(span) = self.pending_gt {
+            return self.placed(span);
+        }
         let Some((_, start, end)) = self
             .input
             .peek()
@@ -364,6 +388,9 @@ impl<'a> Parser<'a> {
     }
     #[inline(always)]
     fn peek_token_opt(&mut self) -> Option<Token<'a>> {
+        if self.pending_gt.is_some() {
+            return Some(Token::OpSup);
+        }
         let (t, start, end) = self
             .input
             .peek()
@@ -375,6 +402,9 @@ impl<'a> Parser<'a> {
     }
     #[inline(always)]
     fn peek_token_opt_span(&mut self) -> Option<Span> {
+        if let Some(span) = self.pending_gt {
+            return Some(self.placed(span));
+        }
         let span = self
             .input
             .peek()
@@ -388,6 +418,22 @@ impl<'a> Parser<'a> {
             self.error(span, ParserErr::UnexpectedToken(expected, next_token, msg));
         }
         span
+    }
+    /// Reads the `>` that closes a type-argument or type-parameter list.
+    ///
+    /// The two closing `>` of `Box<Box<int>>` lex as one `>>`, the shift
+    /// operator, because the lexer reads the longest token it can and knows
+    /// nothing of where it stands. The inner list takes the first half here and
+    /// leaves the second for the list around it.
+    fn next_type_list_close(&mut self, msg: &'static str) -> Span {
+        if self.peek_token_opt() == Some(Token::OpShr) {
+            let (_, span) = self.next_token();
+            let middle = span.start + 1;
+            self.pending_gt = Some((middle, span.end).into());
+            self.last_token_end = middle as usize;
+            return (span.start, middle).into();
+        }
+        self.next_token_expect(Token::OpSup, msg)
     }
     #[inline(always)]
     fn next_token_expect_closer(
@@ -561,6 +607,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         last_token_end: span.end as usize,
         span_override: Some(span),
         nesting: parser.nesting,
+        pending_gt: None,
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -645,6 +692,11 @@ fn parse_op_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32, op: Token<
         Token::AssignOpDiv => Token::OpDiv,
         Token::AssignOpMod => Token::OpMod,
         Token::AssignOpPow => Token::OpPow,
+        Token::AssignOpBitAnd => Token::OpBitAnd,
+        Token::AssignOpBitOr => Token::Pipe,
+        Token::AssignOpBitXor => Token::OpBitXor,
+        Token::AssignOpShl => Token::OpShl,
+        Token::AssignOpShr => Token::OpShr,
         _ => unsafe { unreachable_unchecked() },
     };
     var_assign(
@@ -697,7 +749,12 @@ fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
                     | Token::AssignOpMul
                     | Token::AssignOpDiv
                     | Token::AssignOpMod
-                    | Token::AssignOpPow),
+                    | Token::AssignOpPow
+                    | Token::AssignOpBitAnd
+                    | Token::AssignOpBitOr
+                    | Token::AssignOpBitXor
+                    | Token::AssignOpShl
+                    | Token::AssignOpShr),
                 ) => parse_op_var_assign(input, e, e_start, op),
                 _ => e,
             }
@@ -1039,20 +1096,45 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
 /// would abort the compile over an ordinary comparison.
 struct TypeArgScan<'a> {
     input: TokenIter<'a>,
+    /// The second half of a `>>` the walk has already read. See
+    /// [`Parser::next_type_list_close`], which splits the same token when the
+    /// list is parsed for real.
+    pending_gt: bool,
 }
 
 impl<'a> TypeArgScan<'a> {
     fn peek(&mut self) -> Option<Token<'a>> {
+        if self.pending_gt {
+            return Some(Token::OpSup);
+        }
         self.input.peek().and_then(|(t, _)| t.ok())
     }
 
     fn eat(&mut self, expected: Token<'a>) -> bool {
         if self.peek() == Some(expected) {
-            self.input.next();
+            if self.pending_gt {
+                self.pending_gt = false;
+            } else {
+                self.input.next();
+            }
             true
         } else {
             false
         }
+    }
+
+    /// The `>` that closes a list, which is the first half of a `>>` where two
+    /// lists close at once.
+    fn eat_gt(&mut self) -> bool {
+        if self.eat(Token::OpSup) {
+            return true;
+        }
+        if self.peek() == Some(Token::OpShr) {
+            self.input.next();
+            self.pending_gt = true;
+            return true;
+        }
+        false
     }
 
     fn identifier(&mut self) -> bool {
@@ -1074,7 +1156,7 @@ impl<'a> TypeArgScan<'a> {
                 return false;
             }
             if !self.eat(Token::Comma) {
-                return self.eat(Token::OpSup);
+                return self.eat_gt();
             }
         }
     }
@@ -1141,8 +1223,13 @@ pub enum TypeArgFollow {
 /// `parse_term` frame, and expression parsing recurses once per nesting level.
 #[inline(never)]
 fn type_args_ahead(parser: &Parser<'_>, follow: TypeArgFollow) -> bool {
+    debug_assert!(
+        parser.pending_gt.is_none(),
+        "the half of a '>>' left over from a type list is read before any expression"
+    );
     let mut scan = TypeArgScan {
         input: parser.input.clone(),
+        pending_gt: false,
     };
     if !scan.args() {
         return false;
@@ -1168,7 +1255,7 @@ fn parse_type_args(parser: &mut Parser<'_>) -> Box<[TypeExpr]> {
             break;
         }
     }
-    parser.next_token_expect(Token::OpSup, "A type argument list ends with '>'.");
+    parser.next_type_list_close("A type argument list ends with '>'.");
     Box::from(args)
 }
 
@@ -1201,7 +1288,7 @@ fn parse_type_params(parser: &mut Parser<'_>) -> TypeParams {
             break;
         }
     }
-    parser.next_token_expect(Token::OpSup, "A type parameter list ends with '>'.");
+    parser.next_type_list_close("A type parameter list ends with '>'.");
     Box::from(params)
 }
 
@@ -1388,6 +1475,7 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             last_token_end: 0,
             span_override: None,
             nesting: 0,
+            pending_gt: None,
         },
         &mut impls,
     );
@@ -1471,7 +1559,12 @@ pub fn classify_line(line: &str) -> LineKind {
                             | Token::AssignOpMul
                             | Token::AssignOpDiv
                             | Token::AssignOpMod
-                            | Token::AssignOpPow)
+                            | Token::AssignOpPow
+                            | Token::AssignOpBitAnd
+                            | Token::AssignOpBitOr
+                            | Token::AssignOpBitXor
+                            | Token::AssignOpShl
+                            | Token::AssignOpShr)
                     )
                 });
             if assigns {

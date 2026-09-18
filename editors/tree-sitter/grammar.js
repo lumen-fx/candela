@@ -20,19 +20,23 @@ const PREC = {
   and: 2,
   equality: 3,
   comparison: 4,
-  additive: 5,
-  multiplicative: 6,
-  power: 7,
-  unary: 8,
-  postfix: 9,
+  bit_or: 5,
+  bit_xor: 6,
+  bit_and: 7,
+  shift: 8,
+  additive: 9,
+  multiplicative: 10,
+  power: 11,
+  unary: 12,
+  postfix: 13,
   // A `name { ... }` struct literal competes with the block that follows a
   // condition, so it is resolved dynamically; see the `conflicts` list.
-  struct_literal: 10,
+  struct_literal: 14,
   // `a < b > (c)` reads as a comparison and as a call naming a type argument,
   // and both readings run to the end of the expression. The compiler takes the
   // type argument, so the branch that reads one carries this dynamic
   // precedence and wins the tie.
-  type_arguments: 11,
+  type_arguments: 15,
 };
 
 /**
@@ -318,7 +322,10 @@ module.exports = grammar({
     assignment_statement: ($) =>
       seq(
         field('left', $._expression),
-        field('operator', choice('=', '+=', '-=', '*=', '/=', '%=', '^=')),
+        field(
+          'operator',
+          choice('=', '+=', '-=', '*=', '/=', '%=', '^=', '&=', '|=', '^^=', '<<=', '>>='),
+        ),
         field('right', $._expression),
         ';',
       ),
@@ -408,7 +415,10 @@ module.exports = grammar({
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
     unary_expression: ($) =>
-      prec.right(PREC.unary, seq(field('operator', choice('-', '!')), field('operand', $._expression))),
+      prec.right(
+        PREC.unary,
+        seq(field('operator', choice('-', '!', '~')), field('operand', $._expression)),
+      ),
 
     binary_expression: ($) => {
       const table = [
@@ -420,6 +430,11 @@ module.exports = grammar({
         [PREC.comparison, '<='],
         [PREC.comparison, '>'],
         [PREC.comparison, '>='],
+        [PREC.bit_or, '|'],
+        [PREC.bit_xor, '^^'],
+        [PREC.bit_and, '&'],
+        [PREC.shift, '<<'],
+        [PREC.shift, '>>'],
         [PREC.additive, '+'],
         [PREC.additive, '-'],
         [PREC.multiplicative, '*'],

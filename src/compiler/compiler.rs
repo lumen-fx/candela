@@ -15,6 +15,7 @@ use crate::compiler::compiler_errors::error_map_diff_types;
 use crate::compiler::compiler_errors::error_non_bool_condition;
 use crate::compiler::compiler_errors::error_not_literal_map_key;
 use crate::compiler::compiler_errors::error_range_invalid_type;
+use crate::compiler::compiler_errors::error_shift_count_out_of_range;
 use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_namespace;
@@ -29,6 +30,7 @@ use crate::rt::resolve_library_filename;
 use crate::vm::CandelaMap;
 use crate::vm::Pool;
 use crate::vm::StringPool;
+use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
@@ -2193,6 +2195,112 @@ fn compile_neg_op(
     id
 }
 
+/// Compiles an operator whose operands are both `int` and nothing else: the
+/// bitwise operators and the shifts.
+///
+/// [`uniform_op2`] covers the operators that take a pair of `int` or a pair of
+/// `float`; this one has a single accepted pair, so a `float` operand reaches
+/// the same report a `string` one does.
+#[allow(clippy::too_many_arguments)]
+fn int_op2(
+    instr: fn(u16, u16, u16) -> Instr,
+    symbol: &'static str,
+    l: &Expr,
+    r: &Expr,
+    span_l: Span,
+    span_r: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
+    if t_l != DataType::Int || t_r != DataType::Int {
+        compiler_errors::error_op(
+            &t_l,
+            &t_r,
+            symbol,
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    let id_l = l
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let id_r = r
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(id_l, v);
+    state.free_reg(id_r, v);
+    let id = state.alloc_reg_tgt(tgt_id);
+    output.push(instr(id_l, id_r, id));
+    id
+}
+
+/// Compiles `<<` or `>>`, refusing a count written as a literal that `int` has
+/// no room for. A count only known while the program runs is checked by the
+/// instruction instead, which raises `shift_count_out_of_range`.
+#[allow(clippy::too_many_arguments)]
+fn compile_shift_op(
+    instr: fn(u16, u16, u16) -> Instr,
+    symbol: &'static str,
+    l: &Expr,
+    r: &Expr,
+    span_l: Span,
+    span_r: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    if let Expr::Int(count) = r
+        && !shift_count_in_range(*count)
+    {
+        error_shift_count_out_of_range(*count, span_l.extend(span_r), ctx.file_idx, state.sources);
+    }
+    int_op2(
+        instr, symbol, l, r, span_l, span_r, tgt_id, v, ctx, state, output,
+    )
+}
+
+/// Compiles `~`, which flips the bits of an `int`.
+fn compile_bit_not_op(
+    l: &Expr,
+    span_l: Span,
+    span_r: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let operand_type = l.infer_type(v, ctx, state);
+    let id_l = l
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(id_l, v);
+    let id = state.alloc_reg_tgt(tgt_id);
+    if operand_type != DataType::Int {
+        compiler_errors::error_op(
+            &DataType::Null,
+            &operand_type,
+            "~",
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    output.push(Instr::BitNotInt(id_l, id));
+    id
+}
+
 fn compile_bool_neg_op(
     l: &Expr,
     span_l: Span,
@@ -3704,6 +3812,92 @@ impl Expr {
                     ctx,
                     state,
                     output,
+                ))
+            }
+            Self::BitAnd(l, r, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(int_op2(
+                    Instr::BitAndInt,
+                    "&",
+                    l,
+                    r,
+                    *span1,
+                    *span2,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::BitOr(l, r, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(int_op2(
+                    Instr::BitOrInt,
+                    "|",
+                    l,
+                    r,
+                    *span1,
+                    *span2,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::BitXor(l, r, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(int_op2(
+                    Instr::BitXorInt,
+                    "^^",
+                    l,
+                    r,
+                    *span1,
+                    *span2,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::Shl(l, r, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(compile_shift_op(
+                    Instr::ShlInt,
+                    "<<",
+                    l,
+                    r,
+                    *span1,
+                    *span2,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::Shr(l, r, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(compile_shift_op(
+                    Instr::ShrInt,
+                    ">>",
+                    l,
+                    r,
+                    *span1,
+                    *span2,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::BitNot(l, span1, span2) => {
+                debug_assert!(uses_id);
+                Some(compile_bit_not_op(
+                    l, *span1, *span2, tgt_id, v, ctx, state, output,
                 ))
             }
             Self::Eq(l, r) => {
