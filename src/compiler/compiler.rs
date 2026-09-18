@@ -2717,32 +2717,27 @@ fn compile_int_for_loop(
     if t2 != DataType::Int {
         error_range_invalid_type(span2, &t2, ctx.file_idx, state.sources, state.type_names());
     }
-    let elem_id = if ctx.single_run {
-        start_elem
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id()
+    // The counter is always its own register, filled from the start
+    // expression. Counting in the start's register was fine for a loop that
+    // ran once, until the register was shared: a literal start is the
+    // constant every earlier-compiled function reads for that literal, and a
+    // variable start is the variable itself, so the loop would advance both.
+    let start_elem_id = start_elem
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let start_val = state.registers[start_elem_id as usize];
+    let elem_id = state.alloc_reg();
+    // An `int` wider than the immediate operand comes out of its register.
+    if let Some(n) = int_immediate(start_val)
+        && state.const_registers.values().any(|&v| v == start_elem_id)
+    {
+        output.push(Instr::SetInt(elem_id, n));
     } else {
-        let start_elem_id = start_elem
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
-        let start_val = state.registers[start_elem_id as usize];
-        let elem_id = state.alloc_reg();
-        // An `int` wider than the immediate operand comes out of its register.
-        if let Some(n) = int_immediate(start_val)
-            && state.const_registers.values().any(|&v| v == start_elem_id)
-        {
-            output.push(Instr::SetInt(elem_id, n));
-        } else {
-            output.push(Instr::Mov(start_elem_id, elem_id));
-        }
-        elem_id
-    };
+        output.push(Instr::Mov(start_elem_id, elem_id));
+    }
     let end_elem_id = end_elem
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-
-    // elem_id is a fresh mutable register -> remove from const_registers just in case
-    state.const_registers.retain(|_, &mut v| v != elem_id);
 
     // A closure written in the body takes the counter of the turn it was
     // written on, so the cell is filled at the top of each turn.
