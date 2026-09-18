@@ -1743,6 +1743,58 @@ fn uniform_op2(
     id
 }
 
+/// Compiles one of `<`, `<=`, `>`, `>=`.
+///
+/// Both operands have to be the same type, and that type has to be one the
+/// comparison orders: `int`, `float`, or `string`. Strings order by their
+/// bytes, which is the order `sort` puts a list of strings in.
+fn compile_cmp_op(
+    float_instr: fn(u16, u16, u16) -> Instr,
+    int_instr: fn(u16, u16, u16) -> Instr,
+    str_instr: fn(u16, u16, u16) -> Instr,
+    symbol: &'static str,
+    l: &Expr,
+    r: &Expr,
+    span_l: Span,
+    span_r: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
+    if t_l != t_r || !matches!(t_l, DataType::Float | DataType::Int | DataType::String) {
+        compiler_errors::error_op(
+            &t_l,
+            &t_r,
+            symbol,
+            span_l,
+            span_r,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    let id_l = l
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let id_r = r
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(id_l, v);
+    state.free_reg(id_r, v);
+    let id = state.alloc_reg_tgt(tgt_id);
+    output.push(if t_l == DataType::String {
+        str_instr(id_l, id_r, id)
+    } else if t_l == DataType::Float {
+        float_instr(id_l, id_r, id)
+    } else {
+        int_instr(id_l, id_r, id)
+    });
+    id
+}
+
 fn compile_div_op(
     l: &Expr,
     r: &Expr,
@@ -3662,11 +3714,10 @@ impl Expr {
             }
             Self::Sup(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op2(
+                Some(compile_cmp_op(
                     Instr::SupFloat,
-                    &DataType::Float,
                     Instr::SupInt,
-                    &DataType::Int,
+                    Instr::SupStr,
                     ">",
                     l,
                     r,
@@ -3681,11 +3732,10 @@ impl Expr {
             }
             Self::SupEq(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op2(
+                Some(compile_cmp_op(
                     Instr::SupEqFloat,
-                    &DataType::Float,
                     Instr::SupEqInt,
-                    &DataType::Int,
+                    Instr::SupEqStr,
                     ">=",
                     l,
                     r,
@@ -3700,11 +3750,10 @@ impl Expr {
             }
             Self::Inf(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op2(
+                Some(compile_cmp_op(
                     Instr::InfFloat,
-                    &DataType::Float,
                     Instr::InfInt,
-                    &DataType::Int,
+                    Instr::InfStr,
                     "<",
                     l,
                     r,
@@ -3719,11 +3768,10 @@ impl Expr {
             }
             Self::InfEq(l, r, span1, span2) => {
                 debug_assert!(uses_id);
-                Some(uniform_op2(
+                Some(compile_cmp_op(
                     Instr::InfEqFloat,
-                    &DataType::Float,
                     Instr::InfEqInt,
-                    &DataType::Int,
+                    Instr::InfEqStr,
                     "<=",
                     l,
                     r,

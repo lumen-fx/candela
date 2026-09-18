@@ -659,6 +659,26 @@ pub fn execute(
         };
     }
 
+    /// Orders two string registers with `$op` and writes the answer.
+    ///
+    /// The compiler emits these for two operands it typed as `string`, so one
+    /// can still turn out to be something else at run time: a value that
+    /// crossed a boundary the compiler could not check, such as a variadic
+    /// host function returning something other than what its block declares.
+    /// Ordering bytes that are not a string is not meaningful, so such an
+    /// operand raises, the way joining one does.
+    macro_rules! str_order {
+        ($o1:expr, $o2:expr, $dest:expr, $op:tt) => {
+            let d1 = r[$o1];
+            let d2 = r[$o2];
+            if !d1.is_string() || !d2.is_string() {
+                let culprit = if d1.is_string() { d2 } else { d1 };
+                error_with_catch!(ErrType::NotAString(culprit.type_name()));
+            }
+            r[$dest] = (d1.as_str(str_pool) $op d2.as_str(str_pool)).into();
+        };
+    }
+
     'main: loop {
         match unsafe { *instructions.get_unchecked(i) } {
             Instr::Jmp(size) => {
@@ -1223,6 +1243,18 @@ pub fn execute(
             }
             Instr::InfEqInt(o1, o2, dest) => {
                 r[dest] = (r[o1].as_int() <= r[o2].as_int()).into();
+            }
+            Instr::SupStr(o1, o2, dest) => {
+                str_order!(o1, o2, dest, >);
+            }
+            Instr::SupEqStr(o1, o2, dest) => {
+                str_order!(o1, o2, dest, >=);
+            }
+            Instr::InfStr(o1, o2, dest) => {
+                str_order!(o1, o2, dest, <);
+            }
+            Instr::InfEqStr(o1, o2, dest) => {
+                str_order!(o1, o2, dest, <=);
             }
             Instr::SupFloatJmp(o1, o2, jump_size) => {
                 if r[o1].as_float() > r[o2].as_float() {

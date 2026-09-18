@@ -78,6 +78,18 @@ pub enum Instr {
     InfInt(u16, u16, u16),
     InfEqFloat(u16, u16, u16),
     InfEqInt(u16, u16, u16),
+    /// SupStr(l_reg_id, r_reg_id, dest_reg_id)\
+    /// Orders two strings by their bytes, the order `sort` puts a list of
+    /// strings in. The four string comparisons are their own instructions
+    /// rather than one carrying an ordering operand, because a fourth operand
+    /// would take an instruction past a single word.
+    SupStr(u16, u16, u16),
+    /// SupEqStr(l_reg_id, r_reg_id, dest_reg_id)
+    SupEqStr(u16, u16, u16),
+    /// InfStr(l_reg_id, r_reg_id, dest_reg_id)
+    InfStr(u16, u16, u16),
+    /// InfEqStr(l_reg_id, r_reg_id, dest_reg_id)
+    InfEqStr(u16, u16, u16),
     BoolAnd(u16, u16, u16),
     BoolOr(u16, u16, u16),
     NegBool(u16, u16),
@@ -383,6 +395,10 @@ impl Instr {
             | Self::InfInt(_, _, y)
             | Self::InfEqFloat(_, _, y)
             | Self::InfEqInt(_, _, y)
+            | Self::SupStr(_, _, y)
+            | Self::SupEqStr(_, _, y)
+            | Self::InfStr(_, _, y)
+            | Self::InfEqStr(_, _, y)
             | Self::BoolAnd(_, _, y)
             | Self::BoolOr(_, _, y)
             | Self::NegBool(_, y)
@@ -444,6 +460,10 @@ impl Instr {
             | Self::InfInt(a, b, _)
             | Self::InfEqFloat(a, b, _)
             | Self::InfEqInt(a, b, _)
+            | Self::SupStr(a, b, _)
+            | Self::SupEqStr(a, b, _)
+            | Self::InfStr(a, b, _)
+            | Self::InfEqStr(a, b, _)
             | Self::BoolAnd(a, b, _)
             | Self::BoolOr(a, b, _)
             | Self::GetIndexArray(a, b, _)

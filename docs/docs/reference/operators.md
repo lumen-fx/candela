@@ -82,9 +82,31 @@ An `any` value cannot be used as an arithmetic operand. Narrow it first with
 
 ## Comparison
 
-`<`, `<=`, `>` and `>=` take two `int` operands or two `float` operands and
-produce a `bool`. There is no ordering on strings, arrays, maps, structs or
-enums.
+`<`, `<=`, `>` and `>=` produce a `bool`. Both operands have to be the same
+type, and that type has to be one of three:
+
+| Operator | Operand types | Result |
+| --- | --- | --- |
+| `<` `<=` `>` `>=` | `int`, `int` | `bool` |
+| `<` `<=` `>` `>=` | `float`, `float` | `bool` |
+| `<` `<=` `>` `>=` | `string`, `string` | `bool` |
+
+Strings order by their bytes, which is the order `sort` puts a list of strings
+in. A string that prefixes another comes first, so `"ab" < "abc"`. Bytes are
+not letters: every uppercase ASCII letter comes before every lowercase one, so
+`"Z" < "a"`, and every ASCII character comes before a character that takes more
+than one byte. Lowercase both sides when you want a case-insensitive order.
+
+```rust
+fn main() {
+    let names = ["pear", "Apple", "fig"];
+    names.sort();
+    print(names);            // ["Apple","fig","pear"]
+    print("fig" < "pear");   // true
+}
+```
+
+There is no ordering on arrays, maps, structs or enums.
 
 ## Equality
 

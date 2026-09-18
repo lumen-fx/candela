@@ -3031,7 +3031,8 @@ impl Expr {
                     (DataType::Unknown, DataType::Float | DataType::Int)
                     | (DataType::Float | DataType::Int, DataType::Unknown)
                     | (DataType::Float, DataType::Float)
-                    | (DataType::Int, DataType::Int) => DataType::Bool,
+                    | (DataType::Int, DataType::Int)
+                    | (DataType::String, DataType::String) => DataType::Bool,
                     (l, r) => error_op(
                         &l,
                         &r,

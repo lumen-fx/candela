@@ -1622,16 +1622,20 @@ pub fn error_op(
                     red(op),
                     green(DataType::Float),
                 ));
-            } else if op == "*"
-                || op == "/"
-                || op == "-"
-                || op == "%"
-                || op == "^"
-                || op == ">"
-                || op == ">="
-                || op == "<"
-                || op == "<="
-            {
+            } else if op == ">" || op == ">=" || op == "<" || op == "<=" {
+                report = report.with_note(format_args!(
+                    "The supported types are:\n- {} {} {}\n- {} {} {}\n- {} {} {}",
+                    blue(DataType::Int),
+                    red(op),
+                    green(DataType::Int),
+                    blue(DataType::Float),
+                    red(op),
+                    green(DataType::Float),
+                    blue(DataType::String),
+                    red(op),
+                    green(DataType::String),
+                ));
+            } else if op == "*" || op == "/" || op == "-" || op == "%" || op == "^" {
                 report = report.with_note(format_args!(
                     "The supported types are:\n- {} {} {}\n- {} {} {}",
                     blue(DataType::Int),
