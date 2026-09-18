@@ -27,11 +27,11 @@ use crate::rt::HostFnSig;
 use crate::rt::Pools;
 use crate::rt::Span;
 use crate::rt::Struct;
+use indexmap::IndexMap;
 use lexical_core::FormattedSize;
 use memchr::memmem;
 use smol_strc::ToSmolStr;
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::fs;
 use std::hash::BuildHasherDefault;
 use std::hint::cold_path;
@@ -55,7 +55,13 @@ use crate::errors::wasm_error;
 pub const CALL_DEPTH_LIMIT: usize = 1_000_000;
 
 pub type ObjectPool = Pool<Vec<Data>>;
-pub type MapPool = Pool<HashMap<Data, Data, BuildHasherDefault<DataHash>>>;
+
+/// A candela map: `Data`-keyed, hashed by the raw value bits, and walked in the
+/// order its keys were first inserted. Every surface that walks a map (a `for`
+/// loop, `keys`, `values`, printing, json) reads it in that one order, so a
+/// program that builds a map the same way twice prints it the same way twice.
+pub type CandelaMap = IndexMap<Data, Data, BuildHasherDefault<DataHash>>;
+pub type MapPool = Pool<CandelaMap>;
 
 /// The character count a slot has not been asked for yet.
 const UNCOUNTED: u32 = u32::MAX;
@@ -1572,7 +1578,10 @@ pub fn execute(
             // A key that is not in the map leaves it as it was: taking an entry
             // out is a request for the key to be absent, and it already is.
             Instr::MapRemove(map_reg_id, key_reg_id) => unsafe {
-                map_pool[r[map_reg_id].as_map()].remove(&r[key_reg_id]);
+                // `shift_remove`, not `swap_remove`: the entries after the one
+                // taken out keep their order, and a key put back afterwards
+                // lands at the end.
+                map_pool[r[map_reg_id].as_map()].shift_remove(&r[key_reg_id]);
             },
             Instr::CloneMap(src_reg, dest_reg) => {
                 let new_map = map_pool[r[src_reg].as_map()].clone();

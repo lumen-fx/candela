@@ -77,9 +77,9 @@ set::is_empty(s)
 set::members(s)
 ```
 
-- Returns: a list of the members. A set is a map underneath, so the order is
-  unspecified and is not insertion order. Sort the result when you need a fixed
-  order.
+- Returns: a list of the members, in the order they were added. A set is a map
+  underneath, so it inherits the map's order: a member added twice keeps the
+  place it first took, and one removed and added again goes to the end.
 
 ## union
 

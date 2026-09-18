@@ -26,6 +26,7 @@ use crate::rt::FnValue;
 use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
 use crate::rt::resolve_library_filename;
+use crate::vm::CandelaMap;
 use crate::vm::Pool;
 use crate::vm::StringPool;
 use crate::{data::Data, instr::Instr};
@@ -61,7 +62,6 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
-use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
@@ -1372,7 +1372,9 @@ fn compile_map_literal(
         .collect::<Vec<DataType>>();
     let as_fn_values = holds_functions(&value_types);
     let map_id = state.pools.maps.len();
-    state.pools.maps.push(HashMap::with_capacity_and_hasher(
+    // Entries are inserted in source order and the map keeps that order, so a
+    // literal prints the way it was written.
+    state.pools.maps.push(CandelaMap::with_capacity_and_hasher(
         kv_pairs.len(),
         BuildHasherDefault::default(),
     ));

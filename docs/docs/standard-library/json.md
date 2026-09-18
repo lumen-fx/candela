@@ -40,6 +40,9 @@ The mapping from json to candela is:
 | `true`, `false` | bool |
 | `null` | null |
 
+An object becomes a map that holds its keys in document order, which is the
+order `stringify` writes them back out in.
+
 The result is typed `any`, so read a field back with a downcast (`as_int`,
 `as_str`, `as_map`, `as_list`) or test it first with `is_int`, `is_map`, and the
 rest. Those are [built-in functions](builtins.md). A document mixes types within
@@ -72,8 +75,9 @@ counterparts. A float keeps a decimal point so it parses back as a float, and a
 float that is infinite or not a number serialises as `null`. A map key that is
 not a string is rendered to its text form and quoted, because json object keys
 are strings. A struct or enum value has no json shape, so it serialises as a
-quoted string of its literal form. A map serialises in the map's own iteration
-order, which is unspecified.
+quoted string of its literal form. A map serialises in the order its keys went
+in, so a document parsed with `parse` and handed straight back to `stringify`
+keeps the key order it was written with.
 
 ```rust
 import "std/json" as json;

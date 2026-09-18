@@ -12,23 +12,19 @@
 //! (which compiles and drives scripts) lives in the `candela` crate on top.
 
 use crate::data::Data;
-use crate::data::DataHash;
 use crate::data::NULL;
 use crate::rt::DataType;
 use crate::rt::EnumType;
 use crate::rt::HostFnSig;
 use crate::rt::Struct;
+use crate::vm::CandelaMap;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::StringPool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::BuildHasherDefault;
 use std::rc::Rc;
-
-/// A candela runtime map: `Data`-keyed, hashed by the raw value bits.
-type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// A dynamically-typed value passed across the host/script boundary.
 ///
@@ -987,7 +983,7 @@ pub fn marshal_value(
             Data::array(id)
         }
         Value::Map(entries) => {
-            let mut map: CandelaMap = HashMap::default();
+            let mut map = CandelaMap::default();
             for (k, val) in entries {
                 let key = Data::p_str(k, strings);
                 let value = marshal_value(val, objs, maps, strings);

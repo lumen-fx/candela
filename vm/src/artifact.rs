@@ -23,7 +23,6 @@
 //! and RUN it lives here.
 
 use crate::data::Data;
-use crate::data::DataHash;
 use crate::embed::HostBindError;
 use crate::embed::HostDispatch;
 use crate::embed::HostRegistry;
@@ -52,6 +51,7 @@ use crate::rt::TargetOs;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::rt::resolve_library_filename;
 use crate::vm;
+use crate::vm::CandelaMap;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::Pool;
@@ -61,13 +61,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use smol_strc::SmolStr;
 use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
 
 /// The pair of words a value is recorded as. See [`Data::into_words`].
 pub type DataWords = (u64, i64);
-
-/// Runtime map: `Data`-keyed, hashed by the raw value bits.
-type CandelaMap = HashMap<Data, Data, BuildHasherDefault<DataHash>>;
 
 /// 4-byte artifact magic, so a non-`.cdlb` file fails cleanly.
 const MAGIC: [u8; 4] = *b"CDLB";
@@ -86,9 +82,11 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// read and written through. Version 9 added the indirect call, which dispatches
 /// on the function a value carries. Version 10 added the instruction that
 /// builds a function value, which tells a function from the list it is built
-/// as wherever one becomes text. Version 11 added the four string comparison
-/// instructions, which sit among the other comparisons and so renumber the
-/// instructions after them.
+/// as wherever one becomes text. Version 11 added the string comparison and
+/// bitwise instructions, which sit among the existing ones and so renumber the
+/// instructions after them, and gave the order of each map's recorded pairs a
+/// meaning: a map is walked in the order its keys went in, so the pair list is
+/// the program's order and an artifact from before the change cannot supply it.
 const FORMAT_VERSION: u8 = 11;
 
 /// Serializable mirror of a compiled program's runtime state.
@@ -508,7 +506,7 @@ impl RuntimeProgram {
             img.maps
                 .into_iter()
                 .map(|pairs| {
-                    let mut m: CandelaMap = HashMap::default();
+                    let mut m = CandelaMap::default();
                     for ((k_boxed, k_int), (v_boxed, v_int)) in pairs {
                         m.insert(
                             Data::from_words(k_boxed, k_int),

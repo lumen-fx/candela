@@ -1,11 +1,11 @@
 use crate::array_gc::reset_marks;
 use crate::array_gc::trace_roots;
 use crate::array_gc::track;
+use crate::vm::CandelaMap;
 use crate::vm::GcScratch;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
-use std::collections::HashMap;
 
 pub fn alloc_map(
     map_pool: &mut MapPool,
@@ -36,7 +36,7 @@ pub fn alloc_map(
             id
         } else {
             let id = map_pool.len() as u32;
-            map_pool.push(HashMap::default());
+            map_pool.push(CandelaMap::default());
             id
         }
     }

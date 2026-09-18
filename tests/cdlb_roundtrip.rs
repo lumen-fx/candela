@@ -299,8 +299,9 @@ fn unknown_version_is_rejected() {
 
 #[test]
 fn current_format_version_is_eleven_and_v2_is_rejected() {
-    // The version byte was bumped to 11 when the string comparisons joined the
-    // instruction set. A freshly built artifact must carry version 11.
+    // The version byte was bumped to 11 when the string comparison and bitwise
+    // instructions joined the instruction set and maps took on insertion order.
+    // A freshly built artifact must carry version 11.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
@@ -745,6 +746,37 @@ fn main() {
     print(adder(1)(20)(300));
 }
 ";
+
+/// Every way a program can reorder a map, run against a literal written out of
+/// alphabetical order so a sort would show up.
+const MAP_ORDER_PROGRAM: &str = "
+fn main() {
+    let m = {\"b\": 1, \"a\": 2, \"c\": 3};
+    print(m);
+    m.insert(\"d\", 4);
+    m.insert(\"b\", 20);
+    m.remove(\"a\");
+    m.insert(\"a\", 9);
+    print(m.keys());
+    print(m.values());
+}
+";
+
+/// A map reads in the same order through `candela <file>` and through
+/// `candela build` plus `candela-vm`: the artifact records a constant map's
+/// pairs in the order the program wrote them, so the literal keeps source
+/// order after a round-trip. Skips if `candela-vm` is not built alongside
+/// `candela`.
+#[test]
+fn map_order_agrees_across_source_and_artifact() {
+    agrees_across_source_and_artifact(
+        "map_order_agrees_across_source_and_artifact",
+        "maporder",
+        MAP_ORDER_PROGRAM,
+        "{\"b\":1,\"a\":2,\"c\":3}\n[\"b\",\"c\",\"d\",\"a\"]\n[20,3,4,9]\n",
+        "a map walks in the order its keys went in",
+    );
+}
 
 /// A captured variable reads the same through `candela <file>` and through
 /// `candela build` plus `candela-vm`: the artifact carries the cell

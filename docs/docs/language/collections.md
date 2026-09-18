@@ -231,7 +231,11 @@ fallback.
 
 ### Iterating
 
-Iterating a map walks its keys.
+Iterating a map walks its keys in the order they went in, and a literal's keys
+go in as written. `keys`, `values`, and printing read the same order. Inserting
+a key that is already there replaces the value and leaves the entry where it
+is; removing a key and inserting it again puts it at the end. Two maps holding
+the same entries are equal whatever order they were built in.
 
 ```rust
 fn main() {
@@ -278,4 +282,5 @@ fn main() {
 }
 ```
 
-Because a set is a map underneath, `members` gives you a list to iterate.
+Because a set is a map underneath, `members` gives you a list to iterate, in
+the order the members were added.

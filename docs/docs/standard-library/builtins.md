@@ -407,9 +407,19 @@ return nothing.
 | `m.keys()` | list | The keys |
 | `m.values()` | list | The values |
 
-A map is a hash map, so the order of `keys`, `values`, and `for k in m` is
-unspecified and is not insertion order. `keys` and `values` walk the map the same
-way, so their results line up entry for entry.
+A map keeps its entries in the order they went in, so `keys`, `values`,
+`for k in m`, printing, and json all walk it first-inserted first. Three rules
+settle every case:
+
+- Inserting a key the map does not hold puts it at the end.
+- Inserting a key the map already holds replaces the value and leaves the entry
+  where it is.
+- Removing a key and inserting it again puts it at the end; the entries after
+  the removed one keep their order.
+
+Two maps holding the same entries are equal whatever order they were built in.
+`keys` and `values` walk the map the same way, so their results line up entry
+for entry.
 
 An empty map literal `{}` takes its key and value types from the first `insert`,
 the way an empty list takes its element type from the first `push`. Only a
