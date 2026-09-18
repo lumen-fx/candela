@@ -83,6 +83,8 @@ enum ParserErr<'a> {
     UnknownToken,
     /// An integer literal outside the range `int` holds.
     IntLiteralOutOfRange,
+    /// A float literal outside the range `float` holds.
+    FloatLiteralOutOfRange,
     /// A number whose exponent marker carries no digits.
     FloatExponentMissingDigits,
     /// (expected, received)
@@ -127,6 +129,7 @@ impl ParserErr<'_> {
             ParserErr::UnexpectedEOF => "unexpected_eof",
             ParserErr::UnknownToken => "unknown_token",
             ParserErr::IntLiteralOutOfRange => "int_literal_out_of_range",
+            ParserErr::FloatLiteralOutOfRange => "float_literal_out_of_range",
             ParserErr::FloatExponentMissingDigits => "float_exponent_missing_digits",
             ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => {
                 "unexpected_token"
@@ -159,6 +162,7 @@ const fn lex_err(e: LexErr) -> ParserErr<'static> {
     match e {
         LexErr::UnknownToken => ParserErr::UnknownToken,
         LexErr::IntOutOfRange => ParserErr::IntLiteralOutOfRange,
+        LexErr::FloatOutOfRange => ParserErr::FloatLiteralOutOfRange,
         LexErr::FloatExponentMissingDigits => ParserErr::FloatExponentMissingDigits,
     }
 }
@@ -174,6 +178,11 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             "This number does not fit an {BLUE}{BOLD}int{RESET}, which holds {} to {}. A wider value goes in a {BLUE}{BOLD}float{RESET}",
             i64::MIN,
             i64::MAX
+        ),
+        ParserErr::FloatLiteralOutOfRange => &format!(
+            "This number does not fit a {BLUE}{BOLD}float{RESET}, which holds {:e} to {:e}",
+            f64::MIN,
+            f64::MAX
         ),
         ParserErr::FloatExponentMissingDigits => {
             "This exponent has no digits after it. Write the power, as in 1e3 or 2.5e-1"

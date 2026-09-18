@@ -37,6 +37,8 @@ pub enum LexErr {
     UnknownToken,
     /// An integer literal outside what `int` holds.
     IntOutOfRange,
+    /// A float literal outside what `float` holds, such as `1e400`.
+    FloatOutOfRange,
     /// A number whose exponent marker carries no digits, such as `1e`.
     FloatExponentMissingDigits,
 }
@@ -192,14 +194,8 @@ pub enum Token<'a> {
     // Three spellings of the same type: a decimal point, an exponent, or both.
     // The exponent form is what lets a constant like 6.02e23 be written at the
     // scale it is quoted at.
-    #[regex(r"[0-9]*[.][0-9]+", |lex| {
-        let slice = lex.slice();
-        lexical_core::parse::<f64>(slice.as_bytes()).unwrap()
-    })]
-    #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?[0-9]+", |lex| {
-        let slice = lex.slice();
-        lexical_core::parse::<f64>(slice.as_bytes()).unwrap()
-    })]
+    #[regex(r"[0-9]*[.][0-9]+", read_float)]
+    #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?[0-9]+", read_float)]
     // An exponent marker with nothing after it. The rule exists so the number
     // is refused as a number, rather than read as a smaller one followed by a
     // name the file never declared.
@@ -233,6 +229,20 @@ pub enum Token<'a> {
 pub struct MacroToken<'a> {
     pub name: &'a str,
     pub body: Option<&'a str>,
+}
+
+/// Reads a float literal, refusing one whose value is past what `float` holds.
+///
+/// The number parser answers an infinity for a literal that overflows, which
+/// would leave the program running on a value nobody wrote. The sign is a token
+/// of its own, so both ends of the range are refused here.
+fn read_float<'a>(lex: &Lexer<'a, Token<'a>>) -> Result<f64, LexErr> {
+    let value = lexical_core::parse::<f64>(lex.slice().as_bytes()).unwrap();
+    if value.is_infinite() {
+        cold_path();
+        return Err(LexErr::FloatOutOfRange);
+    }
+    Ok(value)
 }
 
 /// Refuses a number whose exponent marker has no digits after it.
