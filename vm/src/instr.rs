@@ -541,4 +541,11 @@ mod tests {
     fn instruction_is_one_word() {
         assert_eq!(size_of::<Instr>(), 8);
     }
+
+    /// A value is two words: the NaN box and the word an `int` needs. A third
+    /// would widen every register and every list slot in a program.
+    #[test]
+    fn a_value_is_two_words() {
+        assert_eq!(size_of::<crate::data::Data>(), 16);
+    }
 }
