@@ -212,7 +212,26 @@ module.exports = grammar({
         $.generic_type,
         $.array_type,
         $.map_type,
+        $.function_type,
+        $.parenthesized_type,
       ),
+
+    // `fn(int, int) -> int`, the type of a position that holds a function. The
+    // return type runs to the end of the type, so the `[]` in
+    // `fn(int) -> int[]` belongs to it; `(fn(int) -> int)[]` is the list of
+    // functions.
+    function_type: ($) =>
+      prec.right(
+        seq(
+          'fn',
+          '(',
+          optional(sepByTrailing(',', $._type)),
+          ')',
+          optional(seq('->', field('return_type', $._type))),
+        ),
+      ),
+
+    parenthesized_type: ($) => seq('(', $._type, ')'),
 
     // `Cell<int>`, and nested as deep as it goes: a type argument is an
     // ordinary type, so `Cell<Cell<int>>` and `Cell<int>[]` both spell out.
@@ -242,9 +261,18 @@ module.exports = grammar({
     // docs/docs/language/generics.md.
     type_arguments: ($) => seq('<', sepBy1(',', $._type), '>'),
 
-    union_type: ($) => seq($._atomic_type, repeat1(seq('|', $._atomic_type))),
+    // A union runs as far as the `|`s go, which settles `fn() -> A|B`: the
+    // return type of a function type runs to the end of the type, so the union
+    // is what the function returns.
+    union_type: ($) =>
+      prec.right(1, seq($._atomic_type, repeat1(seq('|', $._atomic_type)))),
 
-    array_type: ($) => seq(field('element', $._atomic_type), '[', ']'),
+    // `[]` binds to the type on its left, which settles `fn(int) -> int[]`: the
+    // return type of a function type runs to the end of the type, so the list
+    // is what the function returns. `(fn(int) -> int)[]` is the list of
+    // functions.
+    array_type: ($) =>
+      prec.right(1, seq(field('element', $._atomic_type), '[', ']')),
 
     map_type: ($) => seq('{', field('key', $._type), ':', field('value', $._type), '}'),
 

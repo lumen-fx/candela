@@ -18,6 +18,7 @@ attribution details.
     `import`, `as`, `host`, `dylib`.
   - Built-in types: `int`, `float`, `bool`, `string`, plus user-defined structs
     and enums.
+  - Function types, `fn(int, int) -> int`, wherever a type goes.
   - Constants: `true`, `false`, `null`.
   - Strings with escape sequences (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`).
   - Integer and float literals.

@@ -63,8 +63,10 @@ tighter than every operator, and a call attaches to what a call or an index
 returned, so `adder(1)(2)` and `fs[0](x)` read as calls. Literals cover
 integers, floats with a decimal point or an exponent or both, strings with
 their escapes, `true`, `false`, `null`, lists, maps, struct literals, and
-anonymous functions. The type syntax covers arrays, map types, unions, and
-namespaced names.
+anonymous functions. The type syntax covers arrays, map types, unions,
+namespaced names, and function types, `fn(int, int) -> int`. A function type's
+return type runs to the end of the type, so `fn(int) -> int[]` returns a list
+and `(fn(int) -> int)[]` is a list of functions.
 
 Generics parse on both sides. A declaration's type parameters (`struct
 Cell<T>`, `fn first<T>`, `impl Signal<int>`) and the type arguments a use names

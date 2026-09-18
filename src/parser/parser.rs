@@ -3,6 +3,7 @@ use crate::RED;
 use crate::RESET;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::{Expr, Span, var_assign};
+use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::TypeExpr;
@@ -919,7 +920,43 @@ fn parse_type_inner(parser: &mut Parser<'_>) -> TypeExpr {
 
 fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
     let (next_token, span) = parser.next_token();
-    let mut t = if next_token == Token::LBrace {
+    let mut t = if next_token == Token::Function {
+        // `fn(A, B) -> R`: a position that holds a function of that shape. The
+        // return type runs to the end of the type, so the `[]` in
+        // `fn(int) -> int[]` belongs to it; parenthesise the whole type to make
+        // a list of functions.
+        parser.next_token_expect(
+            Token::LParen,
+            "A function type needs a parameter list: fn(int, int) -> int",
+        );
+        let mut args: Vec<TypeExpr> = Vec::new();
+        while parser.peek_token() != Token::RParen {
+            args.push(parse_type(parser));
+            if parser.peek_token() == Token::Comma {
+                parser.next_token();
+            } else {
+                break;
+            }
+        }
+        parser.next_token_expect(Token::RParen, "Unmatched '(' in a function type");
+        let return_type = if parser.peek_token() == Token::Arrow {
+            parser.next_token();
+            Some(parse_type(parser))
+        } else {
+            None
+        };
+        TypeExpr::Fn(Box::new(FnTypeExpr {
+            args: args.into_boxed_slice(),
+            return_type,
+            span: (span.start, parser.last_token_end as u32).into(),
+        }))
+    } else if next_token == Token::LParen {
+        // A parenthesised type, which is what puts a function type under a
+        // list suffix: `(fn(int) -> int)[]`.
+        let inner = parse_type(parser);
+        parser.next_token_expect(Token::RParen, "Unmatched '(' in a type");
+        inner
+    } else if next_token == Token::LBrace {
         let key_t = parse_type(parser);
         parser.next_token_expect(
             Token::Colon,

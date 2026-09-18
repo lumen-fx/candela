@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- The `fn` that opens a function type, `fn(int, int) -> int`, colours as a type
+  rather than as a call.
+
 ## 0.2.1
 
 - The grammar reads generics instead of arithmetic: `Cell<int>` in a type,
