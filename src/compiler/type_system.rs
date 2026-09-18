@@ -2052,16 +2052,10 @@ pub fn check_if_returns_void(content: &[Expr]) -> bool {
     true
 }
 
-macro_rules! add_return_type {
-    ($return_types: expr, $return_type: expr, $ctx: expr, $state: expr) => {
-        add_return_type($return_types, $return_type, $ctx, $state);
-    };
-}
-
 macro_rules! extend_return_types {
     ($return_types: expr, $new_types: expr, $ctx: expr, $state: expr) => {
         for return_type in $new_types {
-            add_return_type!($return_types, return_type, $ctx, $state);
+            add_return_type($return_types, return_type, $ctx, $state);
         }
     };
 }
@@ -2140,7 +2134,7 @@ pub fn track_returns(
 ) -> Vec<DataType> {
     let mut flow = track_return_flow(content, v, ctx, state, fn_name);
     if !flow.always_returns && !flow.types.is_empty() {
-        add_return_type!(&mut flow.types, DataType::Null, ctx, state);
+        add_return_type(&mut flow.types, DataType::Null, ctx, state);
     }
     flow.types
 }
@@ -2388,9 +2382,9 @@ fn track_return_flow(
             Expr::ReturnVal(return_val) => {
                 if let Some(val) = return_val.as_ref() {
                     let infered = val.infer_type(v, ctx, state);
-                    add_return_type!(&mut return_types, infered, ctx, state);
+                    add_return_type(&mut return_types, infered, ctx, state);
                 } else {
-                    add_return_type!(&mut return_types, DataType::Null, ctx, state);
+                    add_return_type(&mut return_types, DataType::Null, ctx, state);
                 }
                 return FnReturnFlow {
                     types: return_types,

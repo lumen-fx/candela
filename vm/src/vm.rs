@@ -69,6 +69,13 @@ struct StrCursor {
     byte_off: u32,
 }
 
+/// A cursor standing on no string at all.
+const NO_CURSOR: StrCursor = StrCursor {
+    id: NO_STRING,
+    char_idx: 0,
+    byte_off: 0,
+};
+
 /// One pooled string and what has been worked out about it. The count sits
 /// next to the string's own header so reading both costs one cache line.
 struct PooledStr {
@@ -152,7 +159,8 @@ impl StringPool {
         slot.char_len.set(UNCOUNTED);
         &mut slot.text
     }
-    /// How many characters the string in `id` has.
+    /// The character count of the string in `id`, walked once and then
+    /// remembered on the slot.
     #[inline(always)]
     #[must_use]
     pub fn char_len(&self, id: usize) -> usize {
@@ -164,7 +172,8 @@ impl StringPool {
             remembered as usize
         }
     }
-    /// True when every character in `id` takes a single byte.
+    /// Whether every character in `id` takes a single byte, answered from the
+    /// remembered count rather than a second walk.
     #[inline(always)]
     #[must_use]
     pub fn is_ascii(&self, id: usize) -> bool {
@@ -195,13 +204,6 @@ impl StringPool {
         at_byte
     }
 }
-
-/// A cursor standing on no string at all.
-const NO_CURSOR: StrCursor = StrCursor {
-    id: NO_STRING,
-    char_idx: 0,
-    byte_off: 0,
-};
 
 impl Index<usize> for StringPool {
     type Output = String;

@@ -261,16 +261,13 @@ module.exports = grammar({
     // docs/docs/language/generics.md.
     type_arguments: ($) => seq('<', sepBy1(',', $._type), '>'),
 
-    // A union runs as far as the `|`s go, which settles `fn() -> A|B`: the
-    // return type of a function type runs to the end of the type, so the union
-    // is what the function returns.
+    // A union runs as far as the `|`s go, so `fn() -> A|B` returns the union.
+    // See `function_type`.
     union_type: ($) =>
       prec.right(1, seq($._atomic_type, repeat1(seq('|', $._atomic_type)))),
 
-    // `[]` binds to the type on its left, which settles `fn(int) -> int[]`: the
-    // return type of a function type runs to the end of the type, so the list
-    // is what the function returns. `(fn(int) -> int)[]` is the list of
-    // functions.
+    // `[]` binds to the type on its left, so `fn(int) -> int[]` returns the
+    // list. See `function_type`.
     array_type: ($) =>
       prec.right(1, seq(field('element', $._atomic_type), '[', ']')),
 
