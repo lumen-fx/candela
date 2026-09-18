@@ -21,10 +21,10 @@ use super::super::type_system::track_returns;
 use crate::compiler::SymbolKind;
 use crate::compiler::UnwrapId;
 use crate::compiler::compile_expr;
+use crate::compiler::compile_fn_value;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::FunctionImpl;
 use crate::compiler::compiler_data::State;
-use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_user_fn;
@@ -305,7 +305,7 @@ pub fn handle_user_function(
 
         let start_len = output.len();
         let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
-            crate::compiler::compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
+            compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
         } else {
             args[i]
                 .compile(v, ctx, state, output, Some(tgt_id), false, true)
@@ -315,9 +315,7 @@ pub fn handle_user_function(
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
-    // Hand the callee its environment. The register holding the closure value
-    // is the one the callee expression compiled into, or the one the variable
-    // the call names holds.
+    // Hand the callee its environment.
     if let Some(env_loc) = state.fns[fn_id].impls[fn_impl_idx].env_loc {
         let src_id = env_id.or_else(|| closure_value_register(fn_name, v, state, output));
         if let Some(src_id) = src_id {
@@ -698,10 +696,7 @@ pub fn ensure_indirect_impl(
         .iter()
         .find(|fn_impl| fn_impl.indirect)
     {
-        let types = TypeNames {
-            structs: state.structs,
-            enums: state.enums,
-        };
+        let types = state.type_names();
         let written = compiled
             .arg_types
             .iter()

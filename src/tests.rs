@@ -3871,9 +3871,9 @@ pub fn diagnostics_int_literal_past_the_range() {
     let src = "fn main() { print(9223372036854775809); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
+    assert_eq!(d.code, "int_literal_out_of_range");
     assert!(d.message.contains("-9223372036854775808"), "{}", d.message);
     assert!(d.message.contains("9223372036854775807"), "{}", d.message);
-    assert_eq!(d.code, "int_literal_out_of_range");
     assert_eq!(&src[d.span], "9223372036854775809");
 }
 

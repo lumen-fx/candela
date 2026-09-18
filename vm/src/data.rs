@@ -4,6 +4,7 @@ use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool, char_byte_offset, 
 use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
+use std::hash::Hash;
 use std::hash::Hasher;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
@@ -87,7 +88,7 @@ impl Hasher for DataHash {
     }
 }
 
-impl std::hash::Hash for Data {
+impl Hash for Data {
     /// Both words in one, so an `int` hashes by its value and every other type
     /// hashes by its box exactly as it did when the box was the whole value.
     /// `DataHash` keeps only the last word written, so writing them apart would
@@ -332,7 +333,6 @@ impl Data {
             self.boxed & SMALL_STR_HIGH_BITS == 0
         }
     }
-
     /// How many characters this string has. Positions on a string count
     /// characters, so this is what `len` answers and what an index or a slice
     /// bound is checked against.
@@ -347,7 +347,6 @@ impl Data {
             count_chars(self.as_str(string_pool))
         }
     }
-
     /// The byte offset character `char_idx` starts at. The string has at least
     /// `char_idx` characters; at exactly that many the answer is its byte
     /// length, which is what a slice bound on the end of the string asks for.
@@ -361,14 +360,12 @@ impl Data {
             char_byte_offset(self.as_str(string_pool), char_idx)
         }
     }
-
     /// How many bytes an inlined string takes.
     #[inline(always)]
     const fn small_str_len(&self) -> usize {
         let payload = self.boxed & PAYLOAD_MASK;
         ((64 - payload.leading_zeros()) as usize + 7) >> 3
     }
-
     #[inline(always)]
     pub const fn is_string(self) -> bool {
         // this works because NAN_TAG_STRING_LARGE == NAN_TAG_STRING_SMALL + (1 << 48)

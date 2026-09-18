@@ -197,11 +197,6 @@ const fn set_jmp_size(instr: &mut Instr, size: u16) {
     }
 }
 
-/// Compiles short-circuit && and || conditions
-/// bool_or_mode true indicates left side of ||, emits true jumps
-/// bool_or_mode false emits false jumps
-/// Returns (true_jump_idxs, false_jump_idxs)
-#[allow(clippy::too_many_arguments)]
 /// Compiles one condition operand and checks that it is a `bool`.
 ///
 /// candela has no truthiness, so a condition whose type the compiler knows and
@@ -241,6 +236,11 @@ fn compile_condition_operand(
     }
 }
 
+/// Compiles short-circuit && and || conditions
+/// bool_or_mode true indicates left side of ||, emits true jumps
+/// bool_or_mode false emits false jumps
+/// Returns (true_jump_idxs, false_jump_idxs)
+#[allow(clippy::too_many_arguments)]
 fn compile_short_circuit_condition(
     expr: &Expr,
     condition_span: Span,
@@ -364,14 +364,13 @@ fn parse_loop_flow_control(
     });
 }
 
-#[inline(always)]
 /// Compiles `expr` as a function value: a list whose first slot says where the
 /// function's body starts, followed by the cells it captured.
 ///
 /// A closure that captures already compiles to exactly that, and so does a
 /// value read out of a position that holds one, so a value is built here only
 /// for a function that captures nothing.
-pub fn compile_fn_value(
+pub(crate) fn compile_fn_value(
     expr: &Expr,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -410,6 +409,7 @@ fn compile_element(
     }
 }
 
+#[inline(always)]
 fn compile_array_literal(
     array_items: &[Expr],
     spans: &[Span],
@@ -3020,9 +3020,6 @@ fn compile_var_assignment(
     });
     let id = v[var_pos].register_id;
 
-    // Writing a function into a variable that holds function values adds it to
-    // the set a call through the variable dispatches over, and compiles it for
-    // every call already made through that set.
     let var_type = match (&v[var_pos].var_type, &var_type) {
         (DataType::FnValue(held), DataType::Fn(fn_id)) if held.sig.is_none() => {
             let held = held.clone();
