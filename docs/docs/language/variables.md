@@ -45,7 +45,8 @@ fn main() {
 ## Assigning
 
 Assign to an existing variable with `=`. The compound operators `+=`, `-=`,
-`*=`, `/=`, `%=`, and `^=` apply an operation in place.
+`*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `^^=`, `<<=` and `>>=` apply an operation in
+place.
 
 ```rust
 fn main() {

@@ -9,6 +9,7 @@ use crate::parser::TypeArgFollow;
 use crate::parser::parse_args;
 use crate::parser::parse_type_args;
 use crate::parser::type_args_ahead;
+use crate::vm::shift_count_in_range;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hint::unreachable_unchecked;
@@ -137,8 +138,46 @@ pub fn add_op(
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x.powf(y)),
             (lhs, rhs) => Expr::Pow(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
+        Token::OpBitAnd => match (lhs, rhs) {
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x & y),
+            (lhs, rhs) => Expr::BitAnd(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        },
+        Token::Pipe => match (lhs, rhs) {
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x | y),
+            (lhs, rhs) => Expr::BitOr(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        },
+        Token::OpBitXor => match (lhs, rhs) {
+            (Expr::Int(x), Expr::Int(y)) => Expr::Int(x ^ y),
+            (lhs, rhs) => Expr::BitXor(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        },
+        Token::OpShl => match (lhs, rhs) {
+            (Expr::Int(x), Expr::Int(y)) => {
+                Expr::Int(x << shift_count(parser, y, span_l.extend(span_r)))
+            }
+            (lhs, rhs) => Expr::Shl(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        },
+        Token::OpShr => match (lhs, rhs) {
+            (Expr::Int(x), Expr::Int(y)) => {
+                Expr::Int(x >> shift_count(parser, y, span_l.extend(span_r)))
+            }
+            (lhs, rhs) => Expr::Shr(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        },
         _ => unsafe { unreachable_unchecked() },
     }
+}
+
+/// The count a literal shift moves by, reported where it cannot be one.
+///
+/// `int` holds 64 bits, so a shift by 64 or more, or by a negative count, names
+/// no result. The pair of literals is folded here, so the mistake is a compile
+/// error rather than the runtime one a count only known while the program runs
+/// earns.
+fn shift_count(parser: &Parser<'_>, count: i64, span: Span) -> u32 {
+    if !shift_count_in_range(count) {
+        cold_path();
+        parser.error(span, ParserErr::ShiftCountOutOfRange(count));
+    }
+    count as u32
 }
 
 /// Whether a literal `0` on the right of `/` or `%` makes the expression an
@@ -155,6 +194,19 @@ const fn int_zero_divisor_applies(lhs: &Expr) -> bool {
     )
 }
 
+/// The precedence a prefix operator reads its operand at, which is past every
+/// binary operator: `-a ^ 2` is `(-a) ^ 2` and `~a + 1` is `(~a) + 1`.
+pub const PREFIX_PRECEDENCE: u8 = 12;
+
+/// The operator ahead and the precedence it binds at, or `None` where the token
+/// is not a binary operator or binds looser than the expression being read.
+///
+/// The levels follow Rust, loosest first: `||`, `&&`, equality, comparison,
+/// `|`, `^^`, `&`, the shifts, `+ -`, `* / %`, `^`. So `a | b == c` is
+/// `(a | b) == c`, and the four levels the language had before the bitwise
+/// operators are the four it has now. The table in
+/// docs/docs/reference/operators.md is the same one, and so is `PREC` in
+/// editors/tree-sitter/grammar.js.
 #[inline(always)]
 const fn check_op(op: Token, min_precedence: u8) -> Option<(Token, u8)> {
     let (op_precedence, is_right_assoc) = match op {
@@ -162,9 +214,13 @@ const fn check_op(op: Token, min_precedence: u8) -> Option<(Token, u8)> {
         Token::OpAnd => (2, false),
         Token::OpEq | Token::OpNEq => (3, false),
         Token::OpInf | Token::OpInfEq | Token::OpSup | Token::OpSupEq => (4, false),
-        Token::OpAdd | Token::OpSub => (5, false),
-        Token::OpMul | Token::OpDiv | Token::OpMod => (6, false),
-        Token::OpPow => (7, true),
+        Token::Pipe => (5, false),
+        Token::OpBitXor => (6, false),
+        Token::OpBitAnd => (7, false),
+        Token::OpShl | Token::OpShr => (8, false),
+        Token::OpAdd | Token::OpSub => (9, false),
+        Token::OpMul | Token::OpDiv | Token::OpMod => (10, false),
+        Token::OpPow => (11, true),
         _ => return None,
     };
     if (op_precedence > min_precedence) || (is_right_assoc && (op_precedence == min_precedence)) {

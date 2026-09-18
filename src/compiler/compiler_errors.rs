@@ -139,6 +139,44 @@ pub fn error_invalid_index_type(
     );
 }
 
+/// A shift whose count is written as a literal that `int` has no room for.
+#[inline(never)]
+#[cold]
+pub fn error_shift_count_out_of_range(
+    count: i64,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let message = format!(
+        "An int is 64 bits wide, so it cannot be shifted by {count}. The count must be between 0 and 63"
+    );
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Shift count out of range")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This shifts by {}, and the count must be between 0 and 63",
+                        red(count)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "shift_count_out_of_range",
+    );
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_division_by_zero(modulo: bool, span: Span, file_idx: u16, sources: &[Source]) -> ! {
@@ -1557,7 +1595,7 @@ pub fn error_op(
                 (src.filename.as_str(), span_l.extend(span_r).into()),
             );
 
-            if (op == "-" && l == &DataType::Null) || op == "!" {
+            if ((op == "-" || op == "~") && l == &DataType::Null) || op == "!" {
                 report = report
                     .with_message(format_args!(
                         "Cannot perform operation {} {}",
@@ -1645,6 +1683,19 @@ pub fn error_op(
                     red(op),
                     green(DataType::Float),
                 ));
+            } else if op == "&" || op == "|" || op == "^^" || op == "<<" || op == ">>" {
+                report = report.with_note(format_args!(
+                    "The supported types are:\n- {} {} {}",
+                    blue(DataType::Int),
+                    red(op),
+                    green(DataType::Int),
+                ));
+            } else if op == "~" {
+                report = report.with_note(format_args!(
+                    "The supported types are:\n- {} {}",
+                    red(op),
+                    blue(DataType::Int),
+                ));
             } else if op == "&&" || op == "||" {
                 report = report.with_note(format_args!(
                     "The supported types are:\n- {} {} {}",
@@ -1665,7 +1716,7 @@ pub fn error_op(
         sources,
         file_idx,
         span_l.extend(span_r),
-        &if (op == "-" && l == &DataType::Null) || op == "!" {
+        &if ((op == "-" || op == "~") && l == &DataType::Null) || op == "!" {
             format!("Cannot perform operation {op} {right}")
         } else {
             format!("Cannot perform operation {left} {op} {right}")

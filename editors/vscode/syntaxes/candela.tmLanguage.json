@@ -304,7 +304,11 @@
         },
         {
           "name": "keyword.operator.assignment.compound.candela",
-          "match": "(\\+=|-=|\\*=|/=|%=|\\^=)"
+          "match": "(\\+=|-=|\\*=|/=|%=|\\^\\^=|\\^=|&=|\\|=|<<=|>>=)"
+        },
+        {
+          "name": "keyword.operator.bitwise.candela",
+          "match": "(\\^\\^|<<|>>|&(?!&)|~)"
         },
         {
           "name": "keyword.operator.comparison.candela",

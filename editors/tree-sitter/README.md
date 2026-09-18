@@ -76,7 +76,9 @@ rather than as comparisons. Since type arguments have no spelling of their own,
 `<` opens a list only where a `(`, a `{` or a `::` follows the closing `>`; `a
 < b` and `a < b > c` stay the comparisons they have always been. The one shape
 that reads both ways, a comparison whose right-hand side is parenthesised or
-braced, parses as a type argument list here, as it does in the compiler.
+braced, parses as a type argument list here, as it does in the compiler. Two
+lists closing at once end in the same two characters the shift operator is
+written with, and `Box<Box<int>>` reads as the nested list it is.
 
 In two spots the rule here is deliberately looser than the compiler's. The
 compiler knows a struct literal cannot start in an `if`, `while` or `for`

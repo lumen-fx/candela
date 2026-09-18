@@ -2905,6 +2905,218 @@ pub fn compound_pow_assign() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// BITWISE OPERATORS
+//
+// `&`, `|`, `^^`, `~`, `<<` and `>>` take `int` operands. `^` stays the power
+// operator, so xor is spelled `^^`.
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn bitwise_and() {
+    run_and_check_registers!("fn main() { print(12 & 10); }", 8.into());
+    run_and_check_registers!(
+        "fn main() { let a = -8; let b = 6; print(a & b); }",
+        0.into()
+    );
+}
+
+#[test]
+pub fn bitwise_or() {
+    run_and_check_registers!("fn main() { print(12 | 3); }", 15.into());
+    run_and_check_registers!(
+        "fn main() { let a = -8; let b = 6; print(a | b); }",
+        (-2).into()
+    );
+}
+
+#[test]
+pub fn bitwise_xor() {
+    run_and_check_registers!("fn main() { print(12 ^^ 10); }", 6.into());
+    run_and_check_registers!(
+        "fn main() { let a = -8; let b = 6; print(a ^^ b); }",
+        (-2).into()
+    );
+}
+
+/// Every bit of zero flipped is every bit set, which is -1 in two's complement.
+#[test]
+pub fn bitwise_not() {
+    run_and_check_registers!("fn main() { print(~0); }", (-1).into());
+    run_and_check_registers!("fn main() { let x = 5; print(~x); }", (-6).into());
+    run_and_check_registers!("fn main() { let x = -1; print(~x); }", 0.into());
+}
+
+#[test]
+pub fn shift_left() {
+    run_and_check_registers!("fn main() { print(1 << 4); }", 16.into());
+    run_and_check_registers!(
+        "fn main() { let x = 3; let n = 2; print(x << n); }",
+        12.into()
+    );
+    run_and_check_registers!("fn main() { print(1 << 63); }", i64::MIN.into());
+}
+
+/// `int` is signed, so `>>` is arithmetic: a negative value stays negative and
+/// the vacated places take the sign bit.
+#[test]
+pub fn shift_right_is_arithmetic() {
+    run_and_check_registers!("fn main() { print(-16 >> 2); }", (-4).into());
+    run_and_check_registers!(
+        "fn main() { let x = -1; let n = 40; print(x >> n); }",
+        (-1).into()
+    );
+    run_and_check_registers!("fn main() { let x = 16; print(x >> 2); }", 4.into());
+}
+
+/// The bitwise levels sit between comparison and the shifts, as they do in
+/// Rust, so `a | b == c` compares what the `|` produced.
+#[test]
+pub fn bitwise_precedence() {
+    run_and_check_registers!("fn main() { print(1 | 2 & 3 == 3); }", true.into());
+    run_and_check_registers!("fn main() { print(1 << 2 + 1); }", 8.into());
+    run_and_check_registers!("fn main() { print(2 ^ 3 ^^ 1); }", 9.into());
+    run_and_check_registers!("fn main() { print(1 | 2 ^^ 4 & 12); }", 7.into());
+    run_and_check_registers!("fn main() { print(~1 + 1); }", (-1).into());
+}
+
+/// The same table applies to values the compiler cannot fold.
+#[test]
+pub fn bitwise_precedence_on_variables() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let b = 2;
+            let c = 3;
+            print(a | b & c == c);
+        }
+        ",
+        true.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            let one = 1;
+            let two = 2;
+            print(one << two + 1);
+        }
+        ",
+        8.into()
+    );
+}
+
+#[test]
+pub fn compound_bit_and_assign() {
+    run_and_check_registers!("fn main() { let x = 12; x &= 10; print(x); }", 8.into());
+}
+
+#[test]
+pub fn compound_bit_or_assign() {
+    run_and_check_registers!("fn main() { let x = 12; x |= 3; print(x); }", 15.into());
+}
+
+#[test]
+pub fn compound_bit_xor_assign() {
+    run_and_check_registers!("fn main() { let x = 12; x ^^= 10; print(x); }", 6.into());
+}
+
+#[test]
+pub fn compound_shift_left_assign() {
+    run_and_check_registers!("fn main() { let x = 3; x <<= 4; print(x); }", 48.into());
+}
+
+#[test]
+pub fn compound_shift_right_assign() {
+    run_and_check_registers!("fn main() { let x = -48; x >>= 4; print(x); }", (-3).into());
+}
+
+/// A compound assignment reaches an array element and a struct field, the way
+/// the arithmetic ones do.
+#[test]
+pub fn compound_bitwise_assign_on_a_field_and_an_element() {
+    run_and_check_registers!(
+        "
+        struct Flags { bits: int }
+        fn main() {
+            let f = Flags { bits: 1 };
+            f.bits |= 4;
+            let row = [3, 12];
+            row[1] &= 10;
+            print(f.bits + row[1]);
+        }
+        ",
+        13.into()
+    );
+}
+
+/// `^` is the power operator still, and `^=` still raises in place. The doubled
+/// spelling is what tells xor from it.
+#[test]
+pub fn caret_stays_the_power_operator() {
+    run_and_check_registers!("fn main() { print(2 ^ 8); }", 256.into());
+    run_and_check_registers!("fn main() { let x = 3; x ^= 3; print(x); }", 27.into());
+    run_and_check_registers!("fn main() { print(2 ^ 3 == 8); }", true.into());
+}
+
+/// `|` separates the members of a union type where a type is read, and is
+/// bitwise or where an expression is. The two never meet: a type and an
+/// expression are read by different parsers.
+#[test]
+pub fn a_union_type_still_parses() {
+    run_and_check_registers!(
+        "
+        struct Cell { v: int | string }
+        fn label(x: int | string, mask: int) -> int {
+            return mask | 1;
+        }
+        fn main() {
+            let c = Cell { v: \"hi\" };
+            print(label(c.v, 6));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// The two closing `>` of a nested type-argument list lex as the one `>>` the
+/// shift is written with, so the type parser splits it. Both the list that is
+/// parsed outright and the one the walk ahead of a call has to recognise are
+/// covered.
+#[test]
+pub fn nested_generics_still_close_with_two_angle_brackets() {
+    run_and_check_registers!(
+        "
+        struct Box<T> { v: T }
+        fn pick<T>(a: T) -> T { return a; }
+        fn unwrap(b: Box<Box<int>>) -> int { return b.v.v; }
+        fn main() {
+            let inner = Box<int>{ v: 7 };
+            let outer = Box<Box<int>>{ v: inner };
+            print(unwrap(pick<Box<Box<int>>>(outer)));
+        }
+        ",
+        7.into()
+    );
+}
+
+/// A comparison keeps reading as one next to the shift tokens.
+#[test]
+pub fn comparison_still_parses_beside_the_shifts() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = 1;
+            let b = 2;
+            let c = 3;
+            let d = 0;
+            print(a < b && c > d);
+        }
+        ",
+        true.into()
+    );
+}
+
 #[test]
 pub fn string_index() {
     run_and_check_registers!(
@@ -7588,6 +7800,114 @@ pub fn folded_pow_accepts_matching_floats() {
         }
         ",
         8.0.into()
+    );
+}
+
+/// A bitwise operator takes two `int` operands, and any other pair is reported
+/// the way a wrong pair of arithmetic operands is.
+#[test]
+pub fn bitwise_rejects_a_float_operand() {
+    let src = "fn main() { print(1.5 & 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation float & int");
+}
+
+#[test]
+pub fn bitwise_rejects_a_string_operand() {
+    let src = "fn main() { print(\"a\" | 2); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation string | int");
+}
+
+#[test]
+pub fn bitwise_rejects_an_any_operand() {
+    let src = "struct Wrap { v: any } fn main() { let w = Wrap { v: 3 }; print(w.v & 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation any & int");
+}
+
+/// `~` names only its operand, the way `!` and prefix `-` do.
+#[test]
+pub fn bit_not_names_the_tilde_operator() {
+    let src = "fn main() { print(~1.5); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation ~ float");
+}
+
+#[test]
+pub fn shift_rejects_a_float_count() {
+    let src = "fn main() { let x = 1; print(x << 2.0); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+    assert_eq!(d.message, "Cannot perform operation int << float");
+}
+
+/// An `int` holds 64 bits, so a count of 64 or more, or a negative one, names
+/// no result. A count written as a literal is refused before the program runs,
+/// whether the value being shifted is a literal too or not.
+#[test]
+pub fn a_literal_shift_count_past_the_width_is_a_compile_error() {
+    for src in [
+        "fn main() { print(1 << 64); }",
+        "fn main() { print(1 >> 64); }",
+        "fn main() { print(1 << -1); }",
+        "fn main() { let x = 1; print(x << 64); }",
+        "fn main() { let x = 1; print(x >> -1); }",
+        "fn main() { let x = 1; x <<= 64; print(x); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "shift_count_out_of_range", "{src}");
+        assert!(d.message.contains("64 bits wide"), "{}", d.message);
+    }
+}
+
+/// The widest shift there is still compiles, so the check refuses only what is
+/// past the end.
+#[test]
+pub fn a_shift_by_63_is_in_range() {
+    run_and_check_registers!("fn main() { print(1 << 63); }", i64::MIN.into());
+    run_and_check_registers!("fn main() { print(1 >> 0); }", 1.into());
+}
+
+/// A count only known while the program runs raises instead, and the error is
+/// catchable like division by zero.
+#[test]
+pub fn a_runtime_shift_count_past_the_width_raises() {
+    let src = "fn main() { let x = 1; let n = 64; print(x << n); }";
+    let d = run_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "shift_count_out_of_range");
+
+    let src = "fn main() { let x = 1; let n = -1; print(x >> n); }";
+    let d = run_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "shift_count_out_of_range");
+}
+
+#[test]
+pub fn a_shift_count_out_of_range_is_catchable() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = 1;
+            let n = 64;
+            try {
+                print(x << n);
+            } catch \"shift_count_out_of_range\" {
+                print(99);
+            }
+        }
+        ",
+        99.into()
     );
 }
 

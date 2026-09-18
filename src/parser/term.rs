@@ -3,6 +3,7 @@ use super::lexer::Token;
 use super::lexer::parse_string;
 use super::parse_expr;
 use super::parser_expr;
+use super::parser_expr::PREFIX_PRECEDENCE;
 use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
@@ -282,7 +283,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 return Expr::Int(i64::MIN);
             }
             let expr_start = parser.peek_token_span().start;
-            match parse_expr_with_precedence(parser, 8, allow_struct) {
+            match parse_expr_with_precedence(parser, PREFIX_PRECEDENCE, allow_struct) {
                 Expr::Int(i) => Expr::Int(i.wrapping_neg()),
                 Expr::Float(f) => Expr::Float(-f),
                 other => Expr::Neg(
@@ -295,9 +296,21 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         // ! Expr
         Token::OpNot => {
             let expr_start = parser.peek_token_span().start;
-            match parse_expr_with_precedence(parser, 8, allow_struct) {
+            match parse_expr_with_precedence(parser, PREFIX_PRECEDENCE, allow_struct) {
                 Expr::Bool(b) => Expr::Bool(!b),
                 other => Expr::BoolNeg(
+                    Box::new(other),
+                    (t_span.start, parser.peek_token_span().start).into(),
+                    (expr_start, parser.peek_token_span().start).into(),
+                ),
+            }
+        }
+        // ~ Expr
+        Token::OpBitNot => {
+            let expr_start = parser.peek_token_span().start;
+            match parse_expr_with_precedence(parser, PREFIX_PRECEDENCE, allow_struct) {
+                Expr::Int(i) => Expr::Int(!i),
+                other => Expr::BitNot(
                     Box::new(other),
                     (t_span.start, parser.peek_token_span().start).into(),
                     (expr_start, parser.peek_token_span().start).into(),
