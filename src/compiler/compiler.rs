@@ -76,6 +76,7 @@ use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
 use type_system::collect_direct_fn_calls;
 use type_system::merge_fn_types;
+use type_system::param_type_matches;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
@@ -845,17 +846,24 @@ pub(crate) fn compile_enum_construction(
         state.sources,
         ctx.file_idx,
     );
+    // A payload is checked the way a function parameter is: an instantiation
+    // whose type arguments are `any` lines up with a named one, so a bare
+    // payload-less variant (`Leaf`, which pins nothing and is a `Tree<any>`)
+    // reaches a slot declared `Tree<int>`.
     for (i, expected) in payload_types.iter().enumerate() {
-        functions::check_arg_type(
-            &variant_name,
-            v,
-            ctx,
-            state,
-            args,
-            args_indexes,
-            i,
-            std::slice::from_ref(expected),
-        );
+        let received = args[i].infer_type(v, ctx, state);
+        if !param_type_matches(expected, &received, state.generics) {
+            compiler_errors::error_function_arg_invalid_type(
+                &received,
+                expected,
+                args_indexes[i],
+                &variant_name,
+                None,
+                ctx.file_idx,
+                state.sources,
+                state.type_names(),
+            );
+        }
     }
 
     let pool_idx = {
