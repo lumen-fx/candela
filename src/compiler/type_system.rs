@@ -1688,10 +1688,31 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
     }
 }
 
+/// Whether a value of type `received` fits a field declared `expected`.
+///
+/// `null` fits every field, because it is what an absent value carries.
+/// Everything else is [`param_type_matches`], the rule a parameter uses: a
+/// field declared `any` is a dynamic slot and holds a value of any type, and
+/// two instantiations of one generic declaration line up when their arguments
+/// do.
+///
+/// The one place a field is stricter than a parameter is a dynamic value put
+/// into a typed field. A field is read back at the type it declares and used
+/// without a run-time test, so a `string` stored in an `int` field would be
+/// reported from inside the arithmetic that later read it, or not at all. It
+/// is reported at the line that wrote it instead; name the type with `as_int`
+/// or another downcast to store one.
 #[inline(always)]
 #[must_use]
-pub fn struct_field_type_matches(expected: &DataType, received: &DataType) -> bool {
-    received == &DataType::Null || expected == received
+pub fn struct_field_type_matches(
+    expected: &DataType,
+    received: &DataType,
+    generics: &Generics,
+) -> bool {
+    if *received == DataType::Unknown {
+        return *expected == DataType::Unknown;
+    }
+    received == &DataType::Null || param_type_matches(expected, received, generics)
 }
 
 /// Whether an argument of type `received` satisfies a parameter declared as

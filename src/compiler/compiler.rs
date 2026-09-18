@@ -588,7 +588,7 @@ fn compile_struct_field_type(
     let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
     let field_type = if as_fn_value { declared } else { field_type };
     let field = &state.structs[struct_idx].fields[field_idx];
-    if !struct_field_type_matches(&field.1, &field_type) {
+    if !struct_field_type_matches(&field.1, &field_type, state.generics) {
         compiler_errors::error_struct_field_invalid_type(
             ctx.file_idx,
             name,
@@ -2378,7 +2378,7 @@ fn compile_struct_field_assignment(
         field_struct.fields.iter().enumerate()
     {
         if expected_field_name == field {
-            if !struct_field_type_matches(expected_field_type, &new_val_type) {
+            if !struct_field_type_matches(expected_field_type, &new_val_type, state.generics) {
                 compiler_errors::error_struct_field_invalid_type(
                     ctx.file_idx,
                     struct_name,
