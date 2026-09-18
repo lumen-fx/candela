@@ -18,6 +18,14 @@ fn main() {
     assert::assert_false(set::contains(s, 9));
     assert::assert_eq(set::members(s).len(), 3);
 
+    set::remove(s, 2);
+    assert::assert_false(set::contains(s, 2));
+    assert::assert_eq(set::len(s), 2);
+    set::remove(s, 9); // absent, no effect
+    assert::assert_eq(set::len(s), 2);
+    set::add(s, 2);
+    assert::assert_eq(set::len(s), 3);
+
     // Set algebra.
     let a = set::new();
     set::add(a, 1);

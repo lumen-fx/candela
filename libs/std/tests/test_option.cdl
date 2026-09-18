@@ -8,6 +8,19 @@ import "std/assert" as assert;
 // type.
 fn describe(x) { return str(x); }
 
+// A step that may come back empty, and a test on the payload. Both read the
+// payload back through a downcast, which is how an `any` payload takes part in
+// arithmetic.
+fn half(x) {
+    let n = as_int(x);
+    if n % 2 == 0 {
+        return Some(n / 2);
+    }
+    return None;
+}
+
+fn is_even(x) { return as_int(x) % 2 == 0; }
+
 struct Point { x: int }
 
 fn first(points: Point[]) -> Option<Point> {
@@ -35,6 +48,18 @@ fn main() {
     assert::assert_eq(m.unwrap(), "5");
     let mn = n.map(describe);
     assert::assert_true(mn.is_none());
+
+    // and_then chains a step that may come back empty; map would nest.
+    assert::assert_eq(Some(8).and_then(half).unwrap(), 4);
+    assert::assert_true(s.and_then(half).is_none());
+    assert::assert_true(n.and_then(half).is_none());
+
+    // or falls back, filter drops a payload the test rejects.
+    assert::assert_eq(s.or(Some(99)).unwrap(), 5);
+    assert::assert_eq(n.or(Some(99)).unwrap(), 99);
+    assert::assert_eq(Some(4).filter(is_even).unwrap(), 4);
+    assert::assert_true(s.filter(is_even).is_none());
+    assert::assert_true(n.filter(is_even).is_none());
 
     // A struct payload comes back out as the struct, not as `any`.
     match first([Point { x: 7 }]) {

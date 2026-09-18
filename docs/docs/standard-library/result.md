@@ -121,6 +121,48 @@ r.unwrap_or(default)
 - Returns: the success value, or `default`.
 - Raises: nothing.
 
+### map
+
+```rust
+r.map(f)
+```
+
+- `f`: takes the success value, returns the mapped value.
+- Returns: `Ok(f(v))` for an `Ok(v)`, and the `Err` unchanged. `f` is not called
+  on an `Err`.
+
+### map_err
+
+```rust
+r.map_err(f)
+```
+
+- `f`: takes the error value, returns the mapped error.
+- Returns: `Err(f(e))` for an `Err(e)`, and the `Ok` unchanged. `f` is not
+  called on an `Ok`.
+
+### and_then
+
+```rust
+r.and_then(f)
+```
+
+- `f`: takes the success value and returns a result of its own.
+- Returns: `f(v)` for an `Ok(v)`, and the `Err` unchanged. `f` is not called on
+  an `Err`. Use it to chain steps that may each fail, where `map` would give you
+  a result inside a result.
+
+### ok
+
+```rust
+r.ok()
+```
+
+- Returns: `Some(v)` for an `Ok(v)`, and `None` for an `Err`, which drops the
+  error. The module imports [option](option.md) for this, so a program that
+  imports `std/result` has `Some` and `None` in scope as well, and importing
+  both modules is fine.
+
 ```rust
 import "std/result";
 
@@ -137,6 +179,3 @@ fn main() {
     print(parse_port("http").unwrap_err());
 }
 ```
-
-There is no `map` on `Result`; match on the value when you want to transform one
-side.

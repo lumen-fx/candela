@@ -28,6 +28,11 @@ fn add(s, x) {
     s.insert(x, true);
 }
 
+/// Takes `x` back out. A member the set does not hold is unchanged.
+fn remove(s, x) {
+    s.remove(x);
+}
+
 /// True when `x` is a member.
 fn contains(s, x) {
     return s.contains(x);

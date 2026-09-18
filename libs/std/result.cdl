@@ -11,6 +11,11 @@
 /// The helpers are methods on the value (`r.unwrap()`, `r.is_ok()`). This
 /// module is pure candela and inlines into a `.cdlb`, so it runs under
 /// `candela-vm` with no source tree.
+///
+/// `ok` hands the success side back as an `Option`, so the module imports
+/// `std/option`. A program that imports both gets one `Option`.
+
+import "std/option";
 
 enum Result<T, E> {
     Ok(T),
@@ -62,5 +67,41 @@ impl Result<T, E> {
             Err(e) => { value = default; }
         }
         return value;
+    }
+
+    /// Applies `f` to the success value, returning a new result. An `Err`
+    /// passes through without calling `f`.
+    fn map(self, f) {
+        match self {
+            Ok(v) => { return Ok(f(v)); }
+            Err(e) => { return Err(e); }
+        }
+    }
+
+    /// Applies `f` to the error value, returning a new result. An `Ok` passes
+    /// through without calling `f`.
+    fn map_err(self, f) {
+        match self {
+            Ok(v) => { return Ok(v); }
+            Err(e) => { return Err(f(e)); }
+        }
+    }
+
+    /// Applies `f`, which returns a result of its own, to the success value.
+    /// An `Err` passes through without calling `f`.
+    fn and_then(self, f) {
+        match self {
+            Ok(v) => { return f(v); }
+            Err(e) => { return Err(e); }
+        }
+    }
+
+    /// The success side as an option: `Some` of the value for an `Ok`, and
+    /// `None` for an `Err`, which drops the error.
+    fn ok(self) {
+        match self {
+            Ok(v) => { return Some(v); }
+            Err(e) => { return None; }
+        }
     }
 }
