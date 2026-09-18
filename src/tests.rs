@@ -3838,6 +3838,18 @@ fn compile_report(src: &str, filename: &str) -> String {
     CAPTURED_OUTPUT.with(|o| o.take())
 }
 
+/// Compiles and runs `src` with output captured, and hands back what the
+/// program printed.
+fn run_output(src: &str) -> String {
+    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    let was_capturing = set_capturing(true);
+    let result = run_diag(src, "out.cdl");
+    set_capturing(was_capturing);
+    let printed = CAPTURED_OUTPUT.with(|o| o.take());
+    result.unwrap_or_else(|d| panic!("{}: {printed}", d.message));
+    printed
+}
+
 /// Every diagnostic must carry a plain-text (ANSI-free) message, a non-empty
 /// machine-readable code, and a well-formed byte span into the source.
 fn assert_wellformed(d: &Diagnostic, src: &str) {
@@ -10155,4 +10167,41 @@ pub fn a_name_bound_to_a_function_called_at_two_argument_types_is_reported() {
         }
         "
     );
+}
+
+/// A range loop counts in a register of its own. Counting in the start
+/// literal's register advanced the constant every function compiled before
+/// the loop reads for that literal.
+#[test]
+pub fn a_range_loop_leaves_the_literal_it_starts_from_alone() {
+    let printed = run_output(
+        "
+        fn first(xs: int[]) -> int { return xs[0]; }
+        fn main() {
+            print(first([7, 8, 9]));
+            for i in 0..3 { print(first([7, 8, 9])); }
+            print(first([7, 8, 9]));
+        }
+        ",
+    );
+    assert_eq!(printed, "7\n7\n7\n7\n7\n");
+}
+
+/// A range loop that starts at a variable leaves the variable where it was.
+#[test]
+pub fn a_range_loop_leaves_the_variable_it_starts_from_alone() {
+    let printed = run_output(
+        "
+        fn main() {
+            let s = 1;
+            for i in s..4 { }
+            print(s);
+            let a = 2;
+            let b = 5;
+            for i in a..b { }
+            print(a, b);
+        }
+        ",
+    );
+    assert_eq!(printed, "1\n2\n5\n");
 }
