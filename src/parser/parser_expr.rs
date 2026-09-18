@@ -68,8 +68,8 @@ pub fn add_op(
             (Expr::Bool(x), Expr::Bool(y)) => Expr::Bool(x && y),
             (lhs, rhs) => Expr::BoolAnd(Box::new(lhs), Box::new(rhs), span_l, span_r),
         },
-        Token::OpEq => Expr::Eq(Box::new(lhs), Box::new(rhs)),
-        Token::OpNEq => Expr::NotEq(Box::new(lhs), Box::new(rhs)),
+        Token::OpEq => Expr::Eq(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        Token::OpNEq => Expr::NotEq(Box::new(lhs), Box::new(rhs), span_l, span_r),
         Token::OpInf => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Bool(x < y),
             (Expr::Float(x), Expr::Float(y)) => Expr::Bool(x < y),

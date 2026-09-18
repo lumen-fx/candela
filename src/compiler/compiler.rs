@@ -1331,6 +1331,8 @@ fn compile_match(
                 Box::new(Expr::Eq(
                     Box::new(Expr::Var(obj_var.clone(), span)),
                     Box::new(pat.clone()),
+                    span,
+                    span,
                 )),
                 body.clone(),
                 span,
@@ -1345,6 +1347,8 @@ fn compile_match(
                 Box::new(Expr::Eq(
                     Box::new(Expr::Var(obj_var, span)),
                     Box::new(first_pat.clone()),
+                    span,
+                    span,
                 )),
                 Box::from(output_code),
                 span,
@@ -3900,11 +3904,11 @@ impl Expr {
                     l, *span1, *span2, tgt_id, v, ctx, state, output,
                 ))
             }
-            Self::Eq(l, r) => {
+            Self::Eq(l, r, _, _) => {
                 debug_assert!(uses_id);
                 Some(compile_eq_op(l, r, tgt_id, v, ctx, state, output))
             }
-            Self::NotEq(l, r) => {
+            Self::NotEq(l, r, _, _) => {
                 debug_assert!(uses_id);
                 Some(compile_neq_op(l, r, tgt_id, v, ctx, state, output))
             }
