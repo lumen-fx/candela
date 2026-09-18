@@ -282,9 +282,13 @@ pub fn handle_method_calls(
     let id = obj
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-    state.free_reg(id, v);
 
-    builtin_methods(
+    // The receiver's register stays allocated for as long as the method is
+    // being lowered, because the method's arguments are compiled inside that
+    // call. Releasing it first hands the allocator a register the method still
+    // reads, and an argument that needs one takes it: `s.items.push(s.n)` then
+    // writes `s.n` over the list the push was meant to grow.
+    let result = builtin_methods(
         name,
         id,
         obj_type,
@@ -298,5 +302,7 @@ pub fn handle_method_calls(
         obj_span,
         fn_span,
         args_indexes,
-    )
+    );
+    state.free_reg(id, v);
+    result
 }
