@@ -36,6 +36,19 @@ fn main() {
     assert::assert_eq(m.len(), 3);
     assert::assert_eq(m.get("a"), 10);
 
+    // The keys come back in the order they went in. Overwriting "a" left it
+    // first; removing "b" and inserting it again makes it the newest entry.
+    assert::assert_eq(m.keys(), ["a", "b", "c"]);
+    assert::assert_eq(m.values(), [10, 2, 3]);
+    m.remove("b");
+    m.insert("b", 2);
+    assert::assert_eq(m.keys(), ["a", "c", "b"]);
+
+    // Two maps holding the same entries are equal whatever order built them.
+    let one = {"x": 1, "y": 2};
+    let two = {"y": 2, "x": 1};
+    assert::assert_true(one == two);
+
     // Non-string keys.
     let byint = {};
     byint.insert(1, 100);

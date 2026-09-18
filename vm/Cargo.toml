@@ -43,6 +43,11 @@ embed = []
 
 [dependencies]
 smol_strc = "0.3.6"
+# The map type behind candela's `map`. It keeps entries in insertion order,
+# which is what a program sees whenever it walks a map. `default-features =
+# false` drops the parts that need `std` and the random default hasher; the VM
+# hashes a value's raw bits with its own `DataHash`.
+indexmap = { version = "2.14.2", default-features = false }
 ariadne = "0.6.0"
 memchr = "2.8.3"
 lexical-core = "1.0.6"

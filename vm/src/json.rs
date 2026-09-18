@@ -13,8 +13,7 @@
 use crate::data::{Data, NULL};
 use crate::rt::EnumType;
 use crate::rt::Struct;
-use crate::vm::{MapPool, ObjectPool, StringPool};
-use std::collections::HashMap;
+use crate::vm::{CandelaMap, MapPool, ObjectPool, StringPool};
 
 /// Stores a parsed string in the pool and boxes it.
 ///
@@ -98,7 +97,7 @@ impl JsonParser<'_> {
         str_pool: &mut StringPool,
     ) -> Result<Data, &'static str> {
         self.pos += 1; // consume '{'
-        let mut map: HashMap<Data, Data, _> = HashMap::default();
+        let mut map = CandelaMap::default();
         self.skip_ws();
         if self.peek() == Some(b'}') {
             self.pos += 1;

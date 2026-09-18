@@ -11051,3 +11051,146 @@ pub fn type_writes_an_unannotated_function_with_any() {
         crate::data::TRUE
     );
 }
+
+// ---------------------------------------------------------------------------
+// Map order.
+//
+// A map is walked in the order its keys went in. These pin the three rules a
+// program can lean on: a first insert appends, an insert over a key already
+// there keeps that key's place, and a removed key put back goes to the end.
+// ---------------------------------------------------------------------------
+
+/// A literal prints the way it was written, not in any order the hasher picks.
+#[test]
+pub fn a_map_literal_prints_in_source_order() {
+    let printed = run_output(
+        "
+        fn main() {
+            print({\"b\": 1, \"a\": 2, \"c\": 3});
+        }
+        ",
+    );
+    assert_eq!(printed, "{\"b\":1,\"a\":2,\"c\":3}\n");
+}
+
+/// Each insert of a new key appends, so a `for` loop hands the keys back in
+/// the order they were inserted.
+#[test]
+pub fn iterating_a_map_walks_the_keys_in_insertion_order() {
+    let printed = run_output(
+        "
+        fn main() {
+            let m = {};
+            m.insert(\"e\", 5);
+            m.insert(\"d\", 4);
+            m.insert(\"c\", 3);
+            m.insert(\"b\", 2);
+            m.insert(\"a\", 1);
+            for k in m { print(k); }
+        }
+        ",
+    );
+    assert_eq!(printed, "e\nd\nc\nb\na\n");
+}
+
+/// `keys` and `values` read the same order the loop does, so the two lists
+/// line up entry for entry.
+#[test]
+pub fn map_keys_and_values_come_back_in_insertion_order() {
+    let printed = run_output(
+        "
+        fn main() {
+            let m = {};
+            m.insert(\"e\", 5);
+            m.insert(\"d\", 4);
+            m.insert(\"c\", 3);
+            print(m.keys());
+            print(m.values());
+        }
+        ",
+    );
+    assert_eq!(printed, "[\"e\",\"d\",\"c\"]\n[5,4,3]\n");
+}
+
+/// Taking a key out and putting it back makes it the newest entry. The entries
+/// that stood after the removed one keep their order.
+#[test]
+pub fn a_reinserted_map_key_goes_to_the_end() {
+    let printed = run_output(
+        "
+        fn main() {
+            let m = {\"a\": 1, \"b\": 2, \"c\": 3};
+            m.remove(\"a\");
+            print(m.keys());
+            m.insert(\"a\", 9);
+            print(m.keys());
+        }
+        ",
+    );
+    assert_eq!(printed, "[\"b\",\"c\"]\n[\"b\",\"c\",\"a\"]\n");
+}
+
+/// Writing over a key that is already there replaces the value and leaves the
+/// entry where it stood.
+#[test]
+pub fn overwriting_a_map_key_keeps_its_place() {
+    let printed = run_output(
+        "
+        fn main() {
+            let m = {\"a\": 1, \"b\": 2, \"c\": 3};
+            m.insert(\"a\", 10);
+            print(m.keys());
+            print(m.values());
+        }
+        ",
+    );
+    assert_eq!(printed, "[\"a\",\"b\",\"c\"]\n[10,2,3]\n");
+}
+
+/// A map keyed by ints orders by insertion too; nothing sorts the keys.
+#[test]
+pub fn an_int_keyed_map_keeps_insertion_order() {
+    let printed = run_output(
+        "
+        fn main() {
+            let m = {};
+            m.insert(3, 30);
+            m.insert(1, 10);
+            m.insert(2, 20);
+            print(m);
+        }
+        ",
+    );
+    assert_eq!(printed, "{3:30,1:10,2:20}\n");
+}
+
+/// A parsed json object holds its keys in document order, so writing it back
+/// out reproduces the document's key order.
+#[test]
+pub fn a_json_object_round_trips_with_its_key_order() {
+    let printed = run_output(
+        "
+        fn main() {
+            print(json_stringify(json_parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
+        }
+        ",
+    );
+    assert_eq!(printed, "{\"z\":1,\"m\":2,\"a\":3}\n");
+}
+
+/// Order is what a walk sees, not what equality tests: two maps holding the
+/// same entries are equal however they were built.
+#[test]
+pub fn two_maps_built_in_different_orders_are_equal() {
+    let printed = run_output(
+        "
+        fn main() {
+            let one = {\"x\": 1, \"y\": 2};
+            let two = {\"y\": 2, \"x\": 1};
+            print(one == two, one != two);
+            print(one.keys(), two.keys());
+        }
+        ",
+    );
+    assert_eq!(printed, "true\nfalse\n[\"x\",\"y\"]\n[\"y\",\"x\"]\n");
+}

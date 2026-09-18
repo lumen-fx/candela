@@ -113,8 +113,10 @@ been raised for:
 - the indirect call, which dispatches on the function a value holds
 - the instruction that builds a function value, which tells a function from the
   list it is built as
-- the string comparison instructions, which sit among the other comparisons and
-  so renumber the instructions after them
+- the string comparison and bitwise instructions, which sit among the existing
+  instructions and so renumber the ones after them
+- maps keeping insertion order, which made the order of each map's recorded
+  pairs the order the program built them in
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

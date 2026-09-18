@@ -59,7 +59,6 @@ fn main() {
 }
 ```
 
-A map is a hash map, so the order of `keys`, `values`, and `for k in m` is
-unspecified and is not insertion order. `keys` and `values` walk the map the same
-way, so their results line up entry for entry. Sort the result when you need a
-fixed order.
+A map keeps its entries in the order they went in, and every walk over one
+follows that order. The rules for where an entry lands are in
+[built-in functions](builtins.md).
