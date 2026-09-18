@@ -1,15 +1,21 @@
 use super::expr::{Expr, Span};
+use crate::cold_path;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_data::{Ctx, State};
 use crate::compiler::compiler_errors::error_no_such_method;
+use crate::compiler::compiler_errors::error_operator_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
+use crate::compiler::expr::OperatorForm;
 use crate::compiler::expr::mangle_method;
+use crate::compiler::expr::operator_method;
+use crate::compiler::expr::operator_method_answers_bool;
 use crate::compiler::functions::handle_functions;
 use crate::compiler::functions::handle_value_call;
 use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
 use crate::compiler::type_system::TypeExpr;
+use crate::compiler::type_system::infer_user_fn_return_type;
 use crate::compiler::type_system::resolve_call_type_args;
 use crate::compiler::type_system::struct_field_holds_fn;
 use crate::instr::Instr;
@@ -305,4 +311,182 @@ pub fn handle_method_calls(
     );
     state.free_reg(id, v);
     result
+}
+
+/// The operator method a call site resolved to, and how the call reaches it.
+pub struct OperatorCall {
+    fn_id: usize,
+    /// The mangled symbol, which is what a diagnostic about the call names.
+    name: SmolStr,
+    /// The operands in the order the call passes them, which is the order they
+    /// are evaluated in. The derived `>` swaps them, so its right operand runs
+    /// first.
+    args: Vec<Expr>,
+    arg_spans: Vec<Span>,
+    /// The type the operator produces.
+    return_type: DataType,
+    /// `!=` is `==` with the answer flipped.
+    negated: bool,
+}
+
+/// Resolves an operator on a struct or enum operand to the method that type
+/// defines for it, or answers `None` when it defines none.
+///
+/// Only the left operand's type is consulted, so `1 + v` is the ordinary
+/// operator error however `Vec2` defines `+`: there is one spelling of an
+/// operator method and it belongs to the type on the left. A `None` answer
+/// leaves the caller to report the operator the way it always has.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_operator_method(
+    symbol: &str,
+    l: &Expr,
+    r: Option<&Expr>,
+    t_l: &DataType,
+    t_r: &DataType,
+    span_l: Span,
+    span_r: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<OperatorCall> {
+    let (method, form) = operator_method(symbol)?;
+    let type_name = match t_l {
+        DataType::Struct(struct_id) => state.structs[*struct_id as usize].name.clone(),
+        DataType::Enum(enum_id) => state.enums[*enum_id as usize].name.clone(),
+        _ => return None,
+    };
+    let mangled = mangle_method(&type_name, method);
+    let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
+
+    let (args, arg_spans) = match (r, form) {
+        // A unary operator names its operand with the second span, the way
+        // its report does: the first covers the operator itself.
+        (None, _) => (vec![l.clone()], vec![span_r]),
+        // A derived operator is the method applied to the same two types, so
+        // both operands have to be of the receiver's type whatever the
+        // method's second parameter says.
+        (Some(r), OperatorForm::Swapped | OperatorForm::Negated) => {
+            if t_l != t_r {
+                return None;
+            }
+            if form == OperatorForm::Swapped {
+                (vec![r.clone(), l.clone()], vec![span_r, span_l])
+            } else {
+                (vec![l.clone(), r.clone()], vec![span_l, span_r])
+            }
+        }
+        (Some(r), OperatorForm::Direct) => {
+            // A second parameter left un-annotated means the other operand is
+            // of the receiver's type; a declared one accepts what it declares,
+            // which is how `v * 2.0` reaches `fn *(self, k: float)`.
+            let declared = state.fns[fn_id].args.get(1).and_then(|(_, t)| t.as_ref());
+            if declared.is_none() && t_l != t_r {
+                return None;
+            }
+            (vec![l.clone(), r.clone()], vec![span_l, span_r])
+        }
+    };
+
+    let span = span_l.extend(span_r);
+    if state.fns[fn_id].returns_null {
+        cold_path();
+        error_operator_method(
+            "Operator method returns nothing",
+            &format!(
+                "The {method} method on {type_name} hands nothing back, so this operator has no value"
+            ),
+            "An operator produces a value, so the method it reaches returns one.",
+            "operator_method_return_type",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+
+    let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
+    let return_type = infer_user_fn_return_type(fn_id, &arg_types, &[], &mangled, v, ctx, state);
+    if operator_method_answers_bool(method) && return_type != DataType::Bool {
+        cold_path();
+        let actual = state.type_names().of(&return_type);
+        error_operator_method(
+            "Operator method returns the wrong type",
+            &format!("The {method} method on {type_name} returns {actual}, not bool"),
+            "The ==, < and <= methods answer a question about two values, so each hands back a bool. !=, > and >= are derived from them.",
+            "operator_method_return_type",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+
+    Some(OperatorCall {
+        fn_id,
+        name: mangled,
+        args,
+        arg_spans,
+        return_type,
+        negated: form == OperatorForm::Negated,
+    })
+}
+
+/// The type an operator produces on a receiver that defines a method for it.
+#[allow(clippy::too_many_arguments)]
+pub fn infer_operator_method(
+    symbol: &str,
+    l: &Expr,
+    r: Option<&Expr>,
+    t_l: &DataType,
+    t_r: &DataType,
+    span_l: Span,
+    span_r: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<DataType> {
+    resolve_operator_method(symbol, l, r, t_l, t_r, span_l, span_r, v, ctx, state)
+        .map(|call| call.return_type)
+}
+
+/// Lowers an operator on a struct or enum operand to a call of the method that
+/// type defines for it, through the path an ordinary method call takes: the
+/// VM sees a plain function call and needs no instruction of its own.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_operator_method(
+    symbol: &str,
+    l: &Expr,
+    r: Option<&Expr>,
+    t_l: &DataType,
+    t_r: &DataType,
+    span_l: Span,
+    span_r: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Option<u16> {
+    let call = resolve_operator_method(symbol, l, r, t_l, t_r, span_l, span_r, v, ctx, state)?;
+    let span = span_l.extend(span_r);
+    let result = handle_user_function(
+        &call.name,
+        call.fn_id,
+        output,
+        v,
+        ctx,
+        state,
+        if call.negated { None } else { tgt_id },
+        &call.args,
+        span,
+        &call.arg_spans,
+        &[],
+        None,
+    );
+    if !call.negated {
+        return result;
+    }
+    let answered = result.unwrap_id();
+    state.free_reg(answered, v);
+    let id = state.alloc_reg_tgt(tgt_id);
+    output.push(Instr::NegBool(answered, id));
+    Some(id)
 }

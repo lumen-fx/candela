@@ -88,6 +88,12 @@ method's type arguments, so it refuses `p.x<int>::y(1)` where this grammar
 accepts it. Accepting a little more keeps highlighting steady while you type,
 and the language server is what reports either one.
 
+Inside an `impl` block a method may be named by an operator symbol, which is
+how a type defines that operator: `fn +(self, other: Vec2)` parses as an
+`operator_declaration` whose name is the symbol. This is the one place `fn`
+takes something other than an identifier, and such a method carries no type
+parameters of its own.
+
 A macro invocation, `name!( ... )`, parses as an expression whose body is one
 opaque region. The region ends at the parenthesis that balances the one that
 opened it, and a parenthesis inside a string literal or after `//` does not

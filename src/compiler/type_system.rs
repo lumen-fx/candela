@@ -1,7 +1,11 @@
 use super::expr::Expr;
 use super::expr::METHOD_SEP;
 use super::expr::Span;
+use super::expr::UNARY_MINUS_METHOD;
+use super::expr::is_operator_method;
+use super::expr::is_unary_operator_method;
 use super::expr::mangle_method;
+use super::expr::self_operator_method;
 use super::expr::symbol_of_expr;
 use crate::compiler::FileNamespaces;
 use crate::compiler::Namespace;
@@ -21,6 +25,7 @@ use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_missing_return;
 use crate::compiler::compiler_errors::error_op;
+use crate::compiler::compiler_errors::error_operator_method;
 use crate::compiler::compiler_errors::error_struct_unknown_field;
 use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_args_on_plain_function;
@@ -38,6 +43,7 @@ use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::dyn_lib_receiver;
+use crate::compiler::methods::infer_operator_method;
 use crate::compiler::resolve_enum_variant;
 use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
@@ -1152,6 +1158,104 @@ fn is_type_parameter(name: &SmolStr, file_idx: u16, ctx: &TypeCtx<'_>) -> bool {
             })
 }
 
+/// The bare name of the type an `impl` block attaches to, with the module
+/// qualifier and the type arguments taken off: `g::Cell<int>` reads `Cell`.
+fn impl_base_name(type_name: &str) -> &str {
+    let without_args = type_name.split('<').next().unwrap_or(type_name);
+    without_args.rsplit("::").next().unwrap_or(without_args)
+}
+
+/// The name an annotation is written with, for the comparison that keeps a
+/// receiver's declared type the one its `impl` block names.
+fn annotation_base_name(annotation: &TypeExpr) -> Option<&SmolStr> {
+    match annotation {
+        TypeExpr::Identifier(name, _) => Some(name),
+        TypeExpr::NamespacedIdentifier(path, _) => path.last(),
+        TypeExpr::Generic(generic) => Some(&generic.name),
+        TypeExpr::Array(_) | TypeExpr::Map(_, _) | TypeExpr::Union(_) | TypeExpr::Fn(_) => None,
+    }
+}
+
+/// Checks a method named by an operator symbol where it is declared.
+///
+/// `mangled` carries both halves of the declaration, the type the `impl` block
+/// names and the operator, so one call covers the whole rule: the built-in
+/// types settle their own operators and take none, an operator takes exactly
+/// the operands it has, and the first parameter is the receiver. A method
+/// named with an identifier passes straight through.
+pub fn check_operator_method(
+    mangled: &str,
+    args: &[(SmolStr, Option<TypeExpr>)],
+    name_span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) {
+    let Some((type_name, method)) = mangled.split_once(METHOD_SEP) else {
+        return;
+    };
+    if !is_operator_method(method) {
+        return;
+    }
+    let symbol = if method == UNARY_MINUS_METHOD {
+        "-"
+    } else {
+        method
+    };
+    if matches!(
+        type_name,
+        "int" | "float" | "string" | "bool" | "list" | "map"
+    ) {
+        cold_path();
+        error_operator_method(
+            "Operator on a built-in type",
+            &format!("{type_name} does not take a {symbol} method"),
+            "What an operator means on a built-in type is part of the language. Put the value in a struct of your own and define the operator there.",
+            "operator_method_on_builtin",
+            name_span,
+            file_idx,
+            sources,
+        );
+    }
+    let wanted = usize::from(!is_unary_operator_method(method)) + 1;
+    if args.len() != wanted {
+        cold_path();
+        error_operator_method(
+            "Operator method takes the wrong number of parameters",
+            &format!(
+                "{symbol} on {type_name} is declared with {} parameter{}",
+                args.len(),
+                if args.len() == 1 { "" } else { "s" }
+            ),
+            if symbol == "-" {
+                "- takes the receiver and the value to subtract, or the receiver alone to negate it."
+            } else if wanted == 1 {
+                "A unary operator takes the receiver and nothing else."
+            } else {
+                "A binary operator takes the receiver and the other operand."
+            },
+            "operator_method_arity",
+            name_span,
+            file_idx,
+            sources,
+        );
+    }
+    if let Some((_, Some(annotation))) = args.first() {
+        let base = impl_base_name(type_name);
+        if annotation_base_name(annotation).is_none_or(|written| written != base) {
+            cold_path();
+            error_operator_method(
+                "Operator method receives another type",
+                &format!("The first parameter of {symbol} is not a {base}"),
+                "The first parameter of a method is the receiver, and its type is the one the impl block names. Leave it un-annotated or annotate it with that type.",
+                "operator_method_receiver",
+                name_span,
+                file_idx,
+                sources,
+            );
+        }
+    }
+}
+
 /// Registers one method of an instantiated `impl` block as the mangled free
 /// function its call sites resolve to.
 fn lower_method(
@@ -1165,6 +1269,7 @@ fn lower_method(
         return;
     };
     let mangled = mangle_method(type_name, method_name);
+    check_operator_method(&mangled, args, *name_span, file_idx, ctx.sources);
     if let Some(existing) = ctx.fns.iter().find(|f| f.name == mangled) {
         crate::compiler::compiler_errors::error_function_already_defined(
             existing,
@@ -1928,6 +2033,13 @@ pub fn collect_direct_fn_calls(
 ) {
     let mut expr_stack: Vec<&Expr> = content.iter().collect();
     while let Some(expression) = expr_stack.pop() {
+        // An operator on `self` is a call of the method the receiver's type
+        // defines for it, so it counts the same as `self.method(...)` does.
+        if let Some(type_name) = self_type
+            && let Some(method) = self_operator_method(expression)
+        {
+            calls.push(mangle_method(type_name, method));
+        }
         match expression {
             Expr::FunctionCall(args, namespace, _, _, _) => {
                 calls.push(namespace.last().unwrap().clone());
@@ -2899,6 +3011,52 @@ pub(crate) fn struct_field_holds_fn(struct_id: u16, field: &str, state: &State<'
         })
 }
 
+/// The type an operator produces on operands the built-in rules do not accept.
+///
+/// A struct or an enum reaches the method its type defines for that operator;
+/// anything else is the operator error it has always been. A unary operator is
+/// reported against its one operand, which is the shape [`error_op`] reads from
+/// a `null` left type.
+#[allow(clippy::too_many_arguments)]
+fn operator_result_type(
+    symbol: &str,
+    l: &Expr,
+    r: Option<&Expr>,
+    t_l: &DataType,
+    t_r: &DataType,
+    span_l: Span,
+    span_r: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> DataType {
+    if let Some(result) =
+        infer_operator_method(symbol, l, r, t_l, t_r, span_l, span_r, v, ctx, state)
+    {
+        return result;
+    }
+    let reported = if symbol == UNARY_MINUS_METHOD {
+        "-"
+    } else {
+        symbol
+    };
+    let (report_l, report_r) = if r.is_none() {
+        (&DataType::Null, t_l)
+    } else {
+        (t_l, t_r)
+    };
+    error_op(
+        report_l,
+        report_r,
+        reported,
+        span_l,
+        span_r,
+        ctx.file_idx,
+        state.sources,
+        state.type_names(),
+    );
+}
+
 impl Expr {
     /// Infers this expression's static [`DataType`] without emitting code.
     ///
@@ -2988,18 +3146,18 @@ impl Expr {
                     (DataType::Int, DataType::Int) => DataType::Int,
                     (DataType::String, DataType::String) => DataType::String,
                     (DataType::Array(t1), DataType::Array(t2)) => DataType::Array(t1.or(t2)),
-                    (l, r) => {
-                        error_op(
-                            &l,
-                            &r,
-                            "+",
-                            *span_l,
-                            *span_r,
-                            ctx.file_idx,
-                            state.sources,
-                            state.type_names(),
-                        );
-                    }
+                    (l, r) => operator_result_type(
+                        "+",
+                        x,
+                        Some(&**y),
+                        &l,
+                        &r,
+                        *span_l,
+                        *span_r,
+                        v,
+                        ctx,
+                        state,
+                    ),
                 }
             }
             Self::Mul(x, y, span_l, span_r)
@@ -3015,18 +3173,18 @@ impl Expr {
                     }
                     (DataType::Float, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
-                    (l, r) => {
-                        error_op(
-                            &l,
-                            &r,
-                            symbol_of_expr(self),
-                            *span_l,
-                            *span_r,
-                            ctx.file_idx,
-                            state.sources,
-                            state.type_names(),
-                        );
-                    }
+                    (l, r) => operator_result_type(
+                        symbol_of_expr(self),
+                        x,
+                        Some(&**y),
+                        &l,
+                        &r,
+                        *span_l,
+                        *span_r,
+                        v,
+                        ctx,
+                        state,
+                    ),
                 }
             }
             Self::BitAnd(x, y, span_l, span_r)
@@ -3041,18 +3199,18 @@ impl Expr {
                         t
                     }
                     (DataType::Int, DataType::Int) => DataType::Int,
-                    (l, r) => {
-                        error_op(
-                            &l,
-                            &r,
-                            symbol_of_expr(self),
-                            *span_l,
-                            *span_r,
-                            ctx.file_idx,
-                            state.sources,
-                            state.type_names(),
-                        );
-                    }
+                    (l, r) => operator_result_type(
+                        symbol_of_expr(self),
+                        x,
+                        Some(&**y),
+                        &l,
+                        &r,
+                        *span_l,
+                        *span_r,
+                        v,
+                        ctx,
+                        state,
+                    ),
                 }
             }
             Self::Sup(x, y, span_l, span_r)
@@ -3065,15 +3223,17 @@ impl Expr {
                     | (DataType::Float, DataType::Float)
                     | (DataType::Int, DataType::Int)
                     | (DataType::String, DataType::String) => DataType::Bool,
-                    (l, r) => error_op(
+                    (l, r) => operator_result_type(
+                        symbol_of_expr(self),
+                        x,
+                        Some(&**y),
                         &l,
                         &r,
-                        symbol_of_expr(self),
                         *span_l,
                         *span_r,
-                        ctx.file_idx,
-                        state.sources,
-                        state.type_names(),
+                        v,
+                        ctx,
+                        state,
                     ),
                 }
             }
@@ -3099,29 +3259,33 @@ impl Expr {
                 DataType::Float => DataType::Float,
                 DataType::Int => DataType::Int,
                 DataType::Unknown => DataType::Unknown,
-                operand_type => error_op(
-                    &DataType::Null,
+                operand_type => operator_result_type(
+                    UNARY_MINUS_METHOD,
+                    e,
+                    None,
                     &operand_type,
-                    "-",
+                    &operand_type,
                     *span_l,
                     *span_r,
-                    ctx.file_idx,
-                    state.sources,
-                    state.type_names(),
+                    v,
+                    ctx,
+                    state,
                 ),
             },
             Self::BitNot(e, span_l, span_r) => match e.infer_type(v, ctx, state) {
                 DataType::Int => DataType::Int,
                 DataType::Unknown => DataType::Unknown,
-                operand_type => error_op(
-                    &DataType::Null,
-                    &operand_type,
+                operand_type => operator_result_type(
                     "~",
+                    e,
+                    None,
+                    &operand_type,
+                    &operand_type,
                     *span_l,
                     *span_r,
-                    ctx.file_idx,
-                    state.sources,
-                    state.type_names(),
+                    v,
+                    ctx,
+                    state,
                 ),
             },
             Self::BoolNeg(e, span_l, span_r) => match e.infer_type(v, ctx, state) {

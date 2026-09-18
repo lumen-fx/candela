@@ -52,6 +52,10 @@ let total = float(count) + 2.0;
 number. Arithmetic on `int` wraps at the ends of that range. See
 [types](../language/types.md).
 
+That rule is about the built-in types. A struct or an enum of your own settles
+what an operator on it accepts, including a second operand of another type; see
+[user types](#user-types) below.
+
 ## Arithmetic
 
 | Operator | Operand types | Result |
@@ -189,6 +193,38 @@ evaluated when the left one already settles the answer. That holds in a
 condition, in a `let`, in an argument, and in a returned expression alike, so a
 right operand with a side effect runs only when it is reached.
 
+## User types
+
+A struct or an enum defines an operator by declaring a method named with the
+symbol, and the operator on a value of that type calls it. See
+[methods](../language/methods.md).
+
+```rust
+impl Vec2 {
+    fn +(self, other: Vec2) -> Vec2 {
+        return Vec2 { x: self.x + other.x, y: self.y + other.y };
+    }
+}
+```
+
+| Operators | Form |
+| --- | --- |
+| `+` `-` `*` `/` `%` `^` `&` `\|` `^^` `<<` `>>` | `fn op(self, other)` |
+| `==` `<` `<=` | `fn op(self, other) -> bool` |
+| `-` `~` | `fn op(self)` |
+
+`-` is the one symbol with both forms, and the parameter count says which is
+being declared. `!=`, `>` and `>=` have no method: they come from `==`, `<` and
+`<=`. A derived comparison swaps its operands, so it evaluates the right one
+first.
+
+The other operand is of the receiver's type unless the method declares
+otherwise. Only the left operand picks the method, so `2.0 * v` stays a type
+error however `Vec2` defines `*`. The built-in types are closed: an operator
+method inside `impl int` or `impl string` is a compile error. `&&`, `||`, `!`,
+`=` and the compound assignments are not defined by a type; the compound forms
+apply the matching operator instead.
+
 ## Assignment
 
 `=` assigns to a variable, an array element, or a struct field:
@@ -213,6 +249,9 @@ counts[i] += 1;
 point.x *= 2;
 flags |= read;
 ```
+
+A compound form on a value of your own type applies the operator that type
+defines, so `v += w` reaches its `+` method and needs nothing of its own.
 
 Use `let` to introduce a name and `=` to change one; see
 [variables](../language/variables.md).

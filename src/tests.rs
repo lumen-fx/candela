@@ -11514,3 +11514,454 @@ pub fn two_maps_built_in_different_orders_are_equal() {
     );
     assert_eq!(printed, "true\nfalse\n[\"x\",\"y\"]\n[\"y\",\"x\"]\n");
 }
+
+// ---------------------------------------------------------------------------
+// Operators on your own types.
+//
+// A method named by an operator symbol is what that operator reaches on a
+// receiver of the type the `impl` block names. Resolution is entirely in the
+// compiler: the lowered call is an ordinary function call, so none of these
+// programs needs an instruction the VM did not already have.
+// ---------------------------------------------------------------------------
+
+/// Every binary operator a type may define, on one struct.
+#[test]
+pub fn a_struct_defines_every_binary_operator() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+
+        impl N {
+            fn +(self, other: N) -> N { return N { v: self.v + other.v }; }
+            fn -(self, other: N) -> N { return N { v: self.v - other.v }; }
+            fn *(self, other: N) -> N { return N { v: self.v * other.v }; }
+            fn /(self, other: N) -> N { return N { v: self.v / other.v }; }
+            fn %(self, other: N) -> N { return N { v: self.v % other.v }; }
+            fn ^(self, other: N) -> N { return N { v: self.v ^ other.v }; }
+            fn &(self, other: N) -> N { return N { v: self.v & other.v }; }
+            fn |(self, other: N) -> N { return N { v: self.v | other.v }; }
+            fn ^^(self, other: N) -> N { return N { v: self.v ^^ other.v }; }
+            fn <<(self, other: N) -> N { return N { v: self.v << other.v }; }
+            fn >>(self, other: N) -> N { return N { v: self.v >> other.v }; }
+        }
+
+        fn main() {
+            let a = N { v: 12 };
+            let b = N { v: 5 };
+            let two = N { v: 2 };
+            print((a + b).v, (a - b).v, (a * b).v);
+            print((a / b).v, (a % b).v, (b ^ two).v);
+            print((a & b).v, (a | b).v, (a ^^ b).v);
+            print((a << two).v, (a >> two).v);
+        }
+        ",
+    );
+    assert_eq!(printed, "17\n7\n60\n2\n2\n25\n4\n13\n9\n48\n3\n");
+}
+
+/// The two prefix operators a type may define. `-` has a binary form as well,
+/// and the parameter count tells them apart, so one type carries both.
+#[test]
+pub fn a_struct_defines_both_prefix_operators() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+
+        impl N {
+            fn -(self) -> N { return N { v: -self.v }; }
+            fn ~(self) -> N { return N { v: ~self.v }; }
+            fn -(self, other: N) -> N { return N { v: self.v - other.v }; }
+        }
+
+        fn main() {
+            let a = N { v: 5 };
+            print((-a).v, (~a).v, (a - N { v: 2 }).v);
+        }
+        ",
+    );
+    assert_eq!(printed, "-5\n-6\n3\n");
+}
+
+/// `!=` has no method of its own: it is the type's `==` with the answer
+/// flipped.
+#[test]
+pub fn not_equal_comes_from_the_equality_method() {
+    let printed = run_output(
+        "
+        struct Ver { major: int, patch: int }
+
+        impl Ver {
+            fn ==(self, other: Ver) -> bool { return self.major == other.major; }
+        }
+
+        fn main() {
+            let a = Ver { major: 1, patch: 0 };
+            let b = Ver { major: 1, patch: 9 };
+            let c = Ver { major: 2, patch: 0 };
+            print(a == b, a != b);
+            print(a == c, a != c);
+        }
+        ",
+    );
+    assert_eq!(printed, "true\nfalse\nfalse\ntrue\n");
+}
+
+/// `>` and `>=` are the type's `<` and `<=` with the operands swapped, so a
+/// type writes two methods and gets four operators.
+#[test]
+pub fn greater_than_comes_from_the_less_than_method() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+
+        impl N {
+            fn <(self, other: N) -> bool { return self.v < other.v; }
+            fn <=(self, other: N) -> bool { return self.v <= other.v; }
+        }
+
+        fn main() {
+            let small = N { v: 1 };
+            let big = N { v: 3 };
+            print(small < big, big < small);
+            print(small > big, big > small);
+            print(small >= small, small >= big, big >= small);
+        }
+        ",
+    );
+    assert_eq!(printed, "true\nfalse\nfalse\ntrue\ntrue\nfalse\ntrue\n");
+}
+
+/// The swap is in the operands, so the right one is evaluated first. A program
+/// whose operands have side effects sees that order.
+#[test]
+pub fn a_derived_comparison_evaluates_the_right_operand_first() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+
+        impl N {
+            fn <(self, other: N) -> bool { return self.v < other.v; }
+        }
+
+        fn note(log: int[], tag: int) -> N {
+            log.push(tag);
+            return N { v: tag };
+        }
+
+        fn main() {
+            let log = [];
+            print(note(log, 1) > note(log, 2));
+            print(log);
+        }
+        ",
+    );
+    assert_eq!(printed, "false\n[2,1]\n");
+}
+
+/// A compound assignment is the operator applied to the current value, on
+/// every target an assignment takes.
+#[test]
+pub fn compound_assignment_reaches_an_operator_method() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+        struct Holder { n: N }
+
+        impl N {
+            fn +(self, other: N) -> N { return N { v: self.v + other.v }; }
+            fn *(self, other: N) -> N { return N { v: self.v * other.v }; }
+        }
+
+        fn main() {
+            let a = N { v: 1 };
+            a += N { v: 2 };
+            let row = [N { v: 10 }];
+            row[0] += N { v: 5 };
+            let p = Holder { n: N { v: 100 } };
+            p.n *= N { v: 3 };
+            print(a.v, row[0].v, p.n.v);
+        }
+        ",
+    );
+    assert_eq!(printed, "3\n15\n300\n");
+}
+
+/// The other operand takes whatever the method declares, so a vector scales by
+/// a plain number.
+#[test]
+pub fn a_declared_second_parameter_takes_another_type() {
+    let printed = run_output(
+        "
+        struct Vec2 { x: float, y: float }
+
+        impl Vec2 {
+            fn *(self, k: float) -> Vec2 { return Vec2 { x: self.x * k, y: self.y * k }; }
+        }
+
+        fn main() {
+            let v = Vec2 { x: 1.5, y: 2.0 } * 2.0;
+            print(v.x, v.y);
+        }
+        ",
+    );
+    assert_eq!(printed, "3.0\n4.0\n");
+}
+
+/// A second parameter left un-annotated means the other operand is of the
+/// receiver's type. Anything else is the operator error it has always been.
+#[test]
+pub fn an_unannotated_second_parameter_means_the_receivers_type() {
+    let printed = run_output(
+        "
+        struct N { v: int }
+
+        impl N {
+            fn +(self, other) -> N { return N { v: self.v + other.v }; }
+        }
+
+        fn main() { print((N { v: 1 } + N { v: 2 }).v); }
+        ",
+    );
+    assert_eq!(printed, "3\n");
+
+    let src = "
+        struct N { v: int }
+        impl N { fn +(self, other) -> N { return N { v: self.v + other.v }; } }
+        fn main() { print(N { v: 1 } + 3); }
+    ";
+    let d = compile_diag(src, "mixed.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+}
+
+/// An `impl` block on a generic type carries its operators into every
+/// instantiation.
+#[test]
+pub fn a_generic_type_defines_an_operator_once() {
+    let printed = run_output(
+        "
+        struct Pair<T> { a: T, b: T }
+
+        impl Pair<T> {
+            fn +(self, other: Pair<T>) -> Pair<T> {
+                return Pair<T> { a: self.a + other.a, b: self.b + other.b };
+            }
+        }
+
+        fn main() {
+            let nums = Pair<int> { a: 1, b: 2 } + Pair<int> { a: 10, b: 20 };
+            let words = Pair<string> { a: \"x\", b: \"y\" } + Pair<string> { a: \"1\", b: \"2\" };
+            print(nums.a, nums.b);
+            print(words.a, words.b);
+        }
+        ",
+    );
+    assert_eq!(printed, "11\n22\nx1\ny2\n");
+}
+
+/// An enum takes operators the same way a struct does.
+#[test]
+pub fn an_enum_defines_an_operator() {
+    let printed = run_output(
+        "
+        enum Bit { Off, On }
+
+        impl Bit {
+            fn |(self, other: Bit) -> Bit {
+                let answer = other;
+                match self {
+                    On => { answer = Bit::On; }
+                    Off => { answer = other; }
+                }
+                return answer;
+            }
+        }
+
+        fn main() {
+            print(Bit::Off | Bit::On);
+            print(Bit::Off | Bit::Off);
+        }
+        ",
+    );
+    assert_eq!(printed, "On\nOff\n");
+}
+
+/// `==`, `<` and `<=` answer a question, so each returns a `bool`. The check
+/// is at the operator, against what the method actually hands back.
+#[test]
+pub fn a_comparison_method_returning_another_type_is_refused() {
+    let src = "
+        struct N { v: int }
+        impl N { fn <(self, other: N) -> int { return 1; } }
+        fn main() { print(N { v: 1 } < N { v: 2 }); }
+    ";
+    let d = compile_diag(src, "ret.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_return_type");
+    assert!(d.message.contains("bool"), "{}", d.message);
+}
+
+/// What an operator means on a built-in type is part of the language.
+#[test]
+pub fn an_operator_on_a_builtin_type_is_refused() {
+    let src = "
+        impl int { fn +(self, other: int) -> int { return 0; } }
+        fn main() { print(1); }
+    ";
+    let d = compile_diag(src, "builtin.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_on_builtin");
+    assert!(d.message.contains('+'), "{}", d.message);
+}
+
+/// An operator a type cannot define is refused where it is written, and the
+/// report says what derives the three comparisons that have no method.
+#[test]
+pub fn an_operator_a_type_cannot_define_is_refused() {
+    for (symbol, derived_from) in [(">", "<"), (">=", "<="), ("!=", "==")] {
+        let src = format!(
+            "
+            struct N {{ v: int }}
+            impl N {{ fn {symbol}(self, other: N) -> bool {{ return true; }} }}
+            fn main() {{ print(1); }}
+            "
+        );
+        let d = compile_diag(&src, "unknown.cdl").unwrap_err();
+        assert_wellformed(&d, &src);
+        assert_eq!(d.code, "operator_method_unknown");
+        assert!(d.message.contains(derived_from), "{}", d.message);
+        assert!(d.message.contains("+ - * / %"), "{}", d.message);
+    }
+
+    let src = "
+        struct N { v: int }
+        impl N { fn !(self) -> bool { return true; } }
+        fn main() { print(1); }
+    ";
+    let d = compile_diag(src, "unknown.cdl").unwrap_err();
+    assert_eq!(d.code, "operator_method_unknown");
+}
+
+/// An operator takes the operands it has, so the method declares exactly that
+/// many parameters.
+#[test]
+pub fn an_operator_method_with_the_wrong_parameter_count_is_refused() {
+    let src = "
+        struct N { v: int }
+        impl N { fn +(self) -> N { return self; } }
+        fn main() { print(1); }
+    ";
+    let d = compile_diag(src, "arity.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_arity");
+}
+
+/// The first parameter is the receiver, whose type is the one the `impl` block
+/// names.
+#[test]
+pub fn an_operator_method_receiving_another_type_is_refused() {
+    let src = "
+        struct N { v: int }
+        impl N { fn +(self: int, other: N) -> N { return other; } }
+        fn main() { print(1); }
+    ";
+    let d = compile_diag(src, "receiver.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_receiver");
+}
+
+/// An operator a type does not define is the operator error it has always
+/// been, and the report names the method that would make the expression work.
+#[test]
+pub fn an_operator_a_type_does_not_define_names_the_method_to_write() {
+    let src = "
+        struct V { x: int }
+        fn main() { print(V { x: 1 } | V { x: 2 }); }
+    ";
+    let d = compile_diag(src, "missing.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+
+    let report = strip_ansi(&compile_report(src, "missing.cdl"));
+    assert!(
+        report.contains("impl V { fn |(self, other: V) -> ... }"),
+        "{report}"
+    );
+}
+
+/// Only the left operand's type is consulted: there is one spelling of an
+/// operator method, so a built-in on the left stays an error.
+#[test]
+pub fn an_operator_does_not_reflect_onto_the_right_operand() {
+    let src = "
+        struct V { x: int }
+        impl V { fn +(self, other: V) -> V { return other; } }
+        fn main() { print(1 + V { x: 2 }); }
+    ";
+    let d = compile_diag(src, "reflect.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_operation");
+}
+
+/// A type that defines no operator behaves exactly as it did: structs compare
+/// field by field and maps are untouched.
+#[test]
+pub fn a_type_without_operators_compares_the_way_it_always_did() {
+    let printed = run_output(
+        "
+        struct P { x: int, y: int }
+
+        fn main() {
+            let a = P { x: 1, y: 2 };
+            let b = P { x: 1, y: 2 };
+            let c = P { x: 1, y: 3 };
+            print(a == b, a != b, a == c);
+            print({\"k\": 1} == {\"k\": 1}, {\"k\": 1} != {\"k\": 2});
+        }
+        ",
+    );
+    assert_eq!(printed, "true\nfalse\nfalse\ntrue\ntrue\n");
+}
+
+/// A method that applies its own operator to `self` calls itself. The
+/// recursion check works off the names a body calls, and an operator node
+/// records the method it reaches, so the call saves the caller's registers the
+/// way any recursive call does. Without that the local read after the call is
+/// overwritten by the call's own arguments and the answer is 0.
+#[test]
+pub fn an_operator_method_may_apply_its_own_operator_to_self() {
+    let printed = run_output(
+        "
+        struct N { n: int }
+
+        impl N {
+            fn +(self, other: N) -> N {
+                if other.n <= 0 {
+                    return N { n: 0 };
+                }
+                let step = self.n;
+                let rest = self + N { n: other.n - 1 };
+                return N { n: step + rest.n };
+            }
+        }
+
+        fn main() { print((N { n: 2 } + N { n: 3 }).n); }
+        ",
+    );
+    assert_eq!(printed, "6\n");
+}
+
+/// An operator has one spelling, the operator itself. There is no method-call
+/// form of it, and a dot in front of the symbol is a parse error like any
+/// other name that is not an identifier.
+#[test]
+pub fn an_operator_method_has_no_dot_spelling() {
+    let src = "
+        struct V { x: int }
+        impl V { fn +(self, other: V) -> V { return other; } }
+        fn main() { print(V { x: 1 }.+(V { x: 2 }).x); }
+    ";
+    let d = compile_diag(src, "dot.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unexpected_token");
+}

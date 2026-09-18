@@ -917,3 +917,48 @@ fn function_names_agree_across_source_and_artifact() {
         "a name read as a value carries the function it means",
     );
 }
+
+#[test]
+fn an_overloaded_operator_roundtrips_through_cdlb() {
+    // An operator a type defines is resolved while the program compiles and
+    // lowered to an ordinary function call, so the artifact carries no
+    // instruction the format did not already have and the version stays 11.
+    let src = "
+        struct Vec2 { x: int, y: int }
+
+        impl Vec2 {
+            fn +(self, other: Vec2) -> Vec2 {
+                return Vec2 { x: self.x + other.x, y: self.y + other.y };
+            }
+            fn -(self) -> Vec2 { return Vec2 { x: -self.x, y: -self.y }; }
+            fn ==(self, other: Vec2) -> bool {
+                return self.x == other.x && self.y == other.y;
+            }
+            fn <(self, other: Vec2) -> bool { return self.x < other.x; }
+        }
+
+        fn main() {
+            let a = Vec2 { x: 1, y: 2 };
+            let b = Vec2 { x: 3, y: 4 };
+            let sum = a + b;
+            print(sum.x, sum.y);
+            print((-a).x);
+            print(a == b, a != b);
+            print(a < b, b > a);
+        }
+    ";
+    let bytes = candela::build_bytecode(src.to_owned(), "ops.cdl", &candela::ImportResolver::new())
+        .expect("compiles");
+    assert_eq!(
+        bytes[4], 11,
+        "an operator method needs no new instruction, so the format version stays 11"
+    );
+
+    agrees_across_source_and_artifact(
+        "an_overloaded_operator_roundtrips_through_cdlb",
+        "operators",
+        src,
+        "4\n6\n-1\nfalse\ntrue\ntrue\ntrue\n",
+        "the artifact must reach the same answers the operator methods give",
+    );
+}

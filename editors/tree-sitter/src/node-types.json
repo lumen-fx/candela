@@ -2189,6 +2189,10 @@
         {
           "type": "function_declaration",
           "named": true
+        },
+        {
+          "type": "operator_declaration",
+          "named": true
         }
       ]
     }
@@ -3192,6 +3196,57 @@
         ]
       }
     }
+  },
+  {
+    "type": "operator_declaration",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "operator_name",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "parameter_list",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "return_type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "operator_name",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "parameter",

@@ -570,6 +570,36 @@ mod tests {
         assert!(source.get(diagnostic.span.clone()).is_some());
     }
 
+    /// A method named by an operator symbol lowers to a mangled free function
+    /// like any other method, so it belongs in no outline: `Vec2#+` is not a
+    /// name anyone wrote.
+    #[test]
+    fn an_operator_method_stays_out_of_the_symbols() {
+        let source = "struct Vec2 { x: int }\n\
+                      impl Vec2 {\n\
+                      \x20   fn +(self, other: Vec2) -> Vec2 { return other; }\n\
+                      \x20   fn len(self) -> int { return self.x; }\n\
+                      }\n\
+                      fn main() {\n\
+                      \x20   print((Vec2 { x: 1 } + Vec2 { x: 2 }).x);\n\
+                      }\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        assert!(
+            summary
+                .functions
+                .iter()
+                .any(|f| f.name.contains(METHOD_SEP))
+        );
+        let outlined: Vec<&str> = summary.own_functions().map(|f| f.name.as_str()).collect();
+        assert_eq!(outlined, vec!["main"]);
+    }
+
     /// A type in a tooltip is named the way the compiler names it in a
     /// diagnostic: a user enum reads by the name it was declared under, at the
     /// top level and inside a list or a map. The server used to render every

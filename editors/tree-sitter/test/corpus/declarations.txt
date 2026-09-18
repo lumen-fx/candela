@@ -216,6 +216,93 @@ impl Option {
           (identifier))))))
 
 ================================================================================
+Operator methods (docs/docs/language/methods.md)
+================================================================================
+
+impl Vec2 {
+    fn +(self, other: Vec2) -> Vec2 {
+        return other;
+    }
+    fn -(self) -> Vec2 {
+        return self;
+    }
+    fn ==(self, other: Vec2) -> bool {
+        return true;
+    }
+    fn <=(self, other: Vec2) -> bool {
+        return true;
+    }
+    fn ~(self) -> Vec2 {
+        return self;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (impl_block
+    (type_identifier)
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (identifier))))
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (identifier))))
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (boolean_literal))))
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (boolean_literal))))
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (return_type
+        (type_identifier))
+      (block
+        (return_statement
+          (identifier))))))
+
+================================================================================
 Dynamic library block (pgo/pgo-dynlib.cdl)
 ================================================================================
 

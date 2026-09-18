@@ -39,6 +39,7 @@ Raised while the file is read, before any type is known.
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
+| Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |
 | Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
 
@@ -64,8 +65,22 @@ and returns something else is reported against the annotation.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,
-`||` or `!`. The report names the operator it is complaining about. `==` and
-`!=` take any pair and are never an error. See [operators](operators.md).
+`||` or `!`. The report names the operator it is complaining about, and where an
+operand is a struct or an enum it also names the method that type would define
+to accept the expression. `==` and `!=` take any pair of built-in values and are
+never an error there; on a type that defines its own `==`, an operand that
+method does not accept is. See [operators](operators.md).
+
+**Operator method errors.** A method named by an operator symbol carries its own
+rules, each with an identifier an editor and an embedder read:
+`operator_method_unknown` for a symbol a type cannot define, raised while the
+file is read; `operator_method_arity` for a parameter count the operator does not
+have; `operator_method_on_builtin` for an operator inside `impl int`, `impl list`
+or another built-in type; `operator_method_receiver` for a first parameter
+annotated as a type other than the one the `impl` block names; and
+`operator_method_return_type` for a method the operator cannot take a value from,
+which is one handing nothing back or an `==`, `<` or `<=` not answering a `bool`.
+See [methods](../language/methods.md).
 
 **Type errors.** The general mismatch: an index that is not an `int`, indexing
 or iterating a type that supports neither, a field access on something that is

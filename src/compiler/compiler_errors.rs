@@ -7,6 +7,7 @@ use super::Span;
 use super::State;
 use super::Variable;
 use super::compiler_data::TypeNames;
+use crate::compiler::expr::operator_method;
 use crate::errors::BLUE;
 use crate::errors::GREEN;
 use crate::errors::RESET;
@@ -1327,6 +1328,50 @@ pub fn error_enum(
     )
 }
 
+/// The errors an operator method earns, all reported at one span with one
+/// help line.
+///
+/// `code` is what a `catch` and an editor read, so each mistake keeps its own:
+/// `operator_method_arity` for the wrong parameter count,
+/// `operator_method_on_builtin` for an operator on a built-in type,
+/// `operator_method_receiver` for a first parameter annotated as another type,
+/// and `operator_method_return_type` for a method whose result the operator
+/// cannot use.
+#[cold]
+#[inline(never)]
+pub fn error_operator_method(
+    title: &'static str,
+    message: &str,
+    help: &str,
+    code: &'static str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message(title)
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(message)
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(help)
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        message,
+        code,
+    )
+}
+
 /// A `match` whose arms name variants of `enum_name`, on a scrutinee of type
 /// `scrut_type` instead. Only an enum value carries the variant tag the arms
 /// dispatch on. A bare parameter reaches here when its call site passes a value
@@ -1587,6 +1632,26 @@ pub fn error_op(
 ) -> ! {
     let left = types.of(l);
     let right = types.of(r);
+    let unary_shape = ((op == "-" || op == "~") && l == &DataType::Null) || op == "!";
+    // A struct or an enum reaches an operator through a method it defines, so
+    // the report names the method that would make this expression work. The
+    // derived operators have none of their own: `>` names `<`, because that is
+    // what a type writes to get both.
+    let receiver = if unary_shape { r } else { l };
+    let define_it = operator_method(op).and_then(|(method, _)| {
+        if !matches!(receiver, DataType::Struct(_) | DataType::Enum(_)) {
+            return None;
+        }
+        let name = types.of(receiver);
+        Some(format!(
+            "Define it with {}",
+            blue(if unary_shape {
+                format!("impl {name} {{ fn {method}(self) -> ... }}")
+            } else {
+                format!("impl {name} {{ fn {method}(self, other: {name}) -> ... }}")
+            })
+        ))
+    });
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1595,7 +1660,7 @@ pub fn error_op(
                 (src.filename.as_str(), span_l.extend(span_r).into()),
             );
 
-            if ((op == "-" || op == "~") && l == &DataType::Null) || op == "!" {
+            if unary_shape {
                 report = report
                     .with_message(format_args!(
                         "Cannot perform operation {} {}",
@@ -1711,12 +1776,16 @@ pub fn error_op(
                 ));
             }
 
+            if let Some(help) = &define_it {
+                report = report.with_help(help);
+            }
+
             report.finish()
         },
         sources,
         file_idx,
         span_l.extend(span_r),
-        &if ((op == "-" || op == "~") && l == &DataType::Null) || op == "!" {
+        &if unary_shape {
             format!("Cannot perform operation {op} {right}")
         } else {
             format!("Cannot perform operation {left} {op} {right}")
