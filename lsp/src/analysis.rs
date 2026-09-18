@@ -435,7 +435,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             visit_expr(a, src_file, out);
             visit_expr(b, src_file, out);
         }
-        Expr::Eq(a, b) | Expr::NotEq(a, b) => {
+        Expr::Eq(a, b, _, _) | Expr::NotEq(a, b, _, _) => {
             visit_expr(a, src_file, out);
             visit_expr(b, src_file, out);
         }

@@ -318,6 +318,8 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
             main_condition = Expr::Eq(
                 Box::new(Expr::String(e)),
                 Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
+                catch_span,
+                catch_span,
             );
             output_code.extend(c);
         } else {
@@ -325,6 +327,8 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
                 Box::new(Expr::Eq(
                     Box::new(Expr::String(e)),
                     Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
+                    catch_span,
+                    catch_span,
                 )),
                 Box::from(c),
                 catch_span,

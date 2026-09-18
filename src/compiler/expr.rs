@@ -214,8 +214,8 @@ pub enum Expr {
     Shl(Box<Self>, Box<Self>, Span, Span),
     Shr(Box<Self>, Box<Self>, Span, Span),
     BitNot(Box<Self>, Span, Span),
-    Eq(Box<Self>, Box<Self>),
-    NotEq(Box<Self>, Box<Self>),
+    Eq(Box<Self>, Box<Self>, Span, Span),
+    NotEq(Box<Self>, Box<Self>, Span, Span),
     Sup(Box<Self>, Box<Self>, Span, Span),
     SupEq(Box<Self>, Box<Self>, Span, Span),
     Inf(Box<Self>, Box<Self>, Span, Span),
@@ -275,8 +275,8 @@ impl Expr {
                 | Self::Shl(..)
                 | Self::Shr(..)
                 | Self::BitNot(_, _, _)
-                | Self::Eq(_, _)
-                | Self::NotEq(_, _)
+                | Self::Eq(..)
+                | Self::NotEq(..)
                 | Self::Sup(..)
                 | Self::SupEq(..)
                 | Self::Inf(..)
@@ -306,8 +306,8 @@ pub const fn symbol_of_expr(expr: &Expr) -> &'static str {
         Expr::Shl(_, _, _, _) => "<<",
         Expr::Shr(_, _, _, _) => ">>",
         Expr::BitNot(_, _, _) => "~",
-        Expr::Eq(_, _) => "==",
-        Expr::NotEq(_, _) => "!=",
+        Expr::Eq(..) => "==",
+        Expr::NotEq(..) => "!=",
         Expr::Sup(_, _, _, _) => ">",
         Expr::SupEq(_, _, _, _) => ">=",
         Expr::Inf(_, _, _, _) => "<",
@@ -539,8 +539,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::BitXor(l, r, _, _)
         | Expr::Shl(l, r, _, _)
         | Expr::Shr(l, r, _, _)
-        | Expr::Eq(l, r)
-        | Expr::NotEq(l, r)
+        | Expr::Eq(l, r, _, _)
+        | Expr::NotEq(l, r, _, _)
         | Expr::Sup(l, r, _, _)
         | Expr::SupEq(l, r, _, _)
         | Expr::Inf(l, r, _, _)

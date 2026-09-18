@@ -2019,8 +2019,8 @@ pub fn collect_direct_fn_calls(
             | Expr::BitXor(x, y, _, _)
             | Expr::Shl(x, y, _, _)
             | Expr::Shr(x, y, _, _)
-            | Expr::Eq(x, y)
-            | Expr::NotEq(x, y)
+            | Expr::Eq(x, y, _, _)
+            | Expr::NotEq(x, y, _, _)
             | Expr::Sup(x, y, _, _)
             | Expr::SupEq(x, y, _, _)
             | Expr::Inf(x, y, _, _)
@@ -2927,7 +2927,7 @@ impl Expr {
             Self::Float(_) => DataType::Float,
             Self::Int(_) => DataType::Int,
             Self::String(_) => DataType::String,
-            Self::Bool(_) | Self::Eq(_, _) | Self::NotEq(_, _) => DataType::Bool,
+            Self::Bool(_) | Self::Eq(..) | Self::NotEq(..) => DataType::Bool,
             Self::Null => DataType::Null,
             Self::Array(x, _) => DataType::Array(if x.is_empty() {
                 None
