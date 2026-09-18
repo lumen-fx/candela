@@ -113,7 +113,8 @@ parameters and return types. The type grammar is the same in all of them.
 - `fn(A, B) -> R`: a function taking an `A` and a `B` and returning an `R`.
   Leave the arrow off for one that returns nothing.
 - `(T)`: parentheses, which group a type the way they group an expression.
-- `any`: a slot whose type is decided by the value, allowed in an enum payload.
+- `any`: a slot whose type is decided by the value, written on a struct
+  field, a parameter, or an enum payload.
 
 `[]` after a function type belongs to its return type, so `fn(int) -> int[]` is
 a function returning a list of ints. Parenthesise to put the function itself in
@@ -177,6 +178,20 @@ struct Item {
 fn main() {
     let it = Item { name: "widget", tags: ["new"], counts: {"sold": 2}, id: "w-1" };
     print(it.name, it.tags, it.counts, it.id);
+}
+```
+
+A field declared `any` takes a value of any type, and reading it gives an `any`
+back; name the type again with `as_int`, `as_str` or another downcast.
+
+```rust
+struct Slot {
+    v: any,
+}
+
+fn main() {
+    let s = Slot { v: 5 };
+    print(as_int(s.v) + 1);
 }
 ```
 

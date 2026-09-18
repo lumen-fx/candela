@@ -10539,3 +10539,72 @@ pub fn a_map_inside_a_map_compares_by_contents() {
         crate::data::TRUE
     );
 }
+
+/// A field declared `any` is a dynamic slot: it holds a value of whatever type
+/// is put in it, and reading it back gives an `any` the downcasts name.
+#[test]
+pub fn an_any_field_takes_a_value_of_any_type() {
+    run_and_check_registers!(
+        "
+        struct Wrap { v: any }
+
+        fn main() {
+            let w = Wrap { v: 5 };
+            print(as_int(w.v) + 1);
+        }
+        ",
+        6.into()
+    );
+}
+
+#[test]
+pub fn an_any_field_takes_a_new_value_of_another_type() {
+    run_and_check_registers!(
+        "
+        struct Wrap { v: any }
+
+        fn main() {
+            let w = Wrap { v: 5 };
+            w.v = \"later\";
+            print(as_str(w.v).uppercase() == \"LATER\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn an_any_field_of_a_generic_struct_takes_any_value() {
+    run_and_check_registers!(
+        "
+        struct Box<T> { item: T, tag: any }
+
+        fn main() {
+            let b = Box<int> { item: 3, tag: \"three\" };
+            b.tag = 9;
+            print(b.item + as_int(b.tag));
+        }
+        ",
+        12.into()
+    );
+}
+
+/// The other direction stays reported. A typed field is read back at the type
+/// it declares and used without a run-time test, so a dynamic value put into
+/// one is a mistake the compiler names where it is written.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_dynamic_value_does_not_go_into_a_typed_field() {
+    run!(
+        "
+        struct Wrap { v: any }
+        struct Count { n: int }
+
+        fn main() {
+            let w = Wrap { v: \"oops\" };
+            let c = Count { n: w.v };
+            print(c.n);
+        }
+        "
+    );
+}
