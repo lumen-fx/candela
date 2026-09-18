@@ -9942,9 +9942,18 @@ pub fn a_list_of_function_type_holds_matching_closures() {
 /// never holds a function in a value pays for the ones that do.
 #[test]
 pub fn a_call_the_compiler_settles_stays_direct() {
+    // The list methods come from the standard library in this checkout, not
+    // from wherever the test binary happens to sit.
+    let mut resolver = crate::compiler::imports::ImportResolver::new();
+    resolver.set_lib_dir(std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/libs"
+    )));
     let out = compile(
         String::from(
             "
+        import \"std/list\";
+
         fn apply(f, n) { return f(n); }
         fn twice(x) { return x * 2; }
 
@@ -9960,7 +9969,7 @@ pub fn a_call_the_compiler_settles_stays_direct() {
         ),
         "direct.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &resolver,
     );
     assert!(
         !out.instructions
