@@ -2984,6 +2984,7 @@ fn compile_var_declaration(
 fn join_fn_value_set(
     held: &FnValue,
     fn_id: u16,
+    span: Span,
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -3005,7 +3006,7 @@ fn join_fn_value_set(
     set.candidates.push(fn_id);
     let used_at = set.used_at.clone();
     for arg_types in used_at {
-        ensure_indirect_impl(fn_id as usize, &arg_types, output, v, ctx, state);
+        ensure_indirect_impl(fn_id as usize, &arg_types, span, output, v, ctx, state);
     }
 }
 
@@ -3030,7 +3031,7 @@ fn compile_var_assignment(
     let var_type = match (&v[var_pos].var_type, &var_type) {
         (DataType::FnValue(held), DataType::Fn(fn_id)) if held.sig.is_none() => {
             let held = held.clone();
-            join_fn_value_set(&held, *fn_id, output, v, ctx, state);
+            join_fn_value_set(&held, *fn_id, span, output, v, ctx, state);
             DataType::FnValue(held)
         }
         _ => var_type,

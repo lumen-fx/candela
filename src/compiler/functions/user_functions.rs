@@ -22,9 +22,11 @@ use crate::compiler::compile_expr;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::FunctionImpl;
 use crate::compiler::compiler_data::State;
+use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_user_fn;
+use crate::compiler::compiler_errors::error_enum;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::functions::compile_call_args;
@@ -694,6 +696,7 @@ fn compile_function(
 pub fn ensure_indirect_impl(
     fn_id: usize,
     arg_types: &[DataType],
+    span: Span,
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -703,6 +706,36 @@ pub fn ensure_indirect_impl(
         fn_impl.indirect && arg_types_specialize_equal(&fn_impl.arg_types, arg_types)
     }) {
         return;
+    }
+    // A value carries one body, so the function behind it is compiled once. A
+    // second set of argument types would need a second body and the value has
+    // nowhere to say which, so it is reported here rather than running the
+    // wrong one.
+    if let Some(compiled) = state.fns[fn_id]
+        .impls
+        .iter()
+        .find(|fn_impl| fn_impl.indirect)
+    {
+        let types = TypeNames {
+            structs: state.structs,
+            enums: state.enums,
+        };
+        let written = compiled
+            .arg_types
+            .iter()
+            .map(|t| types.of(t).to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+        error_enum(
+            "Function value called at two argument types",
+            &format!(
+                "This function is held in a value and already compiled for ({written}). \
+                 A value carries one body, so give each call its own function."
+            ),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
     }
     let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
         is_recursive
@@ -784,7 +817,7 @@ pub fn handle_indirect_call(
             state,
             args_indexes,
         );
-        ensure_indirect_impl(candidate as usize, &arg_types, output, v, ctx, state);
+        ensure_indirect_impl(candidate as usize, &arg_types, span, output, v, ctx, state);
     }
 
     // The value is read before the arguments so that an argument expression
@@ -952,7 +985,7 @@ pub fn check_declared_fn(
             state.type_names(),
         );
     }
-    ensure_indirect_impl(fn_id, params, output, v, ctx, state);
+    ensure_indirect_impl(fn_id, params, span, output, v, ctx, state);
     let fn_name = state.fns[fn_id].name.clone();
     let return_type = infer_user_fn_return_type(fn_id, params, &[], &fn_name, v, ctx, state);
     if !param_type_matches(declared_return, &return_type, state.generics) {

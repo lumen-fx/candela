@@ -9994,3 +9994,19 @@ pub fn a_call_through_a_value_goes_indirect() {
         "a callee no type names is dispatched on at run time"
     );
 }
+
+/// A function value carries one body, so calling it at a second set of
+/// argument types is reported rather than running the wrong one.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_function_value_called_at_two_argument_types_is_reported() {
+    run!(
+        "
+        fn main() {
+            let fs = [fn(x) { return x + x; }, fn(y) { return y; }];
+            print(fs[0](2));
+            print(fs[0](\"a\"));
+        }
+        "
+    );
+}

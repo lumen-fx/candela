@@ -334,3 +334,8 @@ fn main() {
 Where the compiler can still name the function a call reaches, it does, so a
 closure in a variable, a list holding one function, and a higher-order call all
 compile to the same jump they always did.
+
+A function held in a value carries one body, so it is compiled for one set of
+argument types. Calling the same value with an `int` in one place and a
+`string` in another is a compile error naming the types it was compiled for;
+write a function for each.
