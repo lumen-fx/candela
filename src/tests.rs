@@ -10468,3 +10468,74 @@ pub fn a_call_result_receiver_keeps_its_register() {
         2.into()
     );
 }
+
+/// Maps compare by their contents, like every other collection: two maps with
+/// the same entries are equal whether or not they are the same map.
+#[test]
+pub fn two_maps_with_the_same_entries_are_equal() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print({\"a\": 1} == {\"a\": 1});
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn two_maps_with_different_values_are_not_equal() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print({\"a\": 1} != {\"a\": 2});
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+#[test]
+pub fn two_maps_of_different_length_are_not_equal() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print({\"a\": 1} == {\"a\": 1, \"b\": 2});
+        }
+        ",
+        crate::data::FALSE
+    );
+}
+
+/// A map comparison written as a condition is fused into a jump, which is a
+/// separate path through the compiler from the one that leaves a bool in a
+/// register.
+#[test]
+pub fn a_map_comparison_reads_as_a_condition() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = {\"a\": 1};
+            let y = {\"a\": 1};
+            let same = 0;
+            if x == y {
+                same = 1;
+            }
+            print(same);
+        }
+        ",
+        1.into()
+    );
+}
+
+#[test]
+pub fn a_map_inside_a_map_compares_by_contents() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            print({\"a\": {\"b\": 1}} == {\"a\": {\"b\": 1}});
+        }
+        ",
+        crate::data::TRUE
+    );
+}

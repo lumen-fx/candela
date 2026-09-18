@@ -2008,6 +2008,21 @@ fn compile_short_circuit_value(
     id
 }
 
+/// Whether the two sides of an equality compare by contents.
+///
+/// A list, a map, a struct and an enum are handles into a pool, so comparing
+/// the registers answers whether the two sides are the same object rather than
+/// whether they hold the same thing. `ObjEq` walks the contents instead.
+const fn compares_by_contents(l_type: &DataType, r_type: &DataType) -> bool {
+    const fn is_object(t: &DataType) -> bool {
+        matches!(
+            t,
+            DataType::Array(_) | DataType::Map(_) | DataType::Struct(_) | DataType::Enum(_)
+        )
+    }
+    is_object(l_type) && is_object(r_type)
+}
+
 fn compile_eq_op(
     l: &Expr,
     r: &Expr,
@@ -2019,13 +2034,7 @@ fn compile_eq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
-    let is_array = matches!(
-        l_type,
-        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
-    ) && matches!(
-        r_type,
-        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
-    );
+    let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
@@ -2036,7 +2045,7 @@ fn compile_eq_op(
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
-    output.push(if is_array {
+    output.push(if by_contents {
         Instr::ObjEq(id_l, id_r, id)
     } else if is_string {
         Instr::StrEq(id_l, id_r, id)
@@ -2057,13 +2066,7 @@ fn compile_neq_op(
 ) -> u16 {
     let l_type = l.infer_type(v, ctx, state);
     let r_type = r.infer_type(v, ctx, state);
-    let is_array = matches!(
-        l_type,
-        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
-    ) && matches!(
-        r_type,
-        DataType::Array(_) | DataType::Struct(_) | DataType::Enum(_)
-    );
+    let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
     let id_l = l
         .compile(v, ctx, state, output, None, false, true)
@@ -2074,7 +2077,7 @@ fn compile_neq_op(
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
-    if is_array {
+    if by_contents {
         output.push(Instr::ObjNotEq(id_l, id_r, id));
     } else if is_string {
         output.push(Instr::StrNotEq(id_l, id_r, id));

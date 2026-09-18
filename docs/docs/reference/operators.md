@@ -101,10 +101,9 @@ the same type is the case worth writing.
 | `T[]` | by length, then element by element |
 | struct | by type, then field by field |
 | enum | by variant, then payload |
-| map | by identity, not by contents |
+| map | by length, then key by key |
 
-Array, struct and enum comparison recurses, so nested collections compare all
-the way down, and a map nested inside one of them compares by its contents.
+Comparison recurses, so nested collections compare all the way down.
 
 Floats compare by their exact representation: `0.0 == -0.0` is false, and any
 comparison involving `NaN` is false.
