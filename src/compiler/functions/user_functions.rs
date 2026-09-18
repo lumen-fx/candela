@@ -7,11 +7,13 @@ use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
+use super::super::type_system::indirect_return_type;
 use super::super::type_system::infer_user_fn_return_type;
 use super::super::type_system::instantiations_line_up;
 use super::super::type_system::param_type_matches;
 use super::super::type_system::pin_empty_literal_bindings;
 use super::super::type_system::pinned_arg_types;
+use super::super::type_system::push_capture_scope;
 use super::super::type_system::specialization_key;
 use super::super::type_system::specialized_arg_types;
 use super::super::type_system::specialized_return_type;
@@ -80,17 +82,7 @@ pub fn handle_user_function(
     // whose callee is an expression rather than a name.
     env_id: Option<u16>,
 ) -> Option<u16> {
-    // Lazily resolve mutual recursion the first time this function is compiled
-    let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
-        is_recursive
-    } else {
-        let name = state.fns[fn_id].name.clone();
-        let mut visited = FxHashSet::default();
-        visited.insert(name.clone());
-        let is_recursive = can_reach(&name, &name, state.fns, &mut visited);
-        state.fns[fn_id].is_recursive = Some(is_recursive);
-        is_recursive
-    };
+    let is_recursive = resolve_is_recursive(fn_id, state);
 
     let fn_returns_null = state.fns[fn_id].returns_null;
 
@@ -467,17 +459,7 @@ fn compile_function(
     }
 
     let v_len_before_args = v.len();
-    // The body's return type is tracked in the scope the body compiles in, so
-    // what a closure captures is declared there too, before its parameters,
-    // which shadow a capture of the same name.
-    for (name, capture_type) in &captures {
-        v.push(Variable {
-            name: name.clone(),
-            register_id: 0,
-            cell: true,
-            var_type: capture_type.clone(),
-        });
-    }
+    push_capture_scope(v, &captures);
     let mut anon_fns: Vec<usize> = Vec::new();
     infered_arg_types
         .iter()
@@ -737,16 +719,7 @@ pub fn ensure_indirect_impl(
             state.sources,
         );
     }
-    let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
-        is_recursive
-    } else {
-        let name = state.fns[fn_id].name.clone();
-        let mut visited = FxHashSet::default();
-        visited.insert(name.clone());
-        let is_recursive = can_reach(&name, &name, state.fns, &mut visited);
-        state.fns[fn_id].is_recursive = Some(is_recursive);
-        is_recursive
-    };
+    let is_recursive = resolve_is_recursive(fn_id, state);
     let fn_name = state.fns[fn_id].name.clone();
     let fn_args = state.fns[fn_id]
         .args
@@ -791,8 +764,11 @@ pub fn handle_indirect_call(
     args: &[Expr],
     span: Span,
     args_indexes: &[Span],
-    returns_null: bool,
 ) -> Option<u16> {
+    let returns_null = matches!(
+        indirect_return_type(fn_type, args, v, ctx, state),
+        DataType::Null
+    );
     let arg_types = indirect_arg_types(fn_type, args, args_indexes, span, v, ctx, state);
     // A variable's set grows as the code writes more functions into it, so a
     // call through one records what it was compiled at: a function that joins
@@ -921,6 +897,20 @@ pub fn indirect_arg_types(
 /// The declaration is what the body is compiled against, so the check is the
 /// compile: a closure whose body does not work at the declared parameter types,
 /// or hands back something else, is reported where it was written.
+/// Whether this function can reach itself, resolved the first time it is
+/// compiled and remembered on the function after that.
+fn resolve_is_recursive(fn_id: usize, state: &mut State<'_>) -> bool {
+    if let Some(is_recursive) = state.fns[fn_id].is_recursive {
+        return is_recursive;
+    }
+    let name = state.fns[fn_id].name.clone();
+    let mut visited = FxHashSet::default();
+    visited.insert(name.clone());
+    let is_recursive = can_reach(&name, &name, state.fns, &mut visited);
+    state.fns[fn_id].is_recursive = Some(is_recursive);
+    is_recursive
+}
+
 pub fn check_declared_fn(
     value: &Expr,
     declared: &DataType,

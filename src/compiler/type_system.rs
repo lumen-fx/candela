@@ -37,6 +37,7 @@ use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::dyn_lib_receiver;
+use crate::compiler::resolve_enum_variant;
 use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -1333,6 +1334,20 @@ pub fn type_args_name_a_variant(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -
 ///
 /// Returns `None` when no generic enum declares a variant of that name, which
 /// is what leaves plain enums and ordinary calls to the paths that follow.
+/// The enum and variant a constructor names, at the types its payload is
+/// given: a generic enum instantiated at what the payload binds, or a plain
+/// enum resolved by name.
+pub fn variant_constructor_at(
+    path: &[SmolStr],
+    arg_types: &[DataType],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(u16, u16)> {
+    resolve_variant_constructor(path, arg_types, span, ctx, state)
+        .or_else(|| resolve_enum_variant(path, ctx.file_idx, state))
+}
+
 pub fn resolve_variant_constructor(
     path: &[SmolStr],
     arg_types: &[DataType],
@@ -2401,6 +2416,21 @@ fn track_return_flow(
 /// `type_args` are the arguments a generic call named. They are part of the
 /// specialisation key because a type parameter no argument mentions still
 /// changes what the body builds.
+/// Declares a closure's captures in `v`, ahead of its parameters, which shadow
+/// a capture of the same name. A closure body reads what the closure captured,
+/// so those names are in scope both while its return type is worked out and
+/// while its body compiles.
+pub fn push_capture_scope(v: &mut Vec<Variable>, captures: &[(SmolStr, DataType)]) {
+    for (name, capture_type) in captures {
+        v.push(Variable {
+            name: name.clone(),
+            register_id: 0,
+            cell: true,
+            var_type: capture_type.clone(),
+        });
+    }
+}
+
 pub fn infer_user_fn_return_type(
     fn_id: usize,
     infered_arg_types: &[DataType],
@@ -2439,17 +2469,7 @@ pub fn infer_user_fn_return_type(
     let fn_src_file = func.src_file;
     let fn_captures = func.captures.clone();
     let v_len_before_args = v.len();
-    // A closure body reads what the closure captured, so those names are in
-    // scope while its return type is worked out, ahead of its parameters,
-    // which shadow a capture of the same name.
-    for (name, capture_type) in &fn_captures {
-        v.push(Variable {
-            name: name.clone(),
-            register_id: 0,
-            cell: true,
-            var_type: capture_type.clone(),
-        });
-    }
+    push_capture_scope(v, &fn_captures);
     for (i, infered_type) in infered_arg_types.iter().cloned().enumerate() {
         // 0 => placeholder id, it's never used
         v.push(Variable {
@@ -2733,14 +2753,7 @@ impl Expr {
                     // function). Its static type is the callee's Fn id.
                     DataType::Fn(fn_id as u16)
                 } else if let Some((enum_id, _)) =
-                    resolve_variant_constructor(std::slice::from_ref(name), &[], *span, ctx, state)
-                        .or_else(|| {
-                            crate::compiler::resolve_enum_variant(
-                                std::slice::from_ref(name),
-                                ctx.file_idx,
-                                state,
-                            )
-                        })
+                    variant_constructor_at(std::slice::from_ref(name), &[], *span, ctx, state)
                 {
                     DataType::Enum(enum_id)
                 } else {
@@ -3051,14 +3064,7 @@ impl Expr {
                         .map(|x| x.infer_type(v, ctx, state))
                         .collect::<Vec<DataType>>();
                     if let Some((enum_id, _)) =
-                        resolve_variant_constructor(namespace, &arg_types, *span, ctx, state)
-                            .or_else(|| {
-                                crate::compiler::resolve_enum_variant(
-                                    namespace,
-                                    ctx.file_idx,
-                                    state,
-                                )
-                            })
+                        variant_constructor_at(namespace, &arg_types, *span, ctx, state)
                     {
                         return DataType::Enum(enum_id);
                     }
@@ -3160,10 +3166,8 @@ impl Expr {
                 // An unqualified call whose name is an enum variant (`Some(x)`)
                 // constructs that variant. Functions above keep priority.
                 let arg_types = infered_args(v, state);
-                if let Some((enum_id, _)) = resolve_variant_constructor(
-                    namespace, &arg_types, *span, ctx, state,
-                )
-                .or_else(|| crate::compiler::resolve_enum_variant(namespace, ctx.file_idx, state))
+                if let Some((enum_id, _)) =
+                    variant_constructor_at(namespace, &arg_types, *span, ctx, state)
                 {
                     return DataType::Enum(enum_id);
                 }
@@ -3445,11 +3449,7 @@ impl Expr {
                     let (enum_id, _) = resolve_generic_variant(path, type_args, *span, ctx, state);
                     return DataType::Enum(enum_id);
                 }
-                if let Some((enum_id, _)) =
-                    resolve_variant_constructor(path, &[], *span, ctx, state).or_else(|| {
-                        crate::compiler::resolve_enum_variant(path, ctx.file_idx, state)
-                    })
-                {
+                if let Some((enum_id, _)) = variant_constructor_at(path, &[], *span, ctx, state) {
                     DataType::Enum(enum_id)
                 } else {
                     crate::compiler::compiler_errors::error_enum(

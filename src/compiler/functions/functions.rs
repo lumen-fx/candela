@@ -2,7 +2,6 @@ use super::expr::Expr;
 use super::expr::Span;
 use super::type_system::DataType;
 use super::type_system::TypeExpr;
-use super::type_system::indirect_return_type;
 use super::type_system::resolve_generic_call;
 use super::type_system::resolve_generic_variant;
 use super::type_system::type_args_name_a_variant;
@@ -174,10 +173,6 @@ pub fn handle_value_call(
     let fn_id = match resolve_callee(callee, span, v, ctx, state) {
         Callee::Direct(fn_id) => fn_id,
         Callee::Indirect(fn_type) => {
-            let returns_null = matches!(
-                indirect_return_type(&fn_type, args, v, ctx, state),
-                DataType::Null
-            );
             return handle_indirect_call(
                 output,
                 v,
@@ -189,7 +184,6 @@ pub fn handle_value_call(
                 args,
                 span,
                 args_indexes,
-                returns_null,
             );
         }
     };
@@ -309,10 +303,6 @@ pub fn handle_functions(
             .map(|var| var.var_type.clone())
     {
         let callee = Expr::Var(namespace[0].clone(), span);
-        let returns_null = matches!(
-            indirect_return_type(&fn_type, args, v, ctx, state),
-            DataType::Null
-        );
         return handle_indirect_call(
             output,
             v,
@@ -324,7 +314,6 @@ pub fn handle_functions(
             args,
             span,
             args_indexes,
-            returns_null,
         );
     }
     let namespace = &namespace[0..len];

@@ -7069,39 +7069,19 @@ pub fn nested_fn_reports_a_parse_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "explicit panic")]
-pub fn if_rejects_int_condition() {
-    run!(
+pub fn if_rejects_a_non_bool_condition() {
+    for condition in ["0", "null", "\"s\""] {
+        let src = format!(
+            "
+        fn main() {{
+            if {condition} {{ print(1); }} else {{ print(2); }}
+        }}
         "
-        fn main() {
-            if 0 { print(1); } else { print(2); }
-        }
-        "
-    );
-}
-
-#[test]
-#[should_panic(expected = "explicit panic")]
-pub fn if_rejects_null_condition() {
-    run!(
-        "
-        fn main() {
-            if null { print(1); } else { print(2); }
-        }
-        "
-    );
-}
-
-#[test]
-#[should_panic(expected = "explicit panic")]
-pub fn if_rejects_string_condition() {
-    run!(
-        "
-        fn main() {
-            if \"s\" { print(1); } else { print(2); }
-        }
-        "
-    );
+        );
+        let d = compile_diag(&src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, &src);
+        assert_eq!(d.code, "non_bool_condition", "{}", d.message);
+    }
 }
 
 #[test]

@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 /// Parses a condition and reports the span it covers, which is what a
 /// condition whose type is not `bool` is reported against.
-fn parse_condition_expr(parser: &mut Parser<'_>) -> (Expr, Span) {
+pub fn parse_condition_expr(parser: &mut Parser<'_>) -> (Expr, Span) {
     let start = parser.peek_token_span().start;
     let condition = parse_expr_no_struct(parser);
     (condition, (start, parser.last_token_end as u32).into())

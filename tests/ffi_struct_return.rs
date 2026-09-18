@@ -2,34 +2,17 @@
 //! one field at a time, and a string field's allocation can run the string
 //! collector partway through. The fields already built have to survive that.
 //!
-//! The library under test is built here with `rustc`, which every `cargo test`
-//! run has on its path, so the test needs no C toolchain.
+
+mod ffi_fixture;
 
 use candela::Engine;
 use candela::Value;
-use candela_vm::rt::TargetOs;
-use candela_vm::rt::resolve_library_filename;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::process::Command;
 
 /// Enough string fields that building the struct on a fresh program crosses
 /// the string collector's starting threshold partway through.
 const FIELDS: usize = 300;
-
-/// A unique scratch directory under the system temp dir.
-fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "candela_ffi_struct_{tag}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
-}
 
 /// The value the fixture puts in field `i`. Longer than the inline-string
 /// limit, so every field is a pooled string.
@@ -49,26 +32,7 @@ fn build_fixture(dir: &std::path::Path) -> PathBuf {
         writeln!(source, "        f{i}: c\"{}\".as_ptr(),", field_value(i)).unwrap();
     }
     source.push_str("    }\n}\n");
-    let source_path = dir.join("fixture.rs");
-    std::fs::write(&source_path, source).expect("write fixture source");
-
-    let library = dir.join(resolve_library_filename("fixture", TargetOs::CURRENT));
-    let output = Command::new("rustc")
-        .arg("--edition")
-        .arg("2021")
-        .arg("--crate-type")
-        .arg("cdylib")
-        .arg("-o")
-        .arg(&library)
-        .arg(&source_path)
-        .output()
-        .expect("run rustc");
-    assert!(
-        output.status.success(),
-        "rustc failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    library
+    ffi_fixture::build_cdylib(dir, "fixture", &source)
 }
 
 /// The candela side: the same struct, the import, and a check that reads every
@@ -95,7 +59,7 @@ fn program() -> String {
 /// including the ones built before the collector ran.
 #[test]
 fn every_string_field_survives_a_collection_during_the_return() {
-    let root = scratch_dir("wide");
+    let root = ffi_fixture::scratch_dir("struct", "wide");
     let _library = build_fixture(&root);
     let script = root.join("app.cdl");
 
