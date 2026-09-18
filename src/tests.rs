@@ -9764,3 +9764,233 @@ pub fn a_closure_that_captures_nothing_allocates_nothing() {
         "a closure with no captures allocates no cell"
     );
 }
+
+/// A list holding two different closures calls the one the index picked.
+#[test]
+pub fn a_list_of_two_closures_calls_the_one_it_was_indexed_for() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let fs = [fn(x) { return x + 1; }, fn(x) { return x * 10; }];
+            print(fs[1](4));
+        }
+        ",
+        40.into()
+    );
+}
+
+/// The other element of the same list is still the other function.
+#[test]
+pub fn a_list_of_two_closures_calls_the_first_one_too() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let fs = [fn(x) { return x + 1; }, fn(x) { return x * 10; }];
+            print(fs[0](4));
+        }
+        ",
+        5.into()
+    );
+}
+
+/// A closure bound to a name calls itself by that name.
+#[test]
+pub fn a_closure_calls_itself_by_the_name_it_is_bound_to() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let fact = fn(n) { if n <= 1 { return 1; } return n * fact(n - 1); };
+            print(fact(5));
+        }
+        ",
+        120.into()
+    );
+}
+
+/// Two closures that call each other through the variables they captured.
+#[test]
+pub fn two_closures_recurse_through_the_variables_they_captured() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let odd = fn(n) { return false; };
+            let even = fn(n) {
+                if n == 0 { return true; }
+                return odd(n - 1);
+            };
+            odd = fn(n) {
+                if n == 0 { return false; }
+                return even(n - 1);
+            };
+            print(even(10));
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// A map of closures dispatches on the key the call went through.
+#[test]
+pub fn a_map_of_closures_dispatches_on_its_key() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let ops = {\"inc\": fn(x) { return x + 1; }, \"ten\": fn(x) { return x * 10; }};
+            print(ops.get(\"ten\")(4));
+        }
+        ",
+        40.into()
+    );
+}
+
+/// A struct field declared `fn(...)` holds any matching closure, and the dot
+/// calls it.
+#[test]
+pub fn a_field_of_function_type_is_called_through_the_dot() {
+    run_and_check_registers!(
+        "
+        struct Button { label: string, on_press: fn(int) -> int }
+
+        fn main() {
+            let b = Button { label: \"ok\", on_press: fn(x) { return x * 2; } };
+            print(b.on_press(21));
+        }
+        ",
+        42.into()
+    );
+}
+
+/// A parameter declared `fn(...)` takes a closure and calls it inside the body.
+#[test]
+pub fn a_parameter_of_function_type_takes_a_closure() {
+    run_and_check_registers!(
+        "
+        fn apply(f: fn(int) -> int, x: int) -> int { return f(x); }
+
+        fn main() {
+            print(apply(fn(y) { return y + 1; }, 41));
+        }
+        ",
+        42.into()
+    );
+}
+
+/// The same parameter takes the name of a declared function.
+#[test]
+pub fn a_parameter_of_function_type_takes_a_declared_function() {
+    run_and_check_registers!(
+        "
+        fn apply(f: fn(int) -> int, x: int) -> int { return f(x); }
+        fn double(n: int) -> int { return n * 2; }
+
+        fn main() {
+            print(apply(double, 21));
+        }
+        ",
+        42.into()
+    );
+}
+
+/// A closure that hands back something else than the declared type is reported
+/// where it was written.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_closure_that_does_not_match_the_declared_function_type_is_reported() {
+    run!(
+        "
+        fn apply(f: fn(int) -> int, x: int) -> int { return f(x); }
+
+        fn main() {
+            print(apply(fn(y) { return \"no\"; }, 1));
+        }
+        "
+    );
+}
+
+/// A closure of the wrong arity is reported the same way.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_closure_of_the_wrong_arity_for_a_function_type_is_reported() {
+    run!(
+        "
+        fn apply(f: fn(int) -> int, x: int) -> int { return f(x); }
+
+        fn main() {
+            print(apply(fn(a, b) { return a + b; }, 1));
+        }
+        "
+    );
+}
+
+/// A `fn(...)` type nests in a list and a map the way any other type does.
+#[test]
+pub fn a_list_of_function_type_holds_matching_closures() {
+    run_and_check_registers!(
+        "
+        struct Steps { run: (fn(int) -> int)[] }
+
+        fn main() {
+            let s = Steps { run: [fn(x) { return x + 1; }, fn(x) { return x * 10; }] };
+            print(s.run[1](4));
+        }
+        ",
+        40.into()
+    );
+}
+
+/// A call the compiler can still settle stays a direct call: no program that
+/// never holds a function in a value pays for the ones that do.
+#[test]
+pub fn a_call_the_compiler_settles_stays_direct() {
+    let out = compile(
+        String::from(
+            "
+        fn apply(f, n) { return f(n); }
+        fn twice(x) { return x * 2; }
+
+        fn main() {
+            let double = fn(x) { return x * 2; };
+            let fs = [fn(x) { return x + 1; }];
+            print(apply(twice, 1), double(2), fs[0](3));
+            print([3, 1, 2].sort_by(fn(a, b) { return a < b; }));
+            print([1, 2, 3].map(fn(x) { return x * 2; }));
+            print([1, 2, 3].filter(fn(x) { return x > 1; }));
+        }
+        ",
+        ),
+        "direct.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    assert!(
+        !out.instructions
+            .iter()
+            .any(|instr| matches!(instr, Instr::CallIndirect(_))),
+        "a callee the compiler can name is jumped to directly"
+    );
+}
+
+/// A call through a value the compiler cannot settle is the one that goes
+/// indirect.
+#[test]
+pub fn a_call_through_a_value_goes_indirect() {
+    let out = compile(
+        String::from(
+            "
+        fn main() {
+            let fs = [fn(x) { return x + 1; }, fn(x) { return x * 10; }];
+            print(fs[1](4));
+        }
+        ",
+        ),
+        "indirect.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    assert!(
+        out.instructions
+            .iter()
+            .any(|instr| matches!(instr, Instr::CallIndirect(_))),
+        "a callee no type names is dispatched on at run time"
+    );
+}

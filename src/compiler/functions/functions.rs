@@ -2,6 +2,7 @@ use super::expr::Expr;
 use super::expr::Span;
 use super::type_system::DataType;
 use super::type_system::TypeExpr;
+use super::type_system::indirect_return_type;
 use super::type_system::resolve_generic_call;
 use super::type_system::resolve_generic_variant;
 use super::type_system::type_args_name_a_variant;
@@ -14,10 +15,12 @@ use crate::compiler::compiler_errors::error_function_arg_invalid_type_multiple;
 use crate::compiler::compiler_errors::error_type_not_callable;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::instr::Instr;
+use crate::rt::FnValue;
 use builtin_functions::builtin_functions;
 use fs_lib_functions::fs_lib_functions;
 use smol_strc::SmolStr;
 use std::slice;
+use user_functions::handle_indirect_call;
 use user_functions::handle_user_function;
 
 // `pub(crate)` (not the default private) so the sibling `methods` module can
@@ -122,20 +125,31 @@ pub fn check_arg_type(
     }
 }
 
+/// What a callee expression turns out to be.
+pub enum Callee {
+    /// One function, settled here from the callee's type.
+    Direct(usize),
+    /// A function value. Which function it holds is decided when the program
+    /// runs, so the call dispatches on what the value carries.
+    Indirect(Box<FnValue>),
+}
+
 /// The function a callee expression names, or a compile error where its type
 /// is not a function.
 ///
-/// A closure is a compile-time entity: its type carries the id of the function
-/// it is, so an indirect call resolves to the same entry a name would.
-pub fn callee_fn_id(
+/// A callee whose type pins one function resolves to the same entry a name
+/// would, which is what keeps a closure bound to a variable, a list of one
+/// closure, and a higher-order call all lowering to a direct jump.
+pub fn resolve_callee(
     callee: &Expr,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
-) -> usize {
+) -> Callee {
     match callee.infer_type(v, ctx, state) {
-        DataType::Fn(fn_id) => fn_id as usize,
+        DataType::Fn(fn_id) => Callee::Direct(fn_id as usize),
+        DataType::FnValue(fn_type) => Callee::Indirect(fn_type),
         t => error_type_not_callable(&t, span, ctx.file_idx, state.sources, state.type_names()),
     }
 }
@@ -157,7 +171,28 @@ pub fn handle_value_call(
     span: Span,
     args_indexes: &[Span],
 ) -> Option<u16> {
-    let fn_id = callee_fn_id(callee, span, v, ctx, state);
+    let fn_id = match resolve_callee(callee, span, v, ctx, state) {
+        Callee::Direct(fn_id) => fn_id,
+        Callee::Indirect(fn_type) => {
+            let returns_null = matches!(
+                indirect_return_type(&fn_type, args, v, ctx, state),
+                DataType::Null
+            );
+            return handle_indirect_call(
+                output,
+                v,
+                ctx,
+                state,
+                tgt_id,
+                callee,
+                &fn_type,
+                args,
+                span,
+                args_indexes,
+                returns_null,
+            );
+        }
+    };
     // The value the callee expression produces is the environment of the
     // closure it names; the register stays allocated until the call has taken
     // it, so an argument compiled in between cannot land on top of it.
@@ -264,6 +299,34 @@ pub fn handle_functions(
     }
     let len = namespace.len() - 1;
     let fn_name = namespace[len].as_str();
+    // A name that holds a function value is called through the value: the call
+    // dispatches on what it holds, since no one function is what the name
+    // names.
+    if len == 0
+        && let Some(DataType::FnValue(fn_type)) = v
+            .iter()
+            .rfind(|var| var.name.as_str() == fn_name)
+            .map(|var| var.var_type.clone())
+    {
+        let callee = Expr::Var(namespace[0].clone(), span);
+        let returns_null = matches!(
+            indirect_return_type(&fn_type, args, v, ctx, state),
+            DataType::Null
+        );
+        return handle_indirect_call(
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            &callee,
+            &fn_type,
+            args,
+            span,
+            args_indexes,
+            returns_null,
+        );
+    }
     let namespace = &namespace[0..len];
     if namespace.is_empty() {
         builtin_functions(

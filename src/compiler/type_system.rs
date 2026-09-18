@@ -34,8 +34,10 @@ use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
 use crate::compiler::expr::closure_free_names;
-use crate::compiler::functions::callee_fn_id;
+use crate::compiler::functions::Callee;
+use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::dyn_lib_receiver;
+use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
@@ -90,6 +92,18 @@ pub enum TypeExpr {
     Array(Box<Self>),
     Map(Box<Self>, Box<Self>),
     Union(Box<[Self]>),
+    /// `fn(A, B) -> R`: a position that holds a function of that shape rather
+    /// than one particular function. The return type is `None` where the arrow
+    /// is left off, which is a function that hands nothing back.
+    Fn(Box<FnTypeExpr>),
+}
+
+/// The parameter types and return type a `fn(...)` annotation was written with.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct FnTypeExpr {
+    pub args: Box<[TypeExpr]>,
+    pub return_type: Option<TypeExpr>,
+    pub span: Span,
 }
 
 /// A generic type and the arguments it is applied to. Boxed inside
@@ -116,6 +130,13 @@ impl TypeExpr {
         match self {
             Self::Identifier(name, _) => params.contains(name),
             Self::NamespacedIdentifier(_, _) => false,
+            Self::Fn(sig) => {
+                sig.args.iter().any(|a| a.mentions_any(params))
+                    || sig
+                        .return_type
+                        .as_ref()
+                        .is_some_and(|r| r.mentions_any(params))
+            }
             Self::Generic(generic) => {
                 // A name written behind a module path names that module's
                 // generic type, never a type parameter of the body being
@@ -228,6 +249,16 @@ impl TypeExpr {
             Self::Union(poly) => {
                 DataType::Union(poly.iter().map(|t| t.to_datatype(ctx)).collect()).check_poly()
             }
+            Self::Fn(sig) => DataType::FnValue(Box::new(FnValue {
+                sig: Some((
+                    sig.args.iter().map(|a| a.to_datatype(ctx)).collect(),
+                    sig.return_type
+                        .as_ref()
+                        .map_or(DataType::Null, |r| r.to_datatype(ctx)),
+                )),
+                candidates: Box::from([]),
+                set: None,
+            })),
         }
     }
 }
@@ -640,6 +671,7 @@ fn render_type(t: &DataType, structs: &[Struct], enums: &[EnumType]) -> SmolStr 
         DataType::String => SmolStr::new_static("string"),
         DataType::Null => SmolStr::new_static("null"),
         DataType::Unknown => SmolStr::new_static("any"),
+        DataType::FnValue(sig) => sig.to_smolstr(),
         DataType::Array(inner) => match inner {
             Some(inner) => format_args!("{}[]", render_type(inner, structs, enums)).to_smolstr(),
             None => SmolStr::new_static("any[]"),
@@ -1181,6 +1213,7 @@ fn lower_method(
             bindings: Box::from(bindings),
             file_idx,
         })),
+        entry_register: None,
     });
 }
 
@@ -1583,6 +1616,7 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
         },
         DataType::Null => SmolStr::new_static("null"),
         DataType::Unknown => SmolStr::new_static("Unknown"),
+        DataType::FnValue(sig) => sig.to_smolstr(),
         DataType::Union(types) => format_args!(
             "{}",
             types
@@ -2357,16 +2391,17 @@ fn track_return_flow(
     }
 }
 
-/// Infers the return type of a user function specialised for `infered_arg_types`,
-/// caching the result on the function. Shared by direct `FunctionCall`s and by
-/// `impl` method calls (which resolve to a mangled free function with the
-/// receiver as argument 0). `function_name` is only used for diagnostics inside
-/// `track_returns`.
+/// Infers the return type of a user function specialised for
+/// `infered_arg_types`, caching the result on the function.
+///
+/// Shared by direct `FunctionCall`s and by `impl` method calls (which resolve
+/// to a mangled free function with the receiver as argument 0).
+/// `function_name` is only used for diagnostics inside `track_returns`.
 ///
 /// `type_args` are the arguments a generic call named. They are part of the
 /// specialisation key because a type parameter no argument mentions still
 /// changes what the body builds.
-fn infer_user_fn_return_type(
+pub fn infer_user_fn_return_type(
     fn_id: usize,
     infered_arg_types: &[DataType],
     type_args: &[DataType],
@@ -2664,20 +2699,19 @@ fn builtin_method_return(
     Some(DataType::Union(types.into_boxed_slice()).check_poly())
 }
 
-/// The function a struct field holds, for a field whose type names one.
+/// Whether a struct field holds a function.
 ///
-/// A function is a compile-time entity, so a field's static type carries the id
-/// of the function put into it. That is what lets `obj.field(x)` lower to the
-/// direct call `fs[0](x)` already lowers to.
+/// A field whose type names one function lets `obj.field(x)` lower to the same
+/// direct call `fs[0](x)` does. A field declared `fn(...)` holds a function
+/// value instead, and the call through it dispatches on what the value carries.
 #[must_use]
-pub(crate) fn struct_field_fn(struct_id: u16, field: &str, state: &State<'_>) -> Option<usize> {
+pub(crate) fn struct_field_holds_fn(struct_id: u16, field: &str, state: &State<'_>) -> bool {
     state.structs[struct_id as usize]
         .fields
         .iter()
         .find(|(name, _, _)| name == field)
-        .and_then(|(_, field_type, _)| match field_type {
-            DataType::Fn(fn_id) => Some(*fn_id as usize),
-            _ => None,
+        .is_some_and(|(_, field_type, _)| {
+            matches!(field_type, DataType::Fn(_) | DataType::FnValue(_))
         })
 }
 
@@ -2721,11 +2755,16 @@ impl Expr {
             Self::Array(x, _) => DataType::Array(if x.is_empty() {
                 None
             } else {
-                let elem_type = x
+                let elem_types = x
                     .iter()
                     .map(|elem| elem.infer_type(v, ctx, state))
-                    .find(|elem_type| *elem_type != DataType::Unknown)
-                    .unwrap_or(DataType::Unknown);
+                    .collect::<Vec<DataType>>();
+                let elem_type = merge_fn_types(&elem_types).unwrap_or_else(|| {
+                    elem_types
+                        .into_iter()
+                        .find(|elem_type| *elem_type != DataType::Unknown)
+                        .unwrap_or(DataType::Unknown)
+                });
                 Some(Box::from(elem_type))
             }),
             Self::Map(kv_pairs, _) => {
@@ -2734,7 +2773,7 @@ impl Expr {
                     // empty array (`Array(None)`); `insert` fills them in.
                     DataType::Map(Box::from((None, None)))
                 } else {
-                    let kv_type = kv_pairs
+                    let entry_types = kv_pairs
                         .iter()
                         .map(|(key, _, value, _)| {
                             (
@@ -2742,6 +2781,13 @@ impl Expr {
                                 value.infer_type(v, ctx, state),
                             )
                         })
+                        .collect::<Vec<(DataType, DataType)>>();
+                    let value_types = entry_types
+                        .iter()
+                        .map(|(_, val_t)| val_t.clone())
+                        .collect::<Vec<DataType>>();
+                    let kv_type = entry_types
+                        .into_iter()
                         .find(|(key_t, val_t)| {
                             key_t != &DataType::Unknown || val_t != &DataType::Unknown
                         })
@@ -2749,6 +2795,12 @@ impl Expr {
                             (Some(DataType::Unknown), Some(DataType::Unknown)),
                             |(key_t, val_t)| (Some(key_t), Some(val_t)),
                         );
+                    // A map whose values are two different functions holds a
+                    // function value, the same as a list does.
+                    let kv_type = match merge_fn_types(&value_types) {
+                        Some(merged) => (kv_type.0, Some(merged)),
+                        None => kv_type,
+                    };
                     DataType::Map(Box::from(kv_type))
                 }
             }
@@ -2933,13 +2985,27 @@ impl Expr {
             // function the callee's type names, at the argument types this
             // call site passes.
             Self::CallValue(callee, args, span, _) => {
-                let fn_id = callee_fn_id(callee, *span, v, ctx, state);
-                let infered_arg_types = args
-                    .iter()
-                    .map(|x| x.infer_type(v, ctx, state))
-                    .collect::<Vec<DataType>>();
-                let fn_name = state.fns[fn_id].name.clone();
-                infer_user_fn_return_type(fn_id, &infered_arg_types, &[], &fn_name, v, ctx, state)
+                match resolve_callee(callee, *span, v, ctx, state) {
+                    Callee::Direct(fn_id) => {
+                        let infered_arg_types = args
+                            .iter()
+                            .map(|x| x.infer_type(v, ctx, state))
+                            .collect::<Vec<DataType>>();
+                        let fn_name = state.fns[fn_id].name.clone();
+                        infer_user_fn_return_type(
+                            fn_id,
+                            &infered_arg_types,
+                            &[],
+                            &fn_name,
+                            v,
+                            ctx,
+                            state,
+                        )
+                    }
+                    Callee::Indirect(fn_type) => {
+                        indirect_return_type(&fn_type, args, v, ctx, state)
+                    }
+                }
             }
             Self::FunctionCall(args, namespace, span, _, type_args) => {
                 // A call written with type arguments names either a variant of a
@@ -3051,6 +3117,15 @@ impl Expr {
                 // parameter's static Fn type. Lowering reads the same function
                 // off the scope symbol `handle_user_function` declares for that
                 // parameter, which inference has not run yet.
+                // A name that holds a function value: what it hands back is
+                // what the type says, since no one function is what it names.
+                if let Some(DataType::FnValue(fn_type)) = v
+                    .iter()
+                    .rfind(|var| var.name.as_str() == fn_name.as_str())
+                    .map(|var| var.var_type.clone())
+                {
+                    return indirect_return_type(&fn_type, args, v, ctx, state);
+                }
                 if let Some(DataType::Fn(fn_id)) = v
                     .iter()
                     .rfind(|var| var.name.as_str() == fn_name.as_str())
@@ -3100,7 +3175,15 @@ impl Expr {
                     state.sources,
                 )
             }
-            Self::ObjFunctionCall(obj, args, namespace, obj_span, fn_span, _, type_args) => {
+            Self::ObjFunctionCall(
+                obj,
+                args,
+                namespace,
+                obj_span,
+                fn_span,
+                args_indexes,
+                type_args,
+            ) => {
                 let method = namespace.last().unwrap().as_str();
                 // `app.rows(id)` on a `host`/`dylib` block is the namespaced
                 // call written with a dot, so its type is the declared return
@@ -3157,21 +3240,20 @@ impl Expr {
                     // called through the same dot, so `obj.field(x)` calls what
                     // the field holds. A method wins, which is why this comes
                     // second.
-                    if let Some(field_fn) = struct_field_fn(struct_id, method, state) {
-                        let arg_types = args
-                            .iter()
-                            .map(|a| a.infer_type(v, ctx, state))
-                            .collect::<Vec<DataType>>();
-                        let fn_name = state.fns[field_fn].name.clone();
-                        return infer_user_fn_return_type(
-                            field_fn,
-                            &arg_types,
-                            &[],
-                            &fn_name,
-                            v,
-                            ctx,
-                            state,
+                    if struct_field_holds_fn(struct_id, method, state) {
+                        let callee = Self::GetStructField(
+                            Box::new(obj.as_ref().clone()),
+                            SmolStr::new(method),
+                            *obj_span,
+                            *fn_span,
                         );
+                        return Self::CallValue(
+                            Box::new(callee),
+                            Box::from(args.to_vec()),
+                            *fn_span,
+                            Box::from(args_indexes.to_vec()),
+                        )
+                        .infer_type(v, ctx, state);
                     }
                     // Neither: mirror the compile-time error path so inference
                     // does not hit the builtin arms with a struct type.
@@ -3431,10 +3513,96 @@ impl Expr {
                     return_type: None,
                     generics: None,
                     captures,
+                    entry_register: None,
                 });
                 DataType::Fn(id)
             }
             _ => unsafe { unreachable_unchecked() },
+        }
+    }
+}
+
+/// The one function type that holds every type in `types`, where more than one
+/// function can land in the same position.
+///
+/// A position every function in it agrees on stays pinned to that function, so
+/// a list of one closure and a call through it resolve at compile time exactly
+/// as they did. Two different functions make the position a function value: no
+/// function is the one it holds, so the call dispatches on what the value
+/// carries. `None` where the types name no function, which leaves the position
+/// to the ordinary rules.
+#[must_use]
+pub fn merge_fn_types(types: &[DataType]) -> Option<DataType> {
+    let mut candidates: Vec<u16> = Vec::new();
+    let mut sig = None;
+    let mut saw_fn = false;
+    for t in types {
+        match t {
+            DataType::Fn(id) => {
+                saw_fn = true;
+                if !candidates.contains(id) {
+                    candidates.push(*id);
+                }
+            }
+            DataType::FnValue(fn_type) => {
+                saw_fn = true;
+                if sig.is_none() {
+                    sig.clone_from(&fn_type.sig);
+                }
+                for id in &fn_type.candidates {
+                    if !candidates.contains(id) {
+                        candidates.push(*id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !saw_fn || (sig.is_none() && candidates.len() < 2) {
+        return None;
+    }
+    Some(DataType::FnValue(Box::new(FnValue {
+        sig,
+        candidates: candidates.into_boxed_slice(),
+        set: None,
+    })))
+}
+
+/// What a call through a function value hands back.
+///
+/// A declared `fn(...) -> R` says it. A type inferred from the functions
+/// written into the position asks each of them, at the argument types this call
+/// passes, and they have to agree.
+pub fn indirect_return_type(
+    fn_type: &FnValue,
+    args: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> DataType {
+    if let Some((_, return_type)) = &fn_type.sig {
+        return return_type.clone();
+    }
+    let infered_arg_types = args
+        .iter()
+        .map(|arg| arg.infer_type(v, ctx, state))
+        .collect::<Vec<DataType>>();
+    let return_types = state
+        .fn_value_candidates(fn_type)
+        .into_iter()
+        .map(|fn_id| {
+            let fn_id = fn_id as usize;
+            let fn_name = state.fns[fn_id].name.clone();
+            infer_user_fn_return_type(fn_id, &infered_arg_types, &[], &fn_name, v, ctx, state)
+        })
+        .collect::<Vec<DataType>>();
+    let mut return_types = return_types.into_iter();
+    match return_types.next() {
+        None => DataType::Unknown,
+        Some(first) if return_types.len() == 0 => first,
+        Some(first) => {
+            let all = std::iter::once(first).chain(return_types).collect();
+            DataType::Union(all).check_poly()
         }
     }
 }

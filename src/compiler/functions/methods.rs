@@ -11,7 +11,7 @@ use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
 use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::resolve_call_type_args;
-use crate::compiler::type_system::struct_field_fn;
+use crate::compiler::type_system::struct_field_holds_fn;
 use crate::instr::Instr;
 use builtin_methods::builtin_methods;
 use builtin_methods::is_builtin_method;
@@ -183,7 +183,7 @@ pub fn handle_method_calls(
         // No method of that name: a field holding a function is called through
         // the same dot, so `obj.field(x)` calls what the field holds. The
         // method lookup above wins, so a field never shadows one.
-        if struct_field_fn(struct_id, name, state).is_some() {
+        if struct_field_holds_fn(struct_id, name, state) {
             let callee =
                 Expr::GetStructField(Box::new(obj.clone()), SmolStr::new(name), obj_span, fn_span);
             return handle_value_call(

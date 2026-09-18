@@ -104,8 +104,9 @@ dynamic-library and host-function tables, adding the enum type table, adding the
 map, JSON and `any` operations, adding the export table, adding the map
 `remove` instruction together with the mark on the dynamic libraries the
 standard library owns, widening `int` to 64 bits, which gave every recorded
-value a second word, and adding the cell instructions a captured variable is
-read and written through, each raised it. There is no forward or backward
+value a second word, adding the cell instructions a captured variable is read
+and written through, and adding the indirect call, which dispatches on the
+function a value holds, each raised it. There is no forward or backward
 compatibility across a change, and there is no conversion tool.
 
 In practice this means: build the artifact with the toolchain whose `candela-vm`

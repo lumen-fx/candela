@@ -27,6 +27,7 @@ use crate::compiler::CompileOutput;
 use crate::compiler::FileNamespaces;
 use crate::compiler::compiler_data::Dynamiclib;
 use crate::compiler::compiler_data::Function;
+use crate::compiler::compiler_data::IndirectRegisters;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
@@ -341,6 +342,7 @@ impl Engine {
             namespaces: out.namespaces,
             const_registers: out.const_registers,
             free_registers: out.free_registers,
+            indirect_registers: out.indirect_registers,
             generics: out.generics,
         };
 
@@ -381,6 +383,7 @@ pub struct Program {
     const_registers: FxHashMap<Data, u16>,
     free_registers: Vec<u16>,
     generics: Generics,
+    indirect_registers: IndirectRegisters,
 }
 
 /// A checkpoint of the resident tables [`Program::call`] can grow while
@@ -555,6 +558,7 @@ impl Program {
             reserved_registers: rustc_hash::FxHashSet::default(),
             namespaces: &mut self.namespaces,
             generics: &mut self.generics,
+            indirect_registers: &mut self.indirect_registers,
         }
     }
 

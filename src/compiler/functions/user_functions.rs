@@ -7,6 +7,7 @@ use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
+use super::super::type_system::infer_user_fn_return_type;
 use super::super::type_system::instantiations_line_up;
 use super::super::type_system::param_type_matches;
 use super::super::type_system::pin_empty_literal_bindings;
@@ -22,13 +23,16 @@ use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::FunctionImpl;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::functions::compile_call_args;
 use crate::compiler::functions::store_call_args;
+use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
+use crate::rt::FnValue;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use std::rc::Rc;
@@ -168,6 +172,19 @@ pub fn handle_user_function(
     // the parameter is inferred, so a generic function keeps compiling when it
     // is called without them.
     let declared_arg_types = specialized_arg_types(fn_id, type_args, ctx, state);
+    // A parameter declared `fn(...)` holds a function value: the argument is
+    // compiled at the types the declaration names, and the body sees the
+    // declared type rather than the one function this call happens to pass, so
+    // the call inside it dispatches on the value.
+    for (i, declared) in declared_arg_types.iter().enumerate() {
+        if let Some(declared) = declared
+            && declared_holds_fn_signature(declared)
+        {
+            let declared = declared.clone();
+            check_declared_fn(&args[i], &declared, args_indexes[i], output, v, ctx, state);
+            infered_arg_types[i] = declared;
+        }
+    }
     for (i, declared) in declared_arg_types.iter().enumerate() {
         if let Some(declared) = declared
             && !param_type_matches(declared, &infered_arg_types[i], state.generics)
@@ -249,6 +266,7 @@ pub fn handle_user_function(
             &fn_code,
             is_recursive,
             state.fns[fn_id].src_file,
+            false,
         );
     }
     // Re-derive index after possible mutation
@@ -256,12 +274,17 @@ pub fn handle_user_function(
     let loc = state.fns[fn_id].impls[fn_impl_idx].loc;
     let args_loc_len = state.fns[fn_id].impls[fn_impl_idx].args_loc.len();
 
+    // A specialisation a value can reach shares its parameter registers with
+    // every other one, so a call into it overwrites the caller's however the
+    // call was written. Saving the caller's registers is therefore decided by
+    // the specialisation this call lands on, not by the function it names.
+    let uses_frame = is_recursive || state.fns[fn_id].impls[fn_impl_idx].indirect;
     let saveframe_loc = output.len();
-    // Only a recursive call saves registers, so the table is keyed by call site
-    // and takes an entry here. The list stays empty until the enclosing body
-    // finishes compiling and `compile_function` can see which registers are
-    // still read after the call returns.
-    let callsite_id = if is_recursive {
+    // Only a call that saves registers is keyed by call site, and takes an
+    // entry here. The list stays empty until the enclosing body finishes
+    // compiling and `compile_function` can see which registers are still read
+    // after the call returns.
+    let callsite_id = if uses_frame {
         let id = state.callsite_registers.len() as u16;
         state.callsite_registers.push(Vec::new());
         output.push(Instr::SaveFrame(0, 0, 0));
@@ -277,7 +300,9 @@ pub fn handle_user_function(
 
         // A function argument is settled at compile time, so nothing is
         // moved for it unless it is a closure that captures: that one carries
-        // an environment, and the environment is a value like any other.
+        // an environment, and the environment is a value like any other. A
+        // parameter declared `fn(...)` takes a value either way, since the body
+        // dispatches on what it holds.
         if let DataType::Fn(callee_id) = infered_arg_types[i]
             && state.fns[callee_id as usize].captures.is_empty()
         {
@@ -285,9 +310,13 @@ pub fn handle_user_function(
         }
 
         let start_len = output.len();
-        let arg_id = args[i]
-            .compile(v, ctx, state, output, Some(tgt_id), false, true)
-            .unwrap_id();
+        let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+            crate::compiler::compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
+        } else {
+            args[i]
+                .compile(v, ctx, state, output, Some(tgt_id), false, true)
+                .unwrap_id()
+        };
         if output.len() == start_len || !move_to_id(output, tgt_id) {
             output.push(Instr::Mov(arg_id, tgt_id));
         }
@@ -307,7 +336,7 @@ pub fn handle_user_function(
     } else {
         state.alloc_reg_tgt(tgt_id)
     };
-    if is_recursive {
+    if uses_frame {
         output.push(Instr::CallFuncRecursive(loc, return_register_id));
     } else {
         output.push(Instr::CallFunc(loc, return_register_id));
@@ -315,7 +344,7 @@ pub fn handle_user_function(
         state.add_to_src(ctx, output, span);
     }
 
-    if is_recursive {
+    if uses_frame {
         output[saveframe_loc] = Instr::SaveFrame(
             (output.len() - 1 - saveframe_loc) as u16,
             return_register_id,
@@ -349,17 +378,33 @@ fn compile_function(
     fn_code: &[Expr],
     is_recursive: bool,
     fn_file_idx: u16,
+    // Whether a call through a value can reach this specialisation. One that
+    // can takes its parameters from the shared indirect registers and returns
+    // the way a recursive call does, since every caller saves its registers on
+    // the way in.
+    indirect: bool,
 ) {
+    // A specialisation a value can reach returns the way a recursive call does:
+    // every caller saved its registers on the way in, so every way out has to
+    // put them back.
+    let is_recursive = is_recursive || indirect;
     // Local vector vars and recorded_types to allow the inner body to type-check correctly
     let mut v_temp: Vec<Variable> = fn_args
         .iter()
         .enumerate()
         .map(|(i, x)| {
-            // Allocate a registers slot for each func arg
-            state.registers.push(NULL);
+            // A specialisation a value can reach reads its parameters where
+            // every indirect call writes them; one only reachable by name gets
+            // registers of its own.
+            let register_id = if indirect {
+                state.indirect_arg_register(i)
+            } else {
+                state.registers.push(NULL);
+                (state.registers.len() - 1) as u16
+            };
             Variable {
                 name: x.clone(),
-                register_id: (state.registers.len() - 1) as u16,
+                register_id,
                 cell: false,
                 var_type: infered_arg_types[i].clone(),
             }
@@ -368,6 +413,7 @@ fn compile_function(
 
     // Get the arg destination ids
     let args_loc = v_temp.iter().map(|x| x.register_id).collect::<Vec<u16>>();
+    let args_loc_saved = args_loc.clone();
 
     // Temporarily jump over function to prevent executing it right now
     // This is a placeholder that's modified later on
@@ -377,6 +423,12 @@ fn compile_function(
     // Record start location for the compiled func body
     let fn_start = output.len();
     let loc = fn_start as u16 + ctx.offset;
+    // A value built for this function carries where its body starts, which is
+    // known here and read by every indirect call that reaches it.
+    if indirect {
+        let entry_id = state.fn_entry_register(function_id);
+        state.registers[entry_id as usize] = Data::int(i64::from(loc));
+    }
 
     // A closure that captures reads its environment out of one register the
     // call site fills, and takes the cells out of it once, on entry, so the
@@ -384,12 +436,20 @@ fn compile_function(
     // declared it does. The captures come first in scope, so a parameter of
     // the same name shadows one.
     let captures = state.fns[function_id].captures.clone();
-    let env_loc = (!captures.is_empty()).then(|| state.alloc_reg());
+    let env_loc = (!captures.is_empty()).then(|| {
+        if indirect {
+            state.indirect_env_register()
+        } else {
+            state.alloc_reg()
+        }
+    });
+    // A function value starts with where its body begins, so the cells it
+    // carries sit one slot further in.
     let mut capture_regs: Vec<u16> = Vec::with_capacity(captures.len());
     if let Some(env_loc) = env_loc {
         let mut with_captures = Vec::with_capacity(captures.len() + v_temp.len());
         for (i, (name, capture_type)) in captures.iter().enumerate() {
-            let idx_id = state.const_int_register(i as i64);
+            let idx_id = state.const_int_register(i as i64 + 1);
             let cell_id = state.alloc_reg();
             output.push(Instr::GetIndexArray(env_loc, idx_id, cell_id));
             capture_regs.push(cell_id);
@@ -499,6 +559,7 @@ fn compile_function(
     let func = state.fns.get_mut(function_id).unwrap();
     func.impls.push(FunctionImpl {
         env_loc,
+        indirect,
         loc,
         args_loc: Box::from(args_loc.as_slice()),
         arg_types: Box::from(infered_arg_types),
@@ -558,18 +619,35 @@ fn compile_function(
         .free_registers
         .retain(|reg| !state.reserved_registers.contains(reg));
 
-    if is_recursive {
+    // A body that calls through a value saves registers at that call whether or
+    // not the static call graph says the function recurses: the value can hold
+    // the function making the call.
+    let saves_registers = is_recursive
+        || parsed
+            .iter()
+            .any(|instr| matches!(instr, Instr::CallIndirect(_)));
+    if saves_registers {
         // The cells the entry took out of the environment count as written by
         // the body: a recursive call fills them again for its own environment,
         // so the caller has to get its own back.
         let mut all_written_regs: Vec<u16> = get_tgt_ids(&parsed);
         all_written_regs.extend(capture_regs.iter().copied());
+        // The parameters of a specialisation a value can reach live in
+        // registers every other such specialisation uses too, so a call made
+        // from this body overwrites them whether or not this body ever wrote
+        // them itself.
+        if indirect {
+            all_written_regs.extend(args_loc_saved.iter().copied());
+        }
         all_written_regs.sort_unstable();
         all_written_regs.dedup();
 
         // For each recursive call, only save registers that are read between that call's return and the end of the function
         for (pos, instr) in parsed.iter().enumerate() {
-            if matches!(instr, Instr::CallFuncRecursive(_, _)) {
+            if matches!(
+                instr,
+                Instr::CallFuncRecursive(_, _) | Instr::CallIndirect(_)
+            ) {
                 // Walk backwards to find this call's SaveFrame and its callsite_id
                 let callsite_id = parsed[..pos]
                     .iter()
@@ -605,4 +683,304 @@ fn compile_function(
 
     // Fix the placeholder Jmp(0) to skip over the function body
     *output.get_mut(jump_idx).unwrap() = Instr::Jmp((output.len() - fn_start + 1) as u16);
+}
+
+/// Compiles `fn_id` at `arg_types` so a call through a value can reach it.
+///
+/// The specialisation takes its parameters from the shared indirect registers
+/// and records where its body starts in the function's entry register, which is
+/// the first slot of every value built for it. A specialisation already
+/// compiled for those types is left alone.
+pub fn ensure_indirect_impl(
+    fn_id: usize,
+    arg_types: &[DataType],
+    output: &mut Vec<Instr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    if state.fns[fn_id].impls.iter().any(|fn_impl| {
+        fn_impl.indirect && arg_types_specialize_equal(&fn_impl.arg_types, arg_types)
+    }) {
+        return;
+    }
+    let is_recursive = if let Some(is_recursive) = state.fns[fn_id].is_recursive {
+        is_recursive
+    } else {
+        let name = state.fns[fn_id].name.clone();
+        let mut visited = FxHashSet::default();
+        visited.insert(name.clone());
+        let is_recursive = can_reach(&name, &name, state.fns, &mut visited);
+        state.fns[fn_id].is_recursive = Some(is_recursive);
+        is_recursive
+    };
+    let fn_name = state.fns[fn_id].name.clone();
+    let fn_args = state.fns[fn_id]
+        .args
+        .iter()
+        .map(|(a, _)| a.clone())
+        .collect::<Vec<SmolStr>>();
+    let fn_code: Rc<[Expr]> = Rc::clone(&state.fns[fn_id].code);
+    let src_file = state.fns[fn_id].src_file;
+    compile_function(
+        output,
+        v,
+        ctx,
+        state,
+        fn_id,
+        &fn_args,
+        &fn_name,
+        arg_types,
+        &[],
+        &[],
+        &fn_code,
+        is_recursive,
+        src_file,
+        true,
+    );
+}
+
+/// Lowers a call through a function value: the callee is compiled, its
+/// arguments go into the registers every such call passes them in, and the jump
+/// reads where to go from the value itself.
+///
+/// The frame is pushed by a `SaveFrame`, so the caller gets its registers back
+/// whichever function the value turned out to hold.
+#[allow(clippy::too_many_arguments)]
+pub fn handle_indirect_call(
+    output: &mut Vec<Instr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    tgt_id: Option<u16>,
+    callee: &Expr,
+    fn_type: &FnValue,
+    args: &[Expr],
+    span: Span,
+    args_indexes: &[Span],
+    returns_null: bool,
+) -> Option<u16> {
+    let arg_types = indirect_arg_types(fn_type, args, args_indexes, span, v, ctx, state);
+    // A variable's set grows as the code writes more functions into it, so a
+    // call through one records what it was compiled at: a function that joins
+    // the set later is compiled for it too.
+    if let Some(set) = fn_type.set
+        && let Some(set) = state.indirect_registers.value_sets.get_mut(set as usize)
+        && !set.used_at.iter().any(|used| **used == *arg_types)
+    {
+        set.used_at.push(Box::from(arg_types.as_slice()));
+    }
+    for candidate in state.fn_value_candidates(fn_type) {
+        check_args_user_fn(
+            args,
+            state.fns[candidate as usize].args.len(),
+            &state.fns[candidate as usize].name.clone(),
+            ctx.file_idx,
+            span,
+            (
+                state.fns[candidate as usize].name_span,
+                state.fns[candidate as usize].src_file,
+            ),
+            state,
+            args_indexes,
+        );
+        ensure_indirect_impl(candidate as usize, &arg_types, output, v, ctx, state);
+    }
+
+    // The value is read before the arguments so that an argument expression
+    // that calls something cannot land on top of it.
+    let callee_id = callee
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let arg_ids = compile_call_args(args, v, ctx, state, output);
+
+    let saveframe_loc = output.len();
+    let callsite_id = state.callsite_registers.len() as u16;
+    state.callsite_registers.push(Vec::new());
+    output.push(Instr::SaveFrame(0, 0, 0));
+    *state.allocated_call_depth += 2;
+
+    for (i, &arg_id) in arg_ids.iter().enumerate() {
+        let dest = state.indirect_arg_register(i);
+        output.push(Instr::Mov(arg_id, dest));
+    }
+    for &arg_id in &arg_ids {
+        state.free_reg(arg_id, v);
+    }
+    // The callee finds the value it was called through where every indirect
+    // call leaves it, which is where the cells it captured come from.
+    let env_dest = state.indirect_env_register();
+    output.push(Instr::Mov(callee_id, env_dest));
+
+    let return_register_id = if returns_null {
+        0
+    } else {
+        state.alloc_reg_tgt(tgt_id)
+    };
+    output.push(Instr::CallIndirect(callee_id));
+    state.add_to_src(ctx, output, span);
+    output[saveframe_loc] = Instr::SaveFrame(
+        (output.len() - 1 - saveframe_loc) as u16,
+        return_register_id,
+        callsite_id,
+    );
+    state.add_instr_to_src(ctx, output[saveframe_loc], span);
+    state.free_reg(callee_id, v);
+
+    if returns_null {
+        None
+    } else {
+        Some(return_register_id)
+    }
+}
+
+/// The types the functions behind a value are compiled at.
+///
+/// A declared `fn(A, B) -> R` says them, and each argument is checked against
+/// what it declares. A type inferred from the functions written into the
+/// position says nothing, so the call site's own argument types are what the
+/// bodies are compiled against.
+pub fn indirect_arg_types(
+    fn_type: &FnValue,
+    args: &[Expr],
+    args_indexes: &[Span],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<DataType> {
+    let Some((params, _)) = &fn_type.sig else {
+        return args
+            .iter()
+            .map(|arg| arg.infer_type(v, ctx, state))
+            .collect();
+    };
+    check_args(
+        args,
+        params.len(),
+        "this function",
+        span,
+        state.sources,
+        ctx.file_idx,
+    );
+    let params = params.clone();
+    for (i, declared) in params.iter().enumerate() {
+        let inferred = args[i].infer_type(v, ctx, state);
+        if !param_type_matches(declared, &inferred, state.generics) {
+            error_function_arg_invalid_type(
+                &inferred,
+                declared,
+                args_indexes[i],
+                "this function",
+                None,
+                ctx.file_idx,
+                state.sources,
+                state.type_names(),
+            );
+        }
+    }
+    params.to_vec()
+}
+
+/// Checks a function written into a position declared `fn(...) -> R`, and
+/// compiles it at the types that declaration names.
+///
+/// The declaration is what the body is compiled against, so the check is the
+/// compile: a closure whose body does not work at the declared parameter types,
+/// or hands back something else, is reported where it was written.
+pub fn check_declared_fn(
+    value: &Expr,
+    declared: &DataType,
+    span: Span,
+    output: &mut Vec<Instr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    // A `fn(...)` inside a list or a map type reaches the functions written
+    // into the literal, so the check follows the declaration into it.
+    match (declared, value) {
+        (DataType::Array(Some(element)), Expr::Array(items, spans)) => {
+            for (i, item) in items.iter().enumerate() {
+                let item_span = spans.get(i + 1).copied().unwrap_or(span);
+                check_declared_fn(item, element, item_span, output, v, ctx, state);
+            }
+            return;
+        }
+        (DataType::Map(entry), Expr::Map(pairs, _)) => {
+            if let Some(declared_value) = &entry.1 {
+                for (_, _, pair_value, value_span) in pairs {
+                    check_declared_fn(
+                        pair_value,
+                        declared_value,
+                        *value_span,
+                        output,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+    let DataType::FnValue(declared) = declared else {
+        return;
+    };
+    let Some((params, declared_return)) = &declared.sig else {
+        return;
+    };
+    let DataType::Fn(fn_id) = value.infer_type(v, ctx, state) else {
+        return;
+    };
+    let fn_id = fn_id as usize;
+    let declared_type = DataType::FnValue(declared.clone());
+    if state.fns[fn_id].args.len() != params.len() {
+        let inferred = DataType::FnValue(Box::new(FnValue::inferred(Box::from([fn_id as u16]))));
+        error_invalid_type(
+            &declared_type,
+            &inferred,
+            span,
+            None,
+            Some(format_args!(
+                "This function takes {} argument(s)",
+                state.fns[fn_id].args.len()
+            )),
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    ensure_indirect_impl(fn_id, params, output, v, ctx, state);
+    let fn_name = state.fns[fn_id].name.clone();
+    let return_type = infer_user_fn_return_type(fn_id, params, &[], &fn_name, v, ctx, state);
+    if !param_type_matches(declared_return, &return_type, state.generics) {
+        let inferred = DataType::FnValue(Box::new(FnValue {
+            sig: Some((params.clone(), return_type)),
+            candidates: Box::from([fn_id as u16]),
+            set: None,
+        }));
+        error_invalid_type(
+            &declared_type,
+            &inferred,
+            span,
+            None,
+            None,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+}
+
+/// Whether a declared type says the shape of a function anywhere inside it.
+#[must_use]
+pub fn declared_holds_fn_signature(declared: &DataType) -> bool {
+    match declared {
+        DataType::FnValue(fn_type) => fn_type.sig.is_some(),
+        DataType::Array(Some(element)) => declared_holds_fn_signature(element),
+        DataType::Map(entry) => entry.1.as_ref().is_some_and(declared_holds_fn_signature),
+        _ => false,
+    }
 }
