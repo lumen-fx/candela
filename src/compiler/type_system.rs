@@ -2074,7 +2074,24 @@ fn add_return_type(
     ctx: Ctx,
     state: &mut State<'_>,
 ) {
-    if return_type == DataType::Unknown || return_types.contains(&return_type) {
+    if return_type == DataType::Unknown {
+        return;
+    }
+    // Two functions handed back by one body make one value the caller calls
+    // through, so the two types join: both bodies are compiled and the call
+    // dispatches on the one that came back. Keeping only the first would leave
+    // the second with no body to jump to.
+    if matches!(return_type, DataType::Fn(_) | DataType::FnValue(_))
+        && let Some(i) = return_types
+            .iter()
+            .position(|held| matches!(held, DataType::Fn(_) | DataType::FnValue(_)))
+    {
+        if let Some(merged) = merge_fn_types(&[return_types[i].clone(), return_type]) {
+            return_types[i] = merged;
+        }
+        return;
+    }
+    if return_types.contains(&return_type) {
         return;
     }
     let mut replacement = None;
@@ -2382,6 +2399,14 @@ fn track_return_flow(
             Expr::ReturnVal(return_val) => {
                 if let Some(val) = return_val.as_ref() {
                     let infered = val.infer_type(v, ctx, state);
+                    // A returned name hands the function on as a value, and the
+                    // caller has no declaration to read it against, so the type
+                    // carries the signature the function was declared with.
+                    let infered = if matches!(infered, DataType::Fn(_)) {
+                        bare_fn_value_type(val, v, ctx, state).unwrap_or(infered)
+                    } else {
+                        infered
+                    };
                     add_return_type(&mut return_types, infered, ctx, state);
                 } else {
                     add_return_type(&mut return_types, DataType::Null, ctx, state);
@@ -3514,6 +3539,60 @@ impl Expr {
             _ => unsafe { unreachable_unchecked() },
         }
     }
+}
+
+/// The type a declared function has where a value holds it.
+///
+/// A function whose parameters and return are annotated says its own signature,
+/// so a call through the value is checked against what the declaration names.
+/// One the compiler infers says only which function it holds, and the first
+/// call through the value settles the types its body is compiled at. The
+/// function is a candidate of the type either way, which is what compiles the
+/// body a call through the value jumps to.
+#[must_use]
+pub fn declared_fn_value_type(fn_id: u16, state: &State<'_>) -> DataType {
+    let function = &state.fns[fn_id as usize];
+    let params: Option<Vec<DataType>> = function
+        .generics
+        .is_none()
+        .then(|| function.args.iter().map(|(_, arg)| arg.clone()).collect())
+        .flatten();
+    let return_type = function
+        .return_type
+        .as_ref()
+        .map(|(declared, _)| declared.clone())
+        .or_else(|| function.returns_null.then_some(DataType::Null));
+    let sig = match (params, return_type) {
+        (Some(params), Some(return_type)) => Some((params.into_boxed_slice(), return_type)),
+        _ => None,
+    };
+    DataType::FnValue(Box::new(FnValue {
+        sig,
+        candidates: Box::from([fn_id]),
+        set: None,
+    }))
+}
+
+/// The type of `expr` where it is a bare name that means a declared function
+/// and the position holds the function rather than calls it.
+///
+/// `None` for anything else, which leaves a closure bound to a name and a call
+/// through a name the compiler can settle lowering to the jump they were.
+#[must_use]
+pub fn bare_fn_value_type(
+    expr: &Expr,
+    v: &[Variable],
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<DataType> {
+    let Expr::Var(name, _) = expr else {
+        return None;
+    };
+    if v.iter().any(|var| var.name == *name) {
+        return None;
+    }
+    let fn_id = state.scope(ctx.file_idx).find_function(&[], name)?;
+    Some(declared_fn_value_type(fn_id as u16, state))
 }
 
 /// The one function type that holds every type in `types`, where more than one

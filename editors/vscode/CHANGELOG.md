@@ -2,8 +2,9 @@
 
 ## 0.2.2
 
-- The `fn` that opens a function type, `fn(int, int) -> int`, colours as a type
-  rather than as a call.
+- The `fn` that opens a function type, `fn(int, int) -> int`, or an anonymous
+  function, `fn(x) { ... }`, carries the same scope as the `fn` of a
+  declaration, so a theme colours all three alike.
 
 ## 0.2.1
 

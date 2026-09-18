@@ -9999,3 +9999,160 @@ pub fn a_function_value_called_at_two_argument_types_is_reported() {
         "
     );
 }
+
+/// A declared function's name is the function itself where a `let` reads it,
+/// and the binding calls what it holds.
+#[test]
+pub fn a_let_holds_the_function_its_name_means() {
+    run_and_check_registers!(
+        "
+        fn double(x: int) -> int { return x * 2; }
+
+        fn main() {
+            let f = double;
+            print(f(4));
+        }
+        ",
+        8.into()
+    );
+}
+
+/// A list of declared function names calls the one the index picked.
+#[test]
+pub fn a_list_of_declared_functions_calls_the_one_it_was_indexed_for() {
+    run_and_check_registers!(
+        "
+        fn double(x: int) -> int { return x * 2; }
+        fn triple(x: int) -> int { return x * 3; }
+
+        fn main() {
+            let fs = [double, triple];
+            print(fs[1](4));
+        }
+        ",
+        12.into()
+    );
+}
+
+/// A map value and a struct field take a declared function's name the same way
+/// they take a closure.
+#[test]
+pub fn a_map_and_a_field_hold_a_declared_function_by_name() {
+    run_and_check_registers!(
+        "
+        struct Button { on_press: fn(int) -> int }
+
+        fn double(x: int) -> int { return x * 2; }
+
+        fn main() {
+            let ops = {\"double\": double};
+            let b = Button { on_press: double };
+            print(ops.get(\"double\")(4) + b.on_press(4));
+        }
+        ",
+        16.into()
+    );
+}
+
+/// A returned name hands the function to the caller, which calls it without an
+/// annotation of its own.
+#[test]
+pub fn a_returned_function_name_is_called_by_the_caller() {
+    run_and_check_registers!(
+        "
+        fn double(x: int) -> int { return x * 2; }
+
+        fn pick() { return double; }
+
+        fn main() {
+            let f = pick();
+            print(f(21));
+        }
+        ",
+        42.into()
+    );
+}
+
+/// A body that hands back two functions of the same shape calls the one that
+/// came back, not the one the first `return` named.
+#[test]
+pub fn a_body_returning_two_functions_calls_the_one_that_came_back() {
+    run_and_check_registers!(
+        "
+        fn double(x: int) -> int { return x * 2; }
+        fn triple(x: int) -> int { return x * 3; }
+
+        fn pick(flag: bool) {
+            if flag { return double; }
+            return triple;
+        }
+
+        fn main() {
+            print(pick(false)(10));
+        }
+        ",
+        30.into()
+    );
+}
+
+/// A `let` that names a function goes through the value rather than the jump
+/// the name used to settle.
+#[test]
+pub fn a_let_that_names_a_function_calls_through_the_value() {
+    let out = compile(
+        String::from(
+            "
+        fn double(x: int) -> int { return x * 2; }
+
+        fn main() {
+            let f = double;
+            print(f(4));
+        }
+        ",
+        ),
+        "let_fn_value.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    assert!(
+        out.instructions
+            .iter()
+            .any(|instr| matches!(instr, Instr::CallIndirect(_))),
+        "a name bound to a function is called through what the binding holds"
+    );
+}
+
+/// A function whose parameters are inferred is compiled for the types the call
+/// through the value asks for.
+#[test]
+pub fn a_name_bound_to_an_inferred_function_takes_the_types_its_call_names() {
+    run_and_check_registers!(
+        "
+        fn same(x) { return x; }
+
+        fn main() {
+            let f = same;
+            print(f(\"hello\") == \"hello\");
+        }
+        ",
+        crate::data::TRUE
+    );
+}
+
+/// One name cannot reach two specialisations through a value, so the second set
+/// of argument types is reported.
+#[test]
+#[should_panic(expected = "explicit panic")]
+pub fn a_name_bound_to_a_function_called_at_two_argument_types_is_reported() {
+    run!(
+        "
+        fn same(x) { return x; }
+
+        fn main() {
+            let f = same;
+            print(f(1));
+            print(f(\"hello\"));
+        }
+        "
+    );
+}

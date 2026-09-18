@@ -321,8 +321,8 @@ Called on a string receiver.
 | `s.repeat(n)` | string | `s` joined to itself `n` times |
 | `s.reverse()` | string | A new string with the characters in reverse order |
 
-Every position on a string counts characters: `len`, `find`, indexing, slicing,
-and `split` with an empty separator, which answers the characters one at a time.
+`len`, `find`, indexing, slicing, and `split` with an empty separator all count
+characters; the empty separator answers the characters one at a time.
 A character is a Unicode scalar value, so an accented letter or an emoji is one
 position and arrives whole. The `chars` method in the [string module](string.md)
 is that empty-separator split under a name that says so.

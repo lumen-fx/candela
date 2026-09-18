@@ -760,3 +760,45 @@ fn closures_agree_across_source_and_artifact() {
         "a closure reads and writes the scope it was written in",
     );
 }
+
+/// Declared functions read by name: a `let`, a list, a struct field and a
+/// return all hand the function on as a value.
+const FUNCTION_NAME_PROGRAM: &str = "
+struct Button { on_press: fn(int) -> int }
+
+fn double(x: int) -> int { return x * 2; }
+fn triple(x: int) -> int { return x * 3; }
+
+fn pick(flag: bool) {
+    if flag { return double; }
+    return triple;
+}
+
+fn main() {
+    let f = double;
+    print(f(4));
+
+    let fs = [double, triple];
+    print(fs[1](4));
+
+    let b = Button { on_press: double };
+    print(b.on_press(4));
+
+    print(pick(false)(10));
+}
+";
+
+/// A function named where a value goes reaches the same body through `candela
+/// <file>` and through `candela build` plus `candela-vm`: the artifact carries
+/// the entry each name was compiled into. Skips if `candela-vm` is not built
+/// alongside `candela`.
+#[test]
+fn function_names_agree_across_source_and_artifact() {
+    agrees_across_source_and_artifact(
+        "function_names_agree_across_source_and_artifact",
+        "function_names",
+        FUNCTION_NAME_PROGRAM,
+        "8\n12\n8\n30\n",
+        "a name read as a value carries the function it means",
+    );
+}
