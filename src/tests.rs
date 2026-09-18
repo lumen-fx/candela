@@ -10205,3 +10205,49 @@ pub fn a_range_loop_leaves_the_variable_it_starts_from_alone() {
     );
     assert_eq!(printed, "1\n2\n5\n");
 }
+
+/// A function returns on every path when its try block and its catch both
+/// return, so the declared type is met without a return after the block.
+#[test]
+pub fn a_try_whose_catch_returns_meets_the_declared_type() {
+    let printed = run_output(
+        "
+        fn a(n: int) -> int { try { return n; } catch e { return -1; } }
+        fn c(n: int) -> int {
+            try { if n == 0 { throw(\"z\"); } return n; }
+            catch \"z\" { return 0; }
+            catch e { return -1; }
+        }
+        fn d(n: int) -> int {
+            try { if n == 0 { throw(\"z\"); } return n; }
+            catch \"z\" { return 0; }
+        }
+        fn e(n: int) -> int {
+            match n {
+                0 => { return 1; }
+                _ => { throw(\"x\"); }
+            }
+        }
+        fn g(n: int) -> int {
+            if n == 0 { return 1; }
+            throw(\"x\");
+        }
+        fn h(n: int) -> int {
+            let i = 0;
+            loop {
+                if i == n { return i; }
+                i += 1;
+            }
+        }
+        fn k(n: int) -> int {
+            loop {
+                if n > 0 { break; }
+                n = 1;
+            }
+            return n;
+        }
+        fn main() { print(a(1), c(0), c(4), d(0), d(6), e(0), g(0), h(3), k(0)); }
+        ",
+    );
+    assert_eq!(printed, "1\n0\n4\n0\n6\n1\n1\n3\n1\n");
+}
