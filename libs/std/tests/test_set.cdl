@@ -4,61 +4,104 @@ import "std/set" as set;
 import "std/assert" as assert;
 
 fn main() {
-    let s = set::new();
-    assert::assert_true(set::is_empty(s));
+    let s = set::new<int>();
+    assert::assert_true(s.is_empty());
 
-    set::add(s, 1);
-    set::add(s, 2);
-    set::add(s, 2); // duplicate, no effect
-    set::add(s, 3);
-    assert::assert_eq(set::len(s), 3);
-    assert::assert_false(set::is_empty(s));
+    s.add(1);
+    s.add(2);
+    s.add(2); // duplicate, no effect
+    s.add(3);
+    assert::assert_eq(s.len(), 3);
+    assert::assert_false(s.is_empty());
 
-    assert::assert_true(set::contains(s, 2));
-    assert::assert_false(set::contains(s, 9));
-    assert::assert_eq(set::members(s).len(), 3);
+    assert::assert_true(s.contains(2));
+    assert::assert_false(s.contains(9));
+    assert::assert_eq(s.members().len(), 3);
 
-    set::remove(s, 2);
-    assert::assert_false(set::contains(s, 2));
-    assert::assert_eq(set::len(s), 2);
-    set::remove(s, 9); // absent, no effect
-    assert::assert_eq(set::len(s), 2);
-    set::add(s, 2);
-    assert::assert_eq(set::len(s), 3);
+    s.remove(2);
+    assert::assert_false(s.contains(2));
+    assert::assert_eq(s.len(), 2);
+    s.remove(9); // absent, no effect
+    assert::assert_eq(s.len(), 2);
+    s.add(2);
+    assert::assert_eq(s.len(), 3);
 
     // Set algebra.
-    let a = set::new();
-    set::add(a, 1);
-    set::add(a, 2);
-    set::add(a, 3);
-    let b = set::new();
-    set::add(b, 2);
-    set::add(b, 3);
-    set::add(b, 4);
+    let a = set::new<int>();
+    a.add(1);
+    a.add(2);
+    a.add(3);
+    let b = set::new<int>();
+    b.add(2);
+    b.add(3);
+    b.add(4);
 
-    assert::assert_eq(set::len(set::union(a, b)), 4);
-    assert::assert_eq(set::len(set::intersection(a, b)), 2);
-    assert::assert_eq(set::len(set::difference(a, b)), 1);
+    assert::assert_eq(a.union(b).len(), 4);
+    assert::assert_eq(a.intersection(b).len(), 2);
+    assert::assert_eq(a.difference(b).len(), 1);
+    assert::assert_eq(a.symmetric_difference(b).len(), 2);
 
-    let inter = set::intersection(a, b);
-    assert::assert_true(set::contains(inter, 2));
-    assert::assert_true(set::contains(inter, 3));
-    assert::assert_false(set::contains(inter, 1));
+    let inter = a.intersection(b);
+    assert::assert_true(inter.contains(2));
+    assert::assert_true(inter.contains(3));
+    assert::assert_false(inter.contains(1));
 
-    let diff = set::difference(a, b);
-    assert::assert_true(set::contains(diff, 1));
-    assert::assert_false(set::contains(diff, 2));
+    let diff = a.difference(b);
+    assert::assert_true(diff.contains(1));
+    assert::assert_false(diff.contains(2));
 
-    // A set is a map underneath, so the members come back in the order they
-    // were added; 2 was removed and added again, so it sits last.
-    assert::assert_eq(set::members(s), [1, 3, 2]);
+    let sym = a.symmetric_difference(b);
+    assert::assert_eq(sym.members(), [1, 4]);
+
+    // The operators are those same four operations.
+    assert::assert_eq((a | b).members(), [1, 2, 3, 4]);
+    assert::assert_eq((a & b).members(), [2, 3]);
+    assert::assert_eq((a - b).members(), [1]);
+    assert::assert_eq((a ^^ b).members(), [1, 4]);
+
+    // A compound assignment applies the matching operator.
+    let grown = set::new<int>();
+    grown.add(1);
+    grown |= b;
+    assert::assert_eq(grown.members(), [1, 2, 3, 4]);
+
+    // Struct equality is field by field and map equality ignores order, so `==`
+    // between two sets is already set equality and needs no method.
+    let same = set::new<int>();
+    same.add(3);
+    same.add(2);
+    same.add(1);
+    assert::assert_true(a == same);
+    assert::assert_false(a == b);
+    assert::assert_ne(a, b);
+
+    // The members come back in the order they were added; 2 was removed and
+    // added again, so it sits last.
+    assert::assert_eq(s.members(), [1, 3, 2]);
+
+    // A set is not iterable; iterate the list `members` hands back.
+    let total = 0;
+    for x in s.members() {
+        total += x;
+    }
+    assert::assert_eq(total, 6);
 
     // String members.
-    let words = set::new();
-    set::add(words, "hi");
-    set::add(words, "hi");
-    set::add(words, "bye");
-    assert::assert_eq(set::len(words), 2);
+    let words = set::new<string>();
+    words.add("hi");
+    words.add("hi");
+    words.add("bye");
+    assert::assert_eq(words.len(), 2);
+
+    // Nothing in a bare `set::new()` pins the member type, so it hands back a
+    // `Set<any>`, which takes a member of any type.
+    let mixed = set::new();
+    assert::assert_true(mixed.is_empty());
+    mixed.add(1);
+    mixed.add("hi");
+    mixed.add(1);
+    assert::assert_eq(mixed.len(), 2);
+    assert::assert_true(mixed.contains("hi"));
 
     print("set ok");
 }

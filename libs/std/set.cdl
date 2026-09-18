@@ -1,88 +1,131 @@
-/// A set of unique values, built as a thin layer over a map.
+/// A set of unique values.
 ///
-/// A set stores its members as the keys of a map (the values are a unit), so it
-/// reuses the map's storage, hashing, and garbage collection rather than adding
-/// a separate runtime type. Membership, size, and iteration all defer to the
-/// underlying map. Create one with `set::new()`, then `add` and test with
-/// `contains`; iterate the members through `members` or by iterating the map
-/// the set wraps.
+/// `Set<T>` is a struct holding a map from member to a unit value, so it reuses
+/// the map's storage, hashing, and garbage collection rather than adding a
+/// separate runtime type. Being a type of its own is what lets the operations
+/// be methods: `s.add(x)`, `s.contains(x)`, and the set algebra through `|`,
+/// `&`, `-`, and `^^`. Create one with `set::new<int>()`, naming the member
+/// type.
 ///
-/// A set value is typed as a map, and method resolution goes by type, so the
-/// set operations are free functions; defining them as methods would attach
-/// them to every map.
+/// Members come back from `members` in the order they were added, because the
+/// map underneath keeps insertion order.
 ///
-/// The functions are polymorphic through Candela's compile-time
-/// monomorphization: a single definition specializes to the member type at the
-/// call site.
+/// The type is generic through Candela's compile-time monomorphization: one
+/// definition specializes to the member type at the call site.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-/// A new empty set.
-fn new() {
-    return {};
+/// A set of unique values of type `T`.
+struct Set<T> {
+    items: {T: bool},
 }
 
-/// Adds `x`. A member already present is unchanged.
-fn add(s, x) {
-    s.insert(x, true);
-}
-
-/// Takes `x` back out. A member the set does not hold is unchanged.
-fn remove(s, x) {
-    s.remove(x);
-}
-
-/// True when `x` is a member.
-fn contains(s, x) {
-    return s.contains(x);
-}
-
-/// The number of members.
-fn len(s) {
-    return s.len();
-}
-
-/// True when the set has no members.
-fn is_empty(s) {
-    return s.len() == 0;
-}
-
-/// A list of the members.
-fn members(s) {
-    return s.keys();
-}
-
-/// A new set with every member of either `a` or `b`.
-fn union(a, b) {
-    let r = {};
-    for x in a {
-        r.insert(x, true);
+impl Set<T> {
+    /// Adds `x`. A member already present is unchanged.
+    fn add(self, x: T) {
+        self.items.insert(x, true);
     }
-    for x in b {
-        r.insert(x, true);
-    }
-    return r;
-}
 
-/// A new set with the members present in both `a` and `b`.
-fn intersection(a, b) {
-    let r = {};
-    for x in a {
-        if b.contains(x) {
-            r.insert(x, true);
+    /// Takes `x` back out. A member the set does not hold is unchanged.
+    fn remove(self, x: T) {
+        self.items.remove(x);
+    }
+
+    /// True when `x` is a member.
+    fn contains(self, x: T) -> bool {
+        return self.items.contains(x);
+    }
+
+    /// The number of members.
+    fn len(self) -> int {
+        return self.items.len();
+    }
+
+    /// True when the set has no members.
+    fn is_empty(self) -> bool {
+        return self.items.len() == 0;
+    }
+
+    /// A list of the members, in the order they were added.
+    fn members(self) -> T[] {
+        return self.items.keys();
+    }
+
+    /// A new set with every member of either set. Neither input changes.
+    fn union(self, other: Set<T>) -> Set<T> {
+        let r = Set<T>{ items: {} };
+        for x in self.items {
+            r.items.insert(x, true);
         }
+        for x in other.items {
+            r.items.insert(x, true);
+        }
+        return r;
     }
-    return r;
+
+    /// A new set with the members present in both sets. Neither input changes.
+    fn intersection(self, other: Set<T>) -> Set<T> {
+        let r = Set<T>{ items: {} };
+        for x in self.items {
+            if other.items.contains(x) {
+                r.items.insert(x, true);
+            }
+        }
+        return r;
+    }
+
+    /// A new set with the members of this set that are not in `other`. Neither
+    /// input changes.
+    fn difference(self, other: Set<T>) -> Set<T> {
+        let r = Set<T>{ items: {} };
+        for x in self.items {
+            if !other.items.contains(x) {
+                r.items.insert(x, true);
+            }
+        }
+        return r;
+    }
+
+    /// A new set with the members of exactly one of the two sets. Neither input
+    /// changes.
+    fn symmetric_difference(self, other: Set<T>) -> Set<T> {
+        let r = Set<T>{ items: {} };
+        for x in self.items {
+            if !other.items.contains(x) {
+                r.items.insert(x, true);
+            }
+        }
+        for x in other.items {
+            if !self.items.contains(x) {
+                r.items.insert(x, true);
+            }
+        }
+        return r;
+    }
+
+    /// `a | b` is the union.
+    fn |(self, other: Set<T>) -> Set<T> {
+        return self.union(other);
+    }
+
+    /// `a & b` is the intersection.
+    fn &(self, other: Set<T>) -> Set<T> {
+        return self.intersection(other);
+    }
+
+    /// `a - b` is the difference.
+    fn -(self, other: Set<T>) -> Set<T> {
+        return self.difference(other);
+    }
+
+    /// `a ^^ b` is the symmetric difference.
+    fn ^^(self, other: Set<T>) -> Set<T> {
+        return self.symmetric_difference(other);
+    }
 }
 
-/// A new set with the members of `a` that are not in `b`.
-fn difference(a, b) {
-    let r = {};
-    for x in a {
-        if !b.contains(x) {
-            r.insert(x, true);
-        }
-    }
-    return r;
+/// A new empty set. Name the member type, `set::new<int>()`, to pin it.
+fn new<T>() -> Set<T> {
+    return Set<T>{ items: {} };
 }

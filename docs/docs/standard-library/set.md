@@ -6,17 +6,22 @@ A set of unique values.
 import "std/set" as set;
 ```
 
-A set is a map whose keys are the members, so it reuses the map's storage,
-hashing, and garbage collection rather than adding a runtime type of its own.
-That has two consequences you can rely on: a set value accepts the built-in map
-methods, and `for x in s` iterates the members.
+`Set<T>` is a struct holding a map from member to a unit value, so it reuses the
+map's storage, hashing, and garbage collection rather than adding a runtime type
+of its own. Because it is a type of its own, the operations are methods on it:
+`s.add(x)`, `s.contains(x)`, and the set algebra through `|`, `&`, `-`, and
+`^^`.
 
-Create one with `set::new()`, add with `set::add`, and test with
-`set::contains`. The operations are free functions rather than methods: a set
-value is typed as a map, and method resolution goes by type, so set methods
-would attach to every map.
+Create one with `set::new<int>()`, naming the member type. Nothing in a bare
+`set::new()` pins the type, so that hands back a `Set<any>`, which takes a
+member of any type. `Set<int>` and `Set<any>` are separate types, like any other
+two instantiations of a generic; see [generics](../language/generics.md).
 
-The helpers are polymorphic through compile-time monomorphisation: one definition
+A set is a struct, so it is not iterable and the built-in map methods do not
+apply to it. Iterate the list `members` hands back, `for x in s.members()`, and
+reach the rest through the methods below.
+
+The type is generic through compile-time monomorphisation: one definition
 specialises to the member type at the call site. The module is pure candela, so
 it compiles into a `.cdlb` artifact and runs under `candela-vm` with no dynamic
 library.
@@ -24,15 +29,16 @@ library.
 ## new
 
 ```rust
-set::new()
+set::new<int>()
 ```
 
-- Returns: a new empty set.
+- Returns: a new empty `Set<int>`. Written bare, `set::new()`, it returns a
+  `Set<any>`.
 
 ## add
 
 ```rust
-set::add(s, x)
+s.add(x)
 ```
 
 - `x`: the member to add.
@@ -41,7 +47,7 @@ set::add(s, x)
 ## remove
 
 ```rust
-set::remove(s, x)
+s.remove(x)
 ```
 
 - `x`: the member to take out.
@@ -50,7 +56,7 @@ set::remove(s, x)
 ## contains
 
 ```rust
-set::contains(s, x)
+s.contains(x)
 ```
 
 - Returns: a bool, true when `x` is a member.
@@ -58,7 +64,7 @@ set::contains(s, x)
 ## len
 
 ```rust
-set::len(s)
+s.len()
 ```
 
 - Returns: the number of members, as an int.
@@ -66,7 +72,7 @@ set::len(s)
 ## is_empty
 
 ```rust
-set::is_empty(s)
+s.is_empty()
 ```
 
 - Returns: a bool, true when the set has no members.
@@ -74,17 +80,18 @@ set::is_empty(s)
 ## members
 
 ```rust
-set::members(s)
+s.members()
 ```
 
-- Returns: a list of the members, in the order they were added. A set is a map
-  underneath, so it inherits the map's order: a member added twice keeps the
-  place it first took, and one removed and added again goes to the end.
+- Returns: a list of the members, in the order they were added. The map
+  underneath keeps insertion order: a member added twice keeps the place it
+  first took, and one removed and added again goes to the end.
 
 ## union
 
 ```rust
-set::union(a, b)
+a.union(b)
+a | b
 ```
 
 - Returns: a new set with every member of either `a` or `b`. Neither input
@@ -93,7 +100,8 @@ set::union(a, b)
 ## intersection
 
 ```rust
-set::intersection(a, b)
+a.intersection(b)
+a & b
 ```
 
 - Returns: a new set with the members present in both `a` and `b`. Neither input
@@ -102,25 +110,56 @@ set::intersection(a, b)
 ## difference
 
 ```rust
-set::difference(a, b)
+a.difference(b)
+a - b
 ```
 
 - Returns: a new set with the members of `a` that are not in `b`. Neither input
   changes.
 
+## symmetric_difference
+
+```rust
+a.symmetric_difference(b)
+a ^^ b
+```
+
+- Returns: a new set with the members of exactly one of `a` and `b`: those in
+  `a` but not `b` first, then those in `b` but not `a`. Neither input changes.
+
+## Comparing two sets
+
+`a == b` is set equality and needs no method of its own. Struct equality
+compares field by field, and map equality ignores the order the entries went in,
+so two sets holding the same members are equal whatever order they were built
+in. `a != b` is the same answer flipped. The two sets have to be the same
+`Set<T>`, so a `Set<int>` never equals a `Set<any>`.
+
+## Operators
+
 ```rust
 import "std/set" as set;
 
 fn main() {
-    let a = set::new();
-    set::add(a, 1);
-    set::add(a, 2);
-    let b = set::new();
-    set::add(b, 2);
-    set::add(b, 3);
+    let a = set::new<int>();
+    a.add(1);
+    a.add(2);
+    let b = set::new<int>();
+    b.add(2);
+    b.add(3);
 
-    print(set::members(set::union(a, b)));
-    print(set::members(set::intersection(a, b)));
-    print(set::members(set::difference(a, b)));
+    print((a | b).members());
+    print((a & b).members());
+    print((a - b).members());
+    print((a ^^ b).members());
+
+    a |= b;
+    print(a.members());
 }
 ```
+
+The four operators come from methods named by the symbol, the same way any type
+defines an operator; see
+[operators on your own types](../language/methods.md#operators-on-your-own-types).
+A compound assignment applies the matching operator, so `a |= b` is
+`a = a | b`.
