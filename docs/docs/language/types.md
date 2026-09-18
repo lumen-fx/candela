@@ -45,6 +45,11 @@ fn main() {
 }
 ```
 
+Every answer is written the way the same type is written in a program: a struct
+or an enum by its declared name, a dynamic value as `any`, and a function as
+`fn(A) -> R`. It is the type the compiler inferred, so a value it could not pin
+reads `any` however the program later fills it.
+
 The predicates `is_int`, `is_float`, `is_str`, `is_bool`, `is_list`, `is_map`,
 and `is_null` answer the same question as a `bool`.
 
