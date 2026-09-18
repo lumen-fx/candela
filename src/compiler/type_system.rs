@@ -2031,6 +2031,11 @@ pub fn check_if_returns_void(content: &[Expr]) -> bool {
                     return false;
                 }
             }
+            Expr::TryCatchBlock(try_code, _, catch_code) => {
+                if !check_if_returns_void(try_code) || !check_if_returns_void(catch_code) {
+                    return false;
+                }
+            }
             Expr::Match(_, arms, wildcard, _) => {
                 for (_, body) in arms {
                     if !check_if_returns_void(body) {
@@ -2223,6 +2228,7 @@ fn track_return_flow(
     fn_name: &str,
 ) -> FnReturnFlow {
     let mut return_types: Vec<DataType> = Vec::new();
+    let mut threw = false;
     for expr in content {
         match expr {
             Expr::Condition(_, code, _, _) | Expr::InlineCondition(_, code, _, _) => {
@@ -2235,13 +2241,22 @@ fn track_return_flow(
                     };
                 }
             }
-            Expr::ElseIfBlock(_, code, _)
-            | Expr::ElseBlock(code)
-            | Expr::EvalBlock(code)
-            | Expr::LoopBlock(code) => {
+            Expr::ElseIfBlock(_, code, _) | Expr::ElseBlock(code) | Expr::EvalBlock(code) => {
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
                 if flow.always_returns {
+                    return FnReturnFlow {
+                        types: return_types,
+                        always_returns: true,
+                    };
+                }
+            }
+            // A `loop` is left through a `break` or a `return`, so one with no
+            // break of its own never falls through to what follows it.
+            Expr::LoopBlock(code) => {
+                let flow = track_scoped_returns(code, v, ctx, state, fn_name);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
+                if flow.always_returns || !block_breaks(code) {
                     return FnReturnFlow {
                         types: return_types,
                         always_returns: true,
@@ -2331,6 +2346,17 @@ fn track_return_flow(
                 let value = args[1].infer_type(v, ctx, state);
                 pin_inserted_entry(obj, &key, &value, v);
             }
+            // A `throw` never comes back, so the path it ends is one the
+            // function returns on: a match arm or a catch that only raises
+            // leaves the other arms to answer. The walk goes on past it, since
+            // a return written after the throw still says what the function
+            // hands back. This comes before the arm that pins a call's
+            // empty-literal arguments, which matches every call.
+            Expr::FunctionCall(_, namespace, _, _, _)
+                if namespace.len() == 1 && namespace[0].as_str() == "throw" =>
+            {
+                threw = true;
+            }
             Expr::FunctionCall(args, namespace, _, _, type_args) if type_args.is_empty() => {
                 let (fn_name, path) = namespace.split_last().unwrap();
                 if let Some(fn_id) = state.scope(ctx.file_idx).find_function(path, fn_name) {
@@ -2396,6 +2422,29 @@ fn track_return_flow(
                     };
                 }
             }
+            // A try block and its catch are two paths out of the statement,
+            // and the function returns on every path when both do. The catch
+            // sees the error kind under the name the block binds.
+            Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+                let try_flow = track_scoped_returns(try_code, v, ctx, state, fn_name);
+                extend_return_types!(&mut return_types, try_flow.types, ctx, state);
+                let v_len = v.len();
+                v.push(Variable {
+                    name: err_var.clone(),
+                    register_id: 0,
+                    cell: false,
+                    var_type: DataType::String,
+                });
+                let catch_flow = track_return_flow(catch_code, v, ctx, state, fn_name);
+                v.truncate(v_len);
+                extend_return_types!(&mut return_types, catch_flow.types, ctx, state);
+                if try_flow.always_returns && catch_flow.always_returns {
+                    return FnReturnFlow {
+                        types: return_types,
+                        always_returns: true,
+                    };
+                }
+            }
             Expr::ReturnVal(return_val) => {
                 if let Some(val) = return_val.as_ref() {
                     let infered = val.infer_type(v, ctx, state);
@@ -2421,8 +2470,30 @@ fn track_return_flow(
     }
     FnReturnFlow {
         types: return_types,
-        always_returns: false,
+        always_returns: threw,
     }
+}
+
+/// Whether a `break` written in `code` leaves the loop it belongs to. A break
+/// inside a nested loop leaves that loop only, so nested loops are not
+/// searched.
+fn block_breaks(code: &[Expr]) -> bool {
+    code.iter().any(|expr| match expr {
+        Expr::Break => true,
+        Expr::Condition(_, body, _, _)
+        | Expr::InlineCondition(_, body, _, _)
+        | Expr::ElseIfBlock(_, body, _)
+        | Expr::ElseBlock(body)
+        | Expr::EvalBlock(body) => block_breaks(body),
+        Expr::TryCatchBlock(try_code, _, catch_code) => {
+            block_breaks(try_code) || block_breaks(catch_code)
+        }
+        Expr::Match(_, arms, wildcard, _) => {
+            arms.iter().any(|(_, body)| block_breaks(body))
+                || wildcard.as_ref().is_some_and(|w| block_breaks(w))
+        }
+        _ => false,
+    })
 }
 
 /// Infers the return type of a user function specialised for
