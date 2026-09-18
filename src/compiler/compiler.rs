@@ -77,9 +77,9 @@ use type_system::collect_direct_fn_calls;
 use type_system::merge_fn_types;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
-use type_system::resolve_variant_constructor;
 use type_system::struct_field_type_matches;
 use type_system::struct_literal_id;
+use type_system::variant_constructor_at;
 
 #[cfg(not(target_arch = "wasm32"))]
 use libloading::Library;
@@ -542,6 +542,56 @@ fn compile_array_literal(
     }
 }
 
+/// Checks a struct field's value against the type the field declares, and
+/// answers whether the value is built as a function value. A field declared
+/// `fn(...)` holds a function value, so the function written into it is
+/// compiled at the types the field declares, and the value carries which
+/// function it is.
+#[allow(clippy::too_many_arguments)]
+fn compile_struct_field_type(
+    name: &SmolStr,
+    struct_idx: usize,
+    field_idx: usize,
+    field_expr: &Expr,
+    field_value_span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> bool {
+    let field_type = field_expr.infer_type(v, ctx, state);
+    let declared = state.structs[struct_idx].fields[field_idx].1.clone();
+    let as_fn_value = declared_holds_fn_signature(&declared);
+    if as_fn_value {
+        check_declared_fn(
+            field_expr,
+            &declared,
+            field_value_span,
+            output,
+            v,
+            ctx,
+            state,
+        );
+    }
+    let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
+    let field_type = if as_fn_value { declared } else { field_type };
+    let field = &state.structs[struct_idx].fields[field_idx];
+    if !struct_field_type_matches(&field.1, &field_type) {
+        compiler_errors::error_struct_field_invalid_type(
+            ctx.file_idx,
+            name,
+            field.2,
+            &field.0,
+            &field.1,
+            field_value_span,
+            &field_type,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    as_fn_value
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_struct_literal(
     namespace: &[SmolStr],
@@ -579,44 +629,17 @@ fn compile_struct_literal(
                 .iter()
                 .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
             {
-                let field_type = field_expr.infer_type(v, ctx, state);
-                // A field declared `fn(...)` holds a function value, so the
-                // function written into it is compiled at the types the field
-                // declares, and the value carries which function it is.
-                let declared = state.structs[expected_struct_idx].fields[field_idx]
-                    .1
-                    .clone();
-                let as_fn_value = declared_holds_fn_signature(&declared);
-                if as_fn_value {
-                    check_declared_fn(
-                        field_expr,
-                        &declared,
-                        *field_value_span,
-                        output,
-                        v,
-                        ctx,
-                        state,
-                    );
-                }
-                let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
-                let field_type = if as_fn_value { declared } else { field_type };
-                let field = &state.structs[expected_struct_idx].fields[field_idx];
-                if !struct_field_type_matches(&field.1, &field_type) {
-                    compiler_errors::error_struct_field_invalid_type(
-                        ctx.file_idx,
-                        name,
-                        field.2,
-                        &field.0,
-                        &field.1,
-                        *field_value_span,
-                        &field_type,
-                        state.sources,
-                        TypeNames {
-                            structs: state.structs,
-                            enums: state.enums,
-                        },
-                    );
-                }
+                let as_fn_value = compile_struct_field_type(
+                    name,
+                    expected_struct_idx,
+                    field_idx,
+                    field_expr,
+                    *field_value_span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
                 let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
                 if field_expr.is_constant_literal() {
                     state
@@ -663,44 +686,17 @@ fn compile_struct_literal(
                 .iter()
                 .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
             {
-                let field_type = field_expr.infer_type(v, ctx, state);
-                // A field declared `fn(...)` holds a function value, so the
-                // function written into it is compiled at the types the field
-                // declares, and the value carries which function it is.
-                let declared = state.structs[expected_struct_idx].fields[field_idx]
-                    .1
-                    .clone();
-                let as_fn_value = declared_holds_fn_signature(&declared);
-                if as_fn_value {
-                    check_declared_fn(
-                        field_expr,
-                        &declared,
-                        *field_value_span,
-                        output,
-                        v,
-                        ctx,
-                        state,
-                    );
-                }
-                let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
-                let field_type = if as_fn_value { declared } else { field_type };
-                let field = &state.structs[expected_struct_idx].fields[field_idx];
-                if !struct_field_type_matches(&field.1, &field_type) {
-                    compiler_errors::error_struct_field_invalid_type(
-                        ctx.file_idx,
-                        name,
-                        field.2,
-                        &field.0,
-                        &field.1,
-                        *field_value_span,
-                        &field_type,
-                        state.sources,
-                        TypeNames {
-                            structs: state.structs,
-                            enums: state.enums,
-                        },
-                    );
-                }
+                let as_fn_value = compile_struct_field_type(
+                    name,
+                    expected_struct_idx,
+                    field_idx,
+                    field_expr,
+                    *field_value_span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
                 let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
                 if field_expr.is_constant_literal() {
                     state
@@ -794,7 +790,7 @@ pub(crate) fn resolve_enum_variant(
 ///
 /// A generic enum has no registered type until something names one, so the
 /// arguments are typed first and the enum is instantiated at what its payload
-/// binds; see [`resolve_variant_constructor`]. A plain enum resolves by name.
+/// binds; see [`variant_constructor_at`]. A plain enum resolves by name.
 pub(crate) fn variant_constructor(
     path: &[SmolStr],
     args: &[Expr],
@@ -804,8 +800,7 @@ pub(crate) fn variant_constructor(
     state: &mut State<'_>,
 ) -> Option<(u16, u16)> {
     let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
-    resolve_variant_constructor(path, &arg_types, span, ctx, state)
-        .or_else(|| resolve_enum_variant(path, ctx.file_idx, state))
+    variant_constructor_at(path, &arg_types, span, ctx, state)
 }
 
 /// Lowers an enum-variant construction (`Color::Red`, `Some(x)`) to a fresh
@@ -3792,10 +3787,11 @@ impl Expr {
             ),
             Self::AnonymousFunction(_, _, span) => {
                 debug_assert!(uses_id);
-                let captures = match self.infer_type(v, ctx, state) {
-                    DataType::Fn(fn_id) => state.fns[fn_id as usize].captures.clone(),
-                    _ => unsafe { unreachable_unchecked() },
+                let DataType::Fn(fn_id) = self.infer_type(v, ctx, state) else {
+                    unsafe { unreachable_unchecked() }
                 };
+                let fn_id = fn_id as usize;
+                let captures = state.fns[fn_id].captures.clone();
                 if captures.is_empty() {
                     // A closure that reads nothing around it is the id of a
                     // function and nothing else, which is what it was before
@@ -3815,10 +3811,6 @@ impl Expr {
                     // variables its body reads, in the order the body expects
                     // them. Two closures written in one scope take the same
                     // cells, so what one writes the other reads.
-                    let fn_id = match self.infer_type(v, ctx, state) {
-                        DataType::Fn(fn_id) => fn_id as usize,
-                        _ => unsafe { unreachable_unchecked() },
-                    };
                     let entry_id = state.fn_entry_register(fn_id);
                     let env_id = state.alloc_reg_tgt(tgt_id);
                     output.push(Instr::EmptyArray(env_id));

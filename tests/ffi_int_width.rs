@@ -3,29 +3,12 @@
 //! with the low half of a wide value, or with a struct whose second field sits
 //! at the wrong offset.
 //!
-//! The library under test is built here with `rustc`, which every `cargo test`
-//! run has on its path, so the test needs no C toolchain.
+
+mod ffi_fixture;
 
 use candela::Engine;
 use candela::Value;
-use candela_vm::rt::TargetOs;
-use candela_vm::rt::resolve_library_filename;
 use std::path::PathBuf;
-use std::process::Command;
-
-/// A unique scratch directory under the system temp dir.
-fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "candela_ffi_int_{tag}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
-}
 
 const FIXTURE: &str = r#"
 #[repr(C)]
@@ -48,27 +31,10 @@ pub extern "C" fn split(x: i64) -> Pair {
 }
 "#;
 
-/// Builds the fixture library in `dir` and returns its path.
+/// The library the `dylib` block under test binds to: `triple` takes and
+/// returns a wide `int`, and `split` returns a struct of two.
 fn build_fixture(dir: &std::path::Path) -> PathBuf {
-    let source_path = dir.join("fixture.rs");
-    std::fs::write(&source_path, FIXTURE).expect("write fixture source");
-    let library = dir.join(resolve_library_filename("intwidth", TargetOs::CURRENT));
-    let output = Command::new("rustc")
-        .arg("--edition")
-        .arg("2021")
-        .arg("--crate-type")
-        .arg("cdylib")
-        .arg("-o")
-        .arg(&library)
-        .arg(&source_path)
-        .output()
-        .expect("run rustc");
-    assert!(
-        output.status.success(),
-        "rustc failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    library
+    ffi_fixture::build_cdylib(dir, "intwidth", FIXTURE)
 }
 
 const PROGRAM: &str = "
@@ -98,7 +64,7 @@ fn main() {}
 /// returned struct of them read back at their own offsets.
 #[test]
 fn wide_ints_cross_the_c_boundary() {
-    let root = scratch_dir("wide");
+    let root = ffi_fixture::scratch_dir("int", "wide");
     let _library = build_fixture(&root);
     let script = root.join("app.cdl");
 

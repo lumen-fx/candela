@@ -1448,7 +1448,8 @@ pub fn execute(
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(char_len, idx_start, idx_end));
                 }
-                let (start, end) = if char_len == src.as_str(str_pool).len() {
+                let text = src.as_str(str_pool);
+                let (start, end) = if char_len == text.len() {
                     (idx_start as usize, idx_end as usize)
                 } else {
                     // The end is found by walking on from the start rather
@@ -1456,7 +1457,6 @@ pub fn execute(
                     // leaves a walk over the string standing at the start of
                     // this cut for the next one.
                     let start = src.str_byte_offset(idx_start as usize, str_pool);
-                    let text = src.as_str(str_pool);
                     let span = char_byte_offset(&text[start..], (idx_end - idx_start) as usize);
                     (start, start + span)
                 };

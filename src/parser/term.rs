@@ -3,7 +3,6 @@ use super::lexer::Token;
 use super::lexer::parse_string;
 use super::parse_expr;
 use super::parser_expr;
-use super::parser_expr::parse_expr_no_struct;
 use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
@@ -13,6 +12,7 @@ use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
 use crate::parser::blocks::parse_block;
 use crate::parser::blocks::parse_block_expr;
+use crate::parser::blocks::parse_condition_expr;
 use crate::parser::expand_macro;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
@@ -306,9 +306,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         }
         // Inline condition
         Token::If => {
-            let condition_start = parser.peek_token_span().start;
-            let condition = parse_expr_no_struct(parser);
-            let condition_span: Span = (condition_start, parser.last_token_end as u32).into();
+            let (condition, condition_span) = parse_condition_expr(parser);
             let mut output_code: Vec<Expr> = Vec::with_capacity(2);
             output_code.push(parse_block_expr(parser));
             loop {
@@ -323,9 +321,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 let next_token = parser.peek_token_opt();
                 if next_token == Some(Token::If) {
                     parser.next_token();
-                    let else_if_start = parser.peek_token_span().start;
-                    let else_if_condition = parse_expr_no_struct(parser);
-                    let else_if_span: Span = (else_if_start, parser.last_token_end as u32).into();
+                    let (else_if_condition, else_if_span) = parse_condition_expr(parser);
                     parser.next_token_expect(Token::LBrace, "Blocks must begin with a '{'.");
                     let else_if_value = parse_expr(parser);
                     parser.next_token_expect(Token::RBrace, "Unmatched '}'");

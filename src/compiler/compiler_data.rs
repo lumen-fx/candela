@@ -376,6 +376,12 @@ impl State<'_> {
         self.registers.push(data);
         id
     }
+    /// Reserves `id` so the allocator never hands it out again, and answers it.
+    fn reserve_register(&mut self, id: u16) -> u16 {
+        self.reserved_registers.insert(id);
+        self.free_registers.retain(|reg| *reg != id);
+        id
+    }
     /// The register the argument at `idx` of an indirect call travels in.
     ///
     /// Reserved on first use, so the allocator never hands it to anything else:
@@ -387,10 +393,7 @@ impl State<'_> {
             let id = (self.registers.len() - 1) as u16;
             self.indirect_registers.args.push(id);
         }
-        let id = self.indirect_registers.args[idx];
-        self.reserved_registers.insert(id);
-        self.free_registers.retain(|reg| *reg != id);
-        id
+        self.reserve_register(self.indirect_registers.args[idx])
     }
     /// A fresh set of the functions one variable may hold, starting with
     /// `fn_id`.
@@ -418,34 +421,26 @@ impl State<'_> {
     }
     /// The register an indirect call leaves the callee's environment in.
     pub fn indirect_env_register(&mut self) -> u16 {
-        let id = if let Some(id) = self.indirect_registers.env {
-            id
-        } else {
-            self.registers.push(NULL);
-            let id = (self.registers.len() - 1) as u16;
-            self.indirect_registers.env = Some(id);
-            id
-        };
-        self.reserved_registers.insert(id);
-        self.free_registers.retain(|reg| *reg != id);
-        id
+        if let Some(id) = self.indirect_registers.env {
+            return self.reserve_register(id);
+        }
+        self.registers.push(NULL);
+        let id = (self.registers.len() - 1) as u16;
+        self.indirect_registers.env = Some(id);
+        self.reserve_register(id)
     }
     /// The register holding where `fn_id`'s body starts, allocated the first
     /// time the function becomes a value. Every value built for the function
     /// carries it, and the compiler writes the location into it once the
     /// function's indirect specialisation is compiled.
     pub fn fn_entry_register(&mut self, fn_id: usize) -> u16 {
-        let id = if let Some(id) = self.fns[fn_id].entry_register {
-            id
-        } else {
-            self.registers.push(NULL);
-            let id = (self.registers.len() - 1) as u16;
-            self.fns[fn_id].entry_register = Some(id);
-            id
-        };
-        self.reserved_registers.insert(id);
-        self.free_registers.retain(|reg| *reg != id);
-        id
+        if let Some(id) = self.fns[fn_id].entry_register {
+            return self.reserve_register(id);
+        }
+        self.registers.push(NULL);
+        let id = (self.registers.len() - 1) as u16;
+        self.fns[fn_id].entry_register = Some(id);
+        self.reserve_register(id)
     }
     /// Allocates a register, reusing `tgt_id` if it holds some register id.
     /// If `tgt_id == None`, it calls `alloc_reg()`.
