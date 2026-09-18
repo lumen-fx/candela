@@ -531,3 +531,61 @@ fn pick(c: shapes::Cell<int>|null) -> Cell<shapes::Point>|null {
     (block
       (return_statement
         (identifier)))))
+
+================================================================================
+Function types on fields, parameters and returns (docs/docs/language/types.md)
+================================================================================
+
+struct Button {
+    on_press: fn(int) -> int,
+    steps: (fn(int) -> int)[],
+    hooks: {string: fn()},
+}
+
+fn apply(f: fn(int, int) -> int, xs: fn(int) -> int[]) -> fn() {
+    return f;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (function_type
+          (type_identifier)
+          (type_identifier)))
+      (field_declaration
+        (identifier)
+        (array_type
+          (parenthesized_type
+            (function_type
+              (type_identifier)
+              (type_identifier)))))
+      (field_declaration
+        (identifier)
+        (map_type
+          (type_identifier)
+          (function_type)))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (function_type
+          (type_identifier)
+          (type_identifier)
+          (type_identifier)))
+      (parameter
+        (identifier)
+        (function_type
+          (type_identifier)
+          (array_type
+            (type_identifier)))))
+    (return_type
+      (function_type))
+    (block
+      (return_statement
+        (identifier)))))

@@ -15,7 +15,7 @@ up before it runs.
 | Absent value | `null` | `null` |
 | List | `T[]` | `[1, 2, 3]` |
 | Map | `{K: V}` | `{"a": 1}` |
-| Function | inferred | `fn(x) { return x; }` |
+| Function | `fn(A) -> R` | `fn(x) { return x; }` |
 
 `int` is a signed 64-bit integer and `float` is double precision. A numeric
 literal with a decimal point is a `float`; without one it is an `int`. An
@@ -29,7 +29,9 @@ past the top comes back at the bottom.
 
 Lists and maps are covered in [Collections](collections.md), functions in
 [Functions](functions.md), and your own types in [Enums](enums.md) and in
-[Structs](#structs) below.
+[Structs](#structs) below. A function's type is inferred wherever the value
+says it; write `fn(A) -> R` where a declaration has to say what it accepts,
+such as a struct field or a parameter.
 
 ## Inspecting a type
 
@@ -108,7 +110,15 @@ parameters and return types. The type grammar is the same in all of them.
 - `{K: V}`: a map from `K` to `V`, for example `{string: int}`.
 - A struct or enum name: that type.
 - `A|B`: a union, a value that is either an `A` or a `B`.
+- `fn(A, B) -> R`: a function taking an `A` and a `B` and returning an `R`.
+  Leave the arrow off for one that returns nothing.
+- `(T)`: parentheses, which group a type the way they group an expression.
 - `any`: a slot whose type is decided by the value, allowed in an enum payload.
+
+`[]` after a function type belongs to its return type, so `fn(int) -> int[]` is
+a function returning a list of ints. Parenthesise to put the function itself in
+a list: `(fn(int) -> int)[]`. The same rule reads a map value type,
+`{string: fn(int) -> int}`, as a map of functions.
 
 An annotation is not only checked against the value. Where a collection carries
 no element type of its own the annotation supplies one: an empty list has no

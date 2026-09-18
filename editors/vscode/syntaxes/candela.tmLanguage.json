@@ -10,6 +10,7 @@
     { "include": "#struct-declaration" },
     { "include": "#enum-declaration" },
     { "include": "#impl-declaration" },
+    { "include": "#function-type" },
     { "include": "#function-declaration" },
     { "include": "#keywords" },
     { "include": "#constants" },
@@ -117,6 +118,16 @@
           "captures": {
             "1": { "name": "storage.type.impl.candela" },
             "2": { "name": "entity.name.type.candela" }
+          }
+        }
+      ]
+    },
+    "function-type": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "storage.type.function.candela" }
           }
         }
       ]
