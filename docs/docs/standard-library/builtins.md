@@ -31,6 +31,7 @@ arguments of any type and returns nothing. A list prints as `[1,2,3]`, a map as
 name with any payload in brackets. A float keeps its decimal point wherever it
 appears, so `print(3.0)` writes `3.0` and `print([3.0])` writes `[3.0]`, the
 same text `str` gives. An infinity prints as `inf` and a not-a-number as `NaN`.
+A function prints as `<fn>`, wherever it is held.
 
 A stream that refuses the write costs the line, not the run. `program | head -1`
 leaves standard output with no reader, and the prints that follow go nowhere
@@ -79,7 +80,8 @@ Renders any value as a string. Ints and floats use their shortest exact decimal
 form, bools become `true` or `false`, a string is returned unchanged, and
 collections, structs, and enum values use their literal form. A struct reads as
 `Name {field:value}`, the spelling `print` writes, wherever it appears: on its
-own, inside a list or a map, and as an enum payload.
+own, inside a list or a map, and as an enum payload. A function reads `<fn>`:
+there is no signature at run time to tell one function from another.
 
 ### bool
 

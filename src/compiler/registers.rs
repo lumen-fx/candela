@@ -37,7 +37,8 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
         | Instr::CloneEnum(_, dest)
         | Instr::CloneMap(_, dest)
         | Instr::CloneArray(_, dest, _)
-        | Instr::EmptyArray(dest) => Some(dest),
+        | Instr::EmptyArray(dest)
+        | Instr::EmptyFnValue(dest) => Some(dest),
         _ => None,
     };
     if let Some(old) = constructed_dest {
@@ -46,7 +47,8 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
             | Instr::CloneEnum(_, y)
             | Instr::CloneMap(_, y)
             | Instr::CloneArray(_, y, _)
-            | Instr::EmptyArray(y) => *y = tgt_id,
+            | Instr::EmptyArray(y)
+            | Instr::EmptyFnValue(y) => *y = tgt_id,
             _ => {}
         }
         for instr in &mut x[matching_elem_index + 1..] {
