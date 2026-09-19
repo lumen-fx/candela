@@ -13,10 +13,11 @@ site_name = "Candela Docs"
 site_description = "Documentation for candela, the scripting language of the Lumen UI framework."
 site_author = "Lumen FX"
 site_url = "https://candela.lumenfx.dev"
+docs_dir = "src"
 
 repo_url = "https://github.com/lumen-fx/candela"
 repo_name = "lumen-fx/candela"
-edit_uri = "edit/main/docs/docs/"
+edit_uri = "edit/main/docs/src/"
 
 copyright = """
 Copyright &copy; 2026 Lumen FX &middot; Candela is a fork of keel by Horace Hoff

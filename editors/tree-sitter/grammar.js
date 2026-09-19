@@ -7,7 +7,7 @@
 // @ts-check
 
 // Binary operator levels, loosest first, matching `check_op` in
-// src/parser/parser_expr.rs and the table in docs/docs/reference/operators.md.
+// src/parser/parser_expr.rs and the table in docs/src/reference/operators.md.
 // The prefix operators bind tighter than `^` and looser than the postfix forms.
 //
 // Everything a bare name can grow into sits at the postfix level: a call, a
@@ -296,7 +296,7 @@ module.exports = grammar({
     // here and are refused by the compiler, which is the direction to err in;
     // the language server reports them while highlighting stays steady. See
     // the "When `<` is a comparison" section of
-    // docs/docs/language/generics.md.
+    // docs/src/language/generics.md.
     type_arguments: ($) => seq('<', sepBy1(',', $._type), '>'),
 
     // A union runs as far as the `|`s go, so `fn() -> A|B` returns the union.

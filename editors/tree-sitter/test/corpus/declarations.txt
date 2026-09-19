@@ -43,7 +43,7 @@ fn to_int(x) {
             (identifier)))))))
 
 ================================================================================
-Typed parameters and return annotation (docs/docs/integration/embedding.md)
+Typed parameters and return annotation (docs/src/integration/embedding.md)
 ================================================================================
 
 fn banner(label: string) -> int {
@@ -103,7 +103,7 @@ struct Body {
         (type_identifier)))))
 
 ================================================================================
-Array, map, and union field types (docs/docs/language/types.md)
+Array, map, and union field types (docs/src/language/types.md)
 ================================================================================
 
 struct Index {
@@ -216,7 +216,7 @@ impl Option {
           (identifier))))))
 
 ================================================================================
-Operator methods (docs/docs/language/methods.md)
+Operator methods (docs/src/language/methods.md)
 ================================================================================
 
 impl Vec2 {
@@ -347,7 +347,7 @@ dylib "pgo_dynlib" {
         (type_identifier)))))
 
 ================================================================================
-Host block with a variadic signature (docs/docs/integration/embedding.md)
+Host block with a variadic signature (docs/src/integration/embedding.md)
 ================================================================================
 
 host "app" {
@@ -401,7 +401,7 @@ fn char_at(s, i) {
             (integer_literal)))))))
 
 ================================================================================
-Type parameters on declarations (docs/docs/language/generics.md)
+Type parameters on declarations (docs/src/language/generics.md)
 ================================================================================
 
 struct Pair<K, V> {
@@ -503,7 +503,7 @@ impl Signal<int> {
           (integer_literal))))))
 
 ================================================================================
-Generic types in type positions (docs/docs/language/generics.md)
+Generic types in type positions (docs/src/language/generics.md)
 ================================================================================
 
 struct Row {
@@ -560,7 +560,7 @@ fn deepen(c: Cell<int>) -> Cell<Cell<int>> {
         (identifier)))))
 
 ================================================================================
-A generic in a union, and a module-qualified generic (docs/docs/language/generics.md)
+A generic in a union, and a module-qualified generic (docs/src/language/generics.md)
 ================================================================================
 
 struct Row {
@@ -620,7 +620,7 @@ fn pick(c: shapes::Cell<int>|null) -> Cell<shapes::Point>|null {
         (identifier)))))
 
 ================================================================================
-Function types on fields, parameters and returns (docs/docs/language/types.md)
+Function types on fields, parameters and returns (docs/src/language/types.md)
 ================================================================================
 
 struct Button {
