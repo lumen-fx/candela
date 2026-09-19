@@ -4,4 +4,4 @@
 # upstream license text, copyright signs stay verbatim
 THIRD-PARTY-LICENSE
 # sample of the ariadne error report; the box-drawing IS the output
-docs/docs/reference/errors.md
+docs/src/reference/errors.md

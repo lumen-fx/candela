@@ -1,5 +1,5 @@
 ================================================================================
-Bitwise operators (docs/docs/reference/operators.md)
+Bitwise operators (docs/src/reference/operators.md)
 ================================================================================
 
 fn main() {
@@ -53,7 +53,7 @@ fn main() {
         (integer_literal)))))
 
 ================================================================================
-Operator precedence (docs/docs/reference/operators.md)
+Operator precedence (docs/src/reference/operators.md)
 ================================================================================
 
 fn main() {
@@ -264,7 +264,7 @@ fn main() {
           (integer_literal))))))
 
 ================================================================================
-Float literals carry an exponent (docs/docs/language/types.md)
+Float literals carry an exponent (docs/src/language/types.md)
 ================================================================================
 
 fn main() {
@@ -291,7 +291,7 @@ fn main() {
         (float_literal)))))
 
 ================================================================================
-A call applies to what a call or an index returned (docs/docs/reference/operators.md)
+A call applies to what a call or an index returned (docs/src/reference/operators.md)
 ================================================================================
 
 fn main() {
@@ -342,7 +342,7 @@ fn main() {
                 (identifier)))))))))
 
 ================================================================================
-Literals (examples/nbody/nbody_lua.cdl, docs/docs/language/collections.md)
+Literals (examples/nbody/nbody_lua.cdl, docs/src/language/collections.md)
 ================================================================================
 
 fn main() {
@@ -451,7 +451,7 @@ fn main() {
                   (identifier))))))))))
 
 ================================================================================
-Enum construction (docs/docs/language/enums.md)
+Enum construction (docs/src/language/enums.md)
 ================================================================================
 
 fn main() {
@@ -520,7 +520,7 @@ fn main() {
               (identifier))))))))
 
 ================================================================================
-Macro invocations (docs/docs/language/macros.md)
+Macro invocations (docs/src/language/macros.md)
 ================================================================================
 
 fn main() {
@@ -565,7 +565,7 @@ fn main() {
           (identifier))))))
 
 ================================================================================
-A macro region ends at the balancing parenthesis (docs/docs/language/macros.md)
+A macro region ends at the balancing parenthesis (docs/src/language/macros.md)
 ================================================================================
 
 fn main() {
@@ -599,7 +599,7 @@ fn main() {
           (macro_body))))))
 
 ================================================================================
-An identifier before `!` is not a macro (docs/docs/language/macros.md)
+An identifier before `!` is not a macro (docs/src/language/macros.md)
 ================================================================================
 
 fn main() {
@@ -637,7 +637,7 @@ fn main() {
               (integer_literal))))))))
 
 ================================================================================
-A nested type argument list closes with the shift token (docs/docs/language/generics.md)
+A nested type argument list closes with the shift token (docs/src/language/generics.md)
 ================================================================================
 
 fn main() {
@@ -667,7 +667,7 @@ fn main() {
             (identifier)))))))
 
 ================================================================================
-Type arguments at a call, a literal, and a variant (docs/docs/language/generics.md)
+Type arguments at a call, a literal, and a variant (docs/src/language/generics.md)
 ================================================================================
 
 fn main() {
@@ -771,7 +771,7 @@ fn main() {
                   (identifier))))))))))
 
 ================================================================================
-An angle bracket that stays a comparison (docs/docs/language/generics.md)
+An angle bracket that stays a comparison (docs/src/language/generics.md)
 ================================================================================
 
 fn main() {
@@ -839,7 +839,7 @@ fn main() {
               (identifier))))))))
 
 ================================================================================
-A comparison that reads as a type argument list (docs/docs/language/generics.md)
+A comparison that reads as a type argument list (docs/src/language/generics.md)
 ================================================================================
 
 fn main() {

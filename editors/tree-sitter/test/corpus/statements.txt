@@ -200,7 +200,7 @@ fn advance(bodies, nbody, dt) {
                   (identifier))))))))))
 
 ================================================================================
-Loop with break and continue (docs/docs/language/control-flow.md)
+Loop with break and continue (docs/src/language/control-flow.md)
 ================================================================================
 
 fn scan(xs) {
@@ -336,7 +336,7 @@ fn main() {
                     (identifier)))))))))))
 
 ================================================================================
-Try with a kind clause (docs/docs/language/error-handling.md)
+Try with a kind clause (docs/src/language/error-handling.md)
 ================================================================================
 
 fn main() {
@@ -383,7 +383,7 @@ fn main() {
                   (identifier))))))))))
 
 ================================================================================
-Bare block scope (docs/docs/language/variables.md)
+Bare block scope (docs/src/language/variables.md)
 ================================================================================
 
 fn main() {

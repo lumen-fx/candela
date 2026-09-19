@@ -150,7 +150,7 @@ Two kinds of version stay where they are. The language server and the editor
 extensions are numbered as the tools they are, on their own schedule, and the
 script leaves them alone by name rather than by what number they happen to
 carry. So does every version that names a release that exists, such as the
-dependency line in `docs/docs/integration/embedding.md`, which tells an embedder
+dependency line in `docs/src/integration/embedding.md`, which tells an embedder
 what to ask crates.io for. The version the script sets is what the tree will be
 next, which is a different thing.
 

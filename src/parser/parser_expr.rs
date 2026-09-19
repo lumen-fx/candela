@@ -205,7 +205,7 @@ pub const PREFIX_PRECEDENCE: u8 = 12;
 /// `|`, `^^`, `&`, the shifts, `+ -`, `* / %`, `^`. So `a | b == c` is
 /// `(a | b) == c`, and the four levels the language had before the bitwise
 /// operators are the four it has now. The table in
-/// docs/docs/reference/operators.md is the same one, and so is `PREC` in
+/// docs/src/reference/operators.md is the same one, and so is `PREC` in
 /// editors/tree-sitter/grammar.js.
 #[inline(always)]
 const fn check_op(op: Token, min_precedence: u8) -> Option<(Token, u8)> {
