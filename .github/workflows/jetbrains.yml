@@ -1,0 +1,71 @@
+name: jetbrains
+
+# Builds the plugin for the IntelliJ-based IDEs and checks it against the IDEs
+# the JetBrains Marketplace verifies against. The marketplace rejects an upload
+# over an API the plugin must not use, and it checks releases newer than the
+# ones the Gradle plugin recommends, so the verifier job covers the current
+# IntelliJ IDEA and the current EAP as well.
+
+on:
+  pull_request:
+    paths:
+      - "editors/jetbrains/**"
+      - "editors/vscode/syntaxes/**"
+      - "editors/vscode/language-configuration.json"
+      - ".github/workflows/jetbrains.yml"
+  merge_group:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: jetbrains plugin
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: editors/jetbrains
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - run: ./gradlew --no-daemon buildPlugin verifyPluginProjectConfiguration verifyPluginStructure
+
+  # downloads a full IDE distribution per IDE checked; too slow for PRs
+  verifier:
+    name: jetbrains plugin verifier
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: editors/jetbrains
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # One unpacked IDE per target does not fit next to the runner image's
+      # preinstalled toolchains.
+      - name: make room for the IDE downloads
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+
+      - run: ./gradlew --no-daemon verifyPlugin

@@ -180,7 +180,8 @@ in the repository, under `editors/`.
 - **IntelliJ IDEA and the other JetBrains IDEs.** Build `editors/jetbrains`
   with `./gradlew buildPlugin`, install [LSP4IJ] from the JetBrains
   Marketplace, then install the zip from `build/distributions/` with
-  Settings | Plugins | Install Plugin from Disk.
+  Settings | Plugins | Install Plugin from Disk. On IntelliJ 2026.2 and later,
+  LSP4IJ 0.21.0 or newer is required; earlier LSP4IJ builds do not load there.
 - **Neovim.** Copy `editors/tree-sitter/nvim/candela.lua` into your config,
   call `require('candela').setup()`, and install the parser with
   `:TSInstall candela`.

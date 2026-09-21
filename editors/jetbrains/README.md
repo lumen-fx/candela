@@ -29,7 +29,9 @@ Use it if you write candela in a JetBrains IDE. The extension in
 
 3. In the IDE, install [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)
    from the Marketplace, then install the zip with Settings | Plugins |
-   gear icon | Install Plugin from Disk, and restart.
+   gear icon | Install Plugin from Disk, and restart. On IntelliJ 2026.2 and
+   later, LSP4IJ 0.21.0 or newer is required; earlier LSP4IJ builds do not
+   load there.
 
 4. Put `candela-lsp` on your `PATH`, or set its path in Settings |
    Languages & Frameworks | Candela. With auto-discovery on, the plugin also
