@@ -1,15 +1,16 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use crate::array_gc::mark;
+use crate::array_gc::next_threshold;
 use crate::array_gc::reset_marks;
-use crate::array_gc::trace_roots;
-use crate::array_gc::track;
 use crate::vm::CandelaMap;
 use crate::vm::GcScratch;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
 
+/// Allocates a new map in the map pool. If reusing a map, it clears it.
 pub fn alloc_map(
     map_pool: &mut MapPool,
     obj_pool: &ObjectPool,
@@ -21,30 +22,30 @@ pub fn alloc_map(
 ) -> u32 {
     if let Some(id) = free_maps.pop() {
         map_pool[id as usize].clear();
-        id
-    } else {
-        if map_pool.len() >= (*gc_map_threshold as usize) {
-            *gc_map_threshold *= 2;
-            map_gc(
-                map_pool,
-                obj_pool,
-                free_maps,
-                registers,
-                recursion_stack,
-                gc,
-            );
-        }
+        return id;
+    }
+    if map_pool.len() >= (*gc_map_threshold as usize) {
+        map_gc(
+            map_pool,
+            obj_pool,
+            free_maps,
+            registers,
+            recursion_stack,
+            gc,
+        );
+        *gc_map_threshold = next_threshold(map_pool.len(), free_maps.len());
         if let Some(id) = free_maps.pop() {
             map_pool[id as usize].clear();
-            id
-        } else {
-            let id = map_pool.len() as u32;
-            map_pool.push(CandelaMap::default());
-            id
+            return id;
         }
     }
+    let id = map_pool.len() as u32;
+    map_pool.push(CandelaMap::default());
+    id
 }
 
+/// Rebuilds the map free list from a fresh trace. It runs only once the free
+/// list is empty, so every slot the trace leaves unmarked is garbage.
 pub fn map_gc(
     map_pool: &MapPool,
     obj_pool: &ObjectPool,
@@ -54,35 +55,7 @@ pub fn map_gc(
     gc: &mut GcScratch,
 ) {
     reset_marks(gc, obj_pool.len(), map_pool.len());
-    trace_roots(registers, recursion_stack, obj_pool, map_pool, gc);
-
-    for &id in free_maps.iter() {
-        unsafe {
-            *gc.map_live.get_unchecked_mut(id as usize) = true;
-        }
-    }
-
-    for (i, map_alive) in gc.map_live.iter().enumerate() {
-        if !map_alive {
-            free_maps.push(i as u32);
-        }
-    }
-}
-
-pub fn track_maps(idx: usize, map_pool: &MapPool, obj_pool: &ObjectPool, gc: &mut GcScratch) {
-    let is_live = unsafe { gc.map_live.get_unchecked_mut(idx) };
-    if *is_live {
-        return;
-    }
-    *is_live = true;
-    // Each entry is tested on its own, for the same reason the array trace
-    // tests each element: a map typed `any` holds whatever the document held,
-    // so one entry cannot stand in for the rest.
-    for (k, v) in &map_pool[idx] {
-        for d in [k, v] {
-            if d.is_array() || d.is_struct() || d.is_enum() || d.is_map() {
-                track(*d, obj_pool, map_pool, gc);
-            }
-        }
-    }
+    mark::<false>(registers, recursion_stack, obj_pool, map_pool, gc);
+    free_maps.clear();
+    gc.map_live.push_unmarked(map_pool.len(), free_maps);
 }

@@ -7,6 +7,8 @@
 //! its own source keeps its import paths (`compiler_data::Struct`,
 //! `type_system::DataType`, `expr::Span`).
 
+use crate::array_gc::MIN_GC_THRESHOLD;
+use crate::array_gc::MarkBits;
 use crate::instr::Instr;
 use crate::vm::GcScratch;
 use crate::vm::MapPool;
@@ -649,13 +651,13 @@ impl Default for GcState {
             free_arrays: Vec::new(),
             free_maps: Vec::new(),
             free_strings: Vec::new(),
-            array_threshold: 256,
-            map_threshold: 256,
-            string_threshold: 256,
+            array_threshold: MIN_GC_THRESHOLD,
+            map_threshold: MIN_GC_THRESHOLD,
+            string_threshold: MIN_GC_THRESHOLD,
             scratch: GcScratch {
-                array_live: Vec::new(),
-                map_live: Vec::new(),
-                string_live: Vec::new(),
+                array_live: MarkBits::default(),
+                map_live: MarkBits::default(),
+                string_live: MarkBits::default(),
                 work: Vec::new(),
                 collections: 0,
             },

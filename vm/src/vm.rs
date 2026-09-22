@@ -1,6 +1,7 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use crate::array_gc::MarkBits;
 use crate::array_gc::alloc_array;
 use crate::captured_output::out;
 use crate::captured_output::outln;
@@ -272,9 +273,9 @@ pub(crate) fn char_byte_offset(s: &str, char_idx: usize) -> usize {
 /// needs a mark slot per array, per map and per string, plus the stack the
 /// trace pops from, whichever pool it is about to sweep.
 pub struct GcScratch {
-    pub array_live: Vec<bool>,
-    pub map_live: Vec<bool>,
-    pub string_live: Vec<bool>,
+    pub array_live: MarkBits,
+    pub map_live: MarkBits,
+    pub string_live: MarkBits,
     pub work: Vec<Data>,
     /// How many collections of any pool have run so far.
     pub collections: u64,
