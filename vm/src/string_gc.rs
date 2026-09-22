@@ -19,7 +19,7 @@ pub fn string_gc(
     array_pool: &ObjectPool,
     map_pool: &MapPool,
     string_pool: &StringPool,
-    free_strings: &mut Vec<u16>,
+    free_strings: &mut Vec<u32>,
     registers: &RegisterFile,
     recursion_stack: &RegisterFile,
     gc: &mut GcScratch,
@@ -39,7 +39,7 @@ pub fn string_gc(
 
     for (i, s) in gc.string_live.iter().enumerate() {
         if !s {
-            free_strings.push(i as u16);
+            free_strings.push(i as u32);
         }
     }
 }
