@@ -79,7 +79,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "candela-lang"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ariadne",
  "getrandom",
