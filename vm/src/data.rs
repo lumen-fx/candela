@@ -1,3 +1,6 @@
+// This file is derived from keel (https://github.com/horacehoff/keel),
+// Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+// It has been modified by the candela authors. See the NOTICE file.
 use crate::rt::EnumType;
 use crate::rt::Struct;
 use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool, char_byte_offset, count_chars};

@@ -1,3 +1,6 @@
+# This file is derived from keel (https://github.com/horacehoff/keel),
+# Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+# It has been modified by the candela authors. See the NOTICE file.
 name: build-artifacts
 
 # Builds the toolchain assets, for whoever asks for them: release.yml on a
@@ -180,7 +183,7 @@ jobs:
           cp target/${{ matrix.target }}/release/candela dist/
           cp target/${{ matrix.target }}/release/candela-vm dist/
           cp -R libs dist/
-          cp LICENSE THIRD-PARTY-LICENSE dist/
+          cp LICENSE NOTICE THIRD-PARTY-LICENSE dist/
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
 
       - name: Package (Windows)
@@ -192,6 +195,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/candela-vm.exe" "dist/"
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
+          Copy-Item "NOTICE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact }}.zip"
 
@@ -227,7 +231,7 @@ jobs:
         run: |
           mkdir -p dist-lib
           cp target/${{ matrix.target }}/embed/${{ matrix.lib }} dist-lib/
-          cp LICENSE THIRD-PARTY-LICENSE dist-lib/
+          cp LICENSE NOTICE THIRD-PARTY-LICENSE dist-lib/
           tar -czf ${{ matrix.embed_artifact }}.tar.gz -C dist-lib .
 
       - name: Package (Windows) (LIB)
@@ -237,6 +241,7 @@ jobs:
           New-Item -ItemType "Directory" -Force -Path "dist-lib"
           Copy-Item "target/${{ matrix.target }}/embed/${{ matrix.lib }}" "dist-lib/"
           Copy-Item "LICENSE" "dist-lib/"
+          Copy-Item "NOTICE" "dist-lib/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist-lib/"
           Compress-Archive -Path "dist-lib/*" -DestinationPath "${{ matrix.embed_artifact }}.zip"
 
@@ -289,7 +294,9 @@ jobs:
             target/wasm32-unknown-unknown/release/candela.wasm
 
       - name: Package candela-web.tar.gz
-        run: tar -czf candela-web.tar.gz -C pkg candela.js candela_bg.wasm
+        run: |
+          cp LICENSE NOTICE THIRD-PARTY-LICENSE pkg/
+          tar -czf candela-web.tar.gz -C pkg candela.js candela_bg.wasm LICENSE NOTICE THIRD-PARTY-LICENSE
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

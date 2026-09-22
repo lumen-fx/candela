@@ -1,3 +1,6 @@
+# This file is derived from keel (https://github.com/horacehoff/keel),
+# Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+# It has been modified by the candela authors. See the NOTICE file.
 [package]
 # The crates.io name is `candela-lang`, because `candela` on crates.io is an
 # unrelated crate from 2020. Everything a user sees stays `candela`: the library

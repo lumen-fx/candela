@@ -1,8 +1,17 @@
+<!--
+This file is derived from keel (https://github.com/horacehoff/keel),
+Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+It has been modified by the candela authors. See the NOTICE file.
+-->
 # candela
 
 candela is a small statically typed scripting language with Rust-like syntax.
 It is the scripting language of the Lumen UI framework, and it works just as
 well on its own.
+
+It began as a fork of [keel](https://github.com/horacehoff/keel), a language
+written by Horace Hoff; candela's compiler, virtual machine and type system
+are built on that work.
 
 ## Who it is for
 

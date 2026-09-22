@@ -1,3 +1,8 @@
+<!--
+This file is derived from keel (https://github.com/horacehoff/keel),
+Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+It has been modified by the candela authors. See the NOTICE file.
+-->
 # candela
 
 [![coverage](https://codecov.io/gh/lumen-fx/candela/branch/main/graph/badge.svg)](https://codecov.io/gh/lumen-fx/candela)
@@ -14,6 +19,11 @@ syntax stays close enough to Rust to read without a tour.
 Reach for it when you want to script an application without embedding a large
 runtime, or when you want a small language for programs that start quickly and
 behave the same every time.
+
+candela began as a fork of [keel](https://github.com/horacehoff/keel), a
+language written by Horace Hoff, and its compiler, virtual machine and type
+system are built on that work. What changed since the fork is recorded in
+[NOTICE](NOTICE) and in the repository's history, which carries keel's commits.
 
 ## Quick start
 
