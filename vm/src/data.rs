@@ -4,7 +4,7 @@
 use crate::rt::EnumType;
 use crate::rt::Struct;
 use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool, char_byte_offset, count_chars};
-use crate::{string_gc::raise_string_gc_threshold, string_gc::string_gc, vm::ObjectPool};
+use crate::{array_gc::next_threshold, string_gc::string_gc, vm::ObjectPool};
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hash::Hash;
@@ -317,7 +317,6 @@ impl Data {
             Self::small_str(s.pool_as_str())
         } else {
             if string_pool.len() >= (*gc_string_threshold as usize) && free_strings.is_empty() {
-                raise_string_gc_threshold(gc_string_threshold, string_pool.len());
                 string_gc(
                     array_pool,
                     map_pool,
@@ -327,6 +326,7 @@ impl Data {
                     recursion_stack,
                     gc,
                 );
+                *gc_string_threshold = next_threshold(string_pool.len(), free_strings.len());
             }
             if let Some(id) = free_strings.pop() {
                 s.move_to_slot(string_pool.get_mut(id as usize));

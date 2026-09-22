@@ -1,6 +1,7 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use crate::array_gc::mark;
 use crate::array_gc::reset_marks;
 use crate::vm::GcScratch;
 use crate::vm::MapPool;
@@ -8,7 +9,9 @@ use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
 use crate::vm::StringPool;
 
-/// Frees every pooled string no live value can still reach.
+/// Frees every pooled string no live value can still reach, rebuilding the
+/// string free list. It runs only once that list is empty, so every slot the
+/// trace leaves unmarked is garbage.
 ///
 /// A string is reachable straight from a register or through any collection a
 /// register holds, so the walk crosses both object pools: a list can hold a
@@ -24,57 +27,10 @@ pub fn string_gc(
     recursion_stack: &RegisterFile,
     gc: &mut GcScratch,
 ) {
-    gc.string_live.clear();
-    gc.string_live.resize(string_pool.len(), false);
     reset_marks(gc, array_pool.len(), map_pool.len());
-
-    for data in registers.0.iter().chain(recursion_stack.0.iter()) {
-        gc.work.push(*data);
-        track_strings(array_pool, map_pool, gc);
-    }
-
-    for &id in free_strings.iter() {
-        gc.string_live[id as usize] = true;
-    }
-
-    for (i, s) in gc.string_live.iter().enumerate() {
-        if !s {
-            free_strings.push(i as u32);
-        }
-    }
-}
-
-/// Marks every pooled string the values on the work stack can reach.
-fn track_strings(array_pool: &ObjectPool, map_pool: &MapPool, gc: &mut GcScratch) {
-    // Everything is tagged, so any value at all can go on the stack and be
-    // sorted out on the way off it. Deciding from one element what a whole
-    // collection holds is what used to free strings a parsed document was
-    // still holding.
-    while let Some(d) = gc.work.pop() {
-        if d.is_large_str() {
-            gc.string_live[d.get_str_pool_id()] = true;
-        } else if d.is_map() {
-            let seen = &mut gc.map_live[d.as_map()];
-            if *seen {
-                continue;
-            }
-            *seen = true;
-            for (k, v) in &map_pool[d.as_map()] {
-                gc.work.push(*k);
-                gc.work.push(*v);
-            }
-        } else if d.is_array() || d.is_struct() || d.is_enum() {
-            let seen = &mut gc.array_live[d.as_array()];
-            if *seen {
-                continue;
-            }
-            *seen = true;
-            gc.work.extend(&array_pool[d.as_array()]);
-        }
-    }
-}
-
-#[inline(always)]
-pub fn raise_string_gc_threshold(gc_string_threshold: &mut u32, string_pool_len: usize) {
-    *gc_string_threshold = string_pool_len.next_power_of_two().min(u32::MAX as usize) as u32;
+    gc.string_live.reset(string_pool.len());
+    mark::<true>(registers, recursion_stack, array_pool, map_pool, gc);
+    free_strings.clear();
+    gc.string_live
+        .push_unmarked(string_pool.len(), free_strings);
 }
