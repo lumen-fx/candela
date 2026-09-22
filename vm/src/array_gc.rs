@@ -92,10 +92,16 @@ pub fn alloc_array(
     id
 }
 
+/// The most elements a freed array keeps room for. A freed slot holds on to
+/// its buffer so the next array written there, usually a struct or a short
+/// list, needs no allocation; a buffer larger than this goes back to the
+/// allocator instead of sitting in a dead slot until something reuses it.
+const KEEP_FREED_CAPACITY: usize = 64;
+
 /// Rebuilds the array free list from a fresh trace. It runs only once the free
 /// list is empty, so every slot the trace leaves unmarked is garbage.
 fn array_gc(
-    obj_pool: &ObjectPool,
+    obj_pool: &mut ObjectPool,
     map_pool: &MapPool,
     free_arrays: &mut Vec<u32>,
     registers: &RegisterFile,
@@ -106,6 +112,12 @@ fn array_gc(
     mark::<false>(registers, recursion_stack, obj_pool, map_pool, gc);
     free_arrays.clear();
     gc.array_live.push_unmarked(obj_pool.len(), free_arrays);
+    for &id in free_arrays.iter() {
+        let slot = &mut obj_pool[id as usize];
+        if slot.capacity() > KEEP_FREED_CAPACITY {
+            *slot = Vec::new();
+        }
+    }
 }
 
 /// Clears the object marks and gives each pool a mark per entry.
