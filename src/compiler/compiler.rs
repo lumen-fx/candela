@@ -3477,12 +3477,12 @@ fn compile_var_assignment(
         .compile(v, ctx, state, output, Some(id), false, true)
         .unwrap_id();
     if output.len() != output_len {
-        if !move_to_id(output, id) {
+        if !move_to_id(output, id) && obj_id != id {
             output.push(Instr::Mov(obj_id, id));
         }
     } else if state.const_registers.values().any(|&v| v == obj_id) {
         move_reg_to_reg(output, obj_id, id, state.registers[obj_id as usize]);
-    } else {
+    } else if obj_id != id {
         output.push(Instr::Mov(obj_id, id));
     }
     if !v
