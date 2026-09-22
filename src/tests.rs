@@ -148,6 +148,30 @@ pub fn void_recursion_restores_the_callers_registers() {
     );
 }
 
+/// An argument that is already in the parameter register it goes to is not
+/// moved there, so the second call below reads `depth` without any instruction
+/// naming it. The first call still has to save `depth` for it, or the second
+/// call starts from whatever the first one's recursion left in the register.
+#[test]
+pub fn a_parameter_passed_on_unmoved_survives_the_call_before_it() {
+    assert_eq!(
+        run_output(
+            "
+            fn count(depth) {
+                if depth == 0 { return 1; }
+                depth -= 1;
+                return count(depth) + count(depth);
+            }
+
+            fn main() {
+                print(count(5));
+            }
+            "
+        ),
+        "32\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every

@@ -314,7 +314,7 @@ pub fn handle_user_function(
                 .compile(v, ctx, state, output, Some(tgt_id), false, true)
                 .unwrap_id()
         };
-        if output.len() == start_len || !move_to_id(output, tgt_id) {
+        if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
@@ -645,6 +645,22 @@ fn compile_function(
 
                 let mut live_regs: Vec<u16> = Vec::new();
                 for after_instr in &parsed[pos + 1..] {
+                    // A recursive call reads its parameters where they already
+                    // are: an argument that is the parameter itself is not
+                    // moved there first, so no instruction names the read.
+                    if let Instr::CallFuncRecursive(target, _) = after_instr {
+                        let callee_params = state
+                            .fns
+                            .iter()
+                            .flat_map(|f| f.impls.iter())
+                            .filter(|fn_impl| fn_impl.loc == *target)
+                            .flat_map(|fn_impl| fn_impl.args_loc.iter());
+                        for reg in args_loc_saved.iter().chain(callee_params) {
+                            if all_written_regs.binary_search(reg).is_ok() {
+                                live_regs.push(*reg);
+                            }
+                        }
+                    }
                     after_instr.for_each_read_reg(|reg| {
                         if all_written_regs.binary_search(&reg).is_ok() {
                             live_regs.push(reg);
