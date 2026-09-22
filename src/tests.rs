@@ -6806,6 +6806,32 @@ pub fn gc_state_persists_across_runs() {
 }
 
 #[test]
+pub fn strings_past_slot_65536_survive_a_collection() {
+    // A string's pool slot is as wide as the value that names it. A collection
+    // that freed slot 70000 under a narrower id handed the next string a slot
+    // a live string still held, and that string read back as the newcomer.
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            let keep = [];
+            for i in 0..70000 {
+                keep.push("longstring" + str(i));
+            }
+            for j in 0..200000 {
+                let t = "temporary" + str(j);
+            }
+            let bad = 0;
+            for i in 0..70000 {
+                if keep[i] != "longstring" + str(i) { bad += 1; }
+            }
+            print(bad);
+        }
+        "#,
+        0.into()
+    );
+}
+
+#[test]
 pub fn parsed_array_survives_array_gc() {
     // An array a parsed document hangs off its root map is reachable only
     // through that map. The array collector has to follow a map register to

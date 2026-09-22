@@ -309,7 +309,7 @@ impl Data {
         string_pool: &mut StringPool,
         registers: &RegisterFile,
         recursion_stack: &RegisterFile,
-        free_strings: &mut Vec<u16>,
+        free_strings: &mut Vec<u32>,
         gc_string_threshold: &mut u32,
         gc: &mut GcScratch,
     ) -> Self {

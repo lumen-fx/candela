@@ -631,7 +631,7 @@ pub struct GcState {
     /// Map-pool slots a collection freed.
     pub free_maps: Vec<u32>,
     /// String-pool slots a collection freed.
-    pub free_strings: Vec<u16>,
+    pub free_strings: Vec<u32>,
     /// Object-pool length at which the next array collection runs.
     pub array_threshold: u32,
     /// Map-pool length at which the next map collection runs.
