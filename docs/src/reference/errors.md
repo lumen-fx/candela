@@ -1,3 +1,8 @@
+<!--
+This file is derived from keel (https://github.com/horacehoff/keel),
+Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
+It has been modified by the candela authors. See the NOTICE file.
+-->
 # Errors
 
 candela reports errors in two places: while a program is compiled, and while it

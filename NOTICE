@@ -9,3 +9,14 @@ preserved. Modifications include a host-embeddable Engine/Program API,
 variadic host functions, array/map marshalling across the host boundary,
 structured diagnostics, and the rename of the language and crate to
 candela (source file extension: .cdl).
+
+Every file in this distribution that derives from keel and has been
+changed carries a notice to that effect at the top of the file. Five
+keel-derived files cannot carry one, and this notice covers them instead:
+Cargo.lock, docs/uv.lock and THIRD-PARTY-LICENSE are written by tooling
+that discards comments, and the two images under docs/src/images/ were
+renamed when the documentation moved. All five are changed from their keel
+originals.
+
+The keel commit history is preserved in this repository. Every change to
+every keel-derived file is attributable to its author by commit.
