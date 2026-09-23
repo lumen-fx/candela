@@ -35,6 +35,7 @@ use crate::compiler::imports::DEFAULT_PACKAGE_ENTRY;
 use crate::compiler::imports::ImportResolver;
 use crate::compiler::type_system::Generics;
 use crate::compiler::type_system::GenericsCheckpoint;
+use crate::compiler::use_immediates;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
 #[cfg(not(target_arch = "wasm32"))]
@@ -524,6 +525,12 @@ impl Program {
 
         let ret_id = ret_id.unwrap_or(0);
         output.push(Instr::Halt(0));
+        use_immediates(
+            &mut output,
+            &self.instructions,
+            &self.registers,
+            &self.const_registers,
+        );
         let start = self.instructions.len();
         self.instructions.extend(output);
 

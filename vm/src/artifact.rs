@@ -87,7 +87,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// instructions after them, and gave the order of each map's recorded pairs a
 /// meaning: a map is walked in the order its keys went in, so the pair list is
 /// the program's order and an artifact from before the change cannot supply it.
-const FORMAT_VERSION: u8 = 11;
+/// Version 12 added the loop step and the add-a-constant instructions, which
+/// sit among the existing ones and so renumber the instructions after them.
+const FORMAT_VERSION: u8 = 12;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

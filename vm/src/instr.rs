@@ -25,6 +25,12 @@ pub enum Instr {
     InfFloatJmp(u16, u16, u16),
     InfIntJmp(u16, u16, u16),
     InfIntJmpBack(u16, u16, u16),
+    /// StepIntJmpBack(counter_reg, end_reg, size)\
+    /// Adds 1 to the `int` in counter_reg, then jumps size instructions
+    /// backwards while it is below the `int` in end_reg. The step at the
+    /// bottom of every counted loop and every loop over a collection, which
+    /// would otherwise be an `IncInt` and an `InfIntJmpBack`.
+    StepIntJmpBack(u16, u16, u16),
     NotEqJmp(u16, u16, u16),
     EqJmp(u16, u16, u16),
     ObjNotEqJmp(u16, u16, u16),
@@ -45,6 +51,10 @@ pub enum Instr {
     // OPS
     AddFloat(u16, u16, u16),
     AddInt(u16, u16, u16),
+    /// AddIntImm(src_reg, imm, dest_reg)\
+    /// dest = src + imm, for an `int` src. What adding or subtracting a
+    /// constant that fits the operand compiles to.
+    AddIntImm(u16, i16, u16),
     AddArray(u16, u16, u16),
     AddStr(u16, u16, u16),
     MulFloat(u16, u16, u16),
@@ -386,6 +396,8 @@ impl Instr {
             | Self::SaveFrame(_, y, _)
             | Self::AddFloat(_, _, y)
             | Self::AddInt(_, _, y)
+            | Self::AddIntImm(_, _, y)
+            | Self::StepIntJmpBack(y, _, _)
             | Self::AddArray(_, _, y)
             | Self::AddStr(_, _, y)
             | Self::MulFloat(_, _, y)
@@ -513,6 +525,7 @@ impl Instr {
             | Self::InfEqFloatJmp(a, b, _)
             | Self::InfEqIntJmp(a, b, _)
             | Self::InfIntJmpBack(a, b, _)
+            | Self::StepIntJmpBack(a, b, _)
             | Self::Push(a, b)
             | Self::SetFieldStruct(a, b, _)
             | Self::MapGet(a, b, _)
@@ -533,6 +546,7 @@ impl Instr {
             }
 
             Self::Mov(a, _)
+            | Self::AddIntImm(a, _, _)
             | Self::IncInt(a)
             | Self::DecInt(a)
             | Self::IncIntTo(a, _)

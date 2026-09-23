@@ -1075,6 +1075,16 @@ pub fn execute(
                     continue;
                 }
             }
+            Instr::StepIntJmpBack(counter, end, jump_size) => {
+                regs[counter].inc_int();
+                if regs[counter].as_int() < regs[end].as_int() {
+                    ip = unsafe { ip.sub(jump_size as usize) };
+                    continue;
+                }
+            }
+            Instr::AddIntImm(src, imm, dest) => {
+                regs[dest] = (regs[src].as_int() + i64::from(imm)).into();
+            }
             Instr::InfIntJmpBack(o1, o2, jump_size) => {
                 if regs[o1].as_int() < regs[o2].as_int() {
                     ip = unsafe { ip.sub(jump_size as usize) };

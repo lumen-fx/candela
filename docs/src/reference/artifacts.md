@@ -117,6 +117,8 @@ been raised for:
   instructions and so renumber the ones after them
 - maps keeping insertion order, which made the order of each map's recorded
   pairs the order the program built them in
+- the loop step and the add-a-constant instructions, which sit among the
+  existing instructions and so renumber the ones after them
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

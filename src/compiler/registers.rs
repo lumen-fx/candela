@@ -3,6 +3,8 @@
 // It has been modified by the candela authors. See the NOTICE file.
 use crate::data::Data;
 use crate::instr::Instr;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 /// Redirects the value produced by the trailing instructions of `x` into
 /// `tgt_id`.
@@ -79,6 +81,7 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
         | Instr::CallFunc(_, y)
         | Instr::AddFloat(_, _, y)
         | Instr::AddInt(_, _, y)
+        | Instr::AddIntImm(_, _, y)
         | Instr::AddArray(_, _, y)
         | Instr::AddStr(_, _, y)
         | Instr::MulFloat(_, _, y)
@@ -181,5 +184,63 @@ pub fn move_reg_to_reg(output: &mut Vec<Instr>, src_id: u16, dest_id: u16, v: Da
         output.push(Instr::SetBool(v.as_bool(), dest_id));
     } else {
         output.push(Instr::Mov(src_id, dest_id));
+    }
+}
+
+/// Rewrites additions of a constant `int` into the form that carries the
+/// constant in the instruction, so the VM reads one register rather than two.
+///
+/// A constant register is one the compiler filled before the run that no
+/// instruction writes: an entry of `const_registers` that neither `rest`, the
+/// program the instructions join, nor the instructions themselves name as a
+/// target. A variable can be given the register of the literal it starts
+/// from, and a register some instruction writes holds whatever was last
+/// written there, so only one nothing writes is carried as a constant. Only a
+/// constant that fits the instruction's 16-bit operand moves into it. Each
+/// instruction is replaced one for one, so no jump distance changes.
+pub fn use_immediates(
+    instructions: &mut [Instr],
+    rest: &[Instr],
+    registers: &[Data],
+    const_registers: &FxHashMap<Data, u16>,
+) {
+    let written: FxHashSet<u16> = rest
+        .iter()
+        .chain(instructions.iter())
+        .filter_map(|instr| instr.get_tgt_id())
+        .collect();
+    let constants: FxHashSet<u16> = const_registers
+        .values()
+        .copied()
+        .filter(|reg| !written.contains(reg))
+        .collect();
+    let constant = |reg: u16| -> Option<i16> {
+        if !constants.contains(&reg) {
+            return None;
+        }
+        let value = *registers.get(reg as usize)?;
+        if value.is_int() {
+            i16::try_from(value.as_int()).ok()
+        } else {
+            None
+        }
+    };
+    for instr in instructions.iter_mut() {
+        let replacement = match *instr {
+            Instr::AddInt(a, b, dest) => match (constant(a), constant(b)) {
+                (None, Some(imm)) => Some(Instr::AddIntImm(a, imm, dest)),
+                (Some(imm), None) => Some(Instr::AddIntImm(b, imm, dest)),
+                _ => None,
+            },
+            // `x - k` is `x + -k`, for a `k` whose negation still fits.
+            Instr::SubInt(a, b, dest) => match (constant(a), constant(b)) {
+                (None, Some(imm)) => imm.checked_neg().map(|neg| Instr::AddIntImm(a, neg, dest)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *instr = replacement;
+        }
     }
 }

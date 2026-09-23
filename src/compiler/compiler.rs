@@ -65,6 +65,7 @@ use methods::handle_method_calls;
 use registers::int_immediate;
 use registers::move_reg_to_reg;
 use registers::move_to_id;
+pub(crate) use registers::use_immediates;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
@@ -196,6 +197,7 @@ const fn set_jmp_size(instr: &mut Instr, size: u16) {
         | Instr::InfFloatJmp(_, _, jump_size)
         | Instr::InfIntJmp(_, _, jump_size)
         | Instr::InfIntJmpBack(_, _, jump_size)
+        | Instr::StepIntJmpBack(_, _, jump_size)
         | Instr::NotEqJmp(_, _, jump_size)
         | Instr::EqJmp(_, _, jump_size)
         | Instr::ObjNotEqJmp(_, _, jump_size)
@@ -363,10 +365,12 @@ fn parse_loop_flow_control(
         } else if let Instr::EqJmp(continue_id, 0, 0) = x
             && *continue_id == loop_id
         {
+            // A `continue` lands on the instruction that ends the turn: a
+            // `for` loop's step, or a `loop` block's or `while` loop's jump
+            // back, each the last instruction of its loop.
             if for_loop {
-                *x = Instr::Jmp(code_length - i as u16 - 3);
+                *x = Instr::Jmp(code_length - i as u16 - 2);
             } else {
-                // loop blocks and while loops only have 1 trailing instruction
                 *x = Instr::Jmp(code_length - i as u16 - 1);
             }
         }
@@ -2988,8 +2992,7 @@ fn compile_for_loop(
     // ----
     // (1) if i >= len jump out
     // (2) element = array[i], then the body
-    // (3) i += 1
-    // (4) if i < len jump back to (2)
+    // (3) i += 1, and if i < len jump back to (2)
     // ----
     // so a turn runs one test rather than a test at the top and a jump back
     // to it. The length is read once, before the first turn, either way.
@@ -3025,14 +3028,11 @@ fn compile_for_loop(
         }
     }
     output.extend(body);
-    // add 1 to the index (i+=1) so that the next loop iteration will have the next element in the array
-    output.push(Instr::IncInt(index_id));
-
-    // jump back to the element read while elements remain
-    output.push(Instr::InfIntJmpBack(
+    // step the index and jump back to the element read while elements remain
+    output.push(Instr::StepIntJmpBack(
         index_id,
         array_len_id,
-        body_len + pending + 1,
+        body_len + pending,
     ));
 
     let exit_size = (output.len() - jmp_idx) as u16;
@@ -3064,8 +3064,7 @@ fn compile_int_for_loop(
     // ----
     // (1) if i >= end_elem jump out
     // (2) loop_body
-    // (3) i += 1
-    // (4) if i < end_elem jump back to body
+    // (3) i += 1, and if i < end_elem jump back to body
     // ----
     //
     //
@@ -3134,15 +3133,12 @@ fn compile_int_for_loop(
     // (2) loop_body
     output.extend(compiled_loop_code);
 
-    // (3) i+= 1
-    output.push(Instr::IncInt(elem_id));
-
-    // (4) if i < end_elem jump back to the top of the turn, which is the cell
-    // where a body that captures the counter reads it from
-    output.push(Instr::InfIntJmpBack(
+    // (3) i += 1, and if i < end_elem jump back to the top of the turn,
+    // which is the cell where a body that captures the counter reads it from
+    output.push(Instr::StepIntJmpBack(
         elem_id,
         end_elem_id,
-        compiled_loop_code_len + 1 + u16::from(captured),
+        compiled_loop_code_len + u16::from(captured),
     ));
 
     let exit_size = (output.len() - jmp_idx) as u16;
@@ -6004,6 +6000,7 @@ pub fn compile(
         Vec::new()
     };
     instructions.push(Instr::Halt(0));
+    use_immediates(&mut instructions, &[], &registers, &const_registers);
 
     #[cfg(debug_assertions)]
     if debug {
