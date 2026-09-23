@@ -74,7 +74,7 @@ satisfiable. A `main` is not required here, the way it is for a run or a build:
 a library whose entry only declares functions for other projects to import
 checks like any other file.
 
-### candela build [file.cdl] [-o out.cdlb]
+### candela build [file.cdl] [-o out.cdlb] [--debug]
 
 Compiles to a `.cdlb` bytecode artifact and writes it out, reporting the path
 and the size. `compile` is accepted as the same command.
@@ -83,7 +83,16 @@ and the size. `compile` is accepted as the same command.
 candela build
 candela build game.cdl
 candela build game.cdl -o dist/game.cdlb
+candela build game.cdl --debug
 ```
+
+A build compiles in the release profile, which runs passes that make the
+program faster: a small function that calls no other candela function is
+copied into the places that call it. The release program prints the same
+output and raises the same errors, with the same messages and spans, as the
+program compiled in the debug profile that `candela <file.cdl>`, `candela run`
+and an embedding host use. `--debug` builds in the debug profile instead, with
+no passes.
 
 With no file, the entry point comes from the manifest. Without `-o` (or its
 long form `--output`), the output name is the input with `.cdl` replaced by

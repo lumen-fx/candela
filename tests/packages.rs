@@ -490,28 +490,35 @@ fn a_built_artifact_runs_with_no_source_tree() {
     )
     .unwrap();
 
-    let built = common::output_with_deadline(
-        candela(&project, Some(&stub))
-            .arg("build")
-            .arg("-o")
-            .arg("demo.cdlb"),
-        "candela build",
-    );
-    assert!(
-        built.status.success(),
-        "candela build: {}",
-        stderr_of(&built)
-    );
+    // A plain build is the release profile and `--debug` the debug one; both
+    // artifacts have to run with nothing else present.
+    for (artifact, profile) in [("demo.cdlb", None), ("demo-debug.cdlb", Some("--debug"))] {
+        let built = common::output_with_deadline(
+            candela(&project, Some(&stub))
+                .arg("build")
+                .arg("-o")
+                .arg(artifact)
+                .args(profile),
+            "candela build",
+        );
+        assert!(
+            built.status.success(),
+            "candela build: {}",
+            stderr_of(&built)
+        );
+    }
 
     // Nothing to fall back to: the sources and the package both go.
     std::fs::remove_dir_all(project.join("src")).unwrap();
     std::fs::remove_dir_all(root.join("cache")).unwrap();
 
-    let mut vm = Command::new(&candela_vm);
-    vm.current_dir(&project).arg("demo.cdlb");
-    let ran = common::output_with_deadline(&mut vm, "candela-vm run");
-    assert!(ran.status.success(), "candela-vm: {}", stderr_of(&ran));
-    assert_eq!(stdout_of(&ran).trim(), "42");
+    for artifact in ["demo.cdlb", "demo-debug.cdlb"] {
+        let mut vm = Command::new(&candela_vm);
+        vm.current_dir(&project).arg(artifact);
+        let ran = common::output_with_deadline(&mut vm, "candela-vm run");
+        assert!(ran.status.success(), "candela-vm: {}", stderr_of(&ran));
+        assert_eq!(stdout_of(&ran).trim(), "42");
+    }
 
     std::fs::remove_dir_all(&root).ok();
 }

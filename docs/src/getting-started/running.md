@@ -142,6 +142,13 @@ candela build hello.cdl -o dist/hello.cdlb
 That is the only way to name the output. A second path with no `-o` in front of
 it is rejected rather than taken as the destination.
 
+A build compiles in the release profile: it spends a little longer compiling so
+the program runs faster, for example by copying small functions into the places
+that call them. Running a source file, the REPL and an embedding host compile in
+the debug profile instead, which skips that work. The program behaves the same
+either way, with the same output, the same errors and the same places in the
+source named in them. `candela build --debug` builds without the release work.
+
 A `.cdlb` holds the whole program, its imports included, so the artifact
 travels on its own. See [Artifacts](../reference/artifacts.md) for what else it
 records.
@@ -182,7 +189,7 @@ candela-vm greet.cdlb Ada
 - `candela new <name>` starts a project.
 - `candela run [file.cdl] [args...]` runs the project.
 - `candela check [file.cdl]` compiles without running.
-- `candela build [file.cdl] [-o out.cdlb]` compiles to an artifact.
+- `candela build [file.cdl] [-o out.cdlb] [--debug]` compiles to an artifact.
 - `candela add`, `remove`, `fetch`, `update` and `publish` work on the
   project's dependencies.
 - `candela --help` or `-h` prints usage.

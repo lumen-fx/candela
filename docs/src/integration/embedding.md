@@ -248,10 +248,10 @@ declared type to compile against, so it is left for the call, and so is a
 function an import brought in. The check runs before `main`, so a broken body is
 reported before any top-level setup has run.
 
-`candela::compile_checked` is that check on its own, the seam `candela check`,
-`candela build` and the language server all compile through, for a frontend that
-wants to report what the command line reports without keeping a `Program`
-resident.
+`candela::compile_checked` is that check on its own, the seam `candela check`
+and the language server compile through, and the check `candela build` runs
+before its release passes, for a frontend that wants to report what the command
+line reports without keeping a `Program` resident.
 
 A `main` is required: an embedded program runs one the way a run from the CLI
 does. `candela check` is the step that compiles a file without one.
@@ -340,7 +340,9 @@ returned is complete.
 ## Running a precompiled artifact
 
 Build the script to a `.cdlb` first, with `candela build` or `build_bytecode`,
-then link only `candela-vm` in the program that runs it:
+then link only `candela-vm` in the program that runs it. Both compile in the
+release profile, which runs the passes that make the program faster; see
+[the CLI reference](../reference/cli.md):
 
 ```toml
 [dependencies]

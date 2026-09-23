@@ -3,16 +3,16 @@
 //!
 //! The artifact format and its load/run half live in the VM-only `candela-vm`
 //! crate ([`candela_vm::artifact`]); this module is the compiler-side half that
-//! turns a fresh [`compile_checked`] result into a [`ProgramImage`] and
+//! turns a fresh [`compile_checked_profile`] result into a [`ProgramImage`] and
 //! serializes it.
 //!
 //! The VM carries no compiler, so it cannot build a call trampoline when a host
 //! asks for a function by name. The trampolines are compiled ahead of time by
-//! [`compile_checked`] and recorded in the artifact's export table.
+//! [`compile_checked_profile`] and recorded in the artifact's export table.
 
 use crate::compiler::CompileOutput;
 use crate::compiler::imports::ImportResolver;
-use crate::trampoline::compile_checked;
+use crate::trampoline::compile_checked_profile;
 use candela_vm::artifact::DynLibFnImage;
 use candela_vm::artifact::EnumImage;
 use candela_vm::artifact::EnumVariantImage;
@@ -50,7 +50,20 @@ pub fn build_bytecode(
     filename: &str,
     resolver: &ImportResolver,
 ) -> Result<Vec<u8>, String> {
-    let (out, exports) = compile_checked(source, filename, resolver);
+    build_bytecode_profile(source, filename, resolver, true)
+}
+
+/// [`build_bytecode`] in the profile `optimize` names. `true`, the release
+/// profile, is what [`build_bytecode`] and a plain `candela build` use;
+/// `candela build --debug` passes `false` and gets the program exactly as a
+/// run from source compiles it.
+pub fn build_bytecode_profile(
+    source: String,
+    filename: &str,
+    resolver: &ImportResolver,
+    optimize: bool,
+) -> Result<Vec<u8>, String> {
+    let (out, exports) = compile_checked_profile(source, filename, resolver, optimize);
     // An artifact runs from `main`, so packaging a file without one would write
     // a program that cannot start.
     out.require_main();

@@ -8,15 +8,18 @@ use crate::data::Data;
 use crate::instr::Instr;
 
 /// Compiles and runs `contents` with the compiler's debug dump on, then
-/// asserts some `print` left `expected` in its register.
+/// asserts some `print` left `expected` in its register. It does so in both
+/// profiles, since a release build has to reach the same answers.
 macro_rules! run_and_check_registers {
     ($contents:expr, $expected:expr) => {
+        for optimize in [false, true] {
         let filename = "test.kl";
-        let out = compile(
+        let out = crate::compiler::compile_profile(
             String::from($contents),
             filename,
             true,
             &crate::compiler::imports::ImportResolver::new(),
+            optimize,
         );
         let instructions = out.instructions;
         let mut arrays = out.pools;
@@ -48,41 +51,45 @@ macro_rules! run_and_check_registers {
             } else {
                 false
             }
-        }));
+        }), "the program leaves the value in the register it prints (release profile: {optimize})");
+        }
     };
 }
 
 macro_rules! run {
     ($contents:expr) => {
-        let filename = "test.kl";
-        let out = compile(
-            String::from($contents),
-            filename,
-            true,
-            &crate::compiler::imports::ImportResolver::new(),
-        );
-        let mut arrays = out.pools;
-        crate::vm::execute(
-            &out.instructions,
-            &mut RegisterFile(out.registers),
-            &mut arrays,
-            &crate::errors::ErrorCtx {
-                instr_src: out.instr_src,
-                sources: vec![Source {
-                    filename: filename.into(),
-                    contents: String::from($contents),
-                }],
-            },
-            &out.callsite_registers,
-            &[],
-            &[],
-            &[],
-            out.allocated_arg_count,
-            out.allocated_call_depth,
-            &[],
-            &[],
-            0,
-        );
+        for optimize in [false, true] {
+            let filename = "test.kl";
+            let out = crate::compiler::compile_profile(
+                String::from($contents),
+                filename,
+                true,
+                &crate::compiler::imports::ImportResolver::new(),
+                optimize,
+            );
+            let mut arrays = out.pools;
+            crate::vm::execute(
+                &out.instructions,
+                &mut RegisterFile(out.registers),
+                &mut arrays,
+                &crate::errors::ErrorCtx {
+                    instr_src: out.instr_src,
+                    sources: vec![Source {
+                        filename: filename.into(),
+                        contents: String::from($contents),
+                    }],
+                },
+                &out.callsite_registers,
+                &[],
+                &[],
+                &[],
+                out.allocated_arg_count,
+                out.allocated_call_depth,
+                &[],
+                &[],
+                0,
+            );
+        }
     };
 }
 
@@ -341,6 +348,58 @@ pub fn an_assignment_inside_a_try_gets_its_own_register() {
         ),
         "6\n5\n"
     );
+}
+
+/// A release build copies a small function into its call site. An error the
+/// copy raises has to read exactly as the call's would: the same message and
+/// code, at the same span, including when the instruction that raises it was
+/// rewritten to write the call's register directly.
+#[test]
+pub fn an_inlined_body_raises_what_the_call_would() {
+    let src = "
+fn share(total, parts) {
+    return total / parts;
+}
+
+fn main() {
+    print(share(10, 2));
+    print(share(10, 0));
+}
+";
+    let debug = run_diag_profile(src, "inline.cdl", false).unwrap_err();
+    let release = run_diag_profile(src, "inline.cdl", true).unwrap_err();
+    assert_eq!(debug, release);
+    assert_eq!(debug.code, "division_by_zero");
+    assert_eq!(&src[debug.span], "total / parts");
+}
+
+/// A body is copied into its call sites only in a release build; the debug
+/// build of the same program still calls it.
+#[test]
+pub fn only_a_release_build_copies_a_body_into_its_call() {
+    let src = "
+fn twice(x) { return x * 2; }
+
+fn main() {
+    print(twice(21));
+}
+";
+    let calls = |optimize: bool| {
+        crate::compiler::compile_profile(
+            String::from(src),
+            "copy.cdl",
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+            optimize,
+        )
+        .instructions
+        .iter()
+        .filter(|instr| matches!(instr, Instr::CallFunc(_, _)))
+        .count()
+    };
+    assert_eq!(calls(false), 1);
+    assert_eq!(calls(true), 0);
+    assert_eq!(run_output(src), "42\n");
 }
 
 /// A throw out of a call made inside a `try` skips the return that would have
@@ -4308,26 +4367,51 @@ use candela_vm::captured_output::set_capturing;
 /// Compiles `src` under a diagnostic sink, returning the first structured error
 /// (parser or compiler) instead of printing + exiting. This is exactly what an
 /// embedder would write against the public `collect_diagnostic` surface.
+///
+/// The release profile compiles the same program, so it has to report the
+/// same error, word for word and at the same span; this checks that too.
 fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
-    collect_diagnostic(|| {
-        let _ = compile(
-            String::from(src),
-            filename,
-            false,
-            &crate::compiler::imports::ImportResolver::new(),
-        );
-    })
+    let [debug, release] = [false, true].map(|optimize| {
+        collect_diagnostic(|| {
+            let _ = crate::compiler::compile_profile(
+                String::from(src),
+                filename,
+                false,
+                &crate::compiler::imports::ImportResolver::new(),
+                optimize,
+            );
+        })
+    });
+    assert_eq!(
+        debug, release,
+        "a release build reports what a debug build does"
+    );
+    debug
 }
 
 /// Compiles then executes `src` under a diagnostic sink, surfacing parser,
 /// compiler and runtime errors as structured `Diagnostic`s.
+///
+/// Both profiles run it, and a release build has to stop with the same error
+/// at the same span as a debug one.
 fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
+    let [debug, release] = [false, true].map(|optimize| run_diag_profile(src, filename, optimize));
+    assert_eq!(
+        debug, release,
+        "a release build stops where a debug build does"
+    );
+    debug
+}
+
+/// [`run_diag`] in one profile.
+fn run_diag_profile(src: &str, filename: &str, optimize: bool) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
-        let out = compile(
+        let out = crate::compiler::compile_profile(
             String::from(src),
             filename,
             false,
             &crate::compiler::imports::ImportResolver::new(),
+            optimize,
         );
         let mut arrays = out.pools;
         crate::vm::execute(
@@ -4379,14 +4463,24 @@ fn compile_report(src: &str, filename: &str) -> String {
 
 /// Compiles and runs `src` with output captured, and hands back what the
 /// program printed.
+///
+/// Both profiles run it, and a release build has to print exactly what a
+/// debug one does.
 fn run_output(src: &str) -> String {
-    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
-    let was_capturing = set_capturing(true);
-    let result = run_diag(src, "out.cdl");
-    set_capturing(was_capturing);
-    let printed = CAPTURED_OUTPUT.with(|o| o.take());
-    result.unwrap_or_else(|d| panic!("{}: {printed}", d.message));
-    printed
+    let [debug, release] = [false, true].map(|optimize| {
+        CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+        let was_capturing = set_capturing(true);
+        let result = run_diag_profile(src, "out.cdl", optimize);
+        set_capturing(was_capturing);
+        let printed = CAPTURED_OUTPUT.with(|o| o.take());
+        result.unwrap_or_else(|d| panic!("{}: {printed}", d.message));
+        printed
+    });
+    assert_eq!(
+        debug, release,
+        "a release build prints what a debug build does"
+    );
+    debug
 }
 
 /// Every diagnostic must carry a plain-text (ANSI-free) message, a non-empty

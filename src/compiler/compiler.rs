@@ -5800,6 +5800,9 @@ pub struct CompileOutput {
     /// a later compile against this program (an embedding host calling in, a
     /// REPL line) resolves them the same way.
     pub generics: Generics,
+    /// Whether the program was compiled in the release profile, so a later
+    /// compile against it (an export entry point) uses the same one.
+    pub optimize: bool,
 }
 
 impl CompileOutput {
@@ -5830,6 +5833,23 @@ pub fn compile(
     filename: &str,
     debug: bool,
     resolver: &ImportResolver,
+) -> CompileOutput {
+    compile_profile(contents, filename, debug, resolver, false)
+}
+
+/// [`compile`] in the profile `optimize` names.
+///
+/// `false` is the debug profile every run from source uses, `true` the release
+/// profile `candela build` uses. The two produce programs that behave alike,
+/// with the same diagnostics, runtime errors and spans; the release one runs
+/// faster.
+#[must_use]
+pub fn compile_profile(
+    contents: String,
+    filename: &str,
+    debug: bool,
+    resolver: &ImportResolver,
+    optimize: bool,
 ) -> CompileOutput {
     #[cfg(not(target_arch = "wasm32"))]
     let now = std::time::Instant::now();
@@ -5980,6 +6000,7 @@ pub fn compile(
         sources: &mut sources,
         reserved_registers: FxHashSet::default(),
         value_callsites: FxHashSet::default(),
+        optimize,
         namespaces: &mut file_namespaces,
         generics: &mut generics,
         indirect_registers: &mut indirect_registers,
@@ -6054,5 +6075,6 @@ pub fn compile(
         free_registers,
         indirect_registers,
         generics,
+        optimize,
     }
 }
