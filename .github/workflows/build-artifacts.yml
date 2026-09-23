@@ -180,7 +180,7 @@ jobs:
       - name: Build instrumented candela-vm
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo pgo build --profiles-dir target/pgo-profiles-vm -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+        run: cargo pgo build --profiles-dir "${{ github.workspace }}/target/pgo-profiles-vm" -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
 
       - name: Gather candela-vm PGO profiles
         shell: bash
@@ -206,7 +206,7 @@ jobs:
       - name: Build candela-vm runtime
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo pgo optimize --profiles-dir target/pgo-profiles-vm -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+        run: cargo pgo optimize --profiles-dir "${{ github.workspace }}/target/pgo-profiles-vm" -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
