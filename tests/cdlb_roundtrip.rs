@@ -69,24 +69,44 @@ fn agrees_across_source_and_artifact(
         "{note}"
     );
 
-    let cdlb = dir.join("app.cdlb");
-    let mut build_cmd = std::process::Command::new(candela);
-    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
-    let build = common::output_with_deadline(&mut build_cmd, "candela build");
-    assert!(build.status.success(), "candela build failed");
+    // A plain build is the release profile and `--debug` the debug one; both
+    // have to reach the source run's answers with the source gone.
+    let artifacts: Vec<_> = PROFILES
+        .iter()
+        .enumerate()
+        .map(|(k, profile)| {
+            let cdlb = dir.join(format!("app{k}.cdlb"));
+            let mut build_cmd = std::process::Command::new(candela);
+            build_cmd
+                .arg("build")
+                .arg(&app)
+                .arg("-o")
+                .arg(&cdlb)
+                .args(*profile);
+            let build = common::output_with_deadline(&mut build_cmd, "candela build");
+            assert!(build.status.success(), "candela build {profile:?} failed");
+            (cdlb, profile)
+        })
+        .collect();
     std::fs::remove_file(&app).unwrap();
 
-    let mut vm_cmd = std::process::Command::new(&candela_vm);
-    vm_cmd.arg(&cdlb);
-    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
-    assert!(vm_out.status.success(), "candela-vm run failed");
-    assert_eq!(
-        vm_out.stdout, src_out.stdout,
-        "candela-vm must reach the same answers as the source run"
-    );
+    for (cdlb, profile) in artifacts {
+        let mut vm_cmd = std::process::Command::new(&candela_vm);
+        vm_cmd.arg(&cdlb);
+        let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+        assert!(vm_out.status.success(), "candela-vm run failed");
+        assert_eq!(
+            vm_out.stdout, src_out.stdout,
+            "candela-vm must reach the same answers as the source run ({profile:?})"
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The extra `candela build` arguments for each profile: none for release,
+/// `--debug` for debug.
+const PROFILES: [&[&str]; 2] = [&[], &["--debug"]];
 
 const STRUCT_PROGRAM: &str = "
 struct Point { x: int, y: int }
@@ -546,24 +566,38 @@ fn cli_whole_program_output_matches_source_run() {
     let src_out = common::output_with_deadline(&mut src_cmd, "source run");
     assert!(src_out.status.success(), "candela source run failed");
 
-    // Build the artifact, then delete the whole source tree.
-    let cdlb = dir.join("app.cdlb");
-    let mut build_cmd = std::process::Command::new(candela);
-    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
-    let build = common::output_with_deadline(&mut build_cmd, "candela build");
-    assert!(build.status.success(), "candela build failed");
+    // Build the artifact in each profile, then delete the whole source tree.
+    let artifacts: Vec<_> = PROFILES
+        .iter()
+        .enumerate()
+        .map(|(k, profile)| {
+            let cdlb = dir.join(format!("app{k}.cdlb"));
+            let mut build_cmd = std::process::Command::new(candela);
+            build_cmd
+                .arg("build")
+                .arg(&app)
+                .arg("-o")
+                .arg(&cdlb)
+                .args(*profile);
+            let build = common::output_with_deadline(&mut build_cmd, "candela build");
+            assert!(build.status.success(), "candela build {profile:?} failed");
+            cdlb
+        })
+        .collect();
     std::fs::remove_file(&app).unwrap();
     std::fs::remove_file(&util).unwrap();
 
-    // Run the artifact with the VM-only binary and require identical stdout.
-    let mut vm_cmd = std::process::Command::new(&candela_vm);
-    vm_cmd.arg(&cdlb);
-    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
-    assert!(vm_out.status.success(), "candela-vm run failed");
-    assert_eq!(
-        vm_out.stdout, src_out.stdout,
-        "candela-vm output must match the source run byte-for-byte"
-    );
+    // Run each artifact with the VM-only binary and require identical stdout.
+    for cdlb in artifacts {
+        let mut vm_cmd = std::process::Command::new(&candela_vm);
+        vm_cmd.arg(&cdlb);
+        let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+        assert!(vm_out.status.success(), "candela-vm run failed");
+        assert_eq!(
+            vm_out.stdout, src_out.stdout,
+            "candela-vm output must match the source run byte-for-byte"
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -603,31 +637,38 @@ fn the_call_depth_limit_holds_for_an_artifact_run() {
     ] {
         let app = dir.join(format!("{name}.cdl"));
         std::fs::write(&app, source).unwrap();
-        let cdlb = dir.join(format!("{name}.cdlb"));
-        let mut build_cmd = std::process::Command::new(candela);
-        build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
-        let build = common::output_with_deadline(&mut build_cmd, "candela build");
-        assert!(build.status.success(), "candela build failed");
+        for profile in PROFILES {
+            let cdlb = dir.join(format!("{name}.cdlb"));
+            let mut build_cmd = std::process::Command::new(candela);
+            build_cmd
+                .arg("build")
+                .arg(&app)
+                .arg("-o")
+                .arg(&cdlb)
+                .args(profile);
+            let build = common::output_with_deadline(&mut build_cmd, "candela build");
+            assert!(build.status.success(), "candela build failed");
 
-        let mut vm_cmd = std::process::Command::new(&candela_vm);
-        vm_cmd.arg(&cdlb);
-        let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
-        if deep {
-            assert!(vm_out.status.success(), "a bounded deep recursion must run");
-            assert_eq!(
-                String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
-                "100000\n"
-            );
-        } else {
-            assert!(
-                !vm_out.status.success(),
-                "a runaway recursion must stop the run"
-            );
-            let said = String::from_utf8_lossy(&vm_out.stderr);
-            assert!(
-                said.contains("climb"),
-                "the report names the call it stopped at: {said}"
-            );
+            let mut vm_cmd = std::process::Command::new(&candela_vm);
+            vm_cmd.arg(&cdlb);
+            let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+            if deep {
+                assert!(vm_out.status.success(), "a bounded deep recursion must run");
+                assert_eq!(
+                    String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
+                    "100000\n"
+                );
+            } else {
+                assert!(
+                    !vm_out.status.success(),
+                    "a runaway recursion must stop the run"
+                );
+                let said = String::from_utf8_lossy(&vm_out.stderr);
+                assert!(
+                    said.contains("climb"),
+                    "the report names the call it stopped at: {said}"
+                );
+            }
         }
     }
 
@@ -681,21 +722,28 @@ fn main() {
     )
     .unwrap();
 
-    let cdlb = dir.join("app.cdlb");
-    let mut build_cmd = std::process::Command::new(candela);
-    build_cmd.arg("build").arg(&app).arg("-o").arg(&cdlb);
-    let build = common::output_with_deadline(&mut build_cmd, "candela build");
-    assert!(build.status.success(), "candela build failed");
+    for profile in PROFILES {
+        let cdlb = dir.join("app.cdlb");
+        let mut build_cmd = std::process::Command::new(candela);
+        build_cmd
+            .arg("build")
+            .arg(&app)
+            .arg("-o")
+            .arg(&cdlb)
+            .args(profile);
+        let build = common::output_with_deadline(&mut build_cmd, "candela build");
+        assert!(build.status.success(), "candela build failed");
 
-    let mut vm_cmd = std::process::Command::new(&candela_vm);
-    vm_cmd.arg(&cdlb);
-    let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
-    assert!(vm_out.status.success(), "candela-vm run failed");
-    assert_eq!(
-        String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
-        "4\n\u{e9}\ncaf\u{e9}\n3\nc\na\nf\n\u{e9}\n4\n\u{1f600}b\npast the end\n",
-        "the artifact run counts characters everywhere a position appears"
-    );
+        let mut vm_cmd = std::process::Command::new(&candela_vm);
+        vm_cmd.arg(&cdlb);
+        let vm_out = common::output_with_deadline(&mut vm_cmd, "candela-vm run");
+        assert!(vm_out.status.success(), "candela-vm run failed");
+        assert_eq!(
+            String::from_utf8_lossy(&vm_out.stdout).replace("\r\n", "\n"),
+            "4\n\u{e9}\ncaf\u{e9}\n3\nc\na\nf\n\u{e9}\n4\n\u{1f600}b\npast the end\n",
+            "the artifact run counts characters everywhere a position appears ({profile:?})"
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }

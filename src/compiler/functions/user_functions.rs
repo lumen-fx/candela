@@ -40,6 +40,7 @@ use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
 use crate::rt::FnValue;
+use crate::rt::InstrSrc;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use std::rc::Rc;
@@ -331,6 +332,22 @@ pub fn handle_user_function(
     } else {
         state.alloc_reg_tgt(tgt_id)
     };
+    if !uses_frame && let Some(body) = state.fns[fn_id].impls[fn_impl_idx].inline_body.clone() {
+        let params = state.fns[fn_id].impls[fn_impl_idx].args_loc.clone();
+        inline_call(
+            &body,
+            &params,
+            return_register_id,
+            fn_returns_null,
+            output,
+            state,
+        );
+        return if fn_returns_null {
+            None
+        } else {
+            Some(return_register_id)
+        };
+    }
     if uses_frame {
         output.push(Instr::CallFuncRecursive(loc, return_register_id));
     } else {
@@ -552,6 +569,7 @@ fn compile_function(
         args_loc: Box::from(args_loc.as_slice()),
         arg_types: Box::from(infered_arg_types),
         type_args: Box::from(type_args),
+        inline_body: None,
     });
     // Cache the return type
     let key = specialization_key(type_args, infered_arg_types);
@@ -632,6 +650,15 @@ fn compile_function(
 
         let args_loc_saved = args_loc_saved.clone();
         set_saved_registers(&parsed, &all_written_regs, &args_loc_saved, state);
+    }
+
+    // A release build copies a small body into its call sites instead of
+    // calling it. The body stays where it is too, for a call made in a profile
+    // or a place that does not inline.
+    if state.optimize && !is_recursive && env_loc.is_none() {
+        let body = inlinable_body(&parsed);
+        let fn_impl = state.fns[function_id].impls.last_mut().unwrap();
+        fn_impl.inline_body = body;
     }
 
     output.extend(parsed);
@@ -1145,4 +1172,120 @@ const fn ends_straight_run(instr: Instr) -> bool {
                 | Instr::Halt(_)
                 | Instr::StopErrorCatch
         )
+}
+
+/// The most instructions a body may have and still be copied into its call
+/// sites. Past a handful, a copy grows the program by more than the call it
+/// saves costs.
+const INLINE_LIMIT: usize = 16;
+
+/// The body of a function a release build can copy into its call sites in
+/// place of calling it, or `None` when it cannot be.
+///
+/// The body has to be short, call no candela function (a call out of it would
+/// need a frame, and a body that calls itself would never stop being copied),
+/// and leave in exactly one way: by falling off its end, or by one `return`
+/// that is its last instruction. A copy then runs exactly as the call would
+/// have: the arguments are in the parameter registers, the body reads and
+/// writes the registers it always did, and the value lands in the register
+/// the call would have returned it into. A host or library call inside it is
+/// an ordinary instruction and does not stop it being copied.
+fn inlinable_body(body: &[Instr]) -> Option<Box<[Instr]>> {
+    if body.len() > INLINE_LIMIT {
+        return None;
+    }
+    let (last, rest) = body
+        .split_last()
+        .map_or((None, body), |(l, r)| (Some(*l), r));
+    let ends_in_return = matches!(last, Some(Instr::Return(_)));
+    let inside = if ends_in_return { rest } else { body };
+    let simple = inside.iter().all(|instr| {
+        !matches!(
+            instr,
+            Instr::CallFunc(_, _)
+                | Instr::CallFuncRecursive(_, _)
+                | Instr::CallIndirect(_)
+                | Instr::SaveFrame(_, _, _)
+                | Instr::Return(_)
+                | Instr::RecursiveReturn(_)
+                | Instr::VoidReturn
+                | Instr::StartErrorCatch(_, _)
+                | Instr::StopErrorCatch
+                | Instr::Halt(_)
+        )
+    });
+    // Every jump has to land inside the body or on its end, which is where the
+    // call would have returned to.
+    let jumps_stay = body
+        .iter()
+        .enumerate()
+        .all(|(pos, instr)| branch_target(pos, *instr).is_none_or(|target| target <= body.len()));
+    (simple && jumps_stay).then(|| Box::from(body))
+}
+
+/// Copies an inlinable `body` in place of a call. The arguments are already in
+/// the parameter registers; the `return` at its end, if it has one, becomes a
+/// move of the returned value into the register the call would have written.
+/// When the instruction just before the `return` is the only one to write the
+/// returned register and nothing else in the body reads it, that instruction
+/// writes the call's register directly instead.
+fn inline_call(
+    body: &[Instr],
+    params: &[u16],
+    return_register: u16,
+    returns_null: bool,
+    output: &mut Vec<Instr>,
+    state: &mut State<'_>,
+) {
+    let start = output.len();
+    output.extend_from_slice(body);
+    let Some(&Instr::Return(returned)) = body.last() else {
+        return;
+    };
+    output.pop();
+    if returns_null || returned == return_register {
+        return;
+    }
+    let before = body.len() - 1;
+    let written_once = body
+        .iter()
+        .filter(|instr| instr.get_tgt_id() == Some(returned))
+        .count()
+        == 1;
+    let mut reads = 0;
+    for instr in &body[..before] {
+        instr.for_each_read_reg(|reg| {
+            if reg == returned {
+                reads += 1;
+            }
+        });
+    }
+    let landed_on = body
+        .iter()
+        .enumerate()
+        .any(|(pos, instr)| branch_target(pos, *instr) == Some(before));
+    if before > 0
+        && written_once
+        && reads == 0
+        && !landed_on
+        && !params.contains(&returned)
+        && body[before - 1].get_tgt_id() == Some(returned)
+    {
+        let old = output[start + before - 1];
+        if move_to_id(&mut output[start..], return_register) {
+            let new = output[start + before - 1];
+            // A runtime error names its place by the instruction that raised
+            // it, so the rewritten one takes the original's place too.
+            if let Some(src) = state.instr_src.iter().find(|src| src.instr == old) {
+                let (span, file_id) = (src.span, src.file_id);
+                state.instr_src.push(InstrSrc {
+                    instr: new,
+                    span,
+                    file_id,
+                });
+            }
+            return;
+        }
+    }
+    output.push(Instr::Mov(returned, return_register));
 }

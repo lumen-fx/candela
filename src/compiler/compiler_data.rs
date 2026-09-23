@@ -183,6 +183,10 @@ pub struct FunctionImpl {
     /// to put them, and it returns the way a recursive call does, since the
     /// caller saved its registers on the way in.
     pub indirect: bool,
+    /// The body a release-profile call site copies in place of the call, for a
+    /// specialisation small and simple enough to inline. See
+    /// `inlinable_body` in the user-function compiler for what qualifies.
+    pub inline_body: Option<Box<[Instr]>>,
 }
 
 #[derive(Debug)]
@@ -302,6 +306,11 @@ pub struct State<'a> {
     /// value. Such a call writes its return register on the way back, so that
     /// register holds nothing a save would have to keep.
     pub value_callsites: FxHashSet<u16>,
+    /// Whether this is the release profile. `candela build` compiles with it
+    /// and runs the passes that make the program faster to run; a run from
+    /// source, the REPL and an embedding host compile without it, straight
+    /// from the syntax tree, so the dev loop never waits on a pass.
+    pub optimize: bool,
     pub namespaces: &'a mut FileNamespaces,
     pub generics: &'a mut Generics,
     pub indirect_registers: &'a mut IndirectRegisters,

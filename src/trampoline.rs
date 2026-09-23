@@ -19,7 +19,7 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::SymbolKind;
-use crate::compiler::compile;
+use crate::compiler::compile_profile;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
@@ -82,7 +82,18 @@ pub fn compile_checked(
     filename: &str,
     resolver: &ImportResolver,
 ) -> (CompileOutput, Vec<ExportImage>) {
-    let mut out = compile(source, filename, false, resolver);
+    compile_checked_profile(source, filename, resolver, false)
+}
+
+/// [`compile_checked`] in the profile `optimize` names; see
+/// [`crate::compiler::compile_profile`].
+pub fn compile_checked_profile(
+    source: String,
+    filename: &str,
+    resolver: &ImportResolver,
+    optimize: bool,
+) -> (CompileOutput, Vec<ExportImage>) {
+    let mut out = compile_profile(source, filename, false, resolver, optimize);
     let exports = compile_entry_points(&mut out);
     (out, exports)
 }
@@ -239,6 +250,7 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         sources: &mut out.sources,
         reserved_registers: FxHashSet::default(),
         value_callsites: FxHashSet::default(),
+        optimize: out.optimize,
         namespaces: &mut out.namespaces,
     }
 }

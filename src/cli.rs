@@ -6,7 +6,7 @@
 //! resolve the packages it depends on through `lpm`, and hand the compiler the
 //! roots those packages unpacked to.
 
-use crate::build::build_bytecode;
+use crate::build::build_bytecode_profile;
 use crate::compiler::compile;
 use crate::compiler::imports::ImportResolver;
 use crate::errors::BOLD;
@@ -35,7 +35,7 @@ const USAGE: &str = "Usage:
   candela new <name>               Start a project
   candela run [file.cdl] [args]    Run the project, or the file given
   candela check [file.cdl]         Compile without running
-  candela build [file.cdl] [-o out.cdlb]
+  candela build [file.cdl] [-o out.cdlb] [--debug]
                                    Compile to a bytecode artifact
   candela add <name>[@requirement] Record a dependency and fetch it
   candela remove <name>            Drop a dependency
@@ -47,7 +47,8 @@ const USAGE: &str = "Usage:
 
 Options:
   --offline   Resolve from the package cache alone (run, check, build, fetch)
-  --locked    Refuse to change candela.lock (fetch)";
+  --locked    Refuse to change candela.lock (fetch)
+  --debug     Build without the release passes, as a run from source compiles (build)";
 
 /// Whether an argument names a candela source file, which is how a verb tells
 /// the file it was handed from the program's own arguments.
@@ -187,6 +188,7 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     let mut file: Option<String> = None;
     let mut output: Option<String> = None;
     let mut offline = false;
+    let mut debug = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" | "--output" => {
@@ -196,6 +198,7 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
                 output = Some(path);
             }
             "--offline" => offline = true,
+            "--debug" => debug = true,
             _ if file.is_none() && is_source(&arg) => file = Some(arg),
             _ => misuse(&format!(
                 "unexpected argument {RED}{BOLD}{arg}{RESET}. Name the output file with -o or --output"
@@ -214,7 +217,7 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     });
 
     let contents = read_source(&path);
-    let bytes = match build_bytecode(contents, &path.to_string_lossy(), &resolver) {
+    let bytes = match build_bytecode_profile(contents, &path.to_string_lossy(), &resolver, !debug) {
         Ok(bytes) => bytes,
         Err(e) => fail(&format!("cannot build bytecode: {e}")),
     };
