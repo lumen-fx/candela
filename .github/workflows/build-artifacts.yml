@@ -171,10 +171,42 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo pgo optimize -- --target ${{ matrix.target }}
 
+      # candela-vm is profiled the same way, on the same workloads compiled to
+      # .cdlb by the candela just built, with a profile directory of its own so
+      # the two sets of profiles never mix. Every leg builds for the machine it
+      # runs on, so the instrumented binary can always run. pgo-dynlib is left
+      # out: an artifact finds its library through the loader's search path,
+      # which the runner does not point at pgo/.
+      - name: Build instrumented candela-vm
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo pgo build --profiles-dir target/pgo-profiles-vm -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+
+      - name: Gather candela-vm PGO profiles
+        shell: bash
+        run: |
+          candela=target/${{ matrix.target }}/release/${{ matrix.bin }}
+          vm=target/${{ matrix.target }}/release/candela-vm${{ runner.os == 'Windows' && '.exe' || '' }}
+          mkdir -p target/pgo-vm-artifacts
+          train() {
+            local source="$1"; shift
+            local artifact="target/pgo-vm-artifacts/$(basename "$source" .cdl).cdlb"
+            "$candela" build "$source" -o "$artifact"
+            "$vm" "$artifact" "$@"
+          }
+          train pgo/pgo-std-library.cdl
+          train examples/nbody/nbody_lua.cdl 10000
+          train examples/nbody/nbody_py.cdl 10000
+          train examples/binary-trees/binary-trees.cdl 10
+          train examples/fib/fib.cdl
+          train examples/iter_fib/iter_fib.cdl
+          train pgo/pgo-fizzbuzz.cdl
+          train pgo/pgo-import.cdl
+
       - name: Build candela-vm runtime
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --release --target ${{ matrix.target }} -p candela-vm --bin candela-vm
+        run: cargo pgo optimize --profiles-dir target/pgo-profiles-vm -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
