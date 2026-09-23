@@ -465,7 +465,14 @@ impl Instr {
         }
     }
 
-    pub fn for_each_read_reg(self, mut f: impl FnMut(u16)) {
+    /// Calls `f` with each register this instruction reads.
+    pub fn for_each_read_reg(mut self, mut f: impl FnMut(u16)) {
+        self.read_regs_mut(|reg| f(*reg));
+    }
+
+    /// Hands `f` each operand of this instruction that names a register it
+    /// reads, to look at or to rewrite.
+    pub fn read_regs_mut(&mut self, mut f: impl FnMut(&mut u16)) {
         match self {
             Self::AddFloat(a, b, _)
             | Self::AddInt(a, b, _)
@@ -571,11 +578,11 @@ impl Instr {
 
             Self::CallLibFuncVoid(func, a, b) => {
                 f(a);
-                if matches!(func, LibFuncVoid::FsWrite | LibFuncVoid::FsAppend) {
+                if matches!(*func, LibFuncVoid::FsWrite | LibFuncVoid::FsAppend) {
                     f(b);
                 }
             }
-            Self::Halt(x) if x != 0 => f(x),
+            Self::Halt(x) if *x != 0 => f(x),
 
             Self::CloneArray(src, _, _)
             | Self::CloneStruct(src, _)
