@@ -459,6 +459,12 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
         | Expr::ElseBlock(body)
         | Expr::ForLoop(_, _, body, _)
         | Expr::IntForLoop(_, _, _, body, _, _) => code_modifies_variable(var_name, body),
+        // A catch binds its own name for the error; an assignment to a
+        // variable of the same name there writes the error binding instead.
+        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+            code_modifies_variable(var_name, try_code)
+                || (err_var != var_name && code_modifies_variable(var_name, catch_code))
+        }
         Expr::Match(_, arms, wildcard, _) => {
             arms.iter()
                 .any(|(_, body)| code_modifies_variable(var_name, body))

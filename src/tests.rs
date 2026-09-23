@@ -286,10 +286,9 @@ pub fn a_constant_operand_adds_like_a_register() {
     );
 }
 
-/// A literal a variable starts from can share its register with the
-/// variable, and the variable is then written. That register holds whatever
-/// was last written, so it is never carried into an instruction as a
-/// constant: this reads what the program wrote, the way it did before.
+/// A constant is carried into an instruction only from a register nothing
+/// writes. Here `got` starts from a literal and is written inside a `try` and
+/// a `catch`, and the sum has to read what was written.
 #[test]
 pub fn a_written_literal_register_is_not_a_constant() {
     assert_eq!(
@@ -312,6 +311,35 @@ pub fn a_written_literal_register_is_not_a_constant() {
             "
         ),
         "7\n"
+    );
+}
+
+/// A variable that starts from a literal shares the literal's register until
+/// something assigns to it. An assignment inside a `try` or a `catch` counts,
+/// or the write lands in the register every other use of that literal reads,
+/// and the second call below would start from 6 instead of 0.
+#[test]
+pub fn an_assignment_inside_a_try_gets_its_own_register() {
+    assert_eq!(
+        run_output(
+            "
+            fn g(n) {
+                let got = 0;
+                try {
+                    got = n + 5;
+                } catch e {
+                    got = 1;
+                }
+                return got;
+            }
+
+            fn main() {
+                print(g(1));
+                print(g(0) + 0);
+            }
+            "
+        ),
+        "6\n5\n"
     );
 }
 
