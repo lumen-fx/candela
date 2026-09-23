@@ -556,6 +556,7 @@ impl Program {
             free_registers: &mut self.free_registers,
             sources: &mut self.sources,
             reserved_registers: rustc_hash::FxHashSet::default(),
+            value_callsites: rustc_hash::FxHashSet::default(),
             namespaces: &mut self.namespaces,
             generics: &mut self.generics,
             indirect_registers: &mut self.indirect_registers,
