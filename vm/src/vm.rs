@@ -1183,6 +1183,28 @@ pub fn execute(
                     .get_mut(regs[array].as_array())
                     .push(regs.get(element));
             }
+            Instr::CloneStruct(src_reg, dest_reg) => {
+                let new_id = alloc_array(
+                    m.obj_pool,
+                    m.map_pool,
+                    m.free_arrays,
+                    m.r,
+                    &m.recursion_stack,
+                    m.gc_array_threshold,
+                    m.gc,
+                ) as usize;
+                let src_reg = regs[src_reg];
+                let src = &m.obj_pool[src_reg.as_struct()];
+                let len = src.len();
+                unsafe {
+                    let src_ptr = src.as_ptr();
+                    let dst = m.obj_pool.get_mut(new_id);
+                    dst.reserve_exact(len);
+                    dst.set_len(len);
+                    std::ptr::copy_nonoverlapping(src_ptr, dst.as_mut_ptr(), len);
+                }
+                regs[dest_reg] = Data::struct_instance(src_reg.struct_type_id(), new_id as u32);
+            }
             _ => {
                 let next = run_cold(&mut m, instructions, index_of(base, ip), regs);
                 if next == HALTED {
@@ -1550,28 +1572,6 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     std::ptr::copy_nonoverlapping(src_ptr, dst.as_mut_ptr(), len as usize);
                 }
                 regs[dest_reg] = Data::array(new_id as u32);
-            }
-            Instr::CloneStruct(src_reg, dest_reg) => {
-                let new_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                ) as usize;
-                let src_reg = regs[src_reg];
-                let src = &obj_pool[src_reg.as_struct()];
-                let len = src.len();
-                unsafe {
-                    let src_ptr = src.as_ptr();
-                    let dst = obj_pool.get_mut(new_id);
-                    dst.reserve_exact(len);
-                    dst.set_len(len);
-                    std::ptr::copy_nonoverlapping(src_ptr, dst.as_mut_ptr(), len);
-                }
-                regs[dest_reg] = Data::struct_instance(src_reg.struct_type_id(), new_id as u32);
             }
             Instr::CloneEnum(src_reg, dest_reg) => {
                 let new_id = alloc_array(
