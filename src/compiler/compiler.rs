@@ -2938,11 +2938,6 @@ fn compile_for_loop(
         id
     };
 
-    // do the 'i < len' condition, set up the condition's id (true/false)
-    let condition_id = state.alloc_reg();
-
-    output.push(Instr::InfInt(index_id, array_len_id, condition_id));
-
     // set up the variable for the current element (for current_element_id in ... {}) => current_element_id = array[index]
     let current_element_id = if real_var { state.alloc_reg() } else { 0 };
 
@@ -2989,8 +2984,20 @@ fn compile_for_loop(
     // body captures the element, the cell it goes into
     let pending = u16::from(real_var) + u16::from(captured);
 
+    // The loop is laid out like a counted range:
+    // ----
+    // (1) if i >= len jump out
+    // (2) element = array[i], then the body
+    // (3) i += 1
+    // (4) if i < len jump back to (2)
+    // ----
+    // so a turn runs one test rather than a test at the top and a jump back
+    // to it. The length is read once, before the first turn, either way.
+    let jmp_idx = output.len();
+    output.push(Instr::SupEqIntJmp(index_id, array_len_id, 0));
+
     let regs_before = state.registers.len() as u16;
-    let mut cond_code = compile_expr(
+    let body = compile_expr(
         code,
         v,
         ctx.no_single_run()
@@ -2999,11 +3006,8 @@ fn compile_for_loop(
     );
     // Clean up variables
     v.truncate(v_len);
-    state.free_loop_scope_registers(regs_before, &cond_code, v);
-
-    // add the condition ('i < len') jumping logic
-    let mut len = (cond_code.len() + 3) as u16 + pending;
-    add_cmp_false(condition_id, &mut len, output, true);
+    state.free_loop_scope_registers(regs_before, &body, v);
+    let body_len = body.len() as u16;
 
     // load the element's value into the current_element_id register
     if real_var {
@@ -3020,19 +3024,24 @@ fn compile_for_loop(
             output.push(Instr::NewCell(current_element_id, element_cell_id));
         }
     }
-    parse_loop_flow_control(&mut cond_code, loop_id, len, true, false);
-    // then add the condition code
-    output.extend(cond_code);
+    output.extend(body);
     // add 1 to the index (i+=1) so that the next loop iteration will have the next element in the array
     output.push(Instr::IncInt(index_id));
 
-    // jump back to the loop if still inside of it
-    output.push(Instr::JmpBack(len));
+    // jump back to the element read while elements remain
+    output.push(Instr::InfIntJmpBack(
+        index_id,
+        array_len_id,
+        body_len + pending + 1,
+    ));
+
+    let exit_size = (output.len() - jmp_idx) as u16;
+    output[jmp_idx] = Instr::SupEqIntJmp(index_id, array_len_id, exit_size);
+    parse_loop_flow_control(&mut output[jmp_idx + 1..], loop_id, exit_size, true, false);
 
     if ctx.single_run {
         state.free_reg(array_len_id, v);
         state.free_reg(index_id, v);
-        state.free_reg(condition_id, v);
         if real_var {
             state.free_reg(current_element_id, v);
         }

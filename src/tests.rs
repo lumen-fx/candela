@@ -232,6 +232,41 @@ pub fn a_catch_reads_what_the_code_after_the_call_would_have_overwritten() {
     );
 }
 
+/// A loop over a list or a string tests for its end once per turn, at the
+/// bottom, so `continue` has to land on the step and `break` past the last
+/// test, and an empty collection must never run the body.
+#[test]
+pub fn a_loop_over_a_collection_steps_breaks_and_continues() {
+    assert_eq!(
+        run_output(
+            "
+            fn main() {
+                let s = 0;
+                for x in [1, 2, 3, 4, 5, 6] {
+                    if x == 2 { continue; }
+                    if x == 5 { break; }
+                    s += x;
+                }
+                print(s);
+                let out = \"\";
+                for c in \"hello\" {
+                    if c == \"l\" { continue; }
+                    out = out + c;
+                }
+                print(out);
+                for _ in [] { print(\"never\"); }
+                let fs = [];
+                for x in [10, 20] {
+                    fs.push(fn() { return x; });
+                }
+                for f in fs { print(f()); }
+            }
+            "
+        ),
+        "8\nheo\n10\n20\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every
