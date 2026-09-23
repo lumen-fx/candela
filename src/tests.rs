@@ -4485,12 +4485,27 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
 
 /// [`run_diag`] in one profile.
 fn run_diag_profile(src: &str, filename: &str, optimize: bool) -> Result<(), Diagnostic> {
+    run_diag_profile_with(
+        src,
+        filename,
+        optimize,
+        &crate::compiler::imports::ImportResolver::new(),
+    )
+}
+
+/// [`run_diag_profile`] with the imports resolved by `resolver`.
+fn run_diag_profile_with(
+    src: &str,
+    filename: &str,
+    optimize: bool,
+    resolver: &crate::compiler::imports::ImportResolver,
+) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
         let out = crate::compiler::compile_profile(
             String::from(src),
             filename,
             false,
-            &crate::compiler::imports::ImportResolver::new(),
+            resolver,
             optimize,
         );
         let mut arrays = out.pools;
@@ -12362,4 +12377,232 @@ pub fn an_operator_method_has_no_dot_spelling() {
     let d = compile_diag(src, "dot.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unexpected_token");
+}
+
+/// The standard library in this checkout, for a test whose program imports
+/// from it.
+fn std_resolver() -> crate::compiler::imports::ImportResolver {
+    let mut resolver = crate::compiler::imports::ImportResolver::new();
+    resolver.set_lib_dir(std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/libs"
+    )));
+    resolver
+}
+
+/// [`run_output`] for a program that imports from the standard library.
+fn run_output_std(src: &str) -> String {
+    let resolver = std_resolver();
+    let [debug, release] = [false, true].map(|optimize| {
+        CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+        let was_capturing = set_capturing(true);
+        let result = run_diag_profile_with(src, "out.cdl", optimize, &resolver);
+        set_capturing(was_capturing);
+        let printed = CAPTURED_OUTPUT.with(|o| o.take());
+        result.unwrap_or_else(|d| panic!("{}: {printed}", d.message));
+        printed
+    });
+    assert_eq!(
+        debug, release,
+        "a release build prints what a debug build does"
+    );
+    debug
+}
+
+/// A call has the type its function declares, not the type its body happens
+/// to return, so a declaration that widens the value is what the call site
+/// checks against.
+#[test]
+pub fn a_call_has_its_declared_return_type() {
+    let src = "
+        fn g() -> any { return 1; }
+        fn main() {
+            let xs = [\"a\"];
+            xs.push(g());
+        }
+    ";
+    let d = compile_diag(src, "declared.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert!(d.message.contains("any"), "{}", d.message);
+    assert!(!d.message.contains("int"), "{}", d.message);
+}
+
+/// The call is typed by the declaration whichever reaches the function first,
+/// the statement that discards its value or the one that reads it.
+#[test]
+pub fn a_call_reads_its_declaration_after_an_earlier_call() {
+    let src = "
+        fn g() -> any { return 1; }
+        fn main() {
+            g();
+            let xs = [\"a\"];
+            xs.push(g());
+        }
+    ";
+    let d = compile_diag(src, "declared.cdl").unwrap_err();
+    assert!(d.message.contains("any"), "{}", d.message);
+}
+
+/// A function held in a value hands back what the function declares.
+#[test]
+pub fn a_call_through_a_value_has_the_declared_return_type() {
+    let src = "
+        fn g() -> any { return 1; }
+        fn main() {
+            let h = g;
+            let xs = [\"a\"];
+            xs.push(h());
+        }
+    ";
+    let d = compile_diag(src, "declared.cdl").unwrap_err();
+    assert!(d.message.contains("any"), "{}", d.message);
+}
+
+/// Rows built by a helper declared `{any: any}` share a list with rows that
+/// already are, which is what the declaration is for.
+#[test]
+pub fn a_declared_map_of_any_shares_a_list_with_dynamic_rows() {
+    assert_eq!(
+        run_output(
+            "
+            fn row() -> {any: any} { let r = {\"a\": \"b\"}; return r; }
+
+            fn main() {
+                let rows = [];
+                rows.push(as_map({\"x\": \"y\"}));
+                rows.push(row());
+                print(rows.len());
+            }
+            "
+        ),
+        "2\n"
+    );
+}
+
+/// A body may return something narrower than a declaration naming `any`.
+#[test]
+pub fn a_narrower_body_fits_a_declaration_of_any() {
+    assert_eq!(
+        run_output(
+            "
+            fn nums() -> any[] { return [1, 2]; }
+            fn either(b: bool) -> any[] { if b { return [1]; } return [\"s\"]; }
+
+            fn main() {
+                let xs = nums();
+                xs.push(\"three\");
+                print(xs.len(), either(true).len(), either(false).len());
+            }
+            "
+        ),
+        "3\n1\n1\n"
+    );
+}
+
+/// A declared type still refuses a body returning something it does not hold.
+#[test]
+pub fn a_body_wider_than_its_declaration_is_refused() {
+    let src = "
+        fn f() -> int[] { return [\"s\"]; }
+        fn main() { f(); }
+    ";
+    let d = compile_diag(src, "declared.cdl").unwrap_err();
+    assert!(d.message.contains("expected int[]"), "{}", d.message);
+    assert!(d.message.contains("string[]"), "{}", d.message);
+}
+
+/// A recursive call reads the declared type while the body is still being
+/// worked out, so the result takes part in arithmetic.
+#[test]
+pub fn a_recursive_call_has_its_declared_return_type() {
+    assert_eq!(
+        run_output(
+            "
+            fn fact(n: int) -> int {
+                if n < 2 { return 1; }
+                return n * fact(n - 1);
+            }
+
+            fn main() { print(fact(5) + 1); }
+            "
+        ),
+        "121\n"
+    );
+}
+
+/// A declaration naming a type parameter the call leaves unbound keeps the
+/// body's type; one the call binds is read with the binding.
+#[test]
+pub fn a_generic_declaration_types_the_call_once_bound() {
+    assert_eq!(
+        run_output(
+            "
+            fn first<T>(xs: T[]) -> T { return xs[0]; }
+            fn empty() -> int[] { return []; }
+
+            fn main() {
+                let xs = [3, 4];
+                print(first([1, 2]) + 1, first<int>(xs) + 1);
+                let l = empty();
+                l.push(1);
+                print(l);
+            }
+            "
+        ),
+        "2\n4\n[1]\n"
+    );
+}
+
+/// Generic library functions and methods keep their types at the call site.
+#[test]
+pub fn std_generics_keep_their_call_types() {
+    assert_eq!(
+        run_output_std(
+            "
+            import \"std/option\";
+            import \"std/set\" as set;
+
+            fn main() {
+                print(Some(5).unwrap() + 1);
+                let s = set::new();
+                s.add(1);
+                print(s.len());
+            }
+            "
+        ),
+        "6\n1\n"
+    );
+}
+
+/// A union declaration types the call as the union, which arithmetic refuses.
+#[test]
+pub fn a_declared_union_types_the_call_as_the_union() {
+    let src = "
+        fn f() -> int | string { return 1; }
+        fn main() { print(f() + 1); }
+    ";
+    let d = compile_diag(src, "declared.cdl").unwrap_err();
+    assert!(d.message.contains("int|string"), "{}", d.message);
+}
+
+/// An `any` value returned from a function declared `int` is checked on the
+/// way out: the wrong value raises the catchable `bad_downcast`, the right one
+/// passes through.
+#[test]
+pub fn returning_any_from_a_declared_type_is_checked() {
+    assert_eq!(
+        run_output(
+            "
+            fn g(s: string) -> int { return json_parse(s); }
+            fn m(s: string) -> {string: string} { return json_parse(s); }
+
+            fn main() {
+                print(g(\"4\") + 1);
+                try { print(g(\"\\\"s\\\"\")); } catch err { print(err); }
+                try { print(m(\"[1]\")); } catch err { print(err); }
+            }
+            "
+        ),
+        "5\nbad_downcast\nbad_downcast\n"
+    );
 }
