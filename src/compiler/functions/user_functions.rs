@@ -34,6 +34,8 @@ use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_enum;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::compiler::compiler_errors::error_invalid_type;
+use crate::compiler::flow::branch_target;
+use crate::compiler::flow::ends_straight_run;
 use crate::compiler::functions::compile_call_args;
 use crate::compiler::functions::store_call_args;
 use crate::data::Data;
@@ -1174,53 +1176,6 @@ fn set_saved_registers(
     }
 }
 
-/// Where the branch at `pos` can jump to, for an instruction that branches
-/// within a body.
-const fn branch_target(pos: usize, instr: Instr) -> Option<usize> {
-    match instr {
-        Instr::Jmp(size)
-        | Instr::IsFalseJmp(_, size)
-        | Instr::IsTrueJmp(_, size)
-        | Instr::SupEqFloatJmp(_, _, size)
-        | Instr::SupEqIntJmp(_, _, size)
-        | Instr::SupFloatJmp(_, _, size)
-        | Instr::SupIntJmp(_, _, size)
-        | Instr::InfEqFloatJmp(_, _, size)
-        | Instr::InfEqIntJmp(_, _, size)
-        | Instr::InfFloatJmp(_, _, size)
-        | Instr::InfIntJmp(_, _, size)
-        | Instr::NotEqJmp(_, _, size)
-        | Instr::EqJmp(_, _, size)
-        | Instr::ObjNotEqJmp(_, _, size)
-        | Instr::ObjEqJmp(_, _, size)
-        | Instr::StrNotEqJmp(_, _, size)
-        | Instr::StrEqJmp(_, _, size)
-        | Instr::StartErrorCatch(size, _) => Some(pos + size as usize),
-        Instr::JmpBack(size)
-        | Instr::InfIntJmpBack(_, _, size)
-        | Instr::StepIntJmpBack(_, _, size) => pos.checked_sub(size as usize),
-        _ => None,
-    }
-}
-
-/// Whether execution can leave the straight line at this instruction: it
-/// branches, returns, throws or stops.
-const fn ends_straight_run(instr: Instr) -> bool {
-    branch_target(0, instr).is_some()
-        || matches!(
-            instr,
-            Instr::JmpBack(_)
-                | Instr::InfIntJmpBack(_, _, _)
-                | Instr::StepIntJmpBack(_, _, _)
-                | Instr::Return(_)
-                | Instr::RecursiveReturn(_)
-                | Instr::VoidReturn
-                | Instr::ThrowError(_)
-                | Instr::Halt(_)
-                | Instr::StopErrorCatch
-        )
-}
-
 /// The most instructions a body may have and still be copied into its call
 /// sites. Past a handful, a copy grows the program by more than the call it
 /// saves costs.
@@ -1233,8 +1188,8 @@ const INLINE_LIMIT: usize = 16;
 /// need a frame, and a body that calls itself would never stop being copied),
 /// and leave in exactly one way: by falling off its end, or by one `return`
 /// that is its last instruction. A copy then runs exactly as the call would
-/// have: the arguments are in the parameter registers, the body reads and
-/// writes the registers it always did, and the value lands in the register
+/// have: it reads the arguments the call would have passed, works on
+/// registers nothing outside it reads, and leaves its value in the register
 /// the call would have returned it into. A host or library call inside it is
 /// an ordinary instruction and does not stop it being copied.
 fn inlinable_body(body: &[Instr]) -> Option<Box<[Instr]>> {

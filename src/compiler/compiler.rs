@@ -108,6 +108,8 @@ mod functions;
 #[path = "functions/methods.rs"]
 mod methods;
 
+mod copies;
+mod flow;
 mod registers;
 mod scalar;
 
@@ -6023,7 +6025,17 @@ pub fn compile_profile(
     };
     instructions.push(Instr::Halt(0));
     if optimize {
-        scalar::replace_scalars(&mut scalar::Program {
+        scalar::replace_scalars(&mut flow::Program {
+            instructions: &mut instructions,
+            registers: &mut registers,
+            objs: &pools.objs,
+            const_registers: &mut const_registers,
+            instr_src: &mut instr_src,
+            callsite_registers: &mut callsite_registers,
+            functions: &mut functions,
+            indirect: &indirect_registers,
+        });
+        copies::forward_copies(&mut flow::Program {
             instructions: &mut instructions,
             registers: &mut registers,
             objs: &pools.objs,
