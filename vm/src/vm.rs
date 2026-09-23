@@ -1205,7 +1205,58 @@ pub fn execute(
                 }
                 regs[dest_reg] = Data::struct_instance(src_reg.struct_type_id(), new_id as u32);
             }
-            _ => {
+            // Named one by one rather than caught with `_`: a match that
+            // names every instruction compiles to a jump table that needs no
+            // range check before the jump.
+            Instr::Print(..)
+            | Instr::ObjNotEqJmp(..)
+            | Instr::ObjEqJmp(..)
+            | Instr::StrNotEqJmp(..)
+            | Instr::StrEqJmp(..)
+            | Instr::AddArray(..)
+            | Instr::AddStr(..)
+            | Instr::DivInt(..)
+            | Instr::ModFloat(..)
+            | Instr::ModInt(..)
+            | Instr::PowFloat(..)
+            | Instr::PowInt(..)
+            | Instr::BitAndInt(..)
+            | Instr::BitOrInt(..)
+            | Instr::BitXorInt(..)
+            | Instr::BitNotInt(..)
+            | Instr::ShlInt(..)
+            | Instr::ShrInt(..)
+            | Instr::ObjEq(..)
+            | Instr::ObjNotEq(..)
+            | Instr::StrEq(..)
+            | Instr::StrNotEq(..)
+            | Instr::SupStr(..)
+            | Instr::SupEqStr(..)
+            | Instr::InfStr(..)
+            | Instr::InfEqStr(..)
+            | Instr::CallDynamicLibFunc(..)
+            | Instr::CallHostFunc(..)
+            | Instr::CallLibFunc(..)
+            | Instr::CallLibFuncVoid(..)
+            | Instr::StartErrorCatch(..)
+            | Instr::StopErrorCatch
+            | Instr::ThrowError(..)
+            | Instr::EmptyArray(..)
+            | Instr::EmptyFnValue(..)
+            | Instr::CloneArray(..)
+            | Instr::CloneEnum(..)
+            | Instr::SetElementString(..)
+            | Instr::GetIndexString(..)
+            | Instr::GetSliceArray(..)
+            | Instr::GetSliceString(..)
+            | Instr::Remove(..)
+            | Instr::MapGet(..)
+            | Instr::MapInsert(..)
+            | Instr::MapInsertReg(..)
+            | Instr::MapRemove(..)
+            | Instr::CloneMap(..)
+            | Instr::NewCell(..)
+            | Instr::Halt(..) => {
                 let next = run_cold(&mut m, instructions, index_of(base, ip), regs);
                 if next == HALTED {
                     break;
