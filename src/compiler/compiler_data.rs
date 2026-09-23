@@ -298,6 +298,10 @@ pub struct State<'a> {
     pub free_registers: &'a mut Vec<u16>,
     pub sources: &'a mut Vec<Source>,
     pub reserved_registers: FxHashSet<u16>,
+    /// The call sites, among those that save registers, whose call returns a
+    /// value. Such a call writes its return register on the way back, so that
+    /// register holds nothing a save would have to keep.
+    pub value_callsites: FxHashSet<u16>,
     pub namespaces: &'a mut FileNamespaces,
     pub generics: &'a mut Generics,
     pub indirect_registers: &'a mut IndirectRegisters,

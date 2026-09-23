@@ -5974,6 +5974,7 @@ pub fn compile(
         free_registers: &mut free_registers,
         sources: &mut sources,
         reserved_registers: FxHashSet::default(),
+        value_callsites: FxHashSet::default(),
         namespaces: &mut file_namespaces,
         generics: &mut generics,
         indirect_registers: &mut indirect_registers,

@@ -198,6 +198,40 @@ pub fn a_recursive_call_inside_the_arguments_of_another_keeps_its_own_saves() {
     );
 }
 
+/// A register the code after a call overwrites before reading holds nothing
+/// the call has to save, but only on the path through that code. A throw out
+/// of the call lands on the catch instead, which reads what the register held
+/// before the call.
+#[test]
+pub fn a_catch_reads_what_the_code_after_the_call_would_have_overwritten() {
+    assert_eq!(
+        run_output(
+            "
+            fn dig(n, catching) {
+                if n <= 0 { throw(\"bottom\"); }
+                let mine = n * 10;
+                if catching {
+                    try {
+                        dig(n - 1, false);
+                        mine = 0;
+                        print(mine);
+                    } catch e {
+                        print(mine);
+                    }
+                } else {
+                    dig(n - 1, false);
+                }
+            }
+
+            fn main() {
+                dig(2, true);
+            }
+            "
+        ),
+        "20\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every

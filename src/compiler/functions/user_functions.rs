@@ -340,6 +340,9 @@ pub fn handle_user_function(
     }
 
     if uses_frame {
+        if !fn_returns_null {
+            state.value_callsites.insert(callsite_id.unwrap());
+        }
         output[saveframe_loc] = Instr::SaveFrame(
             (output.len() - 1 - saveframe_loc) as u16,
             return_register_id,
@@ -627,60 +630,8 @@ fn compile_function(
         all_written_regs.sort_unstable();
         all_written_regs.dedup();
 
-        // For each recursive call, only save registers that are read between that call's return and the end of the function
-        for (pos, instr) in parsed.iter().enumerate() {
-            if matches!(
-                instr,
-                Instr::CallFuncRecursive(_, _) | Instr::CallIndirect(_)
-            ) {
-                // The call's own frame is the `SaveFrame` whose offset lands on
-                // it. A call made for one of its arguments saves a frame of its
-                // own in between, so the nearest one is not necessarily it.
-                let callsite_id = parsed[..pos]
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(frame_pos, i)| match i {
-                        Instr::SaveFrame(offset, _, cid) if frame_pos + *offset as usize == pos => {
-                            Some(*cid)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_id();
-
-                let mut live_regs: Vec<u16> = Vec::new();
-                for after_instr in &parsed[pos + 1..] {
-                    // A recursive call reads its parameters where they already
-                    // are: an argument that is the parameter itself is not
-                    // moved there first, so no instruction names the read.
-                    if let Instr::CallFuncRecursive(target, _) = after_instr {
-                        let callee_params = state
-                            .fns
-                            .iter()
-                            .flat_map(|f| f.impls.iter())
-                            .filter(|fn_impl| fn_impl.loc == *target)
-                            .flat_map(|fn_impl| fn_impl.args_loc.iter());
-                        for reg in args_loc_saved.iter().chain(callee_params) {
-                            if all_written_regs.binary_search(reg).is_ok() {
-                                live_regs.push(*reg);
-                            }
-                        }
-                    }
-                    after_instr.for_each_read_reg(|reg| {
-                        if all_written_regs.binary_search(&reg).is_ok() {
-                            live_regs.push(reg);
-                        }
-                    });
-                }
-                live_regs.sort_unstable();
-                live_regs.dedup();
-                unsafe {
-                    *state
-                        .callsite_registers
-                        .get_unchecked_mut(callsite_id as usize) = live_regs;
-                }
-            }
-        }
+        let args_loc_saved = args_loc_saved.clone();
+        set_saved_registers(&parsed, &all_written_regs, &args_loc_saved, state);
     }
 
     output.extend(parsed);
@@ -847,6 +798,9 @@ pub fn handle_indirect_call(
     };
     output.push(Instr::CallIndirect(callee_id));
     state.add_to_src(ctx, output, span);
+    if !returns_null {
+        state.value_callsites.insert(callsite_id);
+    }
     output[saveframe_loc] = Instr::SaveFrame(
         (output.len() - 1 - saveframe_loc) as u16,
         return_register_id,
@@ -1025,4 +979,167 @@ pub fn declared_holds_fn_signature(declared: &DataType) -> bool {
         DataType::Map(entry) => entry.1.as_ref().is_some_and(declared_holds_fn_signature),
         _ => false,
     }
+}
+
+/// Decides, for every call in `body` that saves registers, which registers it
+/// saves: the ones the body may still read after the call returns.
+///
+/// A register counts as read after the call when any instruction past the call
+/// reads it, with two exceptions that hold on every path out of the call. The
+/// register the call returns into is written by the return itself, so the value
+/// saved there would never be read. And in the straight run of instructions
+/// that follows the call, up to the first branch or the first place a branch
+/// lands, a register written before anything reads it holds a fresh value from
+/// then on. Neither exception applies in a body that catches errors: a throw
+/// out of the call resumes at the catch without running the return or the run
+/// after it, so everything the body reads later is saved.
+///
+/// Each call is paired with its own `SaveFrame` through the frame's return
+/// offset, so a call made while working out another call's arguments gets its
+/// own list. The calls are visited last to first, which lets a call see the
+/// list of a later call it runs into, since that later call's frame reads
+/// those registers when it saves them.
+fn set_saved_registers(
+    body: &[Instr],
+    all_written_regs: &[u16],
+    params: &[u16],
+    state: &mut State<'_>,
+) {
+    let catches = body
+        .iter()
+        .any(|instr| matches!(instr, Instr::StartErrorCatch(_, _)));
+    let mut lands = vec![false; body.len() + 1];
+    for (pos, instr) in body.iter().enumerate() {
+        if let Some(target) = branch_target(pos, *instr)
+            && let Some(slot) = lands.get_mut(target)
+        {
+            *slot = true;
+        }
+    }
+    // (call position, return register, call site) for every saving call.
+    let mut calls: Vec<(usize, u16, u16)> = body
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, instr)| match instr {
+            Instr::SaveFrame(offset, return_reg, callsite) => {
+                Some((pos + *offset as usize, *return_reg, *callsite))
+            }
+            _ => None,
+        })
+        .collect();
+    calls.sort_unstable_by_key(|&(call_pos, _, _)| std::cmp::Reverse(call_pos));
+
+    let mut reads: Vec<u16> = Vec::new();
+    for &(call_pos, return_reg, callsite) in &calls {
+        let mut live: Vec<u16> = Vec::new();
+        let mut written: Vec<u16> = Vec::new();
+        let mut straight = !catches;
+        if straight && state.value_callsites.contains(&callsite) {
+            written.push(return_reg);
+        }
+        for (pos, instr) in body.iter().enumerate().skip(call_pos + 1) {
+            if lands[pos] {
+                straight = false;
+            }
+            reads.clear();
+            match instr {
+                // Saving reads the registers the later call keeps.
+                Instr::SaveFrame(_, _, later) => {
+                    reads.extend_from_slice(&state.callsite_registers[*later as usize]);
+                }
+                // A recursive call reads its parameters where they already
+                // are: an argument that is the parameter itself is not moved
+                // there first, so no instruction names the read.
+                Instr::CallFuncRecursive(target, _) => {
+                    reads.extend_from_slice(params);
+                    for fn_impl in state.fns.iter().flat_map(|f| f.impls.iter()) {
+                        if fn_impl.loc == *target {
+                            reads.extend_from_slice(&fn_impl.args_loc);
+                        }
+                    }
+                }
+                _ => instr.for_each_read_reg(|reg| reads.push(reg)),
+            }
+            for &reg in &reads {
+                if !written.contains(&reg) && all_written_regs.binary_search(&reg).is_ok() {
+                    live.push(reg);
+                }
+            }
+            if !straight {
+                continue;
+            }
+            let write = match instr {
+                // A call writes its return register when it comes back, and
+                // only if it returns a value.
+                Instr::CallFuncRecursive(_, _) | Instr::CallIndirect(_) => calls
+                    .iter()
+                    .find(|(pos_of_call, _, site)| {
+                        *pos_of_call == pos && state.value_callsites.contains(site)
+                    })
+                    .map(|(_, reg, _)| *reg),
+                // These name a register they write only later, or maybe not
+                // at all.
+                Instr::SaveFrame(_, _, _)
+                | Instr::CallFunc(_, _)
+                | Instr::StartErrorCatch(_, _) => None,
+                _ => instr.get_tgt_id(),
+            };
+            if let Some(reg) = write
+                && !live.contains(&reg)
+                && !written.contains(&reg)
+            {
+                written.push(reg);
+            }
+            if ends_straight_run(*instr) {
+                straight = false;
+            }
+        }
+        live.sort_unstable();
+        live.dedup();
+        state.callsite_registers[callsite as usize] = live;
+    }
+}
+
+/// Where the branch at `pos` can jump to, for an instruction that branches
+/// within a body.
+const fn branch_target(pos: usize, instr: Instr) -> Option<usize> {
+    match instr {
+        Instr::Jmp(size)
+        | Instr::IsFalseJmp(_, size)
+        | Instr::IsTrueJmp(_, size)
+        | Instr::SupEqFloatJmp(_, _, size)
+        | Instr::SupEqIntJmp(_, _, size)
+        | Instr::SupFloatJmp(_, _, size)
+        | Instr::SupIntJmp(_, _, size)
+        | Instr::InfEqFloatJmp(_, _, size)
+        | Instr::InfEqIntJmp(_, _, size)
+        | Instr::InfFloatJmp(_, _, size)
+        | Instr::InfIntJmp(_, _, size)
+        | Instr::NotEqJmp(_, _, size)
+        | Instr::EqJmp(_, _, size)
+        | Instr::ObjNotEqJmp(_, _, size)
+        | Instr::ObjEqJmp(_, _, size)
+        | Instr::StrNotEqJmp(_, _, size)
+        | Instr::StrEqJmp(_, _, size)
+        | Instr::StartErrorCatch(size, _) => Some(pos + size as usize),
+        Instr::JmpBack(size) | Instr::InfIntJmpBack(_, _, size) => pos.checked_sub(size as usize),
+        _ => None,
+    }
+}
+
+/// Whether execution can leave the straight line at this instruction: it
+/// branches, returns, throws or stops.
+const fn ends_straight_run(instr: Instr) -> bool {
+    branch_target(0, instr).is_some()
+        || matches!(
+            instr,
+            Instr::JmpBack(_)
+                | Instr::InfIntJmpBack(_, _, _)
+                | Instr::Return(_)
+                | Instr::RecursiveReturn(_)
+                | Instr::VoidReturn
+                | Instr::ThrowError(_)
+                | Instr::Halt(_)
+                | Instr::StopErrorCatch
+        )
 }
