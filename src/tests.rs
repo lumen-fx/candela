@@ -172,6 +172,32 @@ pub fn a_parameter_passed_on_unmoved_survives_the_call_before_it() {
     );
 }
 
+/// A recursive call made to work out an argument of another saves a frame of
+/// its own between the outer call's frame and the outer call. Each call has to
+/// keep its own list of registers to save; the outer call used to take the
+/// inner one's, so `n` came back from the inner call as the value the deepest
+/// level left in it and `% n` divided by zero.
+#[test]
+pub fn a_recursive_call_inside_the_arguments_of_another_keeps_its_own_saves() {
+    assert_eq!(
+        run_output(
+            "
+            fn f(n) {
+                if n <= 0 { return 1; }
+                let keep = n * 100;
+                let r = f(f(n - 1) % n);
+                return keep + r;
+            }
+
+            fn main() {
+                print(f(6));
+            }
+            "
+        ),
+        "701\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every
