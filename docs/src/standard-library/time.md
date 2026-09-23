@@ -52,3 +52,11 @@ fn main() {
 
 The value `now` returns is a signed count of seconds, held in an `int`; see
 [types](../language/types.md).
+
+## In a browser
+
+The WebAssembly build reads the browser's clock, and `format` renders in the
+browser's time zone. It knows the directives of the C `strftime` in the "C"
+locale apart from the ISO week ones (`%G`, `%g`, `%V`), which it writes out as
+they stand. The browser has no time zone names, so `%Z` renders the offset from
+UTC the way `%z` does, as in `+0200`.

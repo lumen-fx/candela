@@ -96,6 +96,26 @@ use libloading::Library;
 
 #[cfg(target_arch = "wasm32")]
 use crate::errors::wasm_error;
+
+/// What keeps a bound library open. Where no library loads, a binding is one
+/// of the runtime's intrinsics and there is nothing to hold.
+#[cfg(not(target_arch = "wasm32"))]
+type LibHandle = Rc<Library>;
+#[cfg(target_arch = "wasm32")]
+type LibHandle = ();
+
+/// A `dylib` block waiting for the types it names to resolve: the file it is
+/// in, its slot in the library table, its signatures, the open library, the
+/// spec an artifact records for it with the search that resolves that spec,
+/// and where it was written.
+type PendingDylib = (
+    u16,
+    u16,
+    Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+    LibHandle,
+    (SmolStr, LibraryOrigin),
+    Span,
+);
 pub mod compiler_data;
 mod compiler_errors;
 pub mod imports;
@@ -4820,6 +4840,20 @@ fn loaded_file_key(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+/// The source of a standard library module the browser build carries, by the
+/// path a library import resolves to (`std/math.cdl`). These are the modules
+/// whose native half the runtime provides itself; see
+/// [`candela_vm::intrinsics`].
+#[cfg(target_arch = "wasm32")]
+fn embedded_std_module(path: &str) -> Option<&'static str> {
+    match path {
+        "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
+        "std/time.cdl" => Some(include_str!("../../libs/std/time.cdl")),
+        "std/random.cdl" => Some(include_str!("../../libs/std/random.cdl")),
+        _ => None,
+    }
+}
+
 /// The places an import was looked for, for the error that says it was found in
 /// none of them.
 ///
@@ -4853,14 +4887,7 @@ fn load_auto_prelude(
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
-    pending_dylibs: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Rc<Library>,
-        (SmolStr, LibraryOrigin),
-        Span,
-    )>,
+    pending_dylibs: &mut Vec<PendingDylib>,
     pending_host: &mut Vec<(
         u16,
         u16,
@@ -5102,16 +5129,7 @@ fn parse_toplevel(
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
-    #[cfg(not(target_arch = "wasm32"))] pending_dylibs: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Rc<Library>,
-        // The spec to record in the artifact recipe so a `.cdlb` re-resolves the
-        // library by name, and the search that resolves it.
-        (SmolStr, LibraryOrigin),
-        Span,
-    )>,
+    pending_dylibs: &mut Vec<PendingDylib>,
     pending_host: &mut Vec<(
         u16,
         u16,
@@ -5222,10 +5240,21 @@ fn parse_toplevel(
                 namespace.symbols.push((name, SymbolKind::Enum(enum_id)));
                 pending_enums.push((enum_id, src_file_idx, variants));
             }
+            // A browser has no file system and no library loader. The std
+            // modules the runtime carries import, and their own `dylib` blocks
+            // bind to its intrinsics; nothing else does.
             #[cfg(target_arch = "wasm32")]
-            Expr::ImportDylib(..) => wasm_error("WASM does not support loading dynamic libraries"),
+            Expr::ImportDylib(..) if file_path.to_str().and_then(embedded_std_module).is_none() => {
+                wasm_error("WASM does not support loading dynamic libraries")
+            }
             #[cfg(target_arch = "wasm32")]
-            Expr::ImportFile(..) => wasm_error("WASM does not support importing files"),
+            Expr::ImportFile(ref path, _, is_logical, _)
+                if !is_logical || embedded_std_module(path).is_none() =>
+            {
+                wasm_error(
+                    "WASM does not support importing files. The standard library modules std/math, std/time and std/random import",
+                )
+            }
             import @ (Expr::ImportFile(..) | Expr::ImportDylib(..) | Expr::HostBlock(..)) => {
                 imports.push(import);
             }
@@ -5331,6 +5360,32 @@ fn parse_toplevel(
                     is_host: false,
                 });
             }
+            // Only a std module's block gets here (see the first pass), and it
+            // names its library relative to its own file, as on every target.
+            // The binding is recorded the way a desktop build records it, so
+            // an intrinsic resolves it by the same name.
+            #[cfg(target_arch = "wasm32")]
+            Expr::ImportDylib(path, fn_signatures, span) => {
+                let recorded = path.strip_prefix("../").unwrap_or(path.as_str());
+                let dylib_name = Path::new(recorded)
+                    .file_prefix()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(recorded)
+                    .to_smolstr();
+                pending_dylibs.push((
+                    src_file_idx,
+                    dynamic_libs.len() as u16,
+                    fn_signatures,
+                    (),
+                    (SmolStr::from(recorded), LibraryOrigin::StandardLibrary),
+                    span,
+                ));
+                dynamic_libs.push(Dynamiclib {
+                    name: dylib_name,
+                    fns: Box::new([]),
+                    is_host: false,
+                });
+            }
             Expr::HostBlock(host_namespace, fn_signatures, span) => {
                 pending_host.push((
                     src_file_idx,
@@ -5346,9 +5401,15 @@ fn parse_toplevel(
                 });
             }
             Expr::ImportFile(path, alias, is_logical, span) => {
+                // In a browser the module is one the runtime carries, keyed by
+                // its library path; the first pass let no other through.
+                #[cfg(target_arch = "wasm32")]
+                let file_path = PathBuf::from(path.as_str());
                 // Where the import reads from, and, for the error when it reads
                 // from nowhere, every place that was tried.
+                #[cfg(not(target_arch = "wasm32"))]
                 let library_path = resolver.library_path(path.as_str()).map(loaded_file_key);
+                #[cfg(not(target_arch = "wasm32"))]
                 let file_path = if is_logical {
                     // A library import (`import "std/string";`, extensionless)
                     // resolves against a package root or the shipped library
@@ -5379,6 +5440,10 @@ fn parse_toplevel(
                 let child_namespace = if let Some(cached) = files.get(&file_path) {
                     cached.clone()
                 } else {
+                    #[cfg(target_arch = "wasm32")]
+                    let file_contents =
+                        String::from(embedded_std_module(path.as_str()).unwrap_or_default());
+                    #[cfg(not(target_arch = "wasm32"))]
                     let file_contents = std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
                         error_cannot_read_file(
                             span,
@@ -5421,7 +5486,6 @@ fn parse_toplevel(
                         pending_structs,
                         pending_enums,
                         pending_fns,
-                        #[cfg(not(target_arch = "wasm32"))]
                         pending_dylibs,
                         pending_host,
                         generics,
@@ -5499,16 +5563,7 @@ fn resolve_types(
     pending_structs: Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
     pending_enums: PendingEnums,
     pending_fns: PendingFns,
-    #[cfg(not(target_arch = "wasm32"))] pending_dylibs: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Rc<Library>,
-        // The spec to record in the artifact recipe so a `.cdlb` re-resolves the
-        // library by name, and the search that resolves it.
-        (SmolStr, LibraryOrigin),
-        Span,
-    )>,
+    pending_dylibs: Vec<PendingDylib>,
     pending_host: Vec<(
         u16,
         u16,
@@ -5629,10 +5684,12 @@ fn resolve_types(
                 )
             });
     }
-    #[cfg(not(target_arch = "wasm32"))]
     for (src_file_idx, dynlib_id, fn_signatures, lib, (library_spec, origin), span) in
         pending_dylibs
     {
+        // An intrinsic binding holds no library open.
+        #[cfg(target_arch = "wasm32")]
+        let () = lib;
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
             .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
@@ -5667,9 +5724,13 @@ fn resolve_types(
                     id: dynamic_libs_fns.len() as u16,
                     variadic: false,
                 };
+                #[cfg(not(target_arch = "wasm32"))]
                 let arg_types: Vec<_> = fn_args.iter().map(|t| t.to_c_type(structs)).collect();
+                #[cfg(not(target_arch = "wasm32"))]
                 let return_type = fn_return_type.to_c_type(structs);
+                #[cfg(not(target_arch = "wasm32"))]
                 let cif = libffi::middle::Cif::new(arg_types, return_type);
+                #[cfg(not(target_arch = "wasm32"))]
                 let ptr = unsafe {
                     libffi::middle::CodePtr(
                         lib.get::<*const ()>(fn_name.as_bytes())
@@ -5690,14 +5751,33 @@ fn resolve_types(
                 let mut types = vec![fn_return_type];
                 types.extend(fn_args);
 
+                // Where nothing loads, the only bindings are the standard
+                // library's, and each is one of the runtime's intrinsics.
+                #[cfg(target_arch = "wasm32")]
+                let intrinsic = candela_vm::intrinsics::lookup(&library_spec, fn_name)
+                    .unwrap_or_else(|| {
+                        error_cannot_find_dynlib_symbol(
+                            fn_name,
+                            *fn_name_span,
+                            span,
+                            src_file_idx,
+                            sources,
+                        );
+                    });
+
                 dynamic_libs_fns.push(DynamicLibFn {
                     types: Box::from(types),
                     library: library_spec.clone(),
                     origin,
                     symbol: fn_name.clone(),
+                    #[cfg(not(target_arch = "wasm32"))]
                     _lib: Rc::clone(&lib),
+                    #[cfg(not(target_arch = "wasm32"))]
                     ptr,
+                    #[cfg(not(target_arch = "wasm32"))]
                     cif,
+                    #[cfg(target_arch = "wasm32")]
+                    intrinsic,
                 });
                 return_val
             })
@@ -5903,15 +5983,7 @@ pub fn compile_profile(
     let mut pending_enums: PendingEnums = Vec::new();
     let mut pending_fns: PendingFns = Vec::with_capacity(2);
     let mut generics = Generics::default();
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut pending_dylibs: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Rc<Library>,
-        (SmolStr, LibraryOrigin),
-        Span,
-    )> = Vec::new();
+    let mut pending_dylibs: Vec<PendingDylib> = Vec::new();
     let mut pending_host: Vec<(
         u16,
         u16,
@@ -5936,7 +6008,6 @@ pub fn compile_profile(
         &mut pending_structs,
         &mut pending_enums,
         &mut pending_fns,
-        #[cfg(not(target_arch = "wasm32"))]
         &mut pending_dylibs,
         &mut pending_host,
         &mut generics,
@@ -5968,7 +6039,6 @@ pub fn compile_profile(
         pending_structs,
         pending_enums,
         pending_fns,
-        #[cfg(not(target_arch = "wasm32"))]
         pending_dylibs,
         pending_host,
         &file_namespaces,

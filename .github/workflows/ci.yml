@@ -4,7 +4,8 @@
 name: ci
 
 # Builds and tests the workspace on Linux, macOS, and Windows, and runs the two
-# extra legs candela needs: the `embed` feature, and a wasm32 build.
+# extra legs candela needs: the `embed` feature, and a wasm32 build with the
+# browser build's own tests.
 #
 # fmt and clippy run on Linux only. Neither is platform dependent.
 
@@ -151,3 +152,15 @@ jobs:
           rustflags: ""
           cache-key: wasm
       - run: cargo build --target wasm32-unknown-unknown --verbose
+      # The runner has to be the version the crate was built against, so take
+      # it from the lockfile, as the release build does for wasm-bindgen.
+      - name: Install wasm-bindgen-test-runner
+        shell: bash
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; print }' Cargo.lock \
+            | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Test the browser build
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: cargo test --target wasm32-unknown-unknown --test wasm_std --verbose

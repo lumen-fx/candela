@@ -334,6 +334,10 @@ pub struct DynamicLibFn {
     pub ptr: libffi::middle::CodePtr,
     #[cfg(not(target_arch = "wasm32"))]
     pub cif: libffi::middle::Cif,
+    /// The runtime's own function standing in for the symbol, where there is
+    /// no library to load; see [`crate::intrinsics`].
+    #[cfg(target_arch = "wasm32")]
+    pub intrinsic: crate::intrinsics::Intrinsic,
 }
 
 /// Target operating system for dynamic-library filename resolution.

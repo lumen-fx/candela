@@ -124,6 +124,11 @@ toml_edit = "0.25.15"
 wasm-bindgen = "0.2.126"
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
+# The browser build's own tests (tests/wasm_std.rs), run under
+# wasm-bindgen-test-runner.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
 # Integration tests probe dyn-lib availability through the same OS loader the
 # runtime uses, so they can skip cleanly when a system library is absent.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

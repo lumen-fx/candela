@@ -1419,8 +1419,41 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
     #[allow(clippy::never_loop)]
     'main: for _ in 0..1 {
         match unsafe { *instructions.get_unchecked(i) } {
+            // No library loads here: each binding is one of the runtime's own
+            // functions, which the standard library's modules resolve to.
             #[cfg(target_arch = "wasm32")]
-            Instr::CallDynamicLibFunc(_, _) => unsafe { std::hint::unreachable_unchecked() },
+            Instr::CallDynamicLibFunc(fn_id, dest) => {
+                use crate::intrinsics::{Arg, Ret};
+                let func = unsafe { dyn_libs.get_unchecked(fn_id as usize) };
+                let ret = {
+                    // A short string lives inside its value, so the values are
+                    // held here for as long as the arguments borrow them.
+                    let mut values = [NULL; 2];
+                    for (value, reg) in values.iter_mut().zip(args.iter()) {
+                        *value = regs[*reg];
+                    }
+                    let mut call = [Arg::Int(0); 2];
+                    for (slot, data) in call.iter_mut().zip(values.iter()) {
+                        *slot = if data.is_int() {
+                            Arg::Int(data.as_int())
+                        } else if data.is_float() {
+                            Arg::Float(data.as_float())
+                        } else if data.is_string() {
+                            Arg::Str(data.as_str(str_pool))
+                        } else {
+                            Arg::Int(0)
+                        };
+                    }
+                    (func.intrinsic)(&call[..args.len().min(2)])
+                };
+                args.clear();
+                regs[dest] = match ret {
+                    Ret::Int(v) => v.into(),
+                    Ret::Float(v) => v.into(),
+                    Ret::Str(v) => string!(v),
+                    Ret::Null => NULL,
+                };
+            }
             #[cfg(not(target_arch = "wasm32"))]
             Instr::CallDynamicLibFunc(fn_id, dest) => {
                 dyn_lib_args.clear();
@@ -1527,7 +1560,10 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                             obj_pool.push(data_fields);
                             Data::struct_instance(*struct_idx, new_id as u32)
                         }
-                        DataType::Null => NULL,
+                        DataType::Null => {
+                            func.cif.call::<()>(func.ptr, &ffi_args);
+                            NULL
+                        }
                         DataType::Array(_) => {
                             error_with_catch!(ErrType::CArrayReturnTypeNotSupported);
                         }

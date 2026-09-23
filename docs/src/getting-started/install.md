@@ -223,9 +223,12 @@ try {
 console.log(get_output());
 ```
 
-This build has no file system, so a program it runs cannot `import` and the
-standard library is out of reach. The language itself works, including the
-[built-ins](../standard-library/builtins.md).
+This build has no file system, so a program it runs cannot import its own
+files. The language itself works, including the
+[built-ins](../standard-library/builtins.md), and so do the standard library's
+[`math`](../standard-library/math.md), [`random`](../standard-library/random.md)
+and [`time`](../standard-library/time.md) modules, which the build carries
+inside itself. The other std modules do not import here.
 
 The prompt on [candela.lumenfx.dev](https://candela.lumenfx.dev/) is this
 asset.

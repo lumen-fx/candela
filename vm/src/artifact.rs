@@ -698,22 +698,39 @@ fn resolve_dyn_lib_fns(
     Ok(out)
 }
 
-/// On targets without the FFI backend (wasm) a `.cdlb` that references dynamic
-/// libraries cannot be honored; refuse to load it rather than silently drop the
-/// bindings.
+/// On targets without the FFI backend (wasm) no library loads. A binding the
+/// standard library owns resolves to the runtime's own function for it; any
+/// other refuses the load rather than silently dropping the binding.
 #[cfg(target_arch = "wasm32")]
 fn resolve_dyn_lib_fns(
     recipes: &[DynLibFnImage],
     _structs: &[Struct],
 ) -> Result<Vec<DynamicLibFn>, LoadError> {
-    if let Some(r) = recipes.first() {
-        return Err(LoadError::LibraryOpen {
-            spec: r.library.clone(),
-            filename: r.library.clone(),
-            message: String::from("dynamic libraries are not supported on this target"),
-        });
-    }
-    Ok(Vec::new())
+    recipes
+        .iter()
+        .map(|recipe| {
+            let intrinsic = match recipe.origin {
+                LibraryOrigin::StandardLibrary => {
+                    crate::intrinsics::lookup(&recipe.library, &recipe.symbol)
+                }
+                LibraryOrigin::Program => None,
+            };
+            let Some(intrinsic) = intrinsic else {
+                return Err(LoadError::LibraryOpen {
+                    spec: recipe.library.clone(),
+                    filename: recipe.library.clone(),
+                    message: String::from("dynamic libraries are not supported on this target"),
+                });
+            };
+            Ok(DynamicLibFn {
+                types: recipe.types.clone().into_boxed_slice(),
+                library: SmolStr::from(recipe.library.as_str()),
+                origin: recipe.origin,
+                symbol: SmolStr::from(recipe.symbol.as_str()),
+                intrinsic,
+            })
+        })
+        .collect()
 }
 
 /// Why a `.cdlb` artifact could not be loaded.
