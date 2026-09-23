@@ -109,6 +109,7 @@ mod functions;
 mod methods;
 
 mod registers;
+mod scalar;
 
 pub trait UnwrapId {
     fn unwrap_id(self) -> u16;
@@ -6021,6 +6022,18 @@ pub fn compile_profile(
         Vec::new()
     };
     instructions.push(Instr::Halt(0));
+    if optimize {
+        scalar::replace_scalars(&mut scalar::Program {
+            instructions: &mut instructions,
+            registers: &mut registers,
+            objs: &pools.objs,
+            const_registers: &mut const_registers,
+            instr_src: &mut instr_src,
+            callsite_registers: &mut callsite_registers,
+            functions: &mut functions,
+            indirect: &indirect_registers,
+        });
+    }
     use_immediates(&mut instructions, &[], &registers, &const_registers);
 
     #[cfg(debug_assertions)]

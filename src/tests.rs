@@ -425,6 +425,63 @@ pub fn a_later_argument_calling_the_callee_leaves_earlier_ones_alone() {
     );
 }
 
+/// A release build keeps a struct that never leaves the registers as one
+/// register per field. Whatever it keeps pooled or not, the program has to
+/// print what a debug build prints: a struct shared by two names and written
+/// through one, one stored in a list, compared, printed, or written after it
+/// was built all have to behave as pooled structs do.
+#[test]
+pub fn a_struct_kept_in_registers_behaves_as_a_pooled_one() {
+    let printed = run_output(
+        "
+        struct V { x: float, y: float }
+
+        impl V {
+            fn +(self, other: V) -> V { return V { x: self.x + other.x, y: self.y + other.y }; }
+            fn scale(self, k: float) -> V { return V { x: self.x * k, y: self.y * k }; }
+            fn len2(self) -> float { return self.x * self.x + self.y * self.y; }
+        }
+
+        fn main() {
+            let p = V { x: 0.0, y: 0.0 };
+            let v = V { x: 0.5, y: 0.25 };
+            let s = 0.0;
+            for i in 0..100 {
+                p = p + v.scale(0.5);
+                s += p.len2();
+            }
+            print(s, p.x, p.y);
+
+            let a = V { x: 1.0, y: 2.0 };
+            let b = a;
+            b.x = 5.0;
+            print(a.x);
+
+            let kept = [];
+            for i in 0..3 {
+                let q = V { x: 1.0, y: 1.0 } + V { x: float(i), y: 0.0 };
+                kept.push(q);
+            }
+            print(kept[2].x, kept.len());
+
+            let c = V { x: 1.0, y: 1.0 } + V { x: 0.0, y: 0.0 };
+            print(c == V { x: 1.0, y: 1.0 });
+            print(c);
+
+            let m = V { x: 3.0, y: 4.0 } + V { x: 0.0, y: 0.0 };
+            for i in 0..3 {
+                m.x = m.x + 1.0;
+            }
+            print(m.len2());
+        }
+        ",
+    );
+    assert_eq!(
+        printed,
+        "26433.59375\n25.0\n12.5\n5.0\n3.0\n3\ntrue\nV {x:1.0,y:1.0}\n52.0\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every

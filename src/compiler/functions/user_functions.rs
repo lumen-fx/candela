@@ -291,10 +291,12 @@ pub fn handle_user_function(
     } else {
         None
     };
-    // Move evaluated call args into the expected arg slots. The moves are
-    // remembered, so a release build that copies the body in can read an
-    // argument where it already is instead.
-    let mut arg_moves: Vec<usize> = Vec::new();
+    // A release build copies a small body in place of the call. Its
+    // arguments are then worked out into registers of their own, which the
+    // copy reads in place of the parameters.
+    let inline = !uses_frame && state.fns[fn_id].impls[fn_impl_idx].inline_body.is_some();
+    let mut bindings: Vec<(u16, u16)> = Vec::new();
+    // Move evaluated call args into the expected arg slots.
     // A parameter register belongs to the callee, and a later argument that
     // calls a function can reach this callee again and overwrite it. So an
     // argument before the last one that may call is held in a register of its
@@ -324,6 +326,18 @@ pub fn handle_user_function(
             continue;
         }
 
+        if inline {
+            let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+                compile_fn_value(&args[i], v, ctx, state, output, None)
+            } else {
+                args[i]
+                    .compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id()
+            };
+            bindings.push((tgt_id, arg_id));
+            continue;
+        }
+
         if last_calling.is_some_and(|last| i < last) {
             let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
                 compile_fn_value(&args[i], v, ctx, state, output, None)
@@ -346,13 +360,11 @@ pub fn handle_user_function(
         };
         if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
-            arg_moves.push(output.len() - 1);
         }
     }
     for (arg_id, tgt_id) in held {
         if arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
-            arg_moves.push(output.len() - 1);
         }
     }
     // Hand the callee its environment.
@@ -368,12 +380,10 @@ pub fn handle_user_function(
     } else {
         state.alloc_reg_tgt(tgt_id)
     };
-    if !uses_frame && let Some(body) = state.fns[fn_id].impls[fn_impl_idx].inline_body.clone() {
-        let params = state.fns[fn_id].impls[fn_impl_idx].args_loc.clone();
-        let body = read_arguments_in_place(body, &arg_moves, output, state);
+    if inline && let Some(body) = state.fns[fn_id].impls[fn_impl_idx].inline_body.clone() {
         inline_call(
             &body,
-            &params,
+            &bindings,
             return_register_id,
             fn_returns_null,
             output,
@@ -1274,70 +1284,79 @@ fn carry_span(old: Instr, new: Instr, state: &mut State<'_>) {
     }
 }
 
-/// Lets a body about to be copied into a call site read its arguments where
-/// they already are, instead of from the parameter registers they were just
-/// moved into, and drops those moves.
+/// Gives a body about to be copied into a call site the registers it runs on
+/// there. Each parameter becomes the register its argument was worked out
+/// into, or, for a parameter the body writes, a fresh register the argument is
+/// moved into first. Everything else the body writes gets a fresh register.
 ///
-/// Only the moves at the very end of `output` are taken, the ones for
-/// arguments whose value needed no code of its own, so nothing that runs
-/// between a move and the body can change either register. A move is taken
-/// only when the body writes neither its parameter nor its argument: the body
-/// then sees the same value under either name. A rewritten instruction that
-/// can raise an error takes the original's place in the span table.
-fn read_arguments_in_place(
-    mut body: Box<[Instr]>,
-    arg_moves: &[usize],
+/// A copy that shared the callee's registers with the body left where it is,
+/// and with every other copy, would tie them together: whatever one of them
+/// does with a register, a pass looking at the program has to assume of all.
+/// Nothing outside the body reads what it writes, so fresh registers change
+/// nothing the program can see.
+fn bind_body_registers(
+    body: &[Instr],
+    bindings: &[(u16, u16)],
     output: &mut Vec<Instr>,
     state: &mut State<'_>,
-) -> Box<[Instr]> {
-    let mut tail = output.len();
-    let mut taken: Vec<usize> = Vec::new();
-    for &at in arg_moves.iter().rev() {
-        if at + 1 != tail {
-            break;
+) -> Vec<Instr> {
+    let writes = |reg: u16| body.iter().any(|instr| instr.get_tgt_id() == Some(reg));
+    let mut renamed: Vec<(u16, u16)> = Vec::new();
+    for &(param, arg) in bindings {
+        if writes(param) {
+            state.registers.push(NULL);
+            let fresh = (state.registers.len() - 1) as u16;
+            output.push(Instr::Mov(arg, fresh));
+            renamed.push((param, fresh));
+        } else {
+            renamed.push((param, arg));
         }
-        tail = at;
-        let Instr::Mov(arg, param) = output[at] else {
-            break;
-        };
-        let written = |reg: u16| body.iter().any(|instr| instr.get_tgt_id() == Some(reg));
-        if written(param) || written(arg) {
-            continue;
+    }
+    for instr in body {
+        if let Some(reg) = instr.get_tgt_id()
+            && !renamed.iter().any(|&(from, _)| from == reg)
+        {
+            state.registers.push(NULL);
+            renamed.push((reg, (state.registers.len() - 1) as u16));
         }
-        for instr in &mut body {
-            let old = *instr;
-            instr.read_regs_mut(|reg| {
-                if *reg == param {
-                    *reg = arg;
-                }
-            });
-            if *instr != old {
-                carry_span(old, *instr, state);
+    }
+    let rename = |reg: &mut u16| {
+        if let Some(&(_, to)) = renamed.iter().find(|&&(from, _)| from == *reg) {
+            *reg = to;
+        }
+    };
+    body.iter()
+        .map(|&old| {
+            let mut new = old;
+            new.read_regs_mut(rename);
+            if let Some(reg) = new.tgt_id_mut() {
+                rename(reg);
             }
-        }
-        taken.push(at);
-    }
-    // Highest first, so each removal leaves the positions still to go alone.
-    for at in taken {
-        output.remove(at);
-    }
-    body
+            if new != old {
+                carry_span(old, new, state);
+            }
+            new
+        })
+        .collect()
 }
 
-/// Copies an inlinable `body` in place of a call. The arguments are already in
-/// the parameter registers; the `return` at its end, if it has one, becomes a
-/// move of the returned value into the register the call would have written.
-/// When the instruction just before the `return` is the only one to write the
-/// returned register and nothing else in the body reads it, that instruction
-/// writes the call's register directly instead.
+/// Copies an inlinable `body` in place of a call, reading each parameter from
+/// the register `bindings` names for it (see [`bind_body_registers`]).
+///
+/// The `return` at the end of the body, if it has one, becomes a move of the
+/// returned value into the register the call would have written. When what
+/// the body returns is built by its last instructions alone (one instruction,
+/// or a struct construction and its field writes) and nothing else reads it,
+/// those instructions build it in the call's register directly instead.
 fn inline_call(
     body: &[Instr],
-    params: &[u16],
+    bindings: &[(u16, u16)],
     return_register: u16,
     returns_null: bool,
     output: &mut Vec<Instr>,
     state: &mut State<'_>,
 ) {
+    let body = &bind_body_registers(body, bindings, output, state)[..];
     let start = output.len();
     output.extend_from_slice(body);
     let Some(&Instr::Return(returned)) = body.last() else {
@@ -1348,6 +1367,20 @@ fn inline_call(
         return;
     }
     let before = body.len() - 1;
+    // The instructions that build the returned value: the last one, or a
+    // construction followed by its field writes.
+    let mut first = before;
+    while first > 0
+        && matches!(body[first - 1], Instr::SetFieldStruct(r, value, _)
+            if r == returned && value != returned && value != return_register)
+    {
+        first -= 1;
+    }
+    let builder = first.checked_sub(1);
+    let builds = builder.is_some_and(|at| match body[at] {
+        Instr::CloneStruct(_, r) => r == returned,
+        other => first == before && other.get_tgt_id() == Some(returned),
+    });
     let written_once = body
         .iter()
         .filter(|instr| instr.get_tgt_id() == Some(returned))
@@ -1361,20 +1394,15 @@ fn inline_call(
             }
         });
     }
-    let landed_on = body
-        .iter()
-        .enumerate()
-        .any(|(pos, instr)| branch_target(pos, *instr) == Some(before));
-    if before > 0
-        && written_once
-        && reads == 0
-        && !landed_on
-        && !params.contains(&returned)
-        && body[before - 1].get_tgt_id() == Some(returned)
-    {
-        let old = output[start + before - 1];
-        if move_to_id(&mut output[start..], return_register) {
-            carry_span(old, output[start + before - 1], state);
+    let field_writes = before - first;
+    let landed_on = body.iter().enumerate().any(|(pos, instr)| {
+        branch_target(pos, *instr).is_some_and(|target| target >= first && target <= before)
+    });
+    if builds && written_once && reads == field_writes && !landed_on {
+        let at = start + builder.unwrap_or_default();
+        let old = output[at];
+        if move_to_id(&mut output[start..start + before], return_register) {
+            carry_span(old, output[at], state);
             return;
         }
     }

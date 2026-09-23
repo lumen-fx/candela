@@ -343,7 +343,13 @@ pub enum LibFuncVoid {
 impl Instr {
     /// Returns the ID of the register that will be modified by the given instruction
     #[must_use]
-    pub const fn get_tgt_id(self) -> Option<u16> {
+    pub fn get_tgt_id(mut self) -> Option<u16> {
+        self.tgt_id_mut().map(|reg| *reg)
+    }
+
+    /// The operand naming the register this instruction writes, to look at or
+    /// to rewrite. See [`Self::get_tgt_id`].
+    pub fn tgt_id_mut(&mut self) -> Option<&mut u16> {
         match self {
             // Instructions that modify no register.
             Self::Print(_)
@@ -386,7 +392,7 @@ impl Instr {
             | Self::CallIndirect(_) // The preceding SaveFrame carries the return register
             => None,
 
-            Self::StartErrorCatch(_, y) if y == u16::MAX => None,
+            Self::StartErrorCatch(_, y) if *y == u16::MAX => None,
 
             Self::Mov(_, y)
             | Self::SetInt(y, _)
