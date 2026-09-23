@@ -291,8 +291,10 @@ pub fn handle_user_function(
     } else {
         None
     };
-    // Move evaluated call args into the expected arg slots.
-    //
+    // Move evaluated call args into the expected arg slots. The moves are
+    // remembered, so a release build that copies the body in can read an
+    // argument where it already is instead.
+    let mut arg_moves: Vec<usize> = Vec::new();
     // A parameter register belongs to the callee, and a later argument that
     // calls a function can reach this callee again and overwrite it. So an
     // argument before the last one that may call is held in a register of its
@@ -344,11 +346,13 @@ pub fn handle_user_function(
         };
         if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
+            arg_moves.push(output.len() - 1);
         }
     }
     for (arg_id, tgt_id) in held {
         if arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
+            arg_moves.push(output.len() - 1);
         }
     }
     // Hand the callee its environment.
@@ -366,6 +370,7 @@ pub fn handle_user_function(
     };
     if !uses_frame && let Some(body) = state.fns[fn_id].impls[fn_impl_idx].inline_body.clone() {
         let params = state.fns[fn_id].impls[fn_impl_idx].args_loc.clone();
+        let body = read_arguments_in_place(body, &arg_moves, output, state);
         inline_call(
             &body,
             &params,
@@ -1255,6 +1260,70 @@ fn inlinable_body(body: &[Instr]) -> Option<Box<[Instr]>> {
     (simple && jumps_stay).then(|| Box::from(body))
 }
 
+/// Gives `new`, an instruction rewritten from `old`, the span `old` has. A
+/// runtime error names its place by the instruction that raised it, so a
+/// rewritten one has to be found where the original was.
+fn carry_span(old: Instr, new: Instr, state: &mut State<'_>) {
+    if let Some(src) = state.instr_src.iter().find(|src| src.instr == old) {
+        let (span, file_id) = (src.span, src.file_id);
+        state.instr_src.push(InstrSrc {
+            instr: new,
+            span,
+            file_id,
+        });
+    }
+}
+
+/// Lets a body about to be copied into a call site read its arguments where
+/// they already are, instead of from the parameter registers they were just
+/// moved into, and drops those moves.
+///
+/// Only the moves at the very end of `output` are taken, the ones for
+/// arguments whose value needed no code of its own, so nothing that runs
+/// between a move and the body can change either register. A move is taken
+/// only when the body writes neither its parameter nor its argument: the body
+/// then sees the same value under either name. A rewritten instruction that
+/// can raise an error takes the original's place in the span table.
+fn read_arguments_in_place(
+    mut body: Box<[Instr]>,
+    arg_moves: &[usize],
+    output: &mut Vec<Instr>,
+    state: &mut State<'_>,
+) -> Box<[Instr]> {
+    let mut tail = output.len();
+    let mut taken: Vec<usize> = Vec::new();
+    for &at in arg_moves.iter().rev() {
+        if at + 1 != tail {
+            break;
+        }
+        tail = at;
+        let Instr::Mov(arg, param) = output[at] else {
+            break;
+        };
+        let written = |reg: u16| body.iter().any(|instr| instr.get_tgt_id() == Some(reg));
+        if written(param) || written(arg) {
+            continue;
+        }
+        for instr in &mut body {
+            let old = *instr;
+            instr.read_regs_mut(|reg| {
+                if *reg == param {
+                    *reg = arg;
+                }
+            });
+            if *instr != old {
+                carry_span(old, *instr, state);
+            }
+        }
+        taken.push(at);
+    }
+    // Highest first, so each removal leaves the positions still to go alone.
+    for at in taken {
+        output.remove(at);
+    }
+    body
+}
+
 /// Copies an inlinable `body` in place of a call. The arguments are already in
 /// the parameter registers; the `return` at its end, if it has one, becomes a
 /// move of the returned value into the register the call would have written.
@@ -1305,17 +1374,7 @@ fn inline_call(
     {
         let old = output[start + before - 1];
         if move_to_id(&mut output[start..], return_register) {
-            let new = output[start + before - 1];
-            // A runtime error names its place by the instruction that raised
-            // it, so the rewritten one takes the original's place too.
-            if let Some(src) = state.instr_src.iter().find(|src| src.instr == old) {
-                let (span, file_id) = (src.span, src.file_id);
-                state.instr_src.push(InstrSrc {
-                    instr: new,
-                    span,
-                    file_id,
-                });
-            }
+            carry_span(old, output[start + before - 1], state);
             return;
         }
     }
