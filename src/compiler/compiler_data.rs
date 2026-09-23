@@ -15,6 +15,7 @@ use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
+use crate::instr::LibFunc;
 use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -228,6 +229,12 @@ pub struct Ctx {
     pub file_idx: u16,
     /// Instruction offset that's only used when compiling a function
     pub offset: u16,
+    /// The downcast a `return` of an `any` value goes through inside a
+    /// function declared to return a scalar, a list or a map. The declaration
+    /// types the call site, so a dynamic value leaving the body is checked on
+    /// the way out; a value of a known type was already checked at compile
+    /// time and pays nothing.
+    pub return_downcast: Option<LibFunc>,
 }
 
 impl Ctx {

@@ -124,6 +124,33 @@ declares it instead, and a body that hands back anything else is a compile
 error. Since each set of argument types is specialised separately, a declared
 return type has to hold for every call.
 
+A declared return type is the type of every call to the function, even where
+the body returns something narrower. That is how a declaration widens a value:
+a body may return an `int[]` from a function declared `-> any[]`, or a
+`{string: string}` from one declared `-> {any: any}`, and the caller sees the
+declared type.
+
+```rust
+fn row() -> {any: any} {
+    return {"name": "a"};
+}
+
+fn main() {
+    let rows = [as_map(json_parse("{\"id\": 1}"))];
+    rows.push(row());
+    print(rows.len());
+}
+```
+
+A generic function declared to return a type parameter the call leaves unbound
+is the exception: `first([1, 2])` has the type the body returns, since the
+declaration names no type until the call does.
+
+A body that returns an `any` value from a function declared `int`, `float`,
+`string`, `bool`, a list or a map checks the value on the way out. A value of
+another type raises `bad_downcast`, which a `catch` can take, the same way
+`as_int` and the other downcasts do.
+
 ```rust
 fn area(w: int, h: int) -> int {
     return w * h;

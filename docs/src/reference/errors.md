@@ -67,7 +67,9 @@ assigning a value of the wrong type to a field.
 arguments, or with an argument whose type the parameter does not accept, whether
 that type was declared with `name: type` or taken from another call. The report
 labels the declaration as well as the call. A function that declares `-> Type`
-and returns something else is reported against the annotation.
+and returns something else is reported against the annotation. A call has the
+type its function declares, so an argument taken from a call is checked against
+the declared return type, not against what the body returns.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,
@@ -173,7 +175,7 @@ kinds above cover the cases where a value is only known at run time.
 | `invalid_int` | `int()` on a string that is not an integer |
 | `invalid_float` | `float()` on a string that is not a number |
 | `invalid_bool` | `bool()` on a string that is neither `true` nor `false` |
-| `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type, and a condition typed `any` holding anything but a bool |
+| `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type, a condition typed `any` holding anything but a bool, and a `return` of an `any` value holding a type the function does not declare |
 | `not_a_string` | Joining a value onto a string, or comparing it with `<`, `<=`, `>` or `>=`, when the value is not a string. A variadic host function is the way this happens: it is not signature-checked, so its closure can return a type its `host` block does not declare |
 | `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason. Objects and arrays nest to a fixed depth, and text past it is rejected the same way |
 

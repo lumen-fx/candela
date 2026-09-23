@@ -121,7 +121,7 @@ parameters and return types. The type grammar is the same in all of them.
   Leave the arrow off for one that returns nothing.
 - `(T)`: parentheses, which group a type the way they group an expression.
 - `any`: a slot whose type is decided by the value, written on a struct
-  field, a parameter, or an enum payload.
+  field, a parameter, a return type, or an enum payload.
 
 `[]` after a function type belongs to its return type, so `fn(int) -> int[]` is
 a function returning a list of ints. Parenthesise to put the function itself in

@@ -1860,6 +1860,49 @@ pub fn param_type_matches(expected: &DataType, received: &DataType, generics: &G
         || instantiations_line_up(expected, received, generics)
 }
 
+/// Whether a body returning `body` satisfies a function declared to return
+/// `declared`.
+///
+/// Every pair [`param_type_matches`] accepts fits. A return also fits where the
+/// body hands back something narrower than a declaration that names `any`
+/// inside it: an `int[]` fits `any[]` and a `{string: string}` fits
+/// `{any: any}`, because the call site reads the declared type and every value
+/// is one an `any` slot holds. A union fits when every member does, and a
+/// member fits a declared union when it fits one of its members. Parameters
+/// keep the stricter rule: an `int[]` a callee may push a string into is not
+/// an `any[]`.
+#[must_use]
+pub fn return_type_fits(declared: &DataType, body: &DataType, generics: &Generics) -> bool {
+    if param_type_matches(declared, body, generics) {
+        return true;
+    }
+    match (declared, body) {
+        (_, DataType::Union(members)) => members
+            .iter()
+            .all(|member| return_type_fits(declared, member, generics)),
+        (DataType::Union(members), _) => members
+            .iter()
+            .any(|member| return_type_fits(member, body, generics)),
+        (DataType::Array(Some(declared)), DataType::Array(Some(body))) => {
+            return_type_fits(declared, body, generics)
+        }
+        (DataType::Map(declared), DataType::Map(body)) => {
+            slot_fits(declared.0.as_ref(), body.0.as_ref(), generics)
+                && slot_fits(declared.1.as_ref(), body.1.as_ref(), generics)
+        }
+        _ => false,
+    }
+}
+
+/// Whether one half of a returned map's type fits the declared half. A half
+/// either side leaves open fits, the way map equality treats it.
+fn slot_fits(declared: Option<&DataType>, body: Option<&DataType>, generics: &Generics) -> bool {
+    match (declared, body) {
+        (Some(declared), Some(body)) => return_type_fits(declared, body, generics),
+        _ => true,
+    }
+}
+
 /// Whether two instantiations come from one declaration and every pair of their
 /// type arguments lines up.
 #[must_use]
@@ -2733,9 +2776,8 @@ pub fn infer_user_fn_return_type(
     let infered_arg_types = pinned.as_deref().unwrap_or(infered_arg_types);
 
     let key = specialization_key(type_args, infered_arg_types);
-    let func = &state.fns[fn_id];
     // Check the return type cache
-    if let Some((_, ret)) = func
+    if let Some((_, ret)) = state.fns[fn_id]
         .return_type_cache
         .iter()
         .find(|(args, _)| arg_types_specialize_equal(args, &key))
@@ -2743,9 +2785,31 @@ pub fn infer_user_fn_return_type(
         return ret.clone();
     }
 
+    let fn_ctx = Ctx {
+        file_idx: state.fns[fn_id].src_file,
+        ..ctx
+    };
+    // A declared return type is what the call hands back, read with this call's
+    // type arguments bound so a generic `-> T[]` resolves to what it names. An
+    // annotation naming a type parameter the call left unbound stays unread,
+    // and the body says what comes back.
+    state
+        .generics
+        .push_frame(fn_bindings(fn_id, type_args, state));
+    let declared_return = specialized_return_type(fn_id, fn_ctx, state).map(|(t, _)| t);
+    state.generics.pop_bindings();
+
+    // Mutual-recursion cycle guard: a call reached while this function's return
+    // type is still being worked out gets the declaration, or `Unknown` when
+    // there is none, which breaks the cycle.
+    let already_inferring = RETURN_TYPE_INFERRING.with(|s| s.borrow().contains(&fn_id));
+    if already_inferring {
+        return declared_return.unwrap_or(DataType::Unknown);
+    }
+
+    let func = &state.fns[fn_id];
     let fn_args = func.args.clone();
     let fn_code = func.code.clone();
-    let fn_src_file = func.src_file;
     let fn_captures = func.captures.clone();
     let v_len_before_args = v.len();
     push_capture_scope(v, &fn_captures);
@@ -2759,32 +2823,21 @@ pub fn infer_user_fn_return_type(
         });
     }
 
-    // Mutual-recursion cycle guard -> if we are already in the middle of
-    // inferring this function's return type, return Unknown to break the cycle
-    let already_inferring = RETURN_TYPE_INFERRING.with(|s| s.borrow().contains(&fn_id));
-    if already_inferring {
-        v.truncate(v_len_before_args);
-        return DataType::Unknown;
-    }
-
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().insert(fn_id));
 
-    let fn_ctx = Ctx {
-        file_idx: fn_src_file,
-        ..ctx
-    };
+    // The body is walked whether or not a type is declared: the errors it holds
+    // are reported here, in the same order either way.
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
     let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
-    // Read while the bindings are still pushed, so a generic `-> T[]` resolves
-    // to the element type this call named.
-    let declared_return = specialized_return_type(fn_id, fn_ctx, state);
     state.generics.pop_bindings();
 
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
-    let mut to_return = if fn_type.is_empty() {
+    v.truncate(v_len_before_args);
+
+    let body_type = if fn_type.is_empty() {
         // No tracked type means either no value is returned at all, or every
         // returned value was itself dynamic (return-type tracking records no
         // type for `Unknown`). A function handing back an `any` payload is
@@ -2798,14 +2851,7 @@ pub fn infer_user_fn_return_type(
         // If function returns anything, check if it returns the same thing each time
         DataType::Union(Box::from(fn_type)).check_poly()
     };
-
-    // `return []` carries no element type, so a declared `-> T[]` is what the
-    // caller gets: the annotation says what the empty array holds.
-    if let Some((declared, _)) = &declared_return {
-        pin_open_element_types(&mut to_return, declared);
-    }
-
-    v.truncate(v_len_before_args);
+    let to_return = call_return_type(declared_return, body_type);
 
     // Cache the result
     state.fns[fn_id]
@@ -2813,6 +2859,24 @@ pub fn infer_user_fn_return_type(
         .push((key, to_return.clone()));
 
     to_return
+}
+
+/// The type a call to a function hands back, from what the function declares
+/// and what its body returns.
+///
+/// A declared type wins: the call has the type the signature names, even where
+/// the body returns something narrower. Only an element type the declaration
+/// leaves open is taken from the body. With nothing declared, the body's type
+/// is the call's.
+#[must_use]
+pub(crate) fn call_return_type(declared: Option<DataType>, body_type: DataType) -> DataType {
+    match declared {
+        Some(mut declared) => {
+            pin_open_element_types(&mut declared, &body_type);
+            declared
+        }
+        None => body_type,
+    }
 }
 
 /// The declared return type of `function` in the `host` or `dylib` block named

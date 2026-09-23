@@ -61,6 +61,7 @@ pub fn compile_trampoline(
         in_function: false,
         file_idx: 0,
         offset,
+        return_downcast: None,
     };
     let mut variables = seed_vars;
     let mut output = Vec::new();

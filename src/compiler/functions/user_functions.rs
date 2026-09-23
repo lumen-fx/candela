@@ -7,6 +7,7 @@ use super::super::registers::get_tgt_ids;
 use super::super::registers::move_to_id;
 use super::super::type_system::DataType;
 use super::super::type_system::arg_types_specialize_equal;
+use super::super::type_system::call_return_type;
 use super::super::type_system::can_reach;
 use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
@@ -17,6 +18,7 @@ use super::super::type_system::param_type_matches;
 use super::super::type_system::pin_empty_literal_bindings;
 use super::super::type_system::pinned_arg_types;
 use super::super::type_system::push_capture_scope;
+use super::super::type_system::return_type_fits;
 use super::super::type_system::specialization_key;
 use super::super::type_system::specialized_arg_types;
 use super::super::type_system::specialized_return_type;
@@ -41,6 +43,7 @@ use crate::compiler::functions::store_call_args;
 use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
+use crate::instr::LibFunc;
 use crate::rt::FnValue;
 use crate::rt::InstrSrc;
 use rustc_hash::FxHashSet;
@@ -427,6 +430,22 @@ pub fn handle_user_function(
     }
 }
 
+/// The checked downcast a `return` of an `any` value goes through in a function
+/// declared to return `declared`: the one `as_int`, `as_string` and the rest
+/// call. Only a scalar, a list or a map has one; any other declaration returns
+/// the value unchecked.
+const fn return_downcast(declared: &DataType) -> Option<LibFunc> {
+    match declared {
+        DataType::Int => Some(LibFunc::AsIntVal),
+        DataType::Float => Some(LibFunc::AsFloatVal),
+        DataType::String => Some(LibFunc::AsStrVal),
+        DataType::Bool => Some(LibFunc::AsBoolVal),
+        DataType::Array(_) => Some(LibFunc::AsListVal),
+        DataType::Map(_) => Some(LibFunc::AsMapVal),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_function(
     output: &mut Vec<Instr>,
@@ -588,18 +607,20 @@ fn compile_function(
     // A `-> Type` annotation pins what the body may hand back. Each
     // specialisation is checked separately, so an un-annotated parameter that
     // makes one call site return a different type is caught at that call site.
-    if let Some((declared, declared_span)) = specialized_return_type(function_id, ctx, state)
-        && !param_type_matches(&declared, &return_type, state.generics)
+    let declared_return = specialized_return_type(function_id, ctx, state);
+    if let Some((declared, declared_span)) = &declared_return
+        && !return_type_fits(declared, &return_type, state.generics)
     {
+        let (declared, declared_span) = (declared, *declared_span);
         let types = state.type_names();
         error_invalid_type(
-            &declared,
+            declared,
             &return_type,
             declared_span,
             None,
             Some(format_args!(
                 "Function {fn_name} is declared to return {}",
-                types.of(&declared)
+                types.of(declared)
             )),
             fn_file_idx,
             state.sources,
@@ -627,10 +648,19 @@ fn compile_function(
         .iter()
         .any(|(args, _)| arg_types_specialize_equal(args, &key))
     {
-        func.return_type_cache.push((key, return_type));
+        func.return_type_cache.push((
+            key,
+            call_return_type(
+                declared_return.as_ref().map(|(t, _)| t.clone()),
+                return_type,
+            ),
+        ));
     }
 
     // Compile the function into instructions using local vars
+    let return_downcast = declared_return
+        .as_ref()
+        .and_then(|(declared, _)| return_downcast(declared));
     let parsed = compile_expr(
         fn_code,
         &mut v_temp,
@@ -640,6 +670,7 @@ fn compile_function(
             single_run: false,
             in_function: true,
             offset: ctx.offset + output.len() as u16,
+            return_downcast,
             ..ctx
         },
         state,

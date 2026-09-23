@@ -3662,9 +3662,21 @@ fn compile_return(
         output.push(Instr::VoidReturn);
         return;
     };
-    let id = x
+    let mut id = x
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
+    // A value typed `any` leaving a function declared to return a concrete type
+    // is checked here, the one place it can be: the call site reads the
+    // declared type and compiles against it. The wrong value raises the
+    // catchable `bad_downcast`.
+    if let Some(downcast) = ctx.return_downcast
+        && matches!(x.infer_type(v, ctx, state), DataType::Unknown)
+    {
+        state.free_reg(id, v);
+        let checked_id = state.alloc_reg();
+        output.push(Instr::CallLibFunc(downcast, id, checked_id));
+        id = checked_id;
+    }
     if ctx.is_compiling_recursive {
         output.push(Instr::RecursiveReturn(id));
     } else {
@@ -6055,6 +6067,7 @@ pub fn compile_profile(
         single_run: true,
         in_function: false,
         offset: 0,
+        return_downcast: None,
     };
     let mut indirect_registers = IndirectRegisters::default();
     let mut state = State {
