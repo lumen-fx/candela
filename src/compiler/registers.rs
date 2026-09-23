@@ -130,8 +130,14 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
         | Instr::DecIntTo(_, y) => *y = tgt_id,
         Instr::CallFuncRecursive(_, y_func) => {
             *y_func = tgt_id;
-            for i in 1..x.len() - 1 {
-                if let Some(Instr::SaveFrame(_, y_frame, _)) = x.get_mut(matching_elem_index - i) {
+            // The frame the call returns through is the `SaveFrame` whose
+            // offset lands on this call. A call made for one of its arguments
+            // saves a frame of its own in between, so the nearest one is not
+            // necessarily it.
+            for (pos, instr) in x[..matching_elem_index].iter_mut().enumerate().rev() {
+                if let Instr::SaveFrame(offset, y_frame, _) = instr
+                    && pos + *offset as usize == matching_elem_index
+                {
                     *y_frame = tgt_id;
                     break;
                 }

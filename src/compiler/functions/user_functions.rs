@@ -633,12 +633,17 @@ fn compile_function(
                 instr,
                 Instr::CallFuncRecursive(_, _) | Instr::CallIndirect(_)
             ) {
-                // Walk backwards to find this call's SaveFrame and its callsite_id
+                // The call's own frame is the `SaveFrame` whose offset lands on
+                // it. A call made for one of its arguments saves a frame of its
+                // own in between, so the nearest one is not necessarily it.
                 let callsite_id = parsed[..pos]
                     .iter()
+                    .enumerate()
                     .rev()
-                    .find_map(|i| match i {
-                        Instr::SaveFrame(_, _, cid) => Some(*cid),
+                    .find_map(|(frame_pos, i)| match i {
+                        Instr::SaveFrame(offset, _, cid) if frame_pos + *offset as usize == pos => {
+                            Some(*cid)
+                        }
                         _ => None,
                     })
                     .unwrap_id();
