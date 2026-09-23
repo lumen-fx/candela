@@ -62,6 +62,11 @@ time, and `candela-vm` looks for it where the toolchain keeps it: the directory
 install puts it. Such an artifact therefore runs from any working directory. See
 [the standard library overview](../standard-library/overview.md).
 
+The WebAssembly runtime loads no library. It binds a recipe the standard
+library owns to its own built-in version of that function, so an artifact that
+uses `math`, `random` or `time` runs in a browser too; a recipe for any other
+library refuses the load there.
+
 ## The export table
 
 A host calls into a script by name, and working out how to make that call is the

@@ -24,6 +24,11 @@ pub mod embed;
 // json parse/stringify over the runtime value graph, backing `std/json`.
 pub mod json;
 
+// The standard library's native functions, built in where no dynamic library
+// can be loaded.
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod intrinsics;
+
 // The `.cdlb` bytecode artifact format plus the load/run API.
 pub mod artifact;
 

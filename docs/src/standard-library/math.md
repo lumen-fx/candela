@@ -28,6 +28,10 @@ A `.cdlb` built from a program that imports `std/math` records the binding by
 name and re-opens it when the artifact runs; see
 [artifacts](../reference/artifacts.md).
 
+The WebAssembly build carries these functions inside itself, so the module
+imports in a browser too. Its maths library is not the desktop's, and a result
+can differ from a desktop's in the last digit.
+
 Four common operations are also built-in methods on a number, with no import:
 `x.abs()`, `x.sqrt()`, `x.round()`, and `x.floor()`.
 

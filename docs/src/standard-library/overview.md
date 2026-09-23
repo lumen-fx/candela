@@ -30,6 +30,15 @@ when it runs; `candela-vm` finds it the way the compiler does, through
 `CANDELA_LIB_PATH` or beside its own binary. See
 [artifacts](../reference/artifacts.md).
 
+## In a browser
+
+The WebAssembly build has no file system and loads no dynamic library. It
+carries `math`, `random` and `time` inside itself and runs their native half on
+its own functions, so `import "std/math" as math;` works there as it does on a
+desktop, with the same functions. A `.cdlb` built on a
+desktop that imports them runs in the browser as well. The other modules do not
+import in a browser.
+
 ## Importing a module
 
 A library import is a quoted path with no file extension. The resolver appends
