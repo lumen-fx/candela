@@ -544,8 +544,14 @@ fn restore_registers(
     mut regs: Regs,
 ) {
     let saved = unsafe { recursion_stack.0.as_ptr().add(base) };
-    for (k, reg) in saved_regs.iter().enumerate() {
-        regs[*reg] = unsafe { Data::load(saved.add(k)) };
+    // Most calls save one register, and a loop costs more to set up than
+    // that one copy.
+    if let [reg] = saved_regs {
+        regs[*reg] = unsafe { Data::load(saved) };
+    } else {
+        for (k, reg) in saved_regs.iter().enumerate() {
+            regs[*reg] = unsafe { Data::load(saved.add(k)) };
+        }
     }
     unsafe {
         recursion_stack.0.set_len(base);
@@ -940,8 +946,14 @@ pub fn execute(
                 }
                 unsafe {
                     let top = stack.as_mut_ptr().add(stack.len());
-                    for (k, &reg) in saved.iter().enumerate() {
-                        top.add(k).write(regs.get(reg));
+                    // Most calls save one register, and a loop costs more to
+                    // set up than that one copy.
+                    if let [reg] = saved[..] {
+                        top.write(regs.get(reg));
+                    } else {
+                        for (k, &reg) in saved.iter().enumerate() {
+                            top.add(k).write(regs.get(reg));
+                        }
                     }
                     stack.set_len(stack.len() + saved.len());
                 }
