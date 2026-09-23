@@ -229,7 +229,7 @@ pub fn c_struct_to_candela_struct(
     map_pool: &MapPool,
     string_pool: &mut StringPool,
     struct_fields: &[(SmolStr, DataType, Span)],
-    r: &mut RegisterFile,
+    r: &RegisterFile,
     recursion_stack: &mut RegisterFile,
     free_strings: &mut Vec<u32>,
     gc_string_threshold: &mut u32,

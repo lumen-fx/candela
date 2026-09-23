@@ -176,6 +176,39 @@ impl Data {
     pub const fn into_words(self) -> (u64, i64) {
         (self.boxed, self.int)
     }
+    /// Reads the value at `src` as two separate words.
+    ///
+    /// Most instructions write a result a word at a time: the tag and the
+    /// integer are stored apart. A copy that then read the value back as one
+    /// 16-byte load would have to wait for both stores to reach the cache,
+    /// because the processor forwards a pending store only to a load that
+    /// fits inside it. Reading the words apart lets each one forward. The
+    /// reads are volatile so the compiler cannot fuse them back into one.
+    ///
+    /// # Safety
+    ///
+    /// `src` must point to a live value.
+    #[inline(always)]
+    pub unsafe fn load(src: *const Self) -> Self {
+        let words = src.cast::<u64>();
+        unsafe {
+            Self {
+                boxed: words.read_volatile(),
+                int: words.add(1).read_volatile() as i64,
+            }
+        }
+    }
+    /// Whether this is `false`. A bool keeps its whole value in the box, so
+    /// the box alone answers, and the integer word is never read.
+    #[inline(always)]
+    pub const fn is_false(self) -> bool {
+        self.boxed == NAN_BOOL
+    }
+    /// Whether this is `true`, read from the box alone.
+    #[inline(always)]
+    pub const fn is_true(self) -> bool {
+        self.boxed == NAN_BOOL | 1
+    }
     /// Rebuilds a value from the words [`Data::into_words`] handed out.
     #[must_use]
     #[inline(always)]
