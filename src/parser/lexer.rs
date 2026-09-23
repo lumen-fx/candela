@@ -23,6 +23,7 @@ impl std::fmt::Display for Token<'_> {
             Token::LBracket => write!(f, "'['"),
             Token::RBracket => write!(f, "']'"),
             Token::FatArrow => write!(f, "'=>'"),
+            Token::At => write!(f, "'@'"),
             other => write!(f, "{other:?}"),
         }
     }
@@ -202,6 +203,9 @@ pub enum Token<'a> {
     Colon,
     #[token(";")]
     SemiColon,
+    /// `@`: opens an attribute, as in `@cfg(web)`.
+    #[token("@")]
+    At,
     #[token("=>")]
     /// =>
     FatArrow,

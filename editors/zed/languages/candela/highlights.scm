@@ -31,6 +31,18 @@
   "while"
 ] @keyword
 
+; Attributes
+
+(attribute
+  "@" @attribute
+  name: (identifier) @attribute)
+
+(cfg_predicate
+  flag: (identifier) @constant)
+
+(cfg_predicate
+  key: (identifier) @property)
+
 ; Types
 
 (type_identifier) @type

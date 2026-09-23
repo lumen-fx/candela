@@ -181,6 +181,22 @@ Prints the version. `-v` is the same.
 Neither flag takes anything else. An argument after either one is an error
 rather than an argument the command quietly drops.
 
+### Configuration flags
+
+`--cfg` turns on a flag that [`@cfg(...)`](../language/conditional-compilation.md)
+tests, for `run`, `check` and `build`. Repeat it to turn on several.
+
+```sh
+candela run --cfg web
+candela build --cfg web --cfg mode=release game.cdl
+```
+
+`--cfg name` turns on the flag `name`; `--cfg key=value` turns on the pair
+`@cfg(key = "value")` tests, with or without quotes around the value. On `run`
+the flags go before the file, since everything after it is the program's. A
+flag not turned on is false, and the single-file form `candela <file.cdl>` turns
+none on.
+
 ### Development flags
 
 A `candela` built with debug assertions accepts two extra flags after the file

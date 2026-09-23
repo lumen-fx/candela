@@ -6,6 +6,7 @@
 //! resolve the packages it depends on through `lpm`, and hand the compiler the
 //! roots those packages unpacked to.
 
+use crate::Cfg;
 use crate::build::build_bytecode_profile;
 use crate::compiler::compile;
 use crate::compiler::imports::ImportResolver;
@@ -48,7 +49,9 @@ const USAGE: &str = "Usage:
 Options:
   --offline   Resolve from the package cache alone (run, check, build, fetch)
   --locked    Refuse to change candela.lock (fetch)
-  --debug     Build without the release passes, as a run from source compiles (build)";
+  --debug     Build without the release passes, as a run from source compiles (build)
+  --cfg <flag | key=value>
+              Turn on a flag @cfg(...) tests; repeatable (run, check, build)";
 
 /// Whether an argument names a candela source file, which is how a verb tells
 /// the file it was handed from the program's own arguments.
@@ -143,13 +146,19 @@ fn run_file(filename: &str, args: &mut impl Iterator<Item = String>) {
 fn run_verb(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let mut offline = false;
     let mut file = None;
+    let mut cfg = Cfg::new();
     // How many arguments after the verb are the command's own. Everything past
     // them belongs to the program.
     let mut own = 0_usize;
-    for arg in args.by_ref() {
+    while let Some(arg) = args.next() {
         if arg == "--offline" {
             offline = true;
             own += 1;
+            continue;
+        }
+        if arg == "--cfg" {
+            add_cfg(&mut cfg, args.next());
+            own += 2;
             continue;
         }
         if is_source(&arg) {
@@ -166,7 +175,8 @@ fn run_verb(args: &mut impl Iterator<Item = String>) -> ExitCode {
 
     let (path, resolver) = target(file.as_deref(), offline);
     let contents = read_source(&path);
-    execute_compiled(compile(contents, &path.to_string_lossy(), false, &resolver));
+    let out = cfg.scope(|| compile(contents, &path.to_string_lossy(), false, &resolver));
+    execute_compiled(out);
     ExitCode::SUCCESS
 }
 
@@ -176,10 +186,10 @@ fn run_verb(args: &mut impl Iterator<Item = String>) -> ExitCode {
 /// body error in a function `main` never calls is reported here instead of
 /// waiting for the build.
 fn check_verb(args: &mut impl Iterator<Item = String>) {
-    let (file, offline) = one_file_and_flags(args, "check");
+    let (file, offline, cfg) = one_file_and_flags(args, "check");
     let (path, resolver) = target(file.as_deref(), offline);
     let contents = read_source(&path);
-    let _ = compile_checked(contents, &path.to_string_lossy(), &resolver);
+    let _ = cfg.scope(|| compile_checked(contents, &path.to_string_lossy(), &resolver));
     println!("{} compiles", path.display());
 }
 
@@ -189,8 +199,10 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     let mut output: Option<String> = None;
     let mut offline = false;
     let mut debug = false;
+    let mut cfg = Cfg::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--cfg" => add_cfg(&mut cfg, args.next()),
             "-o" | "--output" => {
                 let Some(path) = args.next() else {
                     misuse(&format!("{arg} needs an output path"));
@@ -217,7 +229,9 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     });
 
     let contents = read_source(&path);
-    let bytes = match build_bytecode_profile(contents, &path.to_string_lossy(), &resolver, !debug) {
+    let bytes = match cfg
+        .scope(|| build_bytecode_profile(contents, &path.to_string_lossy(), &resolver, !debug))
+    {
         Ok(bytes) => bytes,
         Err(e) => fail(&format!("cannot build bytecode: {e}")),
     };
@@ -648,17 +662,38 @@ fn open_manifest() -> Manifest {
 fn one_file_and_flags(
     args: &mut impl Iterator<Item = String>,
     verb: &str,
-) -> (Option<String>, bool) {
+) -> (Option<String>, bool, Cfg) {
     let mut file = None;
     let mut offline = false;
-    for arg in args {
+    let mut cfg = Cfg::new();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--offline" => offline = true,
+            "--cfg" => add_cfg(&mut cfg, args.next()),
             _ if file.is_none() && is_source(&arg) => file = Some(arg),
             other => misuse(&format!("{verb} does not take {other}")),
         }
     }
-    (file, offline)
+    (file, offline, cfg)
+}
+
+/// Reads the argument after `--cfg` into `cfg`: `web` turns on the flag `web`,
+/// and `target=web` or `target="web"` the pair `@cfg(target = "web")` tests.
+fn add_cfg(cfg: &mut Cfg, arg: Option<String>) {
+    let Some(arg) = arg else {
+        misuse("--cfg needs a flag, as in --cfg web, or a pair, as in --cfg target=web");
+    };
+    match arg.split_once('=') {
+        Some((key, value)) => {
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            cfg.enable_value(key.trim(), value);
+        }
+        None => cfg.enable(arg.trim()),
+    }
 }
 
 // ---------------------------------------------------------------------------

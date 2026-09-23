@@ -66,6 +66,9 @@ mod lpm;
 // `candela.toml`, the project manifest.
 #[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
 mod manifest;
+// The flags `@cfg(...)` attributes test, which the embedder supplies.
+#[cfg(feature = "compiler")]
+pub mod cfg;
 // Macro registration and the region scanner. `pub` because both sides of a
 // macro are the embedder's: it registers the expanders, and it can scan a file
 // for regions without compiling it.
@@ -102,6 +105,8 @@ pub use candela_vm::IntoHostFn;
 pub use candela_vm::IntoHostResult;
 pub use candela_vm::IntoHostValue;
 pub use candela_vm::Value;
+#[cfg(feature = "compiler")]
+pub use cfg::Cfg;
 #[cfg(feature = "compiler")]
 pub use engine::Engine;
 #[cfg(feature = "compiler")]

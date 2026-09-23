@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#macro" },
+    { "include": "#attribute" },
     { "include": "#import" },
     { "include": "#host-dylib" },
     { "include": "#struct-declaration" },
@@ -35,6 +36,13 @@
           }
         }
       ]
+    },
+    "attribute": {
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.annotation.candela" },
+        "2": { "name": "storage.type.annotation.candela" }
+      }
     },
     "macro": {
       "patterns": [

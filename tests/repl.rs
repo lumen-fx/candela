@@ -150,6 +150,8 @@ fn a_line_declares_everything_a_file_can() {
         "print(p.twice());\n",
         "print(Colour::Red);\n",
         "print(add(2, 3));\n",
+        "@cfg(nothing) fn add(a: int, b: int) -> int { return 0; }\n",
+        "@cfg(nothing) print(\"dropped\");\n",
     ));
 
     assert!(
@@ -163,6 +165,10 @@ fn a_line_declares_everything_a_file_can() {
     assert!(
         out.contains('5'),
         "the function declared is callable, got:\n{out}\n{err}"
+    );
+    assert!(
+        !out.contains("dropped") && err.is_empty(),
+        "a line under a false @cfg is dropped, got:\n{out}\n{err}"
     );
 }
 

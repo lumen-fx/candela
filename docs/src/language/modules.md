@@ -26,7 +26,9 @@ The path decides where candela looks.
   `"shapes/circle"` loads a file out of the `shapes` package.
 
 Any other extension is an error. Imports go at the top level of a file, among
-the other declarations, and are conventionally written first.
+the other declarations, and are conventionally written first. An import under
+a [`@cfg`](conditional-compilation.md) whose condition is false is dropped, so
+it may name a module that exists only on another target.
 
 ## Bare imports
 

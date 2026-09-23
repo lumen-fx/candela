@@ -4,6 +4,8 @@
 use crate::BOLD;
 use crate::RED;
 use crate::RESET;
+use crate::cfg;
+use crate::cfg::Cfg;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
 use crate::compiler::expr::{Expr, Span, var_assign};
@@ -56,6 +58,8 @@ type TokenIter<'a> = Peekable<SpannedIter<'a, Token<'a>>>;
 
 struct ParserCtx<'a> {
     src: &'a Source,
+    /// The configuration `@cfg(...)` attributes are read against.
+    cfg: &'a Cfg,
 }
 
 struct Parser<'a> {
@@ -76,6 +80,11 @@ struct Parser<'a> {
     /// one token and closes two lists, so the inner list takes the first half
     /// and leaves the second here for the list around it.
     pending_gt: Option<Span>,
+    /// How many `@cfg` attributes that evaluated false enclose what is being
+    /// parsed. Code under one is parsed, so its syntax is checked on every
+    /// configuration, and then dropped; a macro inside it is not expanded,
+    /// since the expander may exist only where the code is compiled.
+    inactive: u32,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -134,6 +143,10 @@ enum ParserErr<'a> {
     /// An operator token after `fn` in an `impl` block that a type cannot
     /// define. Carries the symbol that was written.
     OperatorMethodUnknown(&'static str),
+    /// `@name` for a name that is not an attribute.
+    UnknownAttribute(&'a str),
+    /// An attribute with nothing after it to apply to.
+    AttributeWithoutItem,
 }
 
 impl ParserErr<'_> {
@@ -169,6 +182,8 @@ impl ParserErr<'_> {
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
             ParserErr::NestingTooDeep => "nesting_too_deep",
             ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
+            ParserErr::UnknownAttribute(_) => "unknown_attribute",
+            ParserErr::AttributeWithoutItem => "attribute_without_item",
         }
     }
 }
@@ -267,6 +282,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
                 _ => "",
             }
         ),
+        ParserErr::UnknownAttribute(name) => &format!(
+            "There is no attribute named {RED}{BOLD}{name}{RESET}. The attribute candela has is {BLUE}{BOLD}@cfg(...){RESET}"
+        ),
+        ParserErr::AttributeWithoutItem => {
+            "An attribute applies to the declaration or statement after it, and nothing follows this one"
+        }
     };
     if crate::errors::diagnostics_enabled() {
         crate::errors::emit_diagnostic(
@@ -578,6 +599,11 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
         cold_path();
         parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
     };
+    // Code a `@cfg` drops is never compiled, so what the macro would expand
+    // to does not matter, and the expander may not exist in this build.
+    if parser.inactive > 0 {
+        return Expr::Null;
+    }
     // Held until this expansion is parsed, so a macro reached through a chain
     // of other macros counts the whole chain. At the cap `span` is already the
     // outermost invocation, which is the one the reader wrote.
@@ -620,11 +646,13 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         input: Token::lexer(expansion).spanned().peekable(),
         ctx: ParserCtx {
             src: parser.ctx.src,
+            cfg: parser.ctx.cfg,
         },
         last_token_end: span.end as usize,
         span_override: Some(span),
         nesting: parser.nesting,
         pending_gt: None,
+        inactive: parser.inactive,
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -635,7 +663,26 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
 }
 
 fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
-    let token = parser.peek_token_opt()?;
+    let mut token = parser.peek_token_opt()?;
+    // A statement a `@cfg` turns off is parsed and dropped, and the statement
+    // after it stands in its place.
+    while token == Token::At {
+        let active = parse_attributes(parser);
+        if matches!(parser.peek_token_opt(), None | Some(Token::RBrace)) {
+            cold_path();
+            let span = parser
+                .peek_token_opt_span()
+                .unwrap_or_else(|| parser.eof_span());
+            parser.error(span, ParserErr::AttributeWithoutItem);
+        }
+        if active {
+            return parse_statement(parser);
+        }
+        parser.inactive += 1;
+        let _ = parse_statement(parser);
+        parser.inactive -= 1;
+        token = parser.peek_token_opt()?;
+    }
     let t_span = parser.peek_token_span();
     match token {
         Token::If => Some(parse_condition_block(parser, t_span.start)),
@@ -1448,29 +1495,155 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
 fn parse_file(parser: &mut Parser<'_>, impls: &mut Vec<ImplTemplate>) -> Vec<Expr> {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
-    while let Some(t) = parser.peek_token_opt() {
-        // An `impl` block lowers to several top-level function declarations, so
-        // it is expanded directly into `output` rather than yielding one Expr.
-        // A block on a generic type is kept as a template instead.
-        if t == Token::Impl {
-            parse_impl_block(parser, &mut output, impls);
+    while parser.peek_token_opt().is_some() {
+        if parser.peek_token() == Token::At {
+            let active = parse_attributes(parser);
+            if parser.peek_token_opt().is_none() {
+                cold_path();
+                let span = parser.eof_span();
+                parser.error(span, ParserErr::AttributeWithoutItem);
+            }
+            if active {
+                parse_item(parser, &mut output, impls);
+            } else {
+                parser.inactive += 1;
+                parse_item(parser, &mut Vec::new(), &mut Vec::new());
+                parser.inactive -= 1;
+            }
             continue;
         }
-        output.push(match t {
-            Token::Function => parse_function(parser),
-            Token::Import => parse_file_import(parser),
-            Token::Struct => parse_struct_declare(parser),
-            Token::Enum => parse_enum_declare(parser),
-            Token::Dylib => parse_dylib_import(parser),
-            Token::Host => parse_host_block(parser),
-            unexpected => {
-                cold_path();
-                let span = parser.peek_token_span();
-                parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'enum' (enum declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
-            }
-        });
+        parse_item(parser, &mut output, impls);
     }
     output
+}
+
+/// Parses one top-level declaration into `output`.
+fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<ImplTemplate>) {
+    let t = parser.peek_token();
+    // An `impl` block lowers to several top-level function declarations, so
+    // it is expanded directly into `output` rather than yielding one Expr.
+    // A block on a generic type is kept as a template instead.
+    if t == Token::Impl {
+        parse_impl_block(parser, output, impls);
+        return;
+    }
+    output.push(match t {
+        Token::Function => parse_function(parser),
+        Token::Import => parse_file_import(parser),
+        Token::Struct => parse_struct_declare(parser),
+        Token::Enum => parse_enum_declare(parser),
+        Token::Dylib => parse_dylib_import(parser),
+        Token::Host => parse_host_block(parser),
+        unexpected => {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'enum' (enum declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
+        }
+    });
+}
+
+/// Reads the run of attributes in front of an item or a statement, and says
+/// whether the code they apply to is compiled: true when every `@cfg` among
+/// them holds.
+fn parse_attributes(parser: &mut Parser<'_>) -> bool {
+    let mut active = true;
+    while parser.peek_token_opt() == Some(Token::At) {
+        parser.next_token();
+        let (t, span) = parser.next_token();
+        match t {
+            Token::Identifier("cfg") => {}
+            Token::Identifier(name) => {
+                cold_path();
+                parser.error(span, ParserErr::UnknownAttribute(name));
+            }
+            other => {
+                cold_path();
+                parser.error(
+                    span,
+                    ParserErr::UnexpectedToken(
+                        Token::Identifier("cfg"),
+                        other,
+                        "An attribute is '@' followed by its name, as in @cfg(web).",
+                    ),
+                );
+            }
+        }
+        let open = parser.next_token_expect(
+            Token::LParen,
+            "A cfg attribute holds its condition in parentheses, as in @cfg(web).",
+        );
+        let holds = parse_cfg_predicate(parser);
+        parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
+        active &= holds;
+    }
+    active
+}
+
+/// Reads one `@cfg` condition and evaluates it against the active
+/// configuration: a flag, `key = "value"`, or `not(...)`, `any(...)` and
+/// `all(...)` around further conditions.
+fn parse_cfg_predicate(parser: &mut Parser<'_>) -> bool {
+    const EXPECTED: &str = "a flag, key = \"value\", not(...), any(...), or all(...)";
+    let (t, span) = parser.next_token();
+    let Token::Identifier(name) = t else {
+        cold_path();
+        parser.error(
+            span,
+            ParserErr::UnexpectedTokenStr(EXPECTED, t, "This is the condition of a cfg attribute."),
+        );
+    };
+    match parser.peek_token() {
+        Token::LParen if matches!(name, "not" | "any" | "all") => {
+            let (_, open) = parser.next_token();
+            parser.enter(open);
+            let mut results = Vec::new();
+            while parser.peek_token() != Token::RParen {
+                results.push(parse_cfg_predicate(parser));
+                if parser.peek_token() == Token::Comma {
+                    parser.next_token();
+                } else {
+                    break;
+                }
+            }
+            parser.leave();
+            parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
+            match name {
+                "not" => {
+                    if results.len() != 1 {
+                        cold_path();
+                        parser.error(
+                            (span.start, parser.last_token_end as u32).into(),
+                            ParserErr::UnexpectedTokenStr(
+                                "exactly one condition",
+                                Token::RParen,
+                                "not(...) inverts one condition.",
+                            ),
+                        );
+                    }
+                    !results[0]
+                }
+                "any" => results.contains(&true),
+                _ => !results.contains(&false),
+            }
+        }
+        Token::Equals => {
+            parser.next_token();
+            let (value, value_span) = parser.next_token();
+            let Token::String(value) = value else {
+                cold_path();
+                parser.error(
+                    value_span,
+                    ParserErr::UnexpectedToken(
+                        Token::String(""),
+                        value,
+                        "The value a cfg key is compared with is a quoted string.",
+                    ),
+                );
+            };
+            parser.ctx.cfg.has_value(name, &parse_string(value))
+        }
+        _ => parser.ctx.cfg.is_enabled(name),
+    }
 }
 
 /// A parsed file: its top-level statements and its generic `impl` blocks.
@@ -1485,14 +1658,16 @@ pub struct ParsedFile {
 #[must_use]
 pub fn parse(input: &str, src: &Source) -> ParsedFile {
     let mut impls: Vec<ImplTemplate> = Vec::new();
+    let cfg = cfg::active();
     let code = parse_file(
         &mut Parser {
             input: Token::lexer(input).spanned().peekable(),
-            ctx: ParserCtx { src },
+            ctx: ParserCtx { src, cfg: &cfg },
             last_token_end: 0,
             span_override: None,
             nesting: 0,
             pending_gt: None,
+            inactive: 0,
         },
         &mut impls,
     );
@@ -1527,9 +1702,35 @@ pub enum LineKind {
 #[must_use]
 pub fn classify_line(line: &str) -> LineKind {
     let mut tokens = Token::lexer(line);
-    let Some(Ok(first)) = tokens.next() else {
+    let Some(Ok(mut first)) = tokens.next() else {
         return LineKind::Statement;
     };
+    // Attributes in front of a line say nothing about what it is: the line
+    // is what follows them.
+    while first == Token::At {
+        let mut depth = 0_u32;
+        let mut after = None;
+        for token in tokens.by_ref() {
+            let Ok(token) = token else {
+                return LineKind::Statement;
+            };
+            match token {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        after = tokens.next();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(Ok(next)) = after else {
+            return LineKind::Statement;
+        };
+        first = next;
+    }
     match first {
         Token::Function
         | Token::Import

@@ -94,6 +94,7 @@ module.exports = grammar({
     // src/parser/parser.rs rejects everything else, including `let`.
     _declaration: ($) =>
       choice(
+        $.attribute,
         $.import_declaration,
         $.function_declaration,
         $.struct_declaration,
@@ -106,6 +107,22 @@ module.exports = grammar({
     // ------------------------------------------------------------------
     // Declarations
     // ------------------------------------------------------------------
+
+    // `@cfg(...)` in front of a declaration, a method or a statement. The
+    // parser reads it as a prefix of what follows; here it is a sibling node,
+    // which is all highlighting needs.
+    attribute: ($) =>
+      seq('@', field('name', $.identifier), field('arguments', $.attribute_arguments)),
+
+    attribute_arguments: ($) => seq('(', sepByTrailing(',', $.cfg_predicate), ')'),
+
+    // A flag, `key = "value"`, or `not`/`any`/`all` around further conditions.
+    cfg_predicate: ($) =>
+      choice(
+        field('flag', $.identifier),
+        seq(field('key', $.identifier), '=', field('value', $.string_literal)),
+        seq(field('combinator', $.identifier), field('arguments', $.attribute_arguments)),
+      ),
 
     import_declaration: ($) =>
       seq(
@@ -177,7 +194,7 @@ module.exports = grammar({
         field('type', $._type_identifier),
         optional(field('type_arguments', $.type_arguments)),
         '{',
-        repeat(choice($.function_declaration, $.operator_declaration)),
+        repeat(choice($.attribute, $.function_declaration, $.operator_declaration)),
         '}',
       ),
 
@@ -330,6 +347,7 @@ module.exports = grammar({
 
     _statement: ($) =>
       choice(
+        $.attribute,
         $.let_declaration,
         $.assignment_statement,
         $.expression_statement,
