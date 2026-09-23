@@ -291,7 +291,22 @@ pub fn handle_user_function(
     } else {
         None
     };
-    // Move evaluated call args into the expected arg slots
+    // Move evaluated call args into the expected arg slots.
+    //
+    // A parameter register belongs to the callee, and a later argument that
+    // calls a function can reach this callee again and overwrite it. So an
+    // argument before the last one that may call is held in a register of its
+    // own and moved into place once every argument has been worked out. A
+    // call that saves registers keeps its parameters across such a call
+    // already, so only a plain call needs this.
+    let last_calling = if uses_frame {
+        None
+    } else {
+        (0..args_loc_len)
+            .rev()
+            .find(|&i| i > 0 && expr_may_call(&args[i], v, ctx, state))
+    };
+    let mut held: Vec<(u16, u16)> = Vec::new();
     #[allow(clippy::needless_range_loop)]
     for i in 0..args_loc_len {
         let tgt_id = state.fns[fn_id].impls[fn_impl_idx].args_loc[i];
@@ -307,6 +322,18 @@ pub fn handle_user_function(
             continue;
         }
 
+        if last_calling.is_some_and(|last| i < last) {
+            let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+                compile_fn_value(&args[i], v, ctx, state, output, None)
+            } else {
+                args[i]
+                    .compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id()
+            };
+            held.push((arg_id, tgt_id));
+            continue;
+        }
+
         let start_len = output.len();
         let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
             compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
@@ -316,6 +343,11 @@ pub fn handle_user_function(
                 .unwrap_id()
         };
         if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
+            output.push(Instr::Mov(arg_id, tgt_id));
+        }
+    }
+    for (arg_id, tgt_id) in held {
+        if arg_id != tgt_id {
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
@@ -1288,4 +1320,57 @@ fn inline_call(
         }
     }
     output.push(Instr::Mov(returned, return_register));
+}
+
+/// Whether working out `expr` may call a candela function, directly or through
+/// an operator a type defines. A literal, a variable, a field or an element
+/// read, and an operator on primitive values call nothing; anything else is
+/// taken to call.
+fn expr_may_call(expr: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> bool {
+    fn primitive(e: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> bool {
+        matches!(
+            e.infer_type(v, ctx, state),
+            DataType::Int | DataType::Float | DataType::Bool | DataType::String | DataType::Null
+        )
+    }
+    match expr {
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Null
+        | Expr::Var(_, _) => false,
+        Expr::GetStructField(obj, _, _, _) => expr_may_call(obj, v, ctx, state),
+        Expr::ArrayGetIndex(base, index, _) => {
+            expr_may_call(base, v, ctx, state) || expr_may_call(index, v, ctx, state)
+        }
+        Expr::Neg(x, _, _) | Expr::BoolNeg(x, _, _) | Expr::BitNot(x, _, _) => {
+            expr_may_call(x, v, ctx, state) || !primitive(x, v, ctx, state)
+        }
+        Expr::Mul(l, r, _, _)
+        | Expr::Div(l, r, _, _)
+        | Expr::Add(l, r, _, _)
+        | Expr::Sub(l, r, _, _)
+        | Expr::Mod(l, r, _, _)
+        | Expr::Pow(l, r, _, _)
+        | Expr::BitAnd(l, r, _, _)
+        | Expr::BitOr(l, r, _, _)
+        | Expr::BitXor(l, r, _, _)
+        | Expr::Shl(l, r, _, _)
+        | Expr::Shr(l, r, _, _)
+        | Expr::Eq(l, r, _, _)
+        | Expr::NotEq(l, r, _, _)
+        | Expr::Sup(l, r, _, _)
+        | Expr::SupEq(l, r, _, _)
+        | Expr::Inf(l, r, _, _)
+        | Expr::InfEq(l, r, _, _)
+        | Expr::BoolAnd(l, r, _, _)
+        | Expr::BoolOr(l, r, _, _) => {
+            expr_may_call(l, v, ctx, state)
+                || expr_may_call(r, v, ctx, state)
+                || !primitive(l, v, ctx, state)
+                || !primitive(r, v, ctx, state)
+        }
+        _ => true,
+    }
 }

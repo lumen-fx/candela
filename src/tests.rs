@@ -402,6 +402,29 @@ fn main() {
     assert_eq!(run_output(src), "42\n");
 }
 
+/// A call's arguments go into registers that belong to the function being
+/// called. A later argument that calls the same function writes those same
+/// registers, so an argument worked out before it has to wait in a register of
+/// its own; `f(x, f(2, 3))` used to run the outer call with 2 where `x` was.
+#[test]
+pub fn a_later_argument_calling_the_callee_leaves_earlier_ones_alone() {
+    assert_eq!(
+        run_output(
+            "
+            fn f(a, b) { return a * 10 + b; }
+
+            fn main() {
+                let x = 1;
+                print(f(x, f(2, 3)));
+                print(f(f(4, 5), x));
+                print(f(x + 1, f(x, x) + 0));
+            }
+            "
+        ),
+        "33\n451\n31\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every
