@@ -138,6 +138,10 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // project manifest, so an import of a package the project depends on is
     // reported as a file it cannot find.
     let resolver = ImportResolver::new();
+    // The server is not the host either, so it enables no `@cfg` flag. Code a
+    // `@cfg` turns off is parsed and dropped, which is what a compile with no
+    // flags on does: a syntax error in it is reported, a name it uses that
+    // exists only on another target is not.
     // The export table `compile_checked` builds describes the functions a host
     // could call into a `.cdlb` artifact. The server writes no artifact, so it
     // takes the compile result and drops the table, as `candela check` does.
@@ -541,6 +545,20 @@ mod tests {
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
+    }
+
+    /// Code under a `@cfg` the server does not enable is dropped before names
+    /// resolve, so a module or a function that exists only on another target
+    /// is not reported.
+    #[test]
+    fn code_under_a_false_cfg_is_not_a_diagnostic() {
+        let source = "@cfg(web)\nimport \"js\";\n\n@cfg(web)\nfn track(e: string) { js::call(\"gtag\", [e]); }\n@cfg(not(web))\nfn track(e: string) {}\n\nfn main() {\n    @cfg(web)\n    let x = only_on_web();\n    track(\"open\");\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
     }
 
     /// The macro is skipped, not the errors around it.

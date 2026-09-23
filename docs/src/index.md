@@ -120,7 +120,8 @@ which share `editors/tree-sitter/README.md`.
 - [Methods](language/methods.md), [Enums](language/enums.md),
   [Generics](language/generics.md) and [Collections](language/collections.md).
 - [Error handling](language/error-handling.md),
-  [Modules](language/modules.md) and [Macros](language/macros.md).
+  [Modules](language/modules.md), [Macros](language/macros.md) and
+  [Conditional compilation](language/conditional-compilation.md).
 
 **Standard library** is the lookup reference: an
 [overview](standard-library/overview.md) of how the library ships and how to

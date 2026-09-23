@@ -676,3 +676,83 @@ fn apply(f: fn(int, int) -> int, xs: fn(int) -> int[]) -> fn() {
     (block
       (return_statement
         (identifier)))))
+
+================================================================================
+Attributes
+================================================================================
+
+@cfg(web)
+import "js";
+
+@cfg(not(any(web, target = "wasm32")))
+fn track(e: string) {}
+
+impl Store {
+    @cfg(all())
+    fn save(self) {}
+}
+
+fn main() {
+    @cfg(debug)
+    print("x");
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (attribute
+    (identifier)
+    (attribute_arguments
+      (cfg_predicate
+        (identifier))))
+  (import_declaration
+    (string_literal))
+  (attribute
+    (identifier)
+    (attribute_arguments
+      (cfg_predicate
+        (identifier)
+        (attribute_arguments
+          (cfg_predicate
+            (identifier)
+            (attribute_arguments
+              (cfg_predicate
+                (identifier))
+              (cfg_predicate
+                (identifier)
+                (string_literal))))))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (block))
+  (impl_block
+    (type_identifier)
+    (attribute
+      (identifier)
+      (attribute_arguments
+        (cfg_predicate
+          (identifier)
+          (attribute_arguments))))
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (block)))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (attribute
+        (identifier)
+        (attribute_arguments
+          (cfg_predicate
+            (identifier))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (string_literal)))))))

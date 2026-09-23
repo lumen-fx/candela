@@ -67,6 +67,9 @@ Run `candela` with no arguments for a REPL.
   and serialisation in the standard library.
 - **One import form.** `import "std/json" as json;` for a namespace, or
   `import "std/option";` to bring the module's symbols into scope.
+- **Code per target.** `@cfg(web)` compiles a declaration or a statement only
+  where the host turns the flag on, so one program can carry a browser and a
+  desktop version of the same function.
 - **A standard library written in candela.** The `.cdl` sources ship beside the
   toolchain, so you can read any of it.
 - **Projects and packages.** `candela new` starts a project, `candela add`

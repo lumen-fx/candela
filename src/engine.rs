@@ -23,6 +23,7 @@
 //! aborting the process. The value-marshalling types it uses ([`Value`],
 //! [`HostType`], ...) live in the VM-only `candela-vm` crate.
 
+use crate::Cfg;
 use crate::compiler::CompileOutput;
 use crate::compiler::FileNamespaces;
 use crate::compiler::compiler_data::Dynamiclib;
@@ -100,6 +101,7 @@ pub struct Engine {
     registry: HostRegistry,
     macros: MacroEnv,
     resolver: ImportResolver,
+    cfg: Cfg,
 }
 
 impl Engine {
@@ -122,6 +124,22 @@ impl Engine {
     #[must_use]
     pub fn with_lib_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.resolver.set_lib_dir(dir.into());
+        self
+    }
+
+    /// Sets the flags `@cfg(...)` attributes test in the scripts this engine
+    /// compiles.
+    ///
+    /// Code under a `@cfg` whose condition is false is dropped before names
+    /// resolve, so it may import a module or call a function that does not
+    /// exist here. A flag the configuration does not enable is false.
+    ///
+    /// ```no_run
+    /// let engine = candela::Engine::new().with_cfg(candela::Cfg::from_iter(["web"]));
+    /// ```
+    #[must_use]
+    pub fn with_cfg(mut self, cfg: Cfg) -> Self {
+        self.cfg = cfg;
         self
     }
 
@@ -299,18 +317,20 @@ impl Engine {
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
         let resolver = &self.resolver;
-        let out: CompileOutput = self.macros.scope(|| {
-            collect_diagnostic(|| {
-                // `compile_checked` compiles an entry point for every
-                // annotated function, which is what makes this a check step: a
-                // body error in a function `main` never calls is reported now,
-                // not on the first `Program::call` that reaches it. It also
-                // leaves those specialisations warm for that call.
-                let (out, _) = compile_checked(src.to_owned(), &filename_owned, resolver);
-                // A `Program` runs `main` as soon as it is built, so an
-                // embedded program needs one the way a run from the CLI does.
-                out.require_main();
-                out
+        let out: CompileOutput = self.cfg.scope(|| {
+            self.macros.scope(|| {
+                collect_diagnostic(|| {
+                    // `compile_checked` compiles an entry point for every
+                    // annotated function, which is what makes this a check step: a
+                    // body error in a function `main` never calls is reported now,
+                    // not on the first `Program::call` that reaches it. It also
+                    // leaves those specialisations warm for that call.
+                    let (out, _) = compile_checked(src.to_owned(), &filename_owned, resolver);
+                    // A `Program` runs `main` as soon as it is built, so an
+                    // embedded program needs one the way a run from the CLI does.
+                    out.require_main();
+                    out
+                })
             })
         })?;
 

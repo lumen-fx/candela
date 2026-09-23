@@ -46,6 +46,7 @@ Raised while the file is read, before any type is known.
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |
+| Attribute | An `@` name other than `cfg`, an attribute with nothing after it to apply to, or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [conditional compilation](../language/conditional-compilation.md) |
 | Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
 
 ## Compile errors

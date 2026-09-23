@@ -15,6 +15,7 @@ use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::ReturnAnnotation;
 use crate::parser::Parser;
 use crate::parser::TypeExpr;
+use crate::parser::parse_attributes;
 use crate::parser::parse_code;
 use crate::parser::parse_type;
 use crate::parser::parse_type_args;
@@ -459,6 +460,22 @@ pub fn parse_impl_block(
         if parser.peek_token() == Token::RBrace {
             parser.next_token();
             break;
+        }
+        if parser.peek_token() == Token::At {
+            let active = parse_attributes(parser);
+            if parser.peek_token() == Token::RBrace {
+                cold_path();
+                let span = parser.peek_token_span();
+                parser.error(span, ParserErr::AttributeWithoutItem);
+            }
+            if active {
+                methods.push(parse_method(parser));
+            } else {
+                parser.inactive += 1;
+                let _ = parse_method(parser);
+                parser.inactive -= 1;
+            }
+            continue;
         }
         methods.push(parse_method(parser));
     }

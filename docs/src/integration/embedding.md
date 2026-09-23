@@ -230,6 +230,37 @@ Turning this on compiles it as `null` instead. It is for tools that read scripts
 written for a host they are not part of, and would otherwise report every one of
 that host's macros as an error; candela's own language server does this.
 
+### with_cfg
+
+```rust
+use candela::Cfg;
+
+let mut cfg = Cfg::new();
+cfg.enable("web");
+cfg.enable_value("target", "wasm32");
+let engine = candela::Engine::new().with_cfg(cfg);
+```
+
+Sets the flags [`@cfg(...)`](../language/conditional-compilation.md) tests in
+the scripts this engine compiles. `enable` turns on a flag, so `@cfg(web)`
+holds; `enable_value` turns on a pair, so `@cfg(target = "wasm32")` holds. A
+flag the configuration does not enable is false. `Cfg` also collects from an
+iterator of flag names: `Cfg::from_iter(["web", "debug"])`.
+
+candela gives no flag a meaning. Pick the names your host sets, document them
+for the people writing scripts against it, and pass the same set to every
+compile of one target.
+
+A compile that does not go through an `Engine`, such as `build_bytecode` or
+`compile_checked`, reads the configuration of the `Cfg::scope` it runs in:
+
+```rust
+let bytes = cfg.scope(|| candela::build_bytecode(source, "main.cdl", &resolver));
+```
+
+The configuration covers every file the compile imports. Outside a scope,
+nothing is enabled.
+
 ### compile
 
 ```rust

@@ -77,3 +77,6 @@ Tools that read candela without being the host, such as the language server, are
 allowed to compile an unregistered macro as `null` instead of failing, so
 opening a file in an editor does not report every macro in it as an error. See
 [embedding](../integration/embedding.md) for both sides of this.
+
+A macro inside code that a [`@cfg`](conditional-compilation.md) drops is never
+expanded.
