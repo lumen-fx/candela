@@ -48,8 +48,10 @@ The rest of the tree:
   profile-guided builds. `examples/package/` is a project rather than a loose
   file, and it is what the package-workflow self-test packs.
 - `tests/` holds the Rust integration suites.
-- `pgo/` holds the workloads and the small C library used to train a
-  profile-guided release build.
+- `pgo/` holds the workloads and the small C library used to train the
+  profile-guided release builds. Both `candela` and `candela-vm` are built that
+  way: `candela` runs the workloads from source, and `candela-vm` runs them as
+  `.cdlb` artifacts the trained `candela` builds.
 - `msi/` holds the WiX package definition and the script that builds the Windows
   installer.
 - `scripts/` holds the release tooling: `bump-version.py`, which sets the
