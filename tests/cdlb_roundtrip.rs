@@ -298,17 +298,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_eleven_and_v2_is_rejected() {
-    // The version byte was bumped to 11 when the string comparison and bitwise
-    // instructions joined the instruction set and maps took on insertion order.
-    // A freshly built artifact must carry version 11.
+fn current_format_version_is_twelve_and_v2_is_rejected() {
+    // The version byte was bumped to 12 when the loop step and the
+    // add-a-constant instructions joined the instruction set. A freshly built
+    // artifact must carry version 12.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 11, "current .cdlb format version must be 11");
+    assert_eq!(bytes[4], 12, "current .cdlb format version must be 12");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -339,7 +339,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 11);
+    assert_eq!(bytes[4], 12);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
@@ -922,7 +922,7 @@ fn function_names_agree_across_source_and_artifact() {
 fn an_overloaded_operator_roundtrips_through_cdlb() {
     // An operator a type defines is resolved while the program compiles and
     // lowered to an ordinary function call, so the artifact carries no
-    // instruction the format did not already have and the version stays 11.
+    // instruction of its own and the version is the current one.
     let src = "
         struct Vec2 { x: int, y: int }
 
@@ -950,8 +950,8 @@ fn an_overloaded_operator_roundtrips_through_cdlb() {
     let bytes = candela::build_bytecode(src.to_owned(), "ops.cdl", &candela::ImportResolver::new())
         .expect("compiles");
     assert_eq!(
-        bytes[4], 11,
-        "an operator method needs no new instruction, so the format version stays 11"
+        bytes[4], 12,
+        "an operator method needs no instruction of its own, so the artifact carries the current format version"
     );
 
     agrees_across_source_and_artifact(

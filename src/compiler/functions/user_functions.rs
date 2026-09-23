@@ -1122,7 +1122,9 @@ const fn branch_target(pos: usize, instr: Instr) -> Option<usize> {
         | Instr::StrNotEqJmp(_, _, size)
         | Instr::StrEqJmp(_, _, size)
         | Instr::StartErrorCatch(size, _) => Some(pos + size as usize),
-        Instr::JmpBack(size) | Instr::InfIntJmpBack(_, _, size) => pos.checked_sub(size as usize),
+        Instr::JmpBack(size)
+        | Instr::InfIntJmpBack(_, _, size)
+        | Instr::StepIntJmpBack(_, _, size) => pos.checked_sub(size as usize),
         _ => None,
     }
 }
@@ -1135,6 +1137,7 @@ const fn ends_straight_run(instr: Instr) -> bool {
             instr,
             Instr::JmpBack(_)
                 | Instr::InfIntJmpBack(_, _, _)
+                | Instr::StepIntJmpBack(_, _, _)
                 | Instr::Return(_)
                 | Instr::RecursiveReturn(_)
                 | Instr::VoidReturn

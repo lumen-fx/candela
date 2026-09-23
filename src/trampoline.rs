@@ -25,6 +25,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::expr::Expr;
 use crate::compiler::imports::ImportResolver;
+use crate::compiler::use_immediates;
 use crate::instr::Instr;
 use candela_vm::artifact::ExportImage;
 use candela_vm::data::NULL;
@@ -199,6 +200,12 @@ fn compile_entry_point(
     };
 
     trampoline.push(Instr::Halt(0));
+    use_immediates(
+        &mut trampoline,
+        &out.instructions,
+        &out.registers,
+        &out.const_registers,
+    );
     out.instructions.extend(trampoline);
 
     ExportImage {

@@ -267,6 +267,54 @@ pub fn a_loop_over_a_collection_steps_breaks_and_continues() {
     );
 }
 
+/// Adding or subtracting a constant `int` carries the constant in the
+/// instruction. The constant may stand on either side of `+`, subtracting it
+/// is adding its negation, and one too wide for the operand stays in its
+/// register.
+#[test]
+pub fn a_constant_operand_adds_like_a_register() {
+    assert_eq!(
+        run_output(
+            "
+            fn main() {
+                let n = 10;
+                print(n + 7, 7 + n, n - 7, n - -7, n + 40000, 3 - n);
+            }
+            "
+        ),
+        "17\n17\n3\n17\n40010\n-7\n"
+    );
+}
+
+/// A literal a variable starts from can share its register with the
+/// variable, and the variable is then written. That register holds whatever
+/// was last written, so it is never carried into an instruction as a
+/// constant: this reads what the program wrote, the way it did before.
+#[test]
+pub fn a_written_literal_register_is_not_a_constant() {
+    assert_eq!(
+        run_output(
+            "
+            fn sum(n) {
+                if n <= 0 { throw(\"bottom\"); }
+                let got = 0;
+                try {
+                    got = sum(n - 1);
+                } catch e {
+                    got = 1;
+                }
+                return n + got;
+            }
+
+            fn main() {
+                print(sum(3));
+            }
+            "
+        ),
+        "7\n"
+    );
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every
