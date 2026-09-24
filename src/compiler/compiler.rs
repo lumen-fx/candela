@@ -3332,32 +3332,36 @@ fn compile_var_declaration(
     // around a loop and each call of the declaring function its own.
     let captured = code_captures_variable(name, remaining_code);
 
-    let var_id = if ctx.single_run {
-        if as_fn_value {
-            compile_fn_value(value, v, ctx, state, output, None)
-        } else {
-            value
-                .compile(v, ctx, state, output, None, true, true)
-                .unwrap_id()
-        }
+    let output_len = output.len();
+    let src_id = if as_fn_value {
+        compile_fn_value(value, v, ctx, state, output, None)
     } else {
-        let output_len = output.len();
-        let src_id = if as_fn_value {
-            compile_fn_value(value, v, ctx, state, output, None)
-        } else {
-            value
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id()
-        };
-        if !captured && code_modifies_variable(name, remaining_code) {
-            let mutable_id = state.alloc_reg();
-            if !write_scratch_into(output, output_len, src_id, mutable_id, v, state) {
-                move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
-            }
-            mutable_id
-        } else {
-            src_id
+        value
+            .compile(v, ctx, state, output, None, ctx.single_run, true)
+            .unwrap_id()
+    };
+    // The value can come back in a register something else owns: another
+    // variable's, or a constant's. The two names may share it only while
+    // neither is written, or writing one would change the other.
+    let owned_elsewhere = v.iter().any(|var| var.register_id == src_id)
+        || state.const_registers.values().any(|&reg| reg == src_id);
+    let owner_written = v
+        .iter()
+        .filter(|var| var.register_id == src_id)
+        .any(|var| code_modifies_variable(&var.name, remaining_code));
+    let written = code_modifies_variable(name, remaining_code);
+    // Code that runs once gives a literal a register of its own, so only a
+    // shared register needs a copy there.
+    let needs_own =
+        !captured && (owner_written || (written && (owned_elsewhere || !ctx.single_run)));
+    let var_id = if needs_own {
+        let mutable_id = state.alloc_reg();
+        if !write_scratch_into(output, output_len, src_id, mutable_id, v, state) {
+            move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
         }
+        mutable_id
+    } else {
+        src_id
     };
     let var_id = if captured {
         let cell_id = state.alloc_reg();
