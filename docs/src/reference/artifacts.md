@@ -81,22 +81,29 @@ A function gets an entry when all of the following hold:
 
 - It is defined in the file you are building, not in a module it imports.
 - It is reachable by its bare name, and it is not `main`.
-- Every parameter is annotated, with a type a host value can be: `int`, `float`,
-  `bool`, `string`, `null`, `any`, a union of those, an array of those, or a
+- Every parameter has a type a host value can be: `int`, `float`, `bool`,
+  `string`, `null`, `any`, a union of those, an array of those, or a
   string-keyed map of those.
 
-The last one is what a host's arguments are checked against, which is why an
-un-annotated parameter is left out: there is nothing to check. A parameter typed
-as a struct or an enum is left out too, since a host has no way to build one.
-See [embedding](../integration/embedding.md) for how a host makes the call.
+The parameter types are what a host's arguments are checked against. A
+parameter typed as a struct or an enum is left out, since a host has no way to
+build one. See [embedding](../integration/embedding.md) for how a host makes the
+call.
 
 Compiling an entry point is also what type-checks the function's body, so the
 build compiles one for every function whose parameters are all annotated, not
 only for the ones that end up in the table. A body that does not compile at its
-declared parameter types fails the build, naming the error; it used to lose its
-entry and ship as a name the runtime reported as unknown. A function with a bare
-parameter has no declared type to compile against, so it is left for whichever
-call reaches it first.
+declared parameter types fails the build, naming the error.
+
+A function with a bare parameter that the program calls is compiled by that
+call, at the types it passes, and gets no entry. One that nothing in the program
+calls is there for a host to call, so the build warns about each bare parameter
+(`unannotated_host_parameter`) and compiles the entry point with the bare
+parameters typed `any`. When the body does not compile that way, the build warns
+again (`no_host_entry_point`, carrying the error the body raised) and goes on
+without the entry. Annotate the parameters with the types the host passes to
+silence the warning and have the body checked at those types. A generic function
+gets no entry either way.
 
 ## Version compatibility
 

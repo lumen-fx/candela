@@ -274,15 +274,31 @@ host makes its first call. The filename is what error reports name.
 It also compiles the body of every function in the file you pass whose
 parameters are all annotated, at those declared types, whether or not anything
 calls it. An error in a function `main` never calls comes back from `compile`
-rather than from the first `call`. A function with a bare parameter has no
-declared type to compile against, so it is left for the call, and so is a
-function an import brought in. The check runs before `main`, so a broken body is
-reported before any top-level setup has run.
+rather than from the first `call`. A function an import brought in is left for
+the call. The check runs before `main`, so a broken body is reported before any
+top-level setup has run.
+
+A function with a bare parameter that nothing in the script calls is one the
+host calls, so `compile` warns about each bare parameter and checks the body
+with those parameters typed `any`. A body that does not compile that way is
+another warning, not an error; the function is still compiled by the first
+`call` that reaches it. The warnings come back on the program:
+
+```rust
+for warning in program.warnings() {
+    eprintln!("{}: {}", warning.code, warning.message);
+}
+```
+
+Each is a `Diagnostic` like an error, with a code, a plain-text message and a
+span. See [errors](../reference/errors.md#warnings) for the codes.
 
 `candela::compile_checked` is that check on its own, the seam `candela check`
 and the language server compile through, and the check `candela build` runs
 before its release passes, for a frontend that wants to report what the command
-line reports without keeping a `Program` resident.
+line reports without keeping a `Program` resident. It prints its warnings to
+stderr; run it inside `candela::collect_warnings` to get them back as
+`Diagnostic`s instead.
 
 A `main` is required: an embedded program runs one the way a run from the CLI
 does. `candela check` is the step that compiles a file without one.
@@ -321,11 +337,21 @@ fn banner(label: string) -> int {
 }
 ```
 
-Leaving the parameters bare still works, and the types are then taken from the
-first host call, which is also the first time the body is type-checked.
+Leaving the parameters bare still works, and the types are then taken from
+each host call. `compile` warns about such a parameter and checks the body with
+it typed `any`, which catches an error that does not depend on the argument.
 Annotate when you want a mismatch reported against the declaration rather than
-accepted as a new specialisation, and when you want the body checked by
-`compile` rather than by whichever call reaches it first.
+accepted as a new specialisation, and when you want the body checked at the
+types the host passes.
+
+### warnings
+
+```rust
+let warnings: &[Diagnostic] = program.warnings();
+```
+
+The warnings `compile` raised, in the order it raised them. A warning does not
+stop the compile.
 
 Returns a `Diagnostic` when the function is unknown, when the arguments do not
 type-check, or when the call raises a runtime error.
@@ -429,11 +455,14 @@ the declared parameter types first.
 
 Only functions the artifact exports are callable, and `program.exports()` lists
 them. A function is exported when it is defined in the file that was built, is
-reachable by its bare name, is not `main`, and annotates every parameter with a
-type a host value can be. See [artifacts](../reference/artifacts.md) for the full
-rule. This is the difference that matters when moving a script from `Engine` to
-an artifact: bare parameters take their types from the first host call there, but
-an artifact has no compiler to specialise them later, so annotate them.
+reachable by its bare name, is not `main`, and has a type a host value can be on
+every parameter. A bare parameter on a function nothing in the script calls is
+exported as `any`, with a build warning; see
+[artifacts](../reference/artifacts.md) for the full rule. This is the difference
+that matters when moving a script from `Engine` to an artifact: bare parameters
+take their types from each host call there, but an artifact has no compiler to
+specialise them later, so the body runs with them typed `any`. Annotate them to
+have the body compiled at the types the host passes.
 
 Errors come back as a `CallError`: the name is not exported, the argument count
 or an argument type disagrees with the declaration, or the call raised a runtime

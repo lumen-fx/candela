@@ -12606,3 +12606,136 @@ pub fn returning_any_from_a_declared_type_is_checked() {
         "5\nbad_downcast\nbad_downcast\n"
     );
 }
+
+/// Runs the compile `candela build` does in both profiles, gathering the
+/// warnings it raises, and checks that the two profiles raise the same ones
+/// and export the same functions. Hands back the debug profile's result.
+fn checked_with_warnings(
+    src: &str,
+    filename: &str,
+) -> (Vec<candela_vm::artifact::ExportImage>, Vec<Diagnostic>) {
+    let [debug, release] = [false, true].map(|optimize| {
+        crate::warnings::collect_warnings(|| {
+            crate::trampoline::compile_checked_profile(
+                String::from(src),
+                filename,
+                &crate::compiler::imports::ImportResolver::new(),
+                optimize,
+            )
+            .1
+        })
+    });
+    assert_eq!(
+        debug.1, release.1,
+        "a release build warns the way a debug build does"
+    );
+    let names = |exports: &[candela_vm::artifact::ExportImage]| {
+        exports.iter().map(|e| e.name.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&debug.0),
+        names(&release.0),
+        "a release build exports what a debug build does"
+    );
+    debug
+}
+
+/// A function nothing in the program calls, with a bare parameter, is one a
+/// host calls by name. Its body is checked at `any`, and a body that does not
+/// compile there costs the entry point, not the build.
+#[test]
+pub fn a_host_called_bare_parameter_warns_and_the_build_goes_on() {
+    let src = "fn on_click(id) { let n = 1; n.uppercase(); }\nfn main() {}\n";
+    let (exports, warnings) = checked_with_warnings(src, "click.cdl");
+    assert!(exports.iter().all(|e| e.name != "on_click"));
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+
+    assert_eq!(warnings[0].code, "unannotated_host_parameter");
+    assert!(
+        warnings[0].message.contains("id"),
+        "{}",
+        warnings[0].message
+    );
+    assert!(
+        warnings[0].message.contains("on_click"),
+        "{}",
+        warnings[0].message
+    );
+    assert_eq!(warnings[0].span, 3..11, "the warning points at the name");
+
+    assert_eq!(warnings[1].code, "no_host_entry_point");
+    assert!(
+        warnings[1].message.contains("uppercase"),
+        "the reason the body fails travels with the warning: {}",
+        warnings[1].message
+    );
+    let at = src.find("n.uppercase").unwrap();
+    assert_eq!(warnings[1].span.start, at);
+}
+
+/// A body that compiles at `any` gets its entry point, typed `any` where the
+/// parameter is bare and at its declared type where it is annotated.
+#[test]
+pub fn a_host_called_bare_parameter_gets_an_any_entry_point() {
+    let src = "
+        fn on_click(id) { print(id); }
+        fn h(a: int, b) { print(a, b); }
+        fn main() {}
+    ";
+    let (exports, warnings) = checked_with_warnings(src, "entry.cdl");
+    let on_click = exports.iter().find(|e| e.name == "on_click").unwrap();
+    assert!(matches!(
+        on_click.arg_types[..],
+        [crate::rt::DataType::Unknown]
+    ));
+    let h = exports.iter().find(|e| e.name == "h").unwrap();
+    assert!(matches!(
+        h.arg_types[..],
+        [crate::rt::DataType::Int, crate::rt::DataType::Unknown]
+    ));
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.code == "unannotated_host_parameter")
+    );
+    assert!(warnings[1].message.contains("Parameter b of h"));
+}
+
+/// Only a function a host would be the one to call is warned about: one the
+/// program calls is compiled by that call, a generic one by the call that
+/// names its types, and methods and closures are never reached by a bare name.
+#[test]
+pub fn a_function_the_program_calls_is_not_warned_about() {
+    let src = "
+        struct S { a: int }
+        impl S { fn m(self, k) { return k; } }
+        fn fib(n) { if n < 2 { return n; } return fib(n - 1) + fib(n - 2); }
+        fn same<T>(x) { return x; }
+        fn handle(x) { print(x.m(1)); }
+        fn main() {
+            print(fib(5));
+            handle(S { a: 41 });
+            let f = fn(v) { return v; };
+            print(f(1));
+        }
+    ";
+    let (exports, warnings) = checked_with_warnings(src, "called.cdl");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(exports.is_empty(), "nothing is left for a host to call");
+}
+
+/// A bare function in an imported module is the importer's to call, not a
+/// host's.
+#[test]
+pub fn a_bare_function_in_an_imported_module_is_not_warned_about() {
+    let dir = std::env::temp_dir().join("candela_bare_import_warning_test");
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("lib.cdl"), "fn helper(x) { return x; }\n").unwrap();
+    let main = dir.join("main.cdl");
+    let src = "import \"./lib.cdl\";\nfn main() {}\n";
+    std::fs::write(&main, src).unwrap();
+    let (exports, warnings) = checked_with_warnings(src, main.to_str().unwrap());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(exports.is_empty(), "nothing is left for a host to call");
+}

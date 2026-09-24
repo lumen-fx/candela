@@ -115,7 +115,8 @@ candela run
 packages the project depends on resolved first. `candela check` compiles the
 same program and stops before running, the body of every fully annotated
 function in that file included, so a mistake in a function `main` never calls is
-reported. A function an import brought in is compiled by the call that reaches
+reported. A function nothing calls whose parameters are bare gets a warning and
+has its body checked with them typed `any`. A function an import brought in is compiled by the call that reaches
 it, as it is on a run. Both take a file if you want a different one, and both
 work from anywhere inside the project.
 

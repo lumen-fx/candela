@@ -35,7 +35,6 @@ use crate::compiler::expr::Expr;
 use crate::compiler::imports::DEFAULT_PACKAGE_ENTRY;
 use crate::compiler::imports::ImportResolver;
 use crate::compiler::type_system::Generics;
-use crate::compiler::type_system::GenericsCheckpoint;
 use crate::compiler::use_immediates;
 use crate::macros::MacroEnv;
 use crate::macros::MacroError;
@@ -45,6 +44,7 @@ use crate::manifest::MANIFEST_NAME;
 use crate::manifest::Manifest;
 use crate::trampoline::compile_checked;
 use crate::trampoline::compile_trampoline;
+use crate::warnings::collect_warnings;
 use candela_vm::data::Data;
 use candela_vm::embed::HostDispatch;
 use candela_vm::embed::HostError;
@@ -298,8 +298,9 @@ impl Engine {
     /// those declared types, whether or not anything calls it, so an error in
     /// the body of a function `main` never calls comes back from here rather
     /// than from the first [`Program::call`]. A function with a bare parameter
-    /// has no declared type to compile against and stays lazy, and so does a
-    /// function an import brought in.
+    /// that nothing in the script calls is checked with that parameter typed
+    /// `any`, and warned about; the warnings come back on
+    /// [`Program::warnings`]. A function an import brought in stays lazy.
     ///
     /// `main` is executed once here (module instantiation), so any top-level
     /// setup runs before the host makes its first [`Program::call`]. The
@@ -317,19 +318,23 @@ impl Engine {
     pub fn compile(&self, src: &str, filename: &str) -> Result<Program, Diagnostic> {
         let filename_owned = filename.to_owned();
         let resolver = &self.resolver;
-        let out: CompileOutput = self.cfg.scope(|| {
+        let (out, warnings): (CompileOutput, Vec<Diagnostic>) = self.cfg.scope(|| {
             self.macros.scope(|| {
                 collect_diagnostic(|| {
-                    // `compile_checked` compiles an entry point for every
-                    // annotated function, which is what makes this a check step: a
-                    // body error in a function `main` never calls is reported now,
-                    // not on the first `Program::call` that reaches it. It also
-                    // leaves those specialisations warm for that call.
-                    let (out, _) = compile_checked(src.to_owned(), &filename_owned, resolver);
-                    // A `Program` runs `main` as soon as it is built, so an
-                    // embedded program needs one the way a run from the CLI does.
-                    out.require_main();
-                    out
+                    collect_warnings(|| {
+                        // `compile_checked` compiles an entry point for every
+                        // annotated function, which is what makes this a check
+                        // step: a body error in a function `main` never calls
+                        // is reported now, not on the first `Program::call`
+                        // that reaches it. It also leaves those
+                        // specialisations warm for that call.
+                        let (out, _) = compile_checked(src.to_owned(), &filename_owned, resolver);
+                        // A `Program` runs `main` as soon as it is built, so an
+                        // embedded program needs one the way a run from the CLI
+                        // does.
+                        out.require_main();
+                        out
+                    })
                 })
             })
         })?;
@@ -365,6 +370,7 @@ impl Engine {
             free_registers: out.free_registers,
             indirect_registers: out.indirect_registers,
             generics: out.generics,
+            warnings,
         };
 
         // Instantiate: run `main` once so top-level state is established before
@@ -405,48 +411,19 @@ pub struct Program {
     free_registers: Vec<u16>,
     generics: Generics,
     indirect_registers: IndirectRegisters,
-}
-
-/// A checkpoint of the resident tables [`Program::call`] can grow while
-/// compiling a trampoline, taken by [`Program::checkpoint`] and undone by
-/// [`Program::rollback_to`] if the compile ends in a diagnostic.
-struct CompileCheckpoint {
-    registers: usize,
-    /// `Program::functions` itself grows during a compile, not just once at
-    /// [`Engine::compile`]: an anonymous function literal hoists to a fresh
-    /// entry the first time it is reached, and instantiating a generic type
-    /// lowers every applicable `impl` method the same way. A function the
-    /// aborted attempt hoisted is left holding a bytecode address the resident
-    /// stream never reached, so it goes back with everything else.
-    functions: usize,
-    /// Each pre-existing function's specialization-cache length, indexed the
-    /// same as the first `functions` entries of `Program::functions`.
-    fn_impls: Box<[usize]>,
-    /// `Program::callsite_registers` takes one entry per recursive call site
-    /// the attempt compiled, and each entry is written once, at the end of the
-    /// body that holds the call site. An entry from an earlier compile is
-    /// therefore never touched, so the length alone undoes the growth.
-    callsite_registers: usize,
-    /// Every file's scope length, not only the entry file's: a body compiled
-    /// from an imported module declares into that module's scope.
-    namespaces: crate::compiler::FileNamespacesCheckpoint,
-    /// A generic type is instantiated (and, symmetrically, an enum's variants
-    /// added) the first time a call site needs it, the same on-demand way a
-    /// function is specialized; `structs`/`enums` cover that growth exactly as
-    /// `functions` covers a closure or a lowered `impl` method.
-    structs: usize,
-    enums: usize,
-    /// `add_to_src` grows this in step with the trampoline's local `output`
-    /// buffer, keyed by instruction value rather than position, so a stale
-    /// entry cannot point past the end of `Program::instructions`; it can only
-    /// mislabel a later instruction that happens to be identical to one the
-    /// aborted attempt compiled. Rolled back for the same reason as
-    /// everything else here: it is not this call's to leave behind.
-    instr_src: usize,
-    generics: GenericsCheckpoint,
+    /// The warnings the compile raised, in the order it raised them.
+    warnings: Vec<Diagnostic>,
 }
 
 impl Program {
+    /// The warnings compiling this program raised, in the order they were
+    /// raised. A warning does not stop the compile; see the warnings section
+    /// of the error reference for what each one means.
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.warnings
+    }
+
     /// Invokes the script-defined function `fn_name` with `args`, returning its
     /// value (or [`Value::Null`] for a void function).
     ///
@@ -458,7 +435,7 @@ impl Program {
     /// A diagnostic raised while compiling the trampoline (an undeclared name
     /// at the call site, a type mismatch, a nested call that needed its own
     /// specialization first) leaves the resident tables exactly as they stood
-    /// before this call began; see [`Program::rollback_to`]. The `Program`
+    /// before this call began; see [`State::rollback_to`]. The `Program`
     /// stays callable afterward.
     ///
     /// # Errors
@@ -490,7 +467,7 @@ impl Program {
         // Every table a trampoline compile can grow is snapshotted up front, so
         // a diagnostic raised while compiling it can be undone rather than
         // leaving a half-compiled specialization for a later call to trip on.
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.compiler_state().checkpoint();
 
         // Scalars compile as literal exprs; arrays/maps can't, so they are
         // allocated into the heap pools now and passed as a pre-seeded variable
@@ -538,7 +515,7 @@ impl Program {
         }) {
             Ok(compiled) => compiled,
             Err(diagnostic) => {
-                self.rollback_to(&checkpoint);
+                self.compiler_state().rollback_to(&checkpoint);
                 return Err(diagnostic);
             }
         };
@@ -589,82 +566,6 @@ impl Program {
             generics: &mut self.generics,
             indirect_registers: &mut self.indirect_registers,
         }
-    }
-
-    /// Snapshots the resident tables a trampoline compile writes into as it
-    /// goes, so a diagnostic raised partway through can be undone with
-    /// [`Program::rollback_to`].
-    ///
-    /// `self.instructions` needs no entry here: the bytecode a trampoline
-    /// compiles lives in a local buffer and only reaches the resident stream
-    /// once the whole attempt succeeds (see [`Program::call`]). Everything
-    /// captured below, by contrast, is written in place as compilation
-    /// proceeds, because a nested call can only reuse a specialization another
-    /// call site already produced. Left unrestored on a later error, a
-    /// specialization compiled and cached here during an attempt that then
-    /// aborts records a bytecode address in a region `self.instructions` never
-    /// reached, and the next call that reuses it jumps into whatever unrelated
-    /// code, or none, later lands there.
-    ///
-    /// This is a handful of lengths, one per table plus one per file in the
-    /// program, not a copy of the tables themselves, so a call that does not
-    /// error pays for little more than reading them.
-    fn checkpoint(&self) -> CompileCheckpoint {
-        CompileCheckpoint {
-            registers: self.registers.len(),
-            functions: self.functions.len(),
-            fn_impls: self.functions.iter().map(|f| f.impls.len()).collect(),
-            callsite_registers: self.callsite_registers.len(),
-            namespaces: self.namespaces.checkpoint(),
-            structs: self.structs.len(),
-            enums: self.enums.len(),
-            instr_src: self.instr_src.len(),
-            generics: self.generics.checkpoint(),
-        }
-    }
-
-    /// Undoes everything a failed trampoline compile wrote to the resident
-    /// tables, back to `checkpoint`. `Program::call` runs this only when the
-    /// compile step itself returned a diagnostic; a successful compile leaves
-    /// the tables as they stand and commits the compiled bytecode alongside
-    /// them.
-    fn rollback_to(&mut self, checkpoint: &CompileCheckpoint) {
-        // A `const_registers`/`free_registers` entry naming a register at or
-        // past `registers` was necessarily added during the aborted attempt
-        // (registers only ever grow, and a constant is registered the moment
-        // its register is pushed), so it goes with the registers themselves.
-        // An entry `free_registers` lost, because the attempt popped and
-        // reused an already-free register it never got to write through
-        // committed bytecode, is not restored: that register is simply
-        // orphaned rather than double-allocated, which the next compile
-        // cannot observe.
-        self.const_registers
-            .retain(|_, &mut reg| (reg as usize) < checkpoint.registers);
-        self.free_registers
-            .retain(|&reg| (reg as usize) < checkpoint.registers);
-        self.registers.truncate(checkpoint.registers);
-
-        // Every function this attempt added (a hoisted closure, a lowered
-        // `impl` method) goes, along with every specialization cached on a
-        // function that was already there.
-        self.functions.truncate(checkpoint.functions);
-        for (func, &len) in self.functions.iter_mut().zip(checkpoint.fn_impls.iter()) {
-            func.impls.truncate(len);
-        }
-        self.callsite_registers
-            .truncate(checkpoint.callsite_registers);
-
-        self.namespaces.rollback_to(&checkpoint.namespaces);
-
-        // A generic type instantiated during the attempt is cached in
-        // `self.generics` by rendered name, pointing at the struct or enum
-        // entry the attempt pushed here; both go together for the same reason
-        // `functions` does.
-        self.structs.truncate(checkpoint.structs);
-        self.enums.truncate(checkpoint.enums);
-        self.generics.rollback_to(&checkpoint.generics);
-
-        self.instr_src.truncate(checkpoint.instr_src);
     }
 
     /// Runs the VM against the resident state starting at instruction `start`,

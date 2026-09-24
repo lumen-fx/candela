@@ -94,6 +94,10 @@ mod trampoline;
 mod update;
 #[path = "./util/util.rs"]
 mod util;
+// Compile warnings, which leave the build running, and the collector an
+// embedder or an editor reads them through.
+#[cfg(feature = "compiler")]
+mod warnings;
 
 pub use candela_vm::Diagnostic;
 pub use candela_vm::collect_diagnostic;
@@ -138,6 +142,9 @@ pub use build::build_bytecode;
 // here, not through `compiler::compile`, which stops at the program.
 #[cfg(feature = "compiler")]
 pub use trampoline::compile_checked;
+// Gathers the warnings a compile raises instead of printing them.
+#[cfg(feature = "compiler")]
+pub use warnings::collect_warnings;
 // How a type is written out for a person to read: paired with the struct and
 // enum tables a compile produces, so a user type is named the way it was
 // declared. Every diagnostic prints through this, and so does a frontend that

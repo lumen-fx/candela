@@ -39,7 +39,8 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
   command line fails in the editor: an error in the body of a function `main`
   never calls is reported here too, as long as that function annotates every
   parameter. A `main` is not required, so a library buffer analyses like any
-  other.
+  other. The warnings that command prints, such as a bare parameter on a
+  function nothing calls, are pushed alongside at warning severity.
 
 - **Document sync.** Full-document sync (`didOpen`/`didChange`/`didClose`); each
   change replaces the whole buffer.
@@ -94,8 +95,9 @@ These are deliberate, and the source refers here for them.
 - `src/analysis.rs` unit-tests `analyze` on the buffers whose handling is easy
   to get wrong: one using a macro the server has no expander for, one with an
   error beside such a macro, one whose only error is in the body of a function
-  nothing calls, and one with no `main`. It also covers how a type is written
-  out: a parameter and a struct field of a user enum, and the `any` slot.
+  nothing calls, one with no `main`, and one that compiles with a warning. It
+  also covers how a type is written out: a parameter and a struct field of a
+  user enum, and the `any` slot.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
