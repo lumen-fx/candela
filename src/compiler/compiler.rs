@@ -99,11 +99,44 @@ use libloading::Library;
 use crate::errors::wasm_error;
 
 /// What keeps a bound library open. Where no library loads, a binding is one
-/// of the runtime's intrinsics and there is nothing to hold.
+/// of the runtime's intrinsics and there is nothing to hold. A check-only
+/// compile opens no library, so it holds `None`.
 #[cfg(not(target_arch = "wasm32"))]
-type LibHandle = Rc<Library>;
+type LibHandle = Option<Rc<Library>>;
 #[cfg(target_arch = "wasm32")]
 type LibHandle = ();
+
+thread_local! {
+    /// Set while a check-only compile runs; see [`check_only_scope`].
+    static CHECK_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Puts the previous check-only setting back when dropped, so a compile that
+/// unwinds out of an error leaves it as it found it.
+struct CheckOnlyGuard(bool);
+
+impl Drop for CheckOnlyGuard {
+    fn drop(&mut self) {
+        CHECK_ONLY.set(self.0);
+    }
+}
+
+/// Runs `f` with every compile inside it checking only.
+///
+/// A `dylib` block binds the signatures it declares and opens no library,
+/// looks up no symbol and builds no calling interface. The program that comes
+/// out type-checks the same as a full compile but cannot call into a library,
+/// so it is for checking, never for running.
+pub fn check_only_scope<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = CheckOnlyGuard(CHECK_ONLY.replace(true));
+    f()
+}
+
+/// Whether the compile running now is a check-only one.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_check_only() -> bool {
+    CHECK_ONLY.get()
+}
 
 /// A `dylib` block waiting for the types it names to resolve: the file it is
 /// in, its slot in the library table, its signatures, the open library, the
@@ -5038,6 +5071,21 @@ fn has_c_representation(ty: &DataType, structs: &[Struct], depth: usize) -> bool
     }
 }
 
+/// The namespace a `dylib` block's functions live under: a logical name as
+/// written (`z`), and for a path the file's name without its directory or
+/// extension (`../native/mylib` is `mylib`).
+#[cfg(not(target_arch = "wasm32"))]
+fn dylib_namespace(spec: &str, is_logical: bool) -> SmolStr {
+    if is_logical {
+        return SmolStr::from(spec);
+    }
+    Path::new(spec)
+        .file_prefix()
+        .and_then(|s| s.to_str())
+        .unwrap_or(spec)
+        .to_smolstr()
+}
+
 /// Opens the library a path import (`dylib "../native/mylib"`) names, and
 /// returns the namespace name its functions live under.
 ///
@@ -5047,11 +5095,7 @@ fn has_c_representation(ty: &DataType, structs: &[Struct], depth: usize) -> bool
 /// change how the program calls into it.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_path_dylib(dirs: &[&Path], spec: &str) -> (Option<Library>, SmolStr) {
-    let name = Path::new(spec)
-        .file_prefix()
-        .and_then(|s| s.to_str())
-        .unwrap_or(spec)
-        .to_smolstr();
+    let name = dylib_namespace(spec, false);
 
     if Path::new(spec).is_absolute() {
         return (open_library_path(spec), name);
@@ -5361,17 +5405,22 @@ fn parse_toplevel(
                 dirs.extend(package_dirs.iter().map(PathBuf::as_path));
                 dirs.push(file_dir);
 
-                let (lib, dylib_name) = if is_logical {
-                    // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`.
-                    let filename = resolve_library_filename(spec.as_str(), TargetOs::CURRENT);
-                    (open_logical_dylib(&dirs, &filename), spec.clone())
+                // A check-only compile binds the declared signatures and opens
+                // nothing, so a library that is not there yet is no error.
+                let (lib, dylib_name) = if is_check_only() {
+                    (None, dylib_namespace(spec.as_str(), is_logical))
                 } else {
-                    open_path_dylib(&dirs, spec.as_str())
+                    let (lib, dylib_name) = if is_logical {
+                        // e.g. `z` -> `libz.so` / `libz.dylib` / `z.dll`.
+                        let filename = resolve_library_filename(spec.as_str(), TargetOs::CURRENT);
+                        (open_logical_dylib(&dirs, &filename), spec.clone())
+                    } else {
+                        open_path_dylib(&dirs, spec.as_str())
+                    };
+                    let lib = lib
+                        .unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources));
+                    (Some(Rc::new(lib)), dylib_name)
                 };
-
-                let lib = Rc::new(
-                    lib.unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources)),
-                );
                 // A standard-library module names its C library by a path
                 // relative to its own source file, which an artifact never
                 // carries. Record that one relative to the `libs` directory
@@ -5720,6 +5769,12 @@ fn resolve_types(
                 )
             });
     }
+    // The signatures a check-only compile bound without a library, which take
+    // ids past the end of the bound ones so each still names one function.
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut unbound_dylib_fns = 0_usize;
+    #[cfg(target_arch = "wasm32")]
+    let unbound_dylib_fns = 0_usize;
     for (src_file_idx, dynlib_id, fn_signatures, lib, (library_spec, origin), span) in
         pending_dylibs
     {
@@ -5774,8 +5829,16 @@ fn resolve_types(
                     name: fn_name.clone(),
                     args: fn_args.clone(),
                     return_type: fn_return_type.clone(),
-                    id: dynamic_libs_fns.len() as u16,
+                    id: (dynamic_libs_fns.len() + unbound_dylib_fns) as u16,
                     variadic: false,
+                };
+                // A check-only compile opened no library. The declared
+                // signature is all a call site reads, so the binding stops at
+                // it: no symbol, no calling interface, nothing to run.
+                #[cfg(not(target_arch = "wasm32"))]
+                let Some(lib) = lib.as_ref() else {
+                    unbound_dylib_fns += 1;
+                    return return_val;
                 };
                 #[cfg(not(target_arch = "wasm32"))]
                 let arg_types: Vec<_> = fn_args.iter().map(|t| t.to_c_type(structs)).collect();
@@ -5824,7 +5887,7 @@ fn resolve_types(
                     origin,
                     symbol: fn_name.clone(),
                     #[cfg(not(target_arch = "wasm32"))]
-                    _lib: Rc::clone(&lib),
+                    _lib: Rc::clone(lib),
                     #[cfg(not(target_arch = "wasm32"))]
                     ptr,
                     #[cfg(not(target_arch = "wasm32"))]

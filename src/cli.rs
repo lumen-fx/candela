@@ -21,7 +21,7 @@ use crate::manifest::MANIFEST_NAME;
 use crate::manifest::Manifest;
 use crate::manifest::new_manifest_text;
 use crate::repl::repl;
-use crate::trampoline::compile_checked;
+use crate::trampoline::check_only;
 use crate::update;
 use crate::util;
 use candela_vm::set_argv_skip;
@@ -184,12 +184,13 @@ fn run_verb(args: &mut impl Iterator<Item = String>) -> ExitCode {
 ///
 /// The compile is the one `candela build` does, entry points included, so a
 /// body error in a function `main` never calls is reported here instead of
-/// waiting for the build.
+/// waiting for the build. It is a check only, so a `dylib` library the
+/// program names does not have to exist yet.
 fn check_verb(args: &mut impl Iterator<Item = String>) {
     let (file, offline, cfg) = one_file_and_flags(args, "check");
     let (path, resolver) = target(file.as_deref(), offline);
     let contents = read_source(&path);
-    let _ = cfg.scope(|| compile_checked(contents, &path.to_string_lossy(), &resolver));
+    let _ = cfg.scope(|| check_only(contents, &path.to_string_lossy(), &resolver));
     println!("{} compiles", path.display());
 }
 

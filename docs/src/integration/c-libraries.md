@@ -116,6 +116,12 @@ The library is opened and every symbol resolved while the program is compiled,
 so a missing library or a missing symbol is a compile error naming what it could
 not find, not a surprise at the first call.
 
+Checking needs no library. `candela check`, `Engine::check` and the language
+server type-check each call against the signature the block declares and never
+open the library, so a program whose library a build step produces can be
+checked before that step runs. A signature type with no C representation is an
+error there too.
+
 Building a `.cdlb` artifact records the library name, the symbol and the
 signature, never the library's bytes. Loading the artifact re-opens the library
 and re-resolves the symbol, so the library has to be present wherever the

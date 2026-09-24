@@ -1935,3 +1935,81 @@ fn compile_warnings_reach_the_program() {
         Value::String("s".to_owned())
     );
 }
+
+/// `Engine::check` binds a `dylib` block from its declared signatures and
+/// opens nothing, so a script whose library is not built yet checks, where
+/// `compile` needs the library.
+#[test]
+fn check_binds_a_dylib_without_its_library() {
+    let engine = Engine::new();
+    let src = "
+        dylib \"nosuch_lib_xyz\" {
+            int f(int);
+        }
+        fn g(x: int) -> int { return nosuch_lib_xyz::f(x) + 1; }
+        fn main() {}
+    ";
+    assert_eq!(engine.check(src, "lib.cdl"), Ok(Vec::new()));
+    let error = engine
+        .compile(src, "lib.cdl")
+        .err()
+        .expect("a compile opens the library");
+    assert_eq!(error.code, "cannot_load_dynlib");
+}
+
+/// A library named by a path is called through the namespace its file name
+/// gives, and a signature returning a struct or taking an array binds the same
+/// way a scalar one does.
+#[test]
+fn check_binds_a_path_dylib_and_its_types() {
+    let engine = Engine::new();
+    let src = "
+        struct Point { x: int, y: float }
+        dylib \"../native/mylib\" {
+            Point origin(int);
+            int sum(int[], int);
+            reset();
+        }
+        fn total(xs: int[]) -> int {
+            mylib::reset();
+            return mylib::sum(xs, xs.len()) + mylib::origin(0).x;
+        }
+    ";
+    assert_eq!(engine.check(src, "path.cdl"), Ok(Vec::new()));
+}
+
+/// A check still type-checks the calls: an argument of the wrong type is the
+/// error it is in a compile, and a signature type C cannot represent is
+/// refused rather than bound.
+#[test]
+fn check_reports_what_a_compile_reports() {
+    let engine = Engine::new();
+    let wrong_argument = "
+        dylib \"nosuch_lib_xyz\" { int f(int); }
+        fn g() -> int { return nosuch_lib_xyz::f(\"s\"); }
+    ";
+    let error = engine.check(wrong_argument, "arg.cdl").unwrap_err();
+    assert_eq!(error.code, "argument_type_mismatch", "{}", error.message);
+
+    for signature in ["bool f(int);", "f({string: int});"] {
+        let src = format!("dylib \"nosuch_lib_xyz\" {{ {signature} }}\n");
+        let error = engine.check(&src, "c.cdl").unwrap_err();
+        assert_eq!(error.code, "no_c_representation", "{}", error.message);
+    }
+}
+
+/// A check wants no `main`, binds no `host` block to a closure, and hands back
+/// the warnings the compile raised.
+#[test]
+fn check_returns_warnings_and_needs_no_host() {
+    let engine = Engine::new();
+    let src = "
+        host \"app\" { int width(string); }
+        fn on_click(id) { return app::width(\"x\"); }
+    ";
+    let warnings = engine
+        .check(src, "host.cdl")
+        .expect("nothing is registered and it checks");
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].code, "unannotated_host_parameter");
+}

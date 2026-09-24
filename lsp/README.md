@@ -2,8 +2,9 @@
 
 A language server for [candela](../README.md) (`.cdl` files), speaking LSP over
 stdio. It reuses candela's own lexer, parser, and type checker
-(`candela::compile_checked`) instead of reimplementing the language frontend,
-so its analysis always matches the compiler.
+(`candela::check_only`) instead of reimplementing the language frontend, so its
+analysis always matches the compiler. Like `candela check`, it opens no library
+a `dylib` block names.
 
 ## Build
 
@@ -95,9 +96,9 @@ These are deliberate, and the source refers here for them.
 - `src/analysis.rs` unit-tests `analyze` on the buffers whose handling is easy
   to get wrong: one using a macro the server has no expander for, one with an
   error beside such a macro, one whose only error is in the body of a function
-  nothing calls, one with no `main`, and one that compiles with a warning. It
-  also covers how a type is written out: a parameter and a struct field of a
-  user enum, and the `any` slot.
+  nothing calls, one with no `main`, one that compiles with a warning, and one
+  whose `dylib` library does not exist. It also covers how a type is written
+  out: a parameter and a struct field of a user enum, and the `any` slot.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.

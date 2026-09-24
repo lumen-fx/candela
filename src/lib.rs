@@ -142,6 +142,10 @@ pub use build::build_bytecode;
 // here, not through `compiler::compile`, which stops at the program.
 #[cfg(feature = "compiler")]
 pub use trampoline::compile_checked;
+// The same compile as a check only, which opens no `dylib` library: what
+// `candela check` and the language server run.
+#[cfg(feature = "compiler")]
+pub use trampoline::check_only;
 // Gathers the warnings a compile raises instead of printing them.
 #[cfg(feature = "compiler")]
 pub use warnings::collect_warnings;

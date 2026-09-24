@@ -126,7 +126,9 @@ of itself without end. See [generics](../language/generics.md).
 **Import and library errors.** An import path that cannot be read, a bare import
 whose symbols collide with names already in scope, a `dylib` library that cannot
 be opened, a symbol the library does not export, and a `dylib` signature naming
-a type C has no representation for (`no_c_representation`). See
+a type C has no representation for (`no_c_representation`). `candela check`
+opens no library, so it reports neither a library it cannot open nor a missing
+symbol. See
 [modules](../language/modules.md) and [C libraries](../integration/c-libraries.md).
 
 **No entry point.** A program is entered through `main`, so a run, a build and

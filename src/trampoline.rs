@@ -20,6 +20,7 @@
 
 use crate::compiler::CompileOutput;
 use crate::compiler::SymbolKind;
+use crate::compiler::check_only_scope;
 use crate::compiler::compile_profile;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
@@ -90,6 +91,21 @@ pub fn compile_checked(
     resolver: &ImportResolver,
 ) -> (CompileOutput, Vec<ExportImage>) {
     compile_checked_profile(source, filename, resolver, false)
+}
+
+/// [`compile_checked`] as a check only, which opens no library.
+///
+/// A `dylib` block binds the signatures it declares, so a script whose C
+/// library has not been built yet checks the same as one whose library is in
+/// place.
+///
+/// The result type-checks like a full compile but cannot call into a library,
+/// so it is for reporting on, not for running or packaging. `candela check`,
+/// [`Engine::check`](crate::Engine::check) and the language server compile
+/// through here.
+#[must_use]
+pub fn check_only(source: String, filename: &str, resolver: &ImportResolver) -> CompileOutput {
+    check_only_scope(|| compile_checked(source, filename, resolver).0)
 }
 
 /// [`compile_checked`] in the profile `optimize` names; see

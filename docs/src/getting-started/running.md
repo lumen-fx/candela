@@ -116,9 +116,11 @@ packages the project depends on resolved first. `candela check` compiles the
 same program and stops before running, the body of every fully annotated
 function in that file included, so a mistake in a function `main` never calls is
 reported. A function nothing calls whose parameters are bare gets a warning and
-has its body checked with them typed `any`. A function an import brought in is compiled by the call that reaches
-it, as it is on a run. Both take a file if you want a different one, and both
-work from anywhere inside the project.
+has its body checked with them typed `any`. A function an import brought in is
+compiled by the call that reaches it, as it is on a run. `check` opens no C
+library a `dylib` block names, so it works before a build step has produced
+one. Both take a file if you want a different one, and both work from anywhere
+inside the project.
 
 [Projects and packages](packages.md) covers the manifest, dependencies and
 publishing.
@@ -189,7 +191,8 @@ candela-vm greet.cdlb Ada
 - `candela` with no arguments starts the REPL.
 - `candela new <name>` starts a project.
 - `candela run [file.cdl] [args...]` runs the project.
-- `candela check [file.cdl]` compiles without running.
+- `candela check [file.cdl]` compiles without running, and without opening a
+  `dylib` library.
 - `candela build [file.cdl] [-o out.cdlb] [--debug]` compiles to an artifact.
 - `candela add`, `remove`, `fetch`, `update` and `publish` work on the
   project's dependencies.

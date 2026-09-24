@@ -293,12 +293,10 @@ for warning in program.warnings() {
 Each is a `Diagnostic` like an error, with a code, a plain-text message and a
 span. See [errors](../reference/errors.md#warnings) for the codes.
 
-`candela::compile_checked` is that check on its own, the seam `candela check`
-and the language server compile through, and the check `candela build` runs
-before its release passes, for a frontend that wants to report what the command
-line reports without keeping a `Program` resident. It prints its warnings to
-stderr; run it inside `candela::collect_warnings` to get them back as
-`Diagnostic`s instead.
+`candela::compile_checked` is that check on its own, the check `candela build`
+runs before its release passes. It prints its warnings to stderr; run it inside
+`candela::collect_warnings` to get them back as `Diagnostic`s instead. To check
+without opening libraries, use [`check`](#check).
 
 A `main` is required: an embedded program runs one the way a run from the CLI
 does. `candela check` is the step that compiles a file without one.
@@ -308,6 +306,25 @@ annotated function does not compile at its declared parameter types, when the
 script declares no `main`, when a declared `host` function has no registered
 closure, when a registered closure disagrees with its declaration, or when
 running `main` raises a runtime error.
+
+### check
+
+```rust
+let warnings = engine.check(source, filename)?;
+```
+
+Type-checks the source the way `compile` does and stops there: no `Program`
+comes back and nothing runs. It returns the warnings the compile raised, or the
+first error as a `Diagnostic`.
+
+A check needs less than a compile. A `dylib` block binds the signatures it
+declares without opening its library, so a script whose C library a build step
+has not produced yet still checks; the call sites are type-checked against the
+declared signatures, and a signature naming a type C cannot represent is still
+an error. `host` blocks are not matched against registered closures, and `main`
+is not required. `candela check` and the language server check this way, and
+`candela::check_only` is the same check for a frontend that wants the compile
+tables it produces.
 
 ## Program
 
