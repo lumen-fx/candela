@@ -71,6 +71,12 @@ It reports the median, 99th percentile and longest frame for two shapes:
 
 A frame count as the first argument changes the default of 5000 frames.
 
+The collector does its work a slice at a time. Once a cycle starts, each
+allocation pays for a bounded share of it, so a frame waits for the slices its
+own allocations paid for rather than for a whole collection. On the `retained`
+shape that about halves the slowest frames compared with collecting everything
+at once.
+
 ## Iterative fib(46) x 200000
 
 | Candela | Python 3 | LuaJIT (-joff) |

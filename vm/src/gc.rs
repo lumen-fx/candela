@@ -13,8 +13,12 @@
 //! A collection is a cycle of three phases, and the collector can stop between
 //! any two steps of it and carry on later:
 //!
-//! - Idle: nothing to do. A cycle begins when an allocation finds its pool's
-//!   free list empty and the pool at its threshold.
+//! - Idle: nothing to do. A cycle begins when a pool that has reached its
+//!   threshold is down to its reserve of free slots: enough for the program
+//!   to allocate from while the cycle marks, so the pool does not have to
+//!   grow for it. While the cycle runs, every allocation pays for a share of
+//!   its work, done a slice at a time, so the program never stops for more
+//!   than one slice.
 //! - Mark: beginning a cycle records how long each pool is, marks every slot
 //!   already on a free list, and marks what the roots hold. Marking then walks
 //!   the objects it has reached, a chunk of at most [`CHUNK`] entries at a time,
@@ -75,6 +79,15 @@ const TORTURE: bool = cfg!(feature = "gc-torture");
 /// The least a threshold falls to: under torture every allocation starts a
 /// cycle.
 const THRESHOLD_FLOOR: u32 = if TORTURE { 0 } else { MIN_GC_THRESHOLD };
+
+/// Units of collector work each allocation pays for while a cycle runs. A
+/// cycle with `n` units of work finishes within `n / ALLOC_DEBT` allocations.
+const ALLOC_DEBT: u32 = 16;
+
+/// The units one allocation-driven step does: the allocations' debt is paid
+/// once it reaches this, which bounds how long one allocation stops the
+/// program.
+const SLICE: u32 = 512;
 
 /// The most entries of one list or map a single unit of marking walks. A large
 /// list is walked a chunk at a time, so no single step has to walk all of it.
@@ -245,6 +258,45 @@ impl Tracer {
     }
 }
 
+/// A pool's free slots, kept in two lists so that the common allocation asks
+/// the collector nothing: it takes a slot from `ready`, and only when that is
+/// empty does it go to the collector, which decides from there.
+struct FreeSlots<'a> {
+    /// Slots an allocation takes without asking the collector.
+    ready: &'a mut Vec<u32>,
+    /// The rest: the reserve that feeds the next cycle, and every free slot
+    /// while a cycle runs, so each allocation then pays its share.
+    held: &'a mut Vec<u32>,
+}
+
+impl FreeSlots<'_> {
+    /// A free slot, ready or held.
+    fn take(&mut self) -> Option<u32> {
+        self.ready.pop().or_else(|| self.held.pop())
+    }
+    /// Holds every free slot back, so each allocation goes to the collector.
+    /// The lists trade places rather than copy when one is empty, which is the
+    /// usual case, since a pool's free list can run to most of the pool.
+    fn hold_all(&mut self) {
+        if self.held.is_empty() {
+            std::mem::swap(self.ready, self.held);
+        } else {
+            self.held.append(self.ready);
+        }
+    }
+    /// Makes every free slot ready except `reserve` of them.
+    fn release_above(&mut self, reserve: usize) {
+        if self.ready.is_empty() {
+            std::mem::swap(self.ready, self.held);
+            let keep = reserve.min(self.ready.len());
+            let from = self.ready.len() - keep;
+            self.held.extend(self.ready.drain(from..));
+        } else if self.held.len() > reserve {
+            self.ready.extend(self.held.drain(reserve..));
+        }
+    }
+}
+
 /// What the collector knows about the pools between two allocations.
 ///
 /// This lives with the pools rather than with one run of the interpreter
@@ -256,29 +308,47 @@ impl Tracer {
 /// slot the previous call had freed. A cycle in progress carries over between
 /// calls the same way.
 pub struct GcState {
-    /// Object-pool slots (arrays, structs, enums and function values) a
-    /// collection freed.
+    /// Object-pool slots (arrays, structs, enums and function values) an
+    /// allocation takes without asking the collector.
     pub(crate) free_arrays: Vec<u32>,
-    /// Map-pool slots a collection freed.
+    /// Map-pool slots an allocation takes without asking the collector.
     pub(crate) free_maps: Vec<u32>,
-    /// String-pool slots a collection freed.
+    /// String-pool slots an allocation takes without asking the collector.
     pub(crate) free_strings: Vec<u32>,
-    /// Object-pool length at which an array allocation starts a collection.
+    /// Object-pool length from which a cycle may begin.
     array_threshold: u32,
-    /// Map-pool length at which a map allocation starts a collection.
+    /// Map-pool length from which a cycle may begin.
     map_threshold: u32,
-    /// String-pool length at which a string allocation starts a collection.
+    /// String-pool length from which a cycle may begin.
     string_threshold: u32,
     phase: Phase,
     tracer: Tracer,
     /// The next mark word the sweep reads in the pool it is sweeping.
     sweep_word: usize,
+    /// The free slots below the limit of the pool being swept: those already
+    /// free when the cycle began, plus those the sweep has freed so far. The
+    /// program reuses freed slots while the sweep runs, so the free list's
+    /// length says nothing about what survived.
+    swept_free: usize,
+    /// Each pool's free slots when the cycle began: arrays, maps, strings.
+    free_at_begin: [usize; 3],
+    /// Units of work the allocations of the cycle in progress have paid for
+    /// and no step has done yet.
+    debt: u32,
+    /// How many free slots each pool keeps back for the next cycle to
+    /// allocate from while it marks. Set from how much the last cycle marked.
+    reserve: usize,
+    /// Units the cycle in progress has spent marking.
+    mark_units: usize,
     /// How many cycles have begun.
     cycles: u64,
     /// Every unit of work done, across all cycles.
     units: u64,
     /// The most units one step has spent.
     largest_slice: u32,
+    /// Each pool's free slots held back from the ready lists above: arrays,
+    /// maps, strings. See [`FreeSlots`].
+    held: [Vec<u32>; 3],
 }
 
 impl Default for GcState {
@@ -293,9 +363,15 @@ impl Default for GcState {
             phase: Phase::Idle,
             tracer: Tracer::default(),
             sweep_word: 0,
+            swept_free: 0,
+            free_at_begin: [0; 3],
+            debt: 0,
+            reserve: 0,
+            mark_units: 0,
             cycles: 0,
             units: 0,
             largest_slice: 0,
+            held: [Vec::new(), Vec::new(), Vec::new()],
         }
     }
 }
@@ -319,6 +395,25 @@ impl GcState {
         self.phase == Phase::Mark
     }
 
+    /// The free slots of `pool`, ready and held.
+    fn free(&mut self, pool: Swept) -> FreeSlots<'_> {
+        let [arrays, maps, strings] = &mut self.held;
+        match pool {
+            Swept::Arrays => FreeSlots {
+                ready: &mut self.free_arrays,
+                held: arrays,
+            },
+            Swept::Maps => FreeSlots {
+                ready: &mut self.free_maps,
+                held: maps,
+            },
+            Swept::Strings => FreeSlots {
+                ready: &mut self.free_strings,
+                held: strings,
+            },
+        }
+    }
+
     /// Whether a cycle is in progress.
     #[inline(always)]
     #[must_use]
@@ -326,9 +421,10 @@ impl GcState {
         self.phase != Phase::Idle
     }
 
-    /// Begins a cycle: records each pool's length, marks every free slot, and
-    /// marks what the roots hold. Answers the units it spent, which it spends
-    /// whatever the budget, since the roots have to be read all at once.
+    /// Begins a cycle: records each pool's length, holds back and marks every
+    /// free slot, and marks what the roots hold. Answers the units it spent,
+    /// which it spends whatever the budget, since the roots have to be read
+    /// all at once.
     fn begin(
         &mut self,
         objs: &ObjectPool,
@@ -338,6 +434,12 @@ impl GcState {
     ) -> u32 {
         debug_assert!(!self.active());
         self.cycles += 1;
+        self.mark_units = 0;
+        self.debt = 0;
+        self.free(Swept::Arrays).hold_all();
+        self.free(Swept::Maps).hold_all();
+        self.free(Swept::Strings).hold_all();
+        self.free_at_begin = [self.held[0].len(), self.held[1].len(), self.held[2].len()];
         let tracer = &mut self.tracer;
         tracer.array_limit = objs.len() as u32;
         tracer.map_limit = maps.len() as u32;
@@ -346,16 +448,16 @@ impl GcState {
         strings.begin_marking();
         // A free slot is garbage already, and marking it keeps the sweep from
         // putting it on the free list a second time.
-        for &id in &self.free_arrays {
+        for &id in &self.held[0] {
             tracer.array_marks.insert(id as usize);
         }
-        for &id in &self.free_maps {
+        for &id in &self.held[1] {
             tracer.map_marks.insert(id as usize);
         }
-        for &id in &self.free_strings {
+        for &id in &self.held[2] {
             strings.shade(id as usize);
         }
-        let mut read = self.free_arrays.len() + self.free_maps.len() + self.free_strings.len();
+        let mut read = self.free_at_begin.iter().sum::<usize>();
         for root in roots {
             read += root.len();
             for &d in root {
@@ -365,7 +467,9 @@ impl GcState {
         self.phase = Phase::Mark;
         // One unit per 64 values read, and one per 64 mark words cleared.
         let cleared = (objs.len() + maps.len() + strings.len()) / 64;
-        ((read + cleared) / 64 + 1).min(u32::MAX as usize) as u32
+        let spent = ((read + cleared) / 64 + 1).min(u32::MAX as usize) as u32;
+        self.record(spent);
+        spent
     }
 
     /// Carries the cycle forward by at most `budget` units, and answers
@@ -383,6 +487,7 @@ impl GcState {
             match self.phase {
                 Phase::Idle => break,
                 Phase::Mark => {
+                    let before = spent;
                     while spent < budget {
                         let Some(g) = self.tracer.work.pop() else {
                             break;
@@ -390,12 +495,18 @@ impl GcState {
                         self.tracer.walk(objs, maps, strings, g);
                         spent += 1;
                     }
+                    self.mark_units += (spent - before) as usize;
                     if self.tracer.work.is_empty() {
                         if TORTURE {
                             self.verify(objs, maps, strings, roots);
                         }
+                        // The next cycle marks about as much as this one did,
+                        // and the program allocates from the reserve while it
+                        // does.
+                        self.reserve = (self.mark_units + SLICE as usize) / ALLOC_DEBT as usize;
                         self.phase = Phase::Sweep(Swept::Arrays);
                         self.sweep_word = 0;
+                        self.swept_free = self.free_at_begin[0];
                     }
                 }
                 Phase::Sweep(pool) => {
@@ -407,7 +518,7 @@ impl GcState {
         self.phase == Phase::Idle
     }
 
-    /// Adds `spent` units to the totals.
+    /// Adds a step of `spent` units to the totals.
     fn record(&mut self, spent: u32) {
         self.units += u64::from(spent);
         self.largest_slice = self.largest_slice.max(spent);
@@ -428,22 +539,19 @@ impl GcState {
             Swept::Arrays => (
                 self.tracer.array_limit as usize,
                 &self.tracer.array_marks,
-                &mut self.free_arrays,
+                &mut self.held[0],
             ),
             Swept::Maps => (
                 self.tracer.map_limit as usize,
                 &self.tracer.map_marks,
-                &mut self.free_maps,
+                &mut self.held[1],
             ),
-            Swept::Strings => (
-                strings.mark_limit(),
-                strings.marks(),
-                &mut self.free_strings,
-            ),
+            Swept::Strings => (strings.mark_limit(), strings.marks(), &mut self.held[2]),
         };
         let words = limit.div_ceil(64);
         // The string marks are borrowed from the pool the freed slots are
-        // emptied in, so the string sweep gathers the slots first.
+        // emptied in, so the sweep gathers the slots first and empties them
+        // after.
         let freed_from = free.len();
         while self.sweep_word < words && spent < budget {
             let w = self.sweep_word;
@@ -456,30 +564,33 @@ impl GcState {
             spent += 1;
             self.sweep_word += 1;
         }
+        self.swept_free += free.len() - freed_from;
         let done = self.sweep_word >= words;
         match pool {
             Swept::Arrays => {
-                for &id in &self.free_arrays[freed_from..] {
+                for &id in &self.held[0][freed_from..] {
                     let slot = objs.get_mut(id as usize);
                     if slot.capacity() > KEEP_FREED_CAPACITY {
                         *slot = Vec::new();
                     }
                 }
                 if done {
-                    self.array_threshold = next_threshold(objs.len(), self.free_arrays.len());
+                    self.array_threshold = next_threshold(limit, self.swept_free);
                     self.phase = Phase::Sweep(Swept::Maps);
+                    self.swept_free = self.free_at_begin[1];
                 }
             }
             Swept::Maps => {
-                for &id in &self.free_maps[freed_from..] {
+                for &id in &self.held[1][freed_from..] {
                     let slot = maps.get_mut(id as usize);
                     if slot.capacity() > KEEP_FREED_CAPACITY {
                         *slot = CandelaMap::default();
                     }
                 }
                 if done {
-                    self.map_threshold = next_threshold(maps.len(), self.free_maps.len());
+                    self.map_threshold = next_threshold(limit, self.swept_free);
                     self.phase = Phase::Sweep(Swept::Strings);
+                    self.swept_free = self.free_at_begin[2];
                 }
             }
             Swept::Strings => {
@@ -487,13 +598,13 @@ impl GcState {
                 // comparing text across the whole pool, so a freed slot that
                 // kept its text would be handed out as a live string and then
                 // overwritten by the next allocation that reuses the slot.
-                for &id in &self.free_strings[freed_from..] {
+                for &id in &self.held[2][freed_from..] {
                     strings.release(id as usize);
                 }
                 if done {
-                    self.string_threshold = next_threshold(strings.len(), self.free_strings.len());
+                    self.string_threshold = next_threshold(limit, self.swept_free);
                     strings.end_marking();
-                    self.phase = Phase::Idle;
+                    self.finish();
                 }
             }
         }
@@ -503,25 +614,58 @@ impl GcState {
         spent
     }
 
-    /// What an allocation does when it has to grow its pool and either a cycle
-    /// is running or the pool has reached its threshold: begins a cycle if none
-    /// is running, and runs it to the end.
-    #[cold]
+    /// Ends the cycle: every free slot above each pool's reserve becomes ready
+    /// for allocations to take without asking the collector.
+    fn finish(&mut self) {
+        self.phase = Phase::Idle;
+        if !TORTURE {
+            let reserve = self.reserve;
+            self.free(Swept::Arrays).release_above(reserve);
+            self.free(Swept::Maps).release_above(reserve);
+            self.free(Swept::Strings).release_above(reserve);
+        }
+    }
+
+    /// What an allocation does when its pool has no ready slot. With a cycle
+    /// running it adds ALLOC_DEBT units to what the program owes, and a step
+    /// pays the debt off once it reaches SLICE. With none running, a pool at
+    /// its threshold begins one; a pool below it makes its reserve ready, since
+    /// it has room to grow before it needs a cycle.
     #[inline(never)]
-    fn allocation_step(
+    fn on_empty(
         &mut self,
+        pool: Swept,
         objs: &mut ObjectPool,
         maps: &mut MapPool,
         strings: &mut StringPool,
         roots: [&[Data]; 2],
     ) {
-        let mut spent = 0;
-        if !self.active() {
-            spent = self.begin(objs, maps, strings, roots);
+        if TORTURE {
+            if !self.active() {
+                self.begin(objs, maps, strings, roots);
+            }
+            self.step(objs, maps, strings, roots, 1);
+            return;
         }
-        self.record(spent);
-        let budget = if TORTURE { 1 } else { u32::MAX };
-        self.step(objs, maps, strings, roots, budget);
+        if self.active() {
+            self.debt += ALLOC_DEBT;
+            if self.debt >= SLICE {
+                let budget = self.debt;
+                self.debt = 0;
+                self.step(objs, maps, strings, roots, budget);
+            }
+            return;
+        }
+        let (len, threshold) = match pool {
+            Swept::Arrays => (objs.len(), self.array_threshold),
+            Swept::Maps => (maps.len(), self.map_threshold),
+            Swept::Strings => (strings.len(), self.string_threshold),
+        };
+        if len >= threshold as usize {
+            self.begin(objs, maps, strings, roots);
+        } else {
+            self.free(pool).release_above(0);
+        }
     }
 
     /// Checks a finished mark phase against a fresh trace from `roots`: every
@@ -580,19 +724,28 @@ pub fn alloc_array(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u32 {
-    if TORTURE {
-        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
-    }
     if let Some(id) = gc.free_arrays.pop() {
         objs[id as usize].clear();
         return id;
     }
-    if gc.active() || objs.len() >= gc.array_threshold as usize {
-        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
-        if let Some(id) = gc.free_arrays.pop() {
-            objs[id as usize].clear();
-            return id;
-        }
+    alloc_array_slow(objs, maps, strings, registers, recursion_stack, gc)
+}
+
+/// [`alloc_array`] when no slot is ready.
+#[inline(never)]
+fn alloc_array_slow(
+    objs: &mut ObjectPool,
+    maps: &mut MapPool,
+    strings: &mut StringPool,
+    registers: &RegisterFile,
+    recursion_stack: &RegisterFile,
+    gc: &mut GcState,
+) -> u32 {
+    let roots = [&registers.0[..], &recursion_stack.0[..]];
+    gc.on_empty(Swept::Arrays, objs, maps, strings, roots);
+    if let Some(id) = gc.free(Swept::Arrays).take() {
+        objs[id as usize].clear();
+        return id;
     }
     let id = objs.len() as u32;
     objs.push(Vec::new());
@@ -610,19 +763,15 @@ pub fn alloc_map(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u32 {
-    if TORTURE {
-        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
-    }
     if let Some(id) = gc.free_maps.pop() {
         maps[id as usize].clear();
         return id;
     }
-    if gc.active() || maps.len() >= gc.map_threshold as usize {
-        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
-        if let Some(id) = gc.free_maps.pop() {
-            maps[id as usize].clear();
-            return id;
-        }
+    let roots = [&registers.0[..], &recursion_stack.0[..]];
+    gc.on_empty(Swept::Maps, objs, maps, strings, roots);
+    if let Some(id) = gc.free(Swept::Maps).take() {
+        maps[id as usize].clear();
+        return id;
     }
     let id = maps.len() as u32;
     maps.push(CandelaMap::default());
@@ -641,13 +790,15 @@ pub fn alloc_string<S: PoolString>(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u64 {
-    if TORTURE
-        || gc.free_strings.is_empty()
-            && (gc.active() || strings.len() >= gc.string_threshold as usize)
-    {
-        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
-    }
-    if let Some(id) = gc.free_strings.pop() {
+    let slot = match gc.free_strings.pop() {
+        Some(id) => Some(id),
+        None => {
+            let roots = [&registers.0[..], &recursion_stack.0[..]];
+            gc.on_empty(Swept::Strings, objs, maps, strings, roots);
+            gc.free(Swept::Strings).take()
+        }
+    };
+    if let Some(id) = slot {
         s.move_to_slot(strings.get_mut(id as usize));
         u64::from(id)
     } else {
