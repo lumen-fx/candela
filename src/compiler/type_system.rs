@@ -8,6 +8,7 @@ use super::expr::UNARY_MINUS_METHOD;
 use super::expr::is_operator_method;
 use super::expr::is_unary_operator_method;
 use super::expr::mangle_method;
+use super::expr::operator_method;
 use super::expr::self_operator_method;
 use super::expr::symbol_of_expr;
 use crate::compiler::FileNamespaces;
@@ -562,6 +563,17 @@ impl Generics {
 
     /// Records the `impl` blocks a file declared against a generic type,
     /// stamping each with the file it came from.
+    /// Whether any `impl` block the program has read defines an operator,
+    /// which makes an operator on that type a call to candela code.
+    #[must_use]
+    pub fn defines_operator_methods(&self) -> bool {
+        self.impls.iter().any(|block| {
+            block.methods.iter().any(|method| {
+                matches!(method, Expr::FunctionDecl(name, ..) if operator_method(name).is_some())
+            })
+        })
+    }
+
     pub fn add_impls(&mut self, impls: Vec<ImplTemplate>, file_idx: u16) {
         self.impls.extend(impls.into_iter().map(|mut block| {
             block.file_idx = file_idx;
