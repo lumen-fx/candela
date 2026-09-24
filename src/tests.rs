@@ -13511,3 +13511,90 @@ pub fn adding_to_a_float_field_reads_it_before_the_value() {
     }
     assert_eq!(run_output(src), "2.0\n3.0\n3\n");
 }
+
+/// A `for` loop over a slice walks the list itself in the release profile,
+/// and sees exactly the elements the slice would have held, pushes onto the
+/// walked list included.
+#[test]
+pub fn a_loop_over_a_slice_walks_the_list_and_sees_the_slice() {
+    let src = "
+        fn split(xs: int[], pivot: int) -> int[] {
+            let small = [];
+            let big = [];
+            for x in xs[1..xs.len()] {
+                if x < pivot { small.push(x); } else { big.push(x); }
+                xs.push(x * 10);
+            }
+            return small + [pivot] + big;
+        }
+        fn main() {
+            let xs = [5, 3, 8, 1, 9, 2];
+            print(split(xs, 5));
+            print(xs.len());
+            let total = 0;
+            for y in xs[2..4] { total = total + y; }
+            print(total);
+            for z in xs[3..3] { total = total + z; }
+            print(total);
+        }
+    ";
+    let out = crate::compiler::compile_profile(
+        String::from(src),
+        "walk.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+        true,
+    );
+    // The slice is built only on the path a bad range takes, which a jump
+    // steps over.
+    let slices: Vec<usize> = out
+        .instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, instr)| matches!(instr, Instr::GetSliceArray(..)))
+        .map(|(at, _)| at)
+        .collect();
+    assert!(!slices.is_empty());
+    for at in slices {
+        assert!(
+            matches!(out.instructions[at - 2], Instr::Jmp(size) if at - 2 + size as usize > at),
+            "the slice at {at} is stepped over"
+        );
+    }
+    assert_eq!(run_output(src), "[3,1,2,5,8,9]\n11\n9\n9\n");
+}
+
+/// A body that writes an element, or calls anything, could change what the
+/// walk reads, so its loop still builds the slice; and a range the list cannot
+/// supply raises the same error, at the same place, in both profiles.
+#[test]
+pub fn a_loop_over_a_slice_that_could_change_it_copies_and_bad_ranges_raise_alike() {
+    let src = "
+        fn clobber(ys: int[]) { ys[2] = 700; }
+        fn main() {
+            let xs = [1, 2, 3, 4];
+            for x in xs[0..3] { xs[2] = 100; print(x); }
+            for x in xs[0..4] { clobber(xs); print(x); }
+            try {
+                for x in xs[2..9] { print(x); }
+            } catch e {
+                print(e);
+            }
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "1\n2\n3\n1\n2\n100\n4\nslice_out_of_bounds\n"
+    );
+    let bad = "
+        fn main() {
+            let xs = [1, 2, 3];
+            let n = 5;
+            for x in xs[1..n] { print(x); }
+        }
+    ";
+    let [debug, release] =
+        [false, true].map(|optimize| run_diag_profile(bad, "range.cdl", optimize).unwrap_err());
+    assert_eq!(debug.code, "slice_out_of_bounds");
+    assert_eq!(debug, release);
+}

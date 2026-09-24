@@ -2997,7 +2997,10 @@ fn compile_for_loop(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
-    let real_var = var_name.as_str() != "_";
+    if state.optimize && compile_slice_for_loop(var_name, array, code, span, v, ctx, state, output)
+    {
+        return;
+    }
 
     // parse the array, get its id (the target array is the first Expr in array_code)
     let array_type = array.infer_type(v, ctx, state);
@@ -3026,6 +3029,254 @@ fn compile_for_loop(
         output.push(Instr::SetInt(id, 0));
         id
     };
+    compile_walk(
+        var_name,
+        &array_type,
+        array,
+        index_id,
+        array_len_id,
+        code,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+    );
+}
+
+/// Compiles `for x in list[start..end]` to walk `list` itself from `start` to
+/// `end`, without building the slice, and answers whether it did. A release
+/// profile pass.
+///
+/// A slice is a copy, so the loop sees the elements as they were when it
+/// began. Walking the list itself sees the same elements as long as nothing
+/// rewrites one of them, removes one or reorders them during the loop, so this
+/// is done only for a body that can do none of that to any list: it runs no
+/// candela code (no call, no method but `push`, and no operator a program
+/// could have written as a method) and writes no element of a list. A `push`
+/// adds past the end of a list and moves nothing, so the elements the walk
+/// reads stay put even when it pushes onto the list being walked. It pushes
+/// only onto variables declared outside the loop, whose type says they hold a
+/// list and not a struct with a `push` method of its own.
+///
+/// A range the list cannot supply sends the loop down the path that builds
+/// the slice, which raises the out-of-range error the slice always raised,
+/// from the same place.
+fn compile_slice_for_loop(
+    var_name: &SmolStr,
+    array: &Expr,
+    code: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> bool {
+    let Expr::ArrayGetSlice(list, start, end, slice_span) = array else {
+        return false;
+    };
+    // An operator on a struct or an enum can be a method written in candela,
+    // which the body could not be seen not to call without typing it.
+    if state.generics.defines_operator_methods() {
+        return false;
+    }
+    let mut receivers: Vec<SmolStr> = Vec::new();
+    let mut declared: Vec<SmolStr> = vec![var_name.clone()];
+    if !block_changes_only_pushed_lists(code, &mut receivers, &mut declared) {
+        return false;
+    }
+    for name in &receivers {
+        // A name the body declares is not the variable found out here.
+        if declared.contains(name)
+            || !v
+                .iter()
+                .rfind(|var| var.name == *name)
+                .is_some_and(|var| matches!(var.var_type, DataType::Array(_)))
+        {
+            return false;
+        }
+    }
+    let array_type = list.infer_type(v, ctx, state);
+    if !matches!(array_type, DataType::Array(_))
+        || start.infer_type(v, ctx, state) != DataType::Int
+        || end.infer_type(v, ctx, state) != DataType::Int
+    {
+        return false;
+    }
+
+    let list_id = list
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let start_id = start
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let end_id = end
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+
+    // The walk reads the list, the index and the end out of registers of its
+    // own, so a body that reassigns a variable they came from changes nothing.
+    let walked = state.alloc_reg();
+    let index_id = state.alloc_reg();
+    let end_at = state.alloc_reg();
+    let zero = state.const_int_register(0);
+
+    // In range means 0 <= start <= end <= len. Each test jumps to the path
+    // that builds the slice, patched once its place is known.
+    let mut to_copy: Vec<usize> = Vec::new();
+    output.push(Instr::CallLibFunc(LibFunc::Len, list_id, end_at));
+    to_copy.push(output.len());
+    output.push(Instr::InfIntJmp(start_id, zero, 0));
+    to_copy.push(output.len());
+    output.push(Instr::SupIntJmp(end_id, end_at, 0));
+    to_copy.push(output.len());
+    output.push(Instr::SupIntJmp(start_id, end_id, 0));
+    output.push(Instr::Mov(list_id, walked));
+    output.push(Instr::Mov(start_id, index_id));
+    output.push(Instr::Mov(end_id, end_at));
+    let skip_copy = output.len();
+    output.push(Instr::Jmp(0));
+
+    let copy_at = output.len();
+    for at in to_copy {
+        set_jmp_size(&mut output[at], (copy_at - at) as u16);
+    }
+    output.push(Instr::StoreFuncArg(end_id));
+    output.push(Instr::GetSliceArray(list_id, start_id, walked));
+    state.add_to_src(ctx, output, *slice_span);
+    output.push(Instr::SetInt(index_id, 0));
+    output.push(Instr::CallLibFunc(LibFunc::Len, walked, end_at));
+    let copy_len = (output.len() - skip_copy) as u16;
+    set_jmp_size(&mut output[skip_copy], copy_len);
+
+    state.free_reg(start_id, v);
+    state.free_reg(end_id, v);
+    compile_walk(
+        var_name,
+        &array_type,
+        walked,
+        index_id,
+        end_at,
+        code,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    true
+}
+
+/// Whether running `code` can change no list but by `push` onto a variable,
+/// collecting those variables in `receivers` and every name the code declares
+/// in `declared`. See [`compile_slice_for_loop`].
+fn block_changes_only_pushed_lists(
+    code: &[Expr],
+    receivers: &mut Vec<SmolStr>,
+    declared: &mut Vec<SmolStr>,
+) -> bool {
+    code.iter()
+        .all(|expr| changes_only_pushed_lists(expr, receivers, declared))
+}
+
+/// [`block_changes_only_pushed_lists`] for one expression or statement.
+fn changes_only_pushed_lists(
+    expr: &Expr,
+    receivers: &mut Vec<SmolStr>,
+    declared: &mut Vec<SmolStr>,
+) -> bool {
+    match expr {
+        Expr::Var(..)
+        | Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Null
+        | Expr::Break
+        | Expr::Continue => true,
+        Expr::GetStructField(inner, _, _, _)
+        | Expr::BoolNeg(inner, _, _)
+        | Expr::Neg(inner, _, _)
+        | Expr::BitNot(inner, _, _) => changes_only_pushed_lists(inner, receivers, declared),
+        Expr::ArrayGetIndex(l, r, _)
+        | Expr::Mul(l, r, _, _)
+        | Expr::Div(l, r, _, _)
+        | Expr::Add(l, r, _, _)
+        | Expr::Sub(l, r, _, _)
+        | Expr::Mod(l, r, _, _)
+        | Expr::Pow(l, r, _, _)
+        | Expr::BitAnd(l, r, _, _)
+        | Expr::BitOr(l, r, _, _)
+        | Expr::BitXor(l, r, _, _)
+        | Expr::Shl(l, r, _, _)
+        | Expr::Shr(l, r, _, _)
+        | Expr::Eq(l, r, _, _)
+        | Expr::NotEq(l, r, _, _)
+        | Expr::Sup(l, r, _, _)
+        | Expr::SupEq(l, r, _, _)
+        | Expr::Inf(l, r, _, _)
+        | Expr::InfEq(l, r, _, _)
+        | Expr::BoolAnd(l, r, _, _)
+        | Expr::BoolOr(l, r, _, _) => {
+            changes_only_pushed_lists(l, receivers, declared)
+                && changes_only_pushed_lists(r, receivers, declared)
+        }
+        Expr::VarDeclare(name, value) => {
+            declared.push(name.clone());
+            changes_only_pushed_lists(value, receivers, declared)
+        }
+        Expr::VarAssign(_, value, _) => changes_only_pushed_lists(value, receivers, declared),
+        Expr::ReturnVal(value) => value
+            .as_ref()
+            .as_ref()
+            .is_none_or(|value| changes_only_pushed_lists(value, receivers, declared)),
+        Expr::ObjFunctionCall(obj, args, namespace, _, _, _, type_args) => {
+            let Expr::Var(name, _) = obj.as_ref() else {
+                return false;
+            };
+            if !matches!(&**namespace, [method] if method == "push")
+                || !type_args.is_empty()
+                || !args
+                    .iter()
+                    .all(|arg| changes_only_pushed_lists(arg, receivers, declared))
+            {
+                return false;
+            }
+            if !receivers.contains(name) {
+                receivers.push(name.clone());
+            }
+            true
+        }
+        Expr::Condition(condition, body, _, _)
+        | Expr::ElseIfBlock(condition, body, _)
+        | Expr::WhileBlock(condition, body, _) => {
+            changes_only_pushed_lists(condition, receivers, declared)
+                && block_changes_only_pushed_lists(body, receivers, declared)
+        }
+        Expr::ElseBlock(body) | Expr::EvalBlock(body) | Expr::LoopBlock(body) => {
+            block_changes_only_pushed_lists(body, receivers, declared)
+        }
+        _ => false,
+    }
+}
+
+/// Compiles the turns of a `for` loop over a list, a string or a map's keys:
+/// the loop variable takes `array[index]` for each `index` from where
+/// `index_id` starts up to the `int` in `end_id`, and `code` runs for each.
+fn compile_walk(
+    var_name: &SmolStr,
+    array_type: &DataType,
+    array: u16,
+    index_id: u16,
+    array_len_id: u16,
+    code: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    let real_var = var_name.as_str() != "_";
 
     // set up the variable for the current element (for current_element_id in ... {}) => current_element_id = array[index]
     let current_element_id = if real_var { state.alloc_reg() } else { 0 };
@@ -3038,7 +3289,7 @@ fn compile_for_loop(
 
     let v_len = v.len();
 
-    let is_str = array_type == DataType::String;
+    let is_str = *array_type == DataType::String;
 
     if real_var {
         v.push(Variable {
@@ -3051,12 +3302,12 @@ fn compile_for_loop(
             cell: captured,
             var_type: match array_type {
                 DataType::String => DataType::String,
-                DataType::Array(a_type) => a_type.map_or(DataType::Null, |t| *t),
+                DataType::Array(a_type) => a_type.clone().map_or(DataType::Null, |t| *t),
                 // A map iterates its keys; the loop variable is a key.
-                DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
+                DataType::Map(m) => m.0.clone().unwrap_or(DataType::Unknown),
                 t => {
                     error_type_not_indexable(
-                        &t,
+                        t,
                         span,
                         true,
                         ctx.file_idx,

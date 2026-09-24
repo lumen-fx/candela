@@ -94,7 +94,9 @@ A build compiles in the release profile, which runs passes that make the
 program faster: a small function that calls no other candela function is
 copied into the places that call it, and a struct that is only built, read and
 moved between variables, never returned, stored, passed to a call or printed,
-keeps its fields in registers instead of allocating. The release program prints the same
+keeps its fields in registers instead of allocating, and a `for` loop over a
+slice such as `list[1..n]` walks the list itself instead of copying the slice,
+when nothing in the loop could change the list. The release program prints the same
 output and raises the same errors, with the same messages and spans, as the
 program compiled in the debug profile that `candela <file.cdl>`, `candela run`
 and an embedding host use. `--debug` builds in the debug profile instead, with
