@@ -2301,3 +2301,34 @@ fn a_call_with_new_argument_types_compiles_its_own_entry() {
         );
     }
 }
+
+/// A function that parses a small document on every call and drops it.
+const PARSE_PER_FRAME: &str = "
+fn p() -> int {
+    let v = as_list(json_parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
+    return as_int(as_list(v[0])[1]) + as_int(as_map(v[1]).get(\"a\"));
+}
+fn main() {}
+";
+
+/// A parsed list or map takes a freed slot the way one the script builds
+/// does, so a program that parses every frame keeps the pools bounded, with
+/// the host's idle collection running between frames or not.
+#[test]
+fn json_parse_every_frame_reuses_freed_slots() {
+    for idle in [0, 1] {
+        let mut program = Engine::new()
+            .compile(PARSE_PER_FRAME, "j.cdl")
+            .expect("compiles");
+        for _ in 0..3000 {
+            if idle > 0 {
+                program.collect(idle);
+            }
+            assert_eq!(program.call("p", &[]).unwrap(), Value::Int(5));
+        }
+        let stats = program.gc_stats();
+        assert!(stats.cycles > 0, "the parses never started a collection");
+        assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+        assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+    }
+}

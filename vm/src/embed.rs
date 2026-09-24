@@ -14,8 +14,7 @@
 use crate::data::Data;
 use crate::data::NULL;
 use crate::gc::GcState;
-use crate::gc::alloc_array;
-use crate::gc::alloc_map;
+use crate::gc::Heap;
 use crate::rt::DataType;
 use crate::rt::EnumType;
 use crate::rt::HostFnSig;
@@ -981,27 +980,19 @@ pub fn marshal_value(
     strings: &mut StringPool,
     gc: &mut GcState,
 ) -> Data {
-    let d = Heap {
-        objs: &mut *objs,
-        maps: &mut *maps,
-        strings: &mut *strings,
-        gc: &mut *gc,
+    let mut heap = Heap {
+        objs,
+        maps,
+        strings,
+        gc,
         registers,
         recursion_stack,
-    }
-    .shell(v);
+    };
+    let d = shell(&mut heap, v);
     if matches!(v, Value::Array(_) | Value::Map(_)) {
-        recursion_stack.0.push(d);
-        Heap {
-            objs,
-            maps,
-            strings,
-            gc,
-            registers,
-            recursion_stack,
-        }
-        .fill(v, d);
-        recursion_stack.0.pop();
+        heap.recursion_stack.0.push(d);
+        fill(&mut heap, v, d);
+        heap.recursion_stack.0.pop();
     }
     d
 }
@@ -1031,91 +1022,49 @@ pub fn marshal_args(
     *registers = file.0;
 }
 
-/// The pools and collector [`marshal_value`] allocates through.
-struct Heap<'a> {
-    objs: &'a mut ObjectPool,
-    maps: &'a mut MapPool,
-    strings: &'a mut StringPool,
-    gc: &'a mut GcState,
-    registers: &'a RegisterFile,
-    recursion_stack: &'a RegisterFile,
+/// `v` itself: a scalar, a string, or an empty list or map for [`fill`] to
+/// fill in.
+fn shell(heap: &mut Heap<'_>, v: &Value) -> Data {
+    match v {
+        Value::Null => NULL,
+        Value::Int(i) => Data::int(*i),
+        Value::Float(f) => Data::float(*f),
+        Value::Bool(b) => Data::bool(*b),
+        Value::String(s) => heap.string(s),
+        Value::Array(_) => heap.array(),
+        Value::Map(_) => heap.map(),
+        // Enums travel outward only: both embedding paths refuse an argument
+        // that holds one (see `holds_enum`) before anything is marshalled, so
+        // this arm is what keeps the match exhaustive rather than a conversion
+        // anything reaches.
+        Value::Enum { .. } => NULL,
+    }
 }
 
-impl Heap<'_> {
-    /// `v` itself: a scalar, a string, or an empty list or map for
-    /// [`Self::fill`] to fill in.
-    fn shell(&mut self, v: &Value) -> Data {
-        match v {
-            Value::Null => NULL,
-            Value::Int(i) => Data::int(*i),
-            Value::Float(f) => Data::float(*f),
-            Value::Bool(b) => Data::bool(*b),
-            Value::String(s) => self.string(s),
-            Value::Array(_) => Data::array(alloc_array(
-                self.objs,
-                self.maps,
-                self.strings,
-                self.registers,
-                self.recursion_stack,
-                self.gc,
-            )),
-            Value::Map(_) => Data::map(alloc_map(
-                self.objs,
-                self.maps,
-                self.strings,
-                self.registers,
-                self.recursion_stack,
-                self.gc,
-            )),
-            // Enums travel outward only: both embedding paths refuse an
-            // argument that holds one (see `holds_enum`) before anything is
-            // marshalled, so this arm is what keeps the match exhaustive
-            // rather than a conversion anything reaches.
-            Value::Enum { .. } => NULL,
-        }
-    }
-
-    /// Fills `d`, the shell [`Self::shell`] made for `v` and already
-    /// reachable from the roots. Each entry goes in before anything inside it
-    /// is allocated.
-    fn fill(&mut self, v: &Value, d: Data) {
-        match v {
-            Value::Array(items) => {
-                let id = d.as_array();
-                self.objs[id].reserve(items.len());
-                for item in items {
-                    let child = self.shell(item);
-                    self.objs[id].push(child);
-                    self.fill(item, child);
-                }
+/// Fills `d`, the shell [`shell`] made for `v` and already reachable from the
+/// roots. Each entry goes in before anything inside it is allocated.
+fn fill(heap: &mut Heap<'_>, v: &Value, d: Data) {
+    match v {
+        Value::Array(items) => {
+            let id = d.as_array();
+            heap.objs[id].reserve(items.len());
+            for item in items {
+                let child = shell(heap, item);
+                heap.objs[id].push(child);
+                fill(heap, item, child);
             }
-            Value::Map(entries) => {
-                let id = d.as_map();
-                for (k, val) in entries {
-                    let key = self.string(k);
-                    self.maps[id].insert(key, NULL);
-                    let child = self.shell(val);
-                    self.maps[id].insert(key, child);
-                    self.fill(val, child);
-                }
-            }
-            _ => {}
         }
-    }
-
-    /// `s` as a value, sharing the pool slot of an equal string.
-    fn string(&mut self, s: &str) -> Data {
-        Data::interned(s, self.strings).unwrap_or_else(|| {
-            Data::string(
-                s.to_owned(),
-                self.objs,
-                self.maps,
-                self.strings,
-                self.registers,
-                self.recursion_stack,
-                self.gc,
-            )
-        })
+        Value::Map(entries) => {
+            let id = d.as_map();
+            for (k, val) in entries {
+                let key = heap.string(k);
+                heap.maps[id].insert(key, NULL);
+                let child = shell(heap, val);
+                heap.maps[id].insert(key, child);
+                fill(heap, val, child);
+            }
+        }
+        _ => {}
     }
 }
 

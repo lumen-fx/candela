@@ -1540,7 +1540,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                                 libffi::middle::ret(&mut return_buf[..]),
                             );
 
-                            let data_fields = ffi::c_struct_to_candela_struct(
+                            let new_id = ffi::c_struct_to_candela_struct(
                                 &return_buf,
                                 &field_offsets,
                                 obj_pool,
@@ -1552,9 +1552,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                                 gc,
                                 structs,
                             );
-                            let new_id = obj_pool.len();
-                            obj_pool.push(data_fields);
-                            Data::struct_instance(*struct_idx, new_id as u32)
+                            Data::struct_instance(*struct_idx, new_id)
                         }
                         DataType::Null => {
                             func.cif.call::<()>(func.ptr, &ffi_args);
@@ -2298,7 +2296,15 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             Instr::CallLibFunc(LibFunc::JsonParse, tgt, dest) => {
                 let input = regs[tgt].as_str(str_pool).to_owned();
-                match crate::json::json_parse(&input, obj_pool, map_pool, str_pool) {
+                match crate::json::json_parse(
+                    &input,
+                    obj_pool,
+                    map_pool,
+                    str_pool,
+                    r,
+                    recursion_stack,
+                    gc,
+                ) {
                     Ok(value) => regs[dest] = value,
                     Err(reason) => {
                         error_with_catch!(ErrType::JsonParse(reason));
@@ -2403,14 +2409,19 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let source = regs[source_register];
                 let separator = unsafe { args.pop_unchecked() };
                 if source.is_string() {
-                    let output_str_reg_id =
+                    let output_id =
                         alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+                    // Each part's allocation can run the collector, so the
+                    // list sits on the recursion stack, a root, while it is
+                    // filled. The source and separator stay in their
+                    // registers, so their text stays where it is.
+                    recursion_stack.0.push(Data::array(output_id));
                     let source = source.as_str(str_pool);
                     let separator_data = regs[separator];
                     let separator = separator_data.as_str(str_pool);
-                    let output = obj_pool.get_mut(output_str_reg_id as usize);
-                    output.clear();
-                    output.reserve(source.len() / 4);
+                    obj_pool
+                        .get_mut(output_id as usize)
+                        .reserve(source.len() / 4);
                     let separator_len = separator.len();
                     if separator_len == 0 {
                         // An empty separator answers the characters. Matching
@@ -2419,6 +2430,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         // would cut a multi-byte character in half. A character
                         // is at most four bytes, so every part fits the inline
                         // string form and none reaches the pool.
+                        let output = obj_pool.get_mut(output_id as usize);
                         for (byte_i, character) in source.char_indices() {
                             output.push(Data::small_str(
                                 &source[byte_i..byte_i + character.len_utf8()],
@@ -2427,36 +2439,15 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     } else {
                         let mut i = 0;
                         for part_i in memmem::find_iter(source.as_bytes(), separator.as_bytes()) {
-                            let part = &source[i..part_i];
-                            output.push({
-                                if part.len() <= 6 {
-                                    Data::small_str(part)
-                                } else if let Some(id) = gc.free_strings.pop() {
-                                    part.clone_into(str_pool.get_mut(id as usize));
-                                    Data::large_str_id(id as u64)
-                                } else {
-                                    let id = str_pool.len() as u64;
-                                    str_pool.push(part.to_owned());
-                                    Data::large_str_id(id)
-                                }
-                            });
+                            let part = string!(&source[i..part_i]);
+                            obj_pool.get_mut(output_id as usize).push(part);
                             i = part_i + separator_len;
                         }
-                        let part = &source[i..];
-                        output.push({
-                            if part.len() <= 6 {
-                                Data::small_str(part)
-                            } else if let Some(id) = gc.free_strings.pop() {
-                                part.clone_into(str_pool.get_mut(id as usize));
-                                Data::large_str_id(id as u64)
-                            } else {
-                                let id = str_pool.len() as u64;
-                                str_pool.push(part.to_owned());
-                                Data::large_str_id(id)
-                            }
-                        });
+                        let part = string!(&source[i..]);
+                        obj_pool.get_mut(output_id as usize).push(part);
                     }
-                    regs[dest_register] = Data::array(output_str_reg_id);
+                    recursion_stack.0.pop();
+                    regs[dest_register] = Data::array(output_id);
                 } else if source.is_array() {
                     let source_array_id = source.as_array();
                     let separator = regs[separator];

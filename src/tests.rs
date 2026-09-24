@@ -7137,6 +7137,139 @@ pub fn json_parse_nested_array() {
     );
 }
 
+/// Runs `contents` in the chosen profile and answers the pools it leaves.
+fn pools_after_run(contents: &str, optimize: bool) -> candela_vm::rt::Pools {
+    let filename = "test.kl";
+    let out = crate::compiler::compile_profile(
+        String::from(contents),
+        filename,
+        true,
+        &crate::compiler::imports::ImportResolver::new(),
+        optimize,
+    );
+    let mut pools = out.pools;
+    crate::vm::execute(
+        &out.instructions,
+        &mut RegisterFile(out.registers),
+        &mut pools,
+        &crate::errors::ErrorCtx {
+            instr_src: out.instr_src,
+            sources: vec![Source {
+                filename: filename.into(),
+                contents: String::from(contents),
+            }],
+        },
+        &out.callsite_registers,
+        &[],
+        &[],
+        &[],
+        out.allocated_arg_count,
+        out.allocated_call_depth,
+        &[],
+        &[],
+        0,
+    );
+    pools
+}
+
+#[test]
+pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
+    // Each parse leaves its lists and maps behind as garbage. They used to be
+    // pushed onto the end of their pools without a look at the free slots or
+    // the collector, so every parse grew the pools and none ever started a
+    // collection to take the slots back.
+    let contents = "
+        fn main() {
+            let total = 0;
+            for i in 0..3000 {
+                let v = as_list(json_parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
+                total = total + as_int(as_list(v[0])[1]);
+            }
+            print(total);
+        }
+    ";
+    for optimize in [false, true] {
+        let stats = pools_after_run(contents, optimize).gc_stats();
+        assert!(stats.cycles > 0, "the parses never started a collection");
+        assert!(stats.arrays.len < 512, "{stats:?}");
+        assert!(stats.maps.len < 512, "{stats:?}");
+    }
+}
+
+#[test]
+pub fn json_parse_survives_a_collection_mid_parse() {
+    // The document holds thousands of lists and maps, so parsing it starts a
+    // collection and carries it through marking and sweeping before the
+    // parse ends. Everything the parse built so far has to survive that: every
+    // entry matches the values the program built the document from, and the
+    // answer stringifies back to the document.
+    let src = "
+        fn main() {
+            let doc = \"[\";
+            let ids = [];
+            let names = [];
+            for i in 0..2000 {
+                if i > 0 { doc = doc + \",\"; }
+                let name = \"an entry named after number \" + str(i);
+                doc = doc + \"{\\\"id\\\":\" + str(i) + \",\\\"name\\\":\\\"\" + name + \"\\\",\\\"tags\\\":[\" + str(i) + \",\\\"\" + name + \" again\\\"]}\";
+                ids.push(i);
+                names.push(name);
+            }
+            doc = doc + \"]\";
+            let bad = 0;
+            for round in 0..3 {
+                let parsed = as_list(json_parse(doc));
+                if json_stringify(parsed) != doc { bad += 1; }
+                if parsed.len() != ids.len() { bad += 1; }
+                for i in 0..ids.len() {
+                    let got = as_map(parsed[i]);
+                    if as_int(got.get(\"id\")) != ids[i] { bad += 1; }
+                    if as_str(got.get(\"name\")) != names[i] { bad += 1; }
+                    let tags = as_list(got.get(\"tags\"));
+                    if as_int(tags[0]) != ids[i] { bad += 1; }
+                    if as_str(tags[1]) != names[i] + \" again\" { bad += 1; }
+                }
+            }
+            print(bad);
+        }
+    ";
+    assert_eq!(run_output(src), "0\n");
+    for optimize in [false, true] {
+        let stats = pools_after_run(src, optimize).gc_stats();
+        assert!(stats.cycles > 0, "the parses never started a collection");
+    }
+}
+
+#[test]
+pub fn split_survives_a_collection_mid_split() {
+    // Each part too long to sit inside a value takes a pool slot through the
+    // collector, so a split into thousands of them runs collection work
+    // before the list of parts is done. The parts made so far stay whole.
+    assert_eq!(
+        run_output(
+            "
+            fn main() {
+                let text = \"\";
+                for i in 0..3000 {
+                    if i > 0 { text = text + \";\"; }
+                    text = text + \"part number \" + str(i);
+                }
+                let bad = 0;
+                for round in 0..3 {
+                    let parts = text.split(\";\");
+                    if parts.len() != 3000 { bad += 1; }
+                    for i in 0..parts.len() {
+                        if parts[i] != \"part number \" + str(i) { bad += 1; }
+                    }
+                }
+                print(bad);
+            }
+            "
+        ),
+        "0\n"
+    );
+}
+
 #[test]
 pub fn gc_state_persists_across_runs() {
     // The pools outlive one run of the interpreter, so what the collector

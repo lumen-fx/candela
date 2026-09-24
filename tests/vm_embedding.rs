@@ -1057,3 +1057,44 @@ fn per_frame_arguments_stay_whole_mid_cycle() {
     assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
     assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
 }
+
+/// A function that parses a small document on every call and drops it.
+const PARSE_PER_FRAME: &str = "
+    fn p() -> int {
+        let v = as_list(json_parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
+        return as_int(as_list(v[0])[1]) + as_int(as_map(v[1]).get(\"a\"));
+    }
+    fn main() {}
+";
+
+/// A parsed list or map takes a freed slot the way one the script builds
+/// does, so a program that parses every frame keeps the pools bounded instead
+/// of adding a slot per list and map in the document every frame.
+#[test]
+fn json_parse_every_frame_reuses_freed_slots() {
+    let mut program = load(PARSE_PER_FRAME, "j.cdl", &HostRegistry::new());
+    program.run();
+    for _ in 0..3000 {
+        assert_eq!(program.call("p", &[]).unwrap(), Value::Int(5));
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the parses never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}
+
+/// The same with the host collecting a unit at a time between frames, so most
+/// parses run while a cycle is marking or sweeping.
+#[test]
+fn json_parse_every_frame_stays_whole_mid_cycle() {
+    let mut program = load(PARSE_PER_FRAME, "j.cdl", &HostRegistry::new());
+    program.run();
+    for _ in 0..3000 {
+        program.collect(1);
+        assert_eq!(program.call("p", &[]).unwrap(), Value::Int(5));
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the parses never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}

@@ -12,6 +12,8 @@ use super::Span;
 use super::StringPool;
 use super::Struct;
 use super::UncheckedSliceOps;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::gc::alloc_array;
 use smol_strc::SmolStr;
 use std::hint::unreachable_unchecked;
 
@@ -233,7 +235,7 @@ pub fn c_struct_to_candela_struct(
     recursion_stack: &mut RegisterFile,
     gc: &mut GcState,
     structs: &[Struct],
-) -> Vec<Data> {
+) -> u32 {
     // Each field goes onto the recursion stack as it is built, because that
     // stack is a garbage-collection root and a Rust-local buffer is not. A
     // string field's allocation can run the string collector, which would free
@@ -284,7 +286,7 @@ pub fn c_struct_to_candela_struct(
             DataType::Struct(nested_struct_id) => {
                 let s = unsafe { structs.get_unchecked(*nested_struct_id as usize) };
                 let (_, _, inner_offsets) = get_struct_size_datatype(&s.fields, structs);
-                let nested_data_fields = c_struct_to_candela_struct(
+                let nested_id = c_struct_to_candela_struct(
                     &c_struct[field_offset..],
                     &inner_offsets,
                     obj_pool,
@@ -296,15 +298,18 @@ pub fn c_struct_to_candela_struct(
                     gc,
                     structs,
                 );
-                let new_struct_id = obj_pool.len();
-                obj_pool.push(nested_data_fields);
-                recursion_stack.0.push(Data::struct_instance(
-                    *nested_struct_id,
-                    new_struct_id as u32,
-                ));
+                recursion_stack
+                    .0
+                    .push(Data::struct_instance(*nested_struct_id, nested_id));
             }
             _ => unsafe { unreachable_unchecked() },
         }
     }
-    recursion_stack.0.drain(base..).collect()
+    // The struct takes its slot while its fields are still rooted, since the
+    // allocation can run the collector too.
+    let id = alloc_array(obj_pool, map_pool, string_pool, r, recursion_stack, gc);
+    obj_pool
+        .get_mut(id as usize)
+        .extend(recursion_stack.0.drain(base..));
+    id
 }
