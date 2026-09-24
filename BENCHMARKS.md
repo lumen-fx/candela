@@ -49,6 +49,28 @@ trained on the programs in `pgo/`, which include smaller-input versions of the
 FizzBuzz and standard-library benchmarks below. The workflow is
 [release.yml](.github/workflows/release.yml).
 
+## Collector pauses
+
+The programs below measure throughput. A user interface cares about something
+else as well: how long a garbage collection holds up the frame it lands in.
+`benches/gc_pause.rs` measures that. It drives
+[gc_pause.cdl](/benches/gc_pause.cdl), a script built like a user interface (a
+tree of nodes with tags, attribute maps, children, text and click handlers)
+through the VM-only embedding path, and times every frame on the host side:
+
+```sh
+cargo bench --bench gc_pause
+```
+
+It reports the median, 99th percentile and longest frame for two shapes:
+
+- `retained` keeps a tree of about 20,000 nodes alive for one long call and
+  rebuilds part of it every frame, which is the pause a large live heap costs.
+- `callbacks` calls into the script once per frame, the way an event loop runs
+  a handler, and each call builds and drops a section of 200 nodes.
+
+A frame count as the first argument changes the default of 5000 frames.
+
 ## Iterative fib(46) x 200000
 
 | Candela | Python 3 | LuaJIT (-joff) |
