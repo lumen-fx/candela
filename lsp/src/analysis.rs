@@ -1,16 +1,16 @@
 //! Static analysis over a candela buffer, built entirely on top of candela's
-//! own lexer/parser/type-checker (`candela::compile_checked`). This module
-//! does not reimplement any language frontend logic: it calls
-//! `compile_checked()` and `collect_diagnostic`, then walks the resulting
+//! own lexer/parser/type-checker (`candela::check_only`). This module does not
+//! reimplement any language frontend logic: it calls `check_only()`,
+//! `collect_warnings` and `collect_diagnostic`, then walks the resulting
 //! AST/symbol tables (`CompileOutput`) to answer the position-based questions
 //! the LSP needs (hover, completion, go-to-definition, document symbols).
 //!
-//! `compile_checked()` is the compile `candela check` and `candela build`
-//! perform: the program, and then an entry point for every fully annotated
-//! function in the buffer, which is what type-checks the body of a function
-//! nothing in the program calls. Going through it is what keeps the editor and
-//! the command line reporting the same errors on the same file. Like
-//! `check`, it wants no `main`.
+//! `check_only()` is the compile `candela check` performs: the program, and
+//! then an entry point for every fully annotated function in the buffer, which
+//! is what type-checks the body of a function nothing in the program calls.
+//! Going through it is what keeps the editor and the command line reporting
+//! the same errors on the same file. Like `check`, it wants no `main`, and it
+//! opens no library a `dylib` block names, so editing never loads native code.
 //!
 //! Nothing here runs the program (as `candela::Engine::compile` would): it
 //! parses, type-checks and generates code, so running on every keystroke has
@@ -31,7 +31,7 @@
 //! text. That is a heuristic (documented on `struct_is_in_buffer`), not a
 //! compiler-guaranteed invariant.
 
-use candela::compile_checked;
+use candela::check_only;
 use candela::compiler::compiler_data::{Function, Struct};
 use candela::compiler::expr::METHOD_SEP;
 use candela::compiler::expr::{Expr, Span};
@@ -145,15 +145,10 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // `@cfg` turns off is parsed and dropped, which is what a compile with no
     // flags on does: a syntax error in it is reported, a name it uses that
     // exists only on another target is not.
-    // The export table `compile_checked` builds describes the functions a host
-    // could call into a `.cdlb` artifact. The server writes no artifact, so it
-    // takes the compile result and drops the table, as `candela check` does.
     // Warnings are collected, never printed: the server talks to the editor
     // over stdio, where a report would corrupt the protocol.
     match macros.scope(move || {
-        collect_diagnostic(move || {
-            collect_warnings(move || compile_checked(owned, &path, &resolver).0)
-        })
+        collect_diagnostic(move || collect_warnings(move || check_only(owned, &path, &resolver)))
     }) {
         Err(diagnostic) => AnalysisOutcome {
             diagnostic: Some(diagnostic),
@@ -770,6 +765,19 @@ mod tests {
         assert_eq!(
             source.get(outcome.warnings[0].span.clone()),
             Some("on_click")
+        );
+    }
+
+    /// The editor opens no library a `dylib` block names, so a buffer whose C
+    /// library is not built yet analyses cleanly.
+    #[test]
+    fn a_dylib_is_bound_without_its_library() {
+        let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
         );
     }
 }

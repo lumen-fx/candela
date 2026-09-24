@@ -304,3 +304,31 @@ fn an_artifact_load_searches_the_named_directory() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// `candela check` opens no library, so a program whose C library a build step
+/// has not produced yet checks; `candela build` still needs it.
+#[test]
+fn check_does_not_need_the_library() {
+    let dir = scratch_dir("check");
+    let path = dir.join("app.cdl");
+    std::fs::write(&path, PROGRAM).expect("write program");
+
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_candela"))
+        .arg("check")
+        .arg(&path)
+        .output()
+        .expect("candela runs");
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let build = std::process::Command::new(env!("CARGO_BIN_EXE_candela"))
+        .arg("build")
+        .arg(&path)
+        .output()
+        .expect("candela runs");
+    assert!(!build.status.success(), "a build opens the library");
+    std::fs::remove_dir_all(&dir).ok();
+}

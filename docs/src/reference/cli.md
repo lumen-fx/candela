@@ -72,7 +72,9 @@ too, as long as that function is in the file being checked and annotates every
 parameter. A function with a bare parameter that nothing calls is reported with
 a warning instead, and the check still passes; see
 [warnings](errors.md#warnings). Dependencies are resolved first, so this also
-proves the manifest is satisfiable. A `main` is not required here, the way it is for a run or a build:
+proves the manifest is satisfiable. A `dylib` block is checked against the
+signatures it declares, and the library it names is not opened, so a program
+whose C library a build step produces checks before that step has run. A `main` is not required here, the way it is for a run or a build:
 a library whose entry only declares functions for other projects to import
 checks like any other file.
 

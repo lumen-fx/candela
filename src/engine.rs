@@ -42,6 +42,7 @@ use crate::macros::MacroError;
 use crate::manifest::MANIFEST_NAME;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::manifest::Manifest;
+use crate::trampoline::check_only;
 use crate::trampoline::compile_checked;
 use crate::trampoline::compile_trampoline;
 use crate::warnings::collect_warnings;
@@ -289,6 +290,37 @@ impl Engine {
     /// this on, so the host's macros do not read as errors.
     pub const fn allow_unknown_macros(&mut self, allow: bool) {
         self.macros.allow_unknown(allow);
+    }
+
+    /// Type-checks `src` the way [`Engine::compile`] does, without producing a
+    /// program, and returns the warnings the compile raised.
+    ///
+    /// Every function whose parameters are all annotated is checked at those
+    /// types, and a function a host would call with a bare parameter is
+    /// checked with it typed `any`, as `compile` does. What this leaves out is
+    /// everything a check does not need: a `dylib` block binds the signatures
+    /// it declares without opening its library, so a script whose C library a
+    /// build step has not produced yet still checks; `host` blocks are not
+    /// matched against registered closures; `main` is not required and
+    /// nothing runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Diagnostic`] of the first error: a parse or type error, a
+    /// body that does not compile at its declared parameter types, or a `dylib`
+    /// signature naming a type C cannot represent.
+    pub fn check(&self, src: &str, filename: &str) -> Result<Vec<Diagnostic>, Diagnostic> {
+        let resolver = &self.resolver;
+        self.cfg.scope(|| {
+            self.macros.scope(|| {
+                collect_diagnostic(|| {
+                    collect_warnings(|| {
+                        let _ = check_only(src.to_owned(), filename, resolver);
+                    })
+                    .1
+                })
+            })
+        })
     }
 
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
