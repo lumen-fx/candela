@@ -948,3 +948,23 @@ fn calls_between_collection_slices_stay_correct() {
     assert!(program.collect(u32::MAX));
     assert_eq!(program.call("frame", &frame_args(300)).unwrap(), large);
 }
+
+/// A function that builds structs in a loop answers every call a host makes,
+/// not only the first: the struct literal's template outlives the call.
+#[test]
+fn a_struct_building_function_answers_every_call() {
+    let src = "
+        struct R { c: int }
+        fn g(n: int) -> int {
+            let rows = [];
+            for i in 0..n { rows.push(R { c: i }); }
+            return rows.len();
+        }
+        fn main() {}
+    ";
+    let mut program = load(src, "rows.cdl", &HostRegistry::new());
+    program.run();
+    for n in [3i64, 5, 2, 7] {
+        assert_eq!(program.call("g", &[Value::Int(n)]).unwrap(), Value::Int(n));
+    }
+}

@@ -13035,3 +13035,109 @@ pub fn a_bare_function_in_an_imported_module_is_not_warned_about() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(exports.is_empty(), "nothing is left for a host to call");
 }
+
+/// A literal's template register is read on every run of the literal, so a
+/// register allocated after the literal's last use in the source must not
+/// land on it: the next call of the function would clone whatever was left
+/// there.
+#[test]
+pub fn a_value_computed_after_a_struct_loop_leaves_the_template_alone() {
+    let src = "
+        struct R { c: int }
+        fn g(n: int) -> int {
+            let rows = [];
+            for i in 0..n { rows.push(R { c: i }); }
+            return rows.len();
+        }
+        fn main() { print(g(3)); print(g(5)); print(g(2)); }
+    ";
+    assert_eq!(run_output(src), "3\n5\n2\n");
+}
+
+/// The counter of a later loop is the register the issue first showed on the
+/// template in a longer function.
+#[test]
+pub fn a_second_loop_counter_leaves_the_struct_template_alone() {
+    let src = "
+        struct R { c: int }
+        fn g(n: int) -> int {
+            let rows = [];
+            for i in 0..n { rows.push(R { c: i }); }
+            let s = 0;
+            for j in 0..rows.len() { s = s + rows[j].c; }
+            return s * 10 + rows.len();
+        }
+        fn main() { print(g(3)); print(g(4)); print(g(1)); print(g(3)); }
+    ";
+    assert_eq!(run_output(src), "33\n64\n1\n33\n");
+}
+
+/// An enum, a constant list and a map literal in a loop each read a template
+/// too.
+#[test]
+pub fn enum_list_and_map_templates_survive_repeated_calls() {
+    let src = "
+        enum Shape { Dot, Line(int, int) }
+        fn lines(n: int) -> int {
+            let xs = [];
+            for i in 0..n { xs.push(Shape::Line(i, 7)); }
+            let t = 0;
+            for j in 0..xs.len() { match xs[j] { Shape::Line(a, b) => { t = t + b; } Shape::Dot => {} } }
+            return t;
+        }
+        fn pairs(n: int) -> int {
+            let xs = [];
+            for i in 0..n { xs.push([1, 2]); }
+            let t = 0;
+            for j in 0..xs.len() { t = t + xs[j][1]; }
+            return t;
+        }
+        fn maps(n: int) -> int {
+            let xs = [];
+            for i in 0..n { xs.push({\"k\": i, \"w\": 3}); }
+            let t = 0;
+            for j in 0..xs.len() { t = t + xs[j].get(\"w\"); }
+            return t;
+        }
+        fn main() {
+            for r in 0..3 { print(lines(2)); print(pairs(3)); print(maps(4)); }
+        }
+    ";
+    assert_eq!(run_output(src), "14\n6\n12\n".repeat(3));
+}
+
+/// An inner loop reruns on every turn of the outer one, so its template has to
+/// outlive the inner loop even in code that runs once.
+#[test]
+pub fn an_inner_loop_template_survives_the_outer_loop() {
+    let src = "
+        struct R { c: int }
+        fn main() {
+            let total = 0;
+            for j in 0..3 {
+                let rows = [];
+                for i in 0..2 { rows.push(R { c: i + 1 }); }
+                let k = rows.len();
+                total = total + k + rows[1].c;
+            }
+            print(total);
+        }
+    ";
+    assert_eq!(run_output(src), "12\n");
+}
+
+/// The name `type` answers is a constant as well: freeing its register after
+/// the print let a later value overwrite it for the next call.
+#[test]
+pub fn a_type_name_survives_repeated_calls() {
+    let src = "
+        fn t(n: int) -> int {
+            print(type(n));
+            let s = 0;
+            for i in 0..n { s = s + i; }
+            return s;
+        }
+        fn main() { print(t(2)); print(t(3)); print(t(2)); }
+    ";
+    assert_eq!(run_output(src), "int\n1\nint\n3\nint\n1\n");
+}

@@ -507,7 +507,23 @@ impl State<'_> {
     /// instructions that name it, so every use of the same constant shares
     /// one.
     pub fn const_int_register(&mut self, n: i64) -> u16 {
-        let data = Data::int(n);
+        self.const_register(Data::int(n))
+    }
+    /// A new register holding `data`, the template a `Clone*` instruction
+    /// copies from.
+    ///
+    /// Nothing writes a template: every run of the literal reads the value the
+    /// compiler put there. The code holding the literal can run again, through
+    /// another call of its function or another turn of an enclosing loop, so
+    /// the register stays out of the allocator for good.
+    pub fn template_register(&mut self, data: Data) -> u16 {
+        self.registers.push(data);
+        let id = (self.registers.len() - 1) as u16;
+        self.reserve_register(id)
+    }
+    /// The register a constant lives in, allocated on first use and shared by
+    /// every use of the same value.
+    pub fn const_register(&mut self, data: Data) -> u16 {
         if let Some(&id) = self.const_registers.get(&data) {
             return id;
         }
@@ -606,31 +622,6 @@ impl State<'_> {
         }
     }
 
-    /// Similar to free_scope_registers, but also frees CloneArray template registers. Only call this after a loop ends.
-    pub fn free_loop_scope_registers(
-        &mut self,
-        regs_before: u16,
-        scope_instrs: &[Instr],
-        v: &[Variable],
-    ) {
-        self.free_scope_registers(regs_before, scope_instrs, v);
-        // Free CloneArray template registers
-        for instr in scope_instrs {
-            if let Instr::CloneArray(template_reg, _, _) = instr
-                && *template_reg >= regs_before
-            {
-                self.free_reg(*template_reg, v);
-            } else if let Instr::CloneStruct(template_reg, _) = instr
-                && *template_reg >= regs_before
-            {
-                self.free_reg(*template_reg, v);
-            } else if let Instr::CloneEnum(template_reg, _) = instr
-                && *template_reg >= regs_before
-            {
-                self.free_reg(*template_reg, v);
-            }
-        }
-    }
     /// Associates the last instruction in `output` with `span` and adds the `InstrSrc` to `instr_src`.
     /// This allows runtime errors to be traced back to `span` in the source code.
     #[inline(always)]

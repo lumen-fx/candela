@@ -687,17 +687,6 @@ fn compile_function(
     // to anything else.
     reserved_registers.extend(env_loc);
     reserved_registers.extend(capture_regs.iter().copied());
-    for instr in &parsed {
-        match instr {
-            Instr::CloneArray(template_reg, _, _)
-            | Instr::CloneStruct(template_reg, _)
-            | Instr::CloneEnum(template_reg, _)
-            | Instr::CloneMap(template_reg, _) => {
-                reserved_registers.push(*template_reg);
-            }
-            _ => {}
-        }
-    }
     reserved_registers.sort_unstable();
     reserved_registers.dedup();
     state.reserved_registers.extend(reserved_registers);
