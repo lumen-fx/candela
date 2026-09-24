@@ -20,6 +20,9 @@ use crate::gc::GcState;
 use crate::gc::MarkBits;
 use crate::gc::alloc_array;
 use crate::gc::alloc_map;
+use crate::gc::rescan_list;
+use crate::gc::rescan_map;
+use crate::gc::shade_overwritten;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
@@ -1151,11 +1154,15 @@ pub fn execute(
                 regs[dest] = (-regs[tgt].as_int()).into();
             }
             Instr::StoreFuncArg(id) => m.args.push(id),
+            // Each store into the heap marks the value it overwrites while the
+            // collector is marking; see the barrier rules in `gc`.
             Instr::ObjElemMov(new_elem_reg_id, array_id, idx) => {
                 let arr = m.obj_pool.get_mut(array_id as usize);
-                unsafe {
-                    *arr.get_unchecked_mut(idx as usize) = regs.get(new_elem_reg_id);
+                let slot = unsafe { arr.get_unchecked_mut(idx as usize) };
+                if m.gc.marking() {
+                    shade_overwritten(m.gc, m.str_pool, *slot);
                 }
+                *slot = regs.get(new_elem_reg_id);
             }
             Instr::SetElementObj(array_reg_id, new_elem_reg_id, idx) => {
                 let array = m.obj_pool.get_mut(regs[array_reg_id].as_array());
@@ -1163,13 +1170,19 @@ pub fn execute(
                 if index < 0 || (index as u64) >= array.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(array.len(), index));
                 }
-                array[index as usize] = regs.get(new_elem_reg_id);
+                let slot = unsafe { array.get_unchecked_mut(index as usize) };
+                if m.gc.marking() {
+                    shade_overwritten(m.gc, m.str_pool, *slot);
+                }
+                *slot = regs.get(new_elem_reg_id);
             }
             Instr::SetFieldStruct(struct_reg_id, new_elem_reg_id, idx) => {
                 let s = m.obj_pool.get_mut(regs[struct_reg_id].as_struct());
-                unsafe {
-                    *s.get_unchecked_mut(idx as usize) = regs.get(new_elem_reg_id);
+                let slot = unsafe { s.get_unchecked_mut(idx as usize) };
+                if m.gc.marking() {
+                    shade_overwritten(m.gc, m.str_pool, *slot);
                 }
+                *slot = regs.get(new_elem_reg_id);
             }
             Instr::GetIndexArray(array_reg_id, index, dest) => {
                 let idx = regs[index].as_int();
@@ -1191,10 +1204,12 @@ pub fn execute(
             }
             Instr::StoreCell(cell, src) => {
                 let value = regs.get(src);
-                let slot = m.obj_pool.get_mut(regs[cell].as_array());
-                unsafe {
-                    *slot.get_unchecked_mut(0) = value;
+                let cell = m.obj_pool.get_mut(regs[cell].as_array());
+                let slot = unsafe { cell.get_unchecked_mut(0) };
+                if m.gc.marking() {
+                    shade_overwritten(m.gc, m.str_pool, *slot);
                 }
+                *slot = value;
             }
             Instr::Push(array, element) => {
                 m.obj_pool
@@ -1956,12 +1971,17 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = Data::array(cell_id);
             }
             Instr::Remove(array, idx) => {
-                let arr = obj_pool.get_mut(regs[array].as_array());
+                let id = regs[array].as_array();
+                let arr = obj_pool.get_mut(id);
                 let index = regs[idx].as_int();
                 if index < 0 || (index as u64) >= arr.len() as u64 {
                     error_with_catch!(ErrType::IndexOutOfBounds(arr.len(), index));
                 }
-                arr.remove(index as usize);
+                let removed = arr.remove(index as usize);
+                if gc.marking() {
+                    shade_overwritten(gc, str_pool, removed);
+                    rescan_list(gc, id);
+                }
             }
             Instr::MapGet(map_reg_id, key_reg_id, dest_reg_id) => {
                 regs[dest_reg_id] = if let Some(elem) =
@@ -1977,20 +1997,39 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     ));
                 };
             }
-            Instr::MapInsert(map_pool_id, key_reg_id, val_reg_id) => unsafe {
-                map_pool[map_pool_id as usize].insert(regs[key_reg_id], regs[val_reg_id]);
-            },
-            Instr::MapInsertReg(map_reg_id, key_reg_id, val_reg_id) => unsafe {
-                map_pool[regs[map_reg_id].as_map()].insert(regs[key_reg_id], regs[val_reg_id]);
-            },
+            Instr::MapInsert(map_pool_id, key_reg_id, val_reg_id) => {
+                let old = map_pool[map_pool_id as usize].insert(regs[key_reg_id], regs[val_reg_id]);
+                if let Some(old) = old
+                    && gc.marking()
+                {
+                    shade_overwritten(gc, str_pool, old);
+                }
+            }
+            Instr::MapInsertReg(map_reg_id, key_reg_id, val_reg_id) => {
+                let old =
+                    map_pool[regs[map_reg_id].as_map()].insert(regs[key_reg_id], regs[val_reg_id]);
+                if let Some(old) = old
+                    && gc.marking()
+                {
+                    shade_overwritten(gc, str_pool, old);
+                }
+            }
             // A key that is not in the map leaves it as it was: taking an entry
             // out is a request for the key to be absent, and it already is.
-            Instr::MapRemove(map_reg_id, key_reg_id) => unsafe {
+            Instr::MapRemove(map_reg_id, key_reg_id) => {
+                let id = regs[map_reg_id].as_map();
                 // `shift_remove`, not `swap_remove`: the entries after the one
                 // taken out keep their order, and a key put back afterwards
                 // lands at the end.
-                map_pool[regs[map_reg_id].as_map()].shift_remove(&regs[key_reg_id]);
-            },
+                let removed = map_pool[id].shift_remove_entry(&regs[key_reg_id]);
+                if let Some((key, value)) = removed
+                    && gc.marking()
+                {
+                    shade_overwritten(gc, str_pool, key);
+                    shade_overwritten(gc, str_pool, value);
+                    rescan_map(gc, id);
+                }
+            }
             Instr::CloneMap(src_reg, dest_reg) => {
                 let new_map = map_pool[regs[src_reg].as_map()].clone();
                 let new_id = alloc_map(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
@@ -2127,7 +2166,11 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = string!(regs[tgt].as_str(str_pool).chars().rev().collect::<String>());
             }
             Instr::CallLibFuncVoid(LibFuncVoid::Reverse, tgt, _) => {
-                obj_pool.get_mut(regs[tgt].as_array()).reverse();
+                let id = regs[tgt].as_array();
+                obj_pool.get_mut(id).reverse();
+                if gc.marking() {
+                    rescan_list(gc, id);
+                }
             }
             Instr::CallLibFunc(LibFunc::SqrtFloat, tgt, dest) => {
                 regs[dest] = regs[tgt].as_float().sqrt().into();
@@ -2574,7 +2617,11 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = Data::array(array_id);
             }
             Instr::CallLibFuncVoid(LibFuncVoid::Sort, tgt, _) => {
-                let array = obj_pool.get_mut(regs[tgt].as_array());
+                let id = regs[tgt].as_array();
+                if gc.marking() {
+                    rescan_list(gc, id);
+                }
+                let array = obj_pool.get_mut(id);
                 if !array.is_empty() {
                     if array[0].is_int() {
                         array.sort_unstable_by_key(|x| x.as_int());

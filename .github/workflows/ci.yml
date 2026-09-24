@@ -137,6 +137,24 @@ jobs:
       - run: cargo build --features embed --verbose
       - run: cargo test --features embed --verbose
 
+  test-gc-torture:
+    name: test gc-torture
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-key: test-gc-torture
+      # Every suite again with the collector running on every allocation, a
+      # unit of work at a time, and checking each mark phase against a fresh
+      # trace.
+      - run: cargo test --workspace --no-fail-fast --features candela-vm/gc-torture --verbose
+
   wasm:
     name: wasm
     needs: changes

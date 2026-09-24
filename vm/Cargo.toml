@@ -40,6 +40,11 @@ too_many_arguments = "allow"
 # of this feature; a host redirects program output and error reports at runtime
 # with `captured_output::set_capturing`.
 embed = []
+# Run a collection cycle on every allocation, one unit of work at a time, and
+# check each finished mark phase against a fresh trace from the roots. Slow;
+# for testing the collector. `cargo test --workspace --features
+# candela-vm/gc-torture` runs every suite this way.
+gc-torture = []
 
 [dependencies]
 smol_strc = "0.3.6"
