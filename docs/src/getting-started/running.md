@@ -174,6 +174,11 @@ after the file name of a source run:
 candela-vm greet.cdlb Ada
 ```
 
+On Linux with glibc, `candela-vm` sets the allocator to grow the heap in large
+steps and keep freed blocks for reuse, so a program that builds and drops big
+lists spends its time running rather than waiting on the kernel. The heap it
+holds can be a few megabytes larger for it.
+
 ## Which to use
 
 - **Source** while you write. One command, no build step, errors as you go.
