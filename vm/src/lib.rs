@@ -43,6 +43,7 @@ pub mod captured_output;
 // ---- public runtime API ----
 pub use errors::Diagnostic;
 pub use errors::ErrorCtx;
+pub use errors::RuntimeError;
 pub use errors::collect_diagnostic;
 
 pub use embed::FromHostValue;

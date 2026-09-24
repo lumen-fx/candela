@@ -435,58 +435,110 @@ impl ErrType<'_> {
     }
 }
 
-#[cold]
-#[inline(never)]
-pub fn throw_error(ctx: &ErrorCtx, instr: Instr, t: ErrType) -> ! {
-    let InstrSrc {
-        instr: _,
-        span: Span { start, end },
-        file_id,
-    } = ctx
-        .instr_src
-        .iter()
-        .find(|s| s.instr == instr)
-        .unwrap_or(&InstrSrc {
-            instr: Instr::Halt(1),
-            span: Span { start: 0, end: 0 },
-            file_id: 0,
-        });
-    let src = &ctx.sources[*file_id as usize];
-    if diagnostics_enabled() {
-        let code = t.kind().to_owned();
-        let err_message: SmolStr = t.into();
-        emit_diagnostic(
-            src.filename.as_str(),
-            (*start as usize)..(*end as usize),
-            strip_ansi(err_message.as_str()),
-            &code,
-        );
+/// A run-time error no `try` caught, as the VM hands it back to whoever ran
+/// the program.
+///
+/// It records the instruction that failed, the error's name and its message.
+/// Pair it with the program's [`ErrorCtx`] to place it in the source: turn it
+/// into a [`Diagnostic`] with [`Self::diagnostic`], or print the report and end
+/// the program with [`Self::report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeError {
+    pub instr: Instr,
+    /// The error's name, such as `index_out_of_bounds`, or the name a
+    /// `throw` gave it.
+    pub code: SmolStr,
+    /// The message, with the terminal colors the printed report shows.
+    pub message: SmolStr,
+}
+
+impl RuntimeError {
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn new(instr: Instr, t: ErrType) -> Self {
+        let code = SmolStr::from(t.kind());
+        Self {
+            instr,
+            code,
+            message: t.into(),
+        }
     }
-    let err_message: SmolStr = t.into();
-    let mut out = crate::captured_output::stderr();
-    let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
-    let report = Report::build(
-        ReportKind::Error,
-        (src.filename.as_str(), (*start as usize)..(*end as usize)),
-    )
-    .with_label(
-        Label::new((src.filename.as_str(), (*start as usize)..(*end as usize)))
-            .with_message(err_message.as_str())
-            .with_color(Color::Red),
-    )
-    .finish();
 
-    // A stderr that refuses the report costs the report. Raising here would
-    // replace the error the program hit with an unrelated one about the stream.
-    let _ = report.write(
+    /// The source span the failing instruction was compiled from, and the file
+    /// it is in.
+    fn place<'a>(&self, ctx: &ErrorCtx<'a>) -> (&'a Source, Range<usize>) {
+        let InstrSrc {
+            instr: _,
+            span: Span { start, end },
+            file_id,
+        } = ctx
+            .instr_src
+            .iter()
+            .find(|s| s.instr == self.instr)
+            .unwrap_or(&InstrSrc {
+                instr: Instr::Halt(1),
+                span: Span { start: 0, end: 0 },
+                file_id: 0,
+            });
         (
-            src.filename.as_str(),
-            ariadne::Source::from(src.contents.as_str()),
-        ),
-        &mut out,
-    );
+            &ctx.sources[*file_id as usize],
+            (*start as usize)..(*end as usize),
+        )
+    }
 
-    crash();
+    /// The error as a [`Diagnostic`], its message without terminal colors.
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn diagnostic(&self, ctx: &ErrorCtx<'_>) -> Diagnostic {
+        let (src, span) = self.place(ctx);
+        Diagnostic {
+            filename: src.filename.to_string(),
+            span,
+            message: strip_ansi(self.message.as_str()),
+            code: self.code.to_string(),
+        }
+    }
+
+    /// Reports the error the way a program that stops on it does: prints the
+    /// report to stderr and ends the process, or, inside
+    /// [`collect_diagnostic`], hands the error to it as a [`Diagnostic`].
+    #[cold]
+    #[inline(never)]
+    pub fn report(&self, ctx: &ErrorCtx<'_>) -> ! {
+        let (src, span) = self.place(ctx);
+        if diagnostics_enabled() {
+            emit_diagnostic(
+                src.filename.as_str(),
+                span,
+                strip_ansi(self.message.as_str()),
+                &self.code,
+            );
+        }
+        let mut out = crate::captured_output::stderr();
+        let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
+        let report = Report::build(ReportKind::Error, (src.filename.as_str(), span.clone()))
+            .with_label(
+                Label::new((src.filename.as_str(), span))
+                    .with_message(self.message.as_str())
+                    .with_color(Color::Red),
+            )
+            .finish();
+
+        // A stderr that refuses the report costs the report. Raising here would
+        // replace the error the program hit with an unrelated one about the
+        // stream.
+        let _ = report.write(
+            (
+                src.filename.as_str(),
+                ariadne::Source::from(src.contents.as_str()),
+            ),
+            &mut out,
+        );
+
+        crash();
+    }
 }
 
 #[cold]

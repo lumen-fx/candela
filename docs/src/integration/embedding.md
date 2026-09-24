@@ -687,6 +687,12 @@ On the artifact path the errors are `LoadError` and `CallError` instead, both of
 which print themselves. A runtime error inside a call still arrives as the
 `Diagnostic` above, wrapped in `CallError::Runtime`.
 
+The VM hands a runtime error back to `call` as a value, on both paths, so a call
+does not unwind and leaves the process panic hook alone. Compiling is different:
+the compiler recovers from an error by unwinding, and while it compiles, a hook
+of candela's silences that unwind and passes every other panic on to yours.
+That is why `Engine::compile` needs a profile that unwinds.
+
 ## Evaluating source at run time
 
 Compiling is opt-in and explicit: a host that wants to evaluate new source calls

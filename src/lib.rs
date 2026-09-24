@@ -180,14 +180,15 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
         sources,
         ..
     } = out;
-    vm::execute(
+    let err_ctx = ErrorCtx {
+        instr_src: &instr_src,
+        sources: &sources,
+    };
+    if let Err(error) = vm::execute(
         &instructions,
         &mut RegisterFile(registers),
         &mut pools,
-        &ErrorCtx {
-            instr_src: &instr_src,
-            sources: &sources,
-        },
+        &err_ctx,
         &callsite_registers,
         &dyn_lib_fns,
         &structs,
@@ -197,7 +198,9 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
         &[],
         &[],
         0,
-    );
+    ) {
+        error.report(&err_ctx);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
