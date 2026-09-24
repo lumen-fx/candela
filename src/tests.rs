@@ -7185,7 +7185,7 @@ pub fn gc_state_persists_across_runs() {
             0,
         );
     }
-    assert_eq!(pools.gc.scratch.collections, 1);
+    assert_eq!(pools.gc.cycles(), 1);
     assert!(pools.objs.len() < 512, "pool grew to {}", pools.objs.len());
 }
 

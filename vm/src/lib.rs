@@ -32,11 +32,9 @@ pub mod intrinsics;
 // The `.cdlb` bytecode artifact format plus the load/run API.
 pub mod artifact;
 
-// GC helpers, referenced as `crate::{array_gc,map_gc,string_gc}` by the VM and
-// value modules. Internal to the runtime.
-mod array_gc;
-mod map_gc;
-mod string_gc;
+// The garbage collector. Internal to the runtime; its state is reached through
+// `rt::Pools`.
+mod gc;
 
 // Routes program output and error reports to the process streams, or into a
 // buffer that an embedding host reads back.

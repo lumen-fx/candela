@@ -1,8 +1,6 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
-use crate::array_gc::MarkBits;
-use crate::array_gc::alloc_array;
 use crate::captured_output::out;
 use crate::captured_output::outln;
 use crate::data::Data;
@@ -18,15 +16,16 @@ use crate::errors::ErrType;
 use crate::errors::ErrorCtx;
 use crate::errors::call_site_name;
 use crate::errors::throw_error;
+use crate::gc::GcState;
+use crate::gc::alloc_array;
+use crate::gc::alloc_map;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
-use crate::map_gc::alloc_map;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
 use crate::rt::EnumType;
 use crate::rt::ErrorCatch;
-use crate::rt::GcState;
 use crate::rt::HostFnSig;
 use crate::rt::Pools;
 use crate::rt::Span;
@@ -280,21 +279,6 @@ pub(crate) fn char_byte_offset(s: &str, char_idx: usize) -> usize {
     at_byte
 }
 
-/// The buffers every collection reuses, kept together for the length of a run.
-///
-/// One trace reaches through all three pools, because a list can hold a map, a
-/// map can hold a list, and either can hold a pooled string. So each collection
-/// needs a mark slot per array, per map and per string, plus the stack the
-/// trace pops from, whichever pool it is about to sweep.
-pub struct GcScratch {
-    pub array_live: MarkBits,
-    pub map_live: MarkBits,
-    pub string_live: MarkBits,
-    pub work: Vec<Data>,
-    /// How many collections of any pool have run so far.
-    pub collections: u64,
-}
-
 /// Compares two values with the string-comparison instructions.
 ///
 /// The compiler emits these whenever either operand is statically a `string`,
@@ -452,8 +436,6 @@ fn frame_room(m: &mut Machine<'_>, instructions: &[Instr], i: usize, regs: Regs)
             m.obj_pool,
             m.map_pool,
             m.str_pool,
-            m.free_strings,
-            m.gc_string_threshold,
             m.gc,
         ));
     }
@@ -492,12 +474,10 @@ fn catch_error(
     recursion_stack: &mut RegisterFile,
     mut regs: Regs,
     r: &RegisterFile,
-    obj_pool: &ObjectPool,
-    map_pool: &MapPool,
+    obj_pool: &mut ObjectPool,
+    map_pool: &mut MapPool,
     str_pool: &mut StringPool,
-    free_strings: &mut Vec<u32>,
-    gc_string_threshold: &mut u32,
-    gc: &mut GcScratch,
+    gc: &mut GcState,
 ) -> usize {
     let Some(err_handle) = error_handles.pop() else {
         throw_error(err_ctx, instr, err);
@@ -509,8 +489,6 @@ fn catch_error(
         str_pool,
         r,
         recursion_stack,
-        free_strings,
-        gc_string_threshold,
         gc,
     );
     unwind_to_catch(
@@ -762,13 +740,7 @@ struct Machine<'a> {
     obj_pool: &'a mut ObjectPool,
     map_pool: &'a mut MapPool,
     str_pool: &'a mut StringPool,
-    free_arrays: &'a mut Vec<u32>,
-    free_maps: &'a mut Vec<u32>,
-    free_strings: &'a mut Vec<u32>,
-    gc_array_threshold: &'a mut u32,
-    gc_map_threshold: &'a mut u32,
-    gc_string_threshold: &'a mut u32,
-    gc: &'a mut GcScratch,
+    gc: &'a mut GcState,
     err_ctx: &'a ErrorCtx,
     callsite_registers: &'a [Vec<u16>],
     dyn_libs: &'a [DynamicLibFn],
@@ -794,16 +766,7 @@ pub fn execute(
         objs: obj_pool,
         maps: map_pool,
         strings: str_pool,
-        gc:
-            GcState {
-                free_arrays,
-                free_maps,
-                free_strings,
-                array_threshold: gc_array_threshold,
-                map_threshold: gc_map_threshold,
-                string_threshold: gc_string_threshold,
-                scratch: gc,
-            },
+        gc,
     }: &mut Pools,
     err_ctx: &ErrorCtx,
     callsite_registers: &[Vec<u16>],
@@ -838,12 +801,6 @@ pub fn execute(
         obj_pool,
         map_pool,
         str_pool,
-        free_arrays,
-        free_maps,
-        free_strings,
-        gc_array_threshold,
-        gc_map_threshold,
-        gc_string_threshold,
         gc,
         err_ctx,
         callsite_registers,
@@ -878,8 +835,6 @@ pub fn execute(
                 m.obj_pool,
                 m.map_pool,
                 m.str_pool,
-                m.free_strings,
-                m.gc_string_threshold,
                 m.gc,
             );
             ip = unsafe { base.add(resume) };
@@ -1211,10 +1166,9 @@ pub fn execute(
                 let new_id = alloc_array(
                     m.obj_pool,
                     m.map_pool,
-                    m.free_arrays,
+                    m.str_pool,
                     m.r,
                     &m.recursion_stack,
-                    m.gc_array_threshold,
                     m.gc,
                 ) as usize;
                 let src_reg = regs[src_reg];
@@ -1316,12 +1270,6 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
         obj_pool,
         map_pool,
         str_pool,
-        free_arrays,
-        free_maps,
-        free_strings,
-        gc_array_threshold,
-        gc_map_threshold,
-        gc_string_threshold,
         gc,
         err_ctx,
         callsite_registers,
@@ -1343,13 +1291,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
     let obj_pool: &mut ObjectPool = obj_pool;
     let map_pool: &mut MapPool = map_pool;
     let str_pool: &mut StringPool = str_pool;
-    let free_arrays: &mut Vec<u32> = free_arrays;
-    let free_maps: &mut Vec<u32> = free_maps;
-    let free_strings: &mut Vec<u32> = free_strings;
-    let gc_array_threshold: &mut u32 = gc_array_threshold;
-    let gc_map_threshold: &mut u32 = gc_map_threshold;
-    let gc_string_threshold: &mut u32 = gc_string_threshold;
-    let gc: &mut GcScratch = gc;
+    let gc: &mut GcState = gc;
     let err_ctx: &ErrorCtx = err_ctx;
     let callsite_registers: &[Vec<u16>] = callsite_registers;
     let dyn_libs: &[DynamicLibFn] = dyn_libs;
@@ -1360,17 +1302,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
 
     macro_rules! string {
         ($e: expr) => {
-            Data::string(
-                $e,
-                obj_pool,
-                map_pool,
-                str_pool,
-                r,
-                recursion_stack,
-                free_strings,
-                gc_string_threshold,
-                gc,
-            )
+            Data::string($e, obj_pool, map_pool, str_pool, r, recursion_stack, gc)
         };
     }
 
@@ -1401,8 +1333,6 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 obj_pool,
                 map_pool,
                 str_pool,
-                free_strings,
-                gc_string_threshold,
                 gc,
             )
         };
@@ -1565,8 +1495,6 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                                 struct_fields,
                                 r,
                                 recursion_stack,
-                                free_strings,
-                                gc_string_threshold,
                                 gc,
                                 structs,
                             );
@@ -1641,40 +1569,17 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = string!(s);
             }
             Instr::EmptyArray(arr_reg_id) => {
-                let array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 regs[arr_reg_id] = Data::array(array_id);
             }
             Instr::EmptyFnValue(value_reg_id) => {
-                let array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 regs[value_reg_id] = Data::function(array_id);
             }
             Instr::CloneArray(src_reg, dest_reg, len) => {
                 let src_id = regs[src_reg].as_array();
-                let new_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                ) as usize;
+                let new_id =
+                    alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc) as usize;
                 let src_ptr = obj_pool[src_id].as_ptr();
                 let dst = obj_pool.get_mut(new_id);
                 dst.reserve_exact(len as usize);
@@ -1685,15 +1590,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest_reg] = Data::array(new_id as u32);
             }
             Instr::CloneEnum(src_reg, dest_reg) => {
-                let new_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                ) as usize;
+                let new_id =
+                    alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc) as usize;
                 let src_reg = regs[src_reg];
                 let src = &obj_pool[src_reg.as_enum()];
                 let len = src.len();
@@ -1709,15 +1607,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             Instr::AddArray(o1, o2, dest) => {
                 let arr_a_id = regs[o1].as_array();
                 let arr_b_id = regs[o2].as_array();
-                let array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let array_idx = array_id as usize;
                 unsafe {
                     let array_pool_ptr = obj_pool.as_mut_ptr();
@@ -1940,15 +1830,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 {
                     error_with_catch!(ErrType::SliceOutOfBounds(array.len(), idx_start, idx_end));
                 }
-                let new_array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let new_array_id =
+                    alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 unsafe {
                     if arr_id < (new_array_id as usize) {
                         let (left, right) = obj_pool.split_at_mut(new_array_id as usize);
@@ -2029,15 +1912,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest_reg_id] = string!(part.as_str());
             }
             Instr::NewCell(src, dest) => {
-                let cell_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let cell_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 obj_pool.get_mut(cell_id as usize).push(regs.get(src));
                 regs[dest] = Data::array(cell_id);
             }
@@ -2079,15 +1954,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             },
             Instr::CloneMap(src_reg, dest_reg) => {
                 let new_map = map_pool[regs[src_reg].as_map()].clone();
-                let new_id = alloc_map(
-                    map_pool,
-                    obj_pool,
-                    free_maps,
-                    r,
-                    recursion_stack,
-                    gc_map_threshold,
-                    gc,
-                );
+                let new_id = alloc_map(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 unsafe {
                     map_pool[new_id as usize] = new_map;
                 }
@@ -2199,15 +2066,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     regs[dest] = string!(str.repeat(repeat_count as usize));
                 } else if reg.is_array() {
                     let repeat_count = regs[args.pop_unchecked()].as_int();
-                    let array_id = alloc_array(
-                        obj_pool,
-                        map_pool,
-                        free_arrays,
-                        r,
-                        recursion_stack,
-                        gc_array_threshold,
-                        gc,
-                    );
+                    let array_id =
+                        alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                     obj_pool[array_id as usize] =
                         obj_pool[reg.as_array()].repeat(repeat_count as usize);
                     regs[dest] = Data::array(array_id);
@@ -2331,15 +2191,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             Instr::CallLibFunc(LibFunc::Keys, tgt, dest) => {
                 let map_data = regs[tgt];
-                let out_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let out_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let keys: Vec<Data> = map_pool[map_data.as_map()].keys().copied().collect();
                 let out = obj_pool.get_mut(out_id as usize);
                 out.clear();
@@ -2348,15 +2200,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             Instr::CallLibFunc(LibFunc::Values, tgt, dest) => {
                 let map_data = regs[tgt];
-                let out_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let out_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let vals: Vec<Data> = map_pool[map_data.as_map()].values().copied().collect();
                 let out = obj_pool.get_mut(out_id as usize);
                 out.clear();
@@ -2470,15 +2314,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let source = regs[source_register];
                 let separator = unsafe { args.pop_unchecked() };
                 if source.is_string() {
-                    let output_str_reg_id = alloc_array(
-                        obj_pool,
-                        map_pool,
-                        free_arrays,
-                        r,
-                        recursion_stack,
-                        gc_array_threshold,
-                        gc,
-                    );
+                    let output_str_reg_id =
+                        alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                     let source = source.as_str(str_pool);
                     let separator_data = regs[separator];
                     let separator = separator_data.as_str(str_pool);
@@ -2505,7 +2342,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                             output.push({
                                 if part.len() <= 6 {
                                     Data::small_str(part)
-                                } else if let Some(id) = free_strings.pop() {
+                                } else if let Some(id) = gc.free_strings.pop() {
                                     part.clone_into(str_pool.get_mut(id as usize));
                                     Data::large_str_id(id as u64)
                                 } else {
@@ -2520,7 +2357,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         output.push({
                             if part.len() <= 6 {
                                 Data::small_str(part)
-                            } else if let Some(id) = free_strings.pop() {
+                            } else if let Some(id) = gc.free_strings.pop() {
                                 part.clone_into(str_pool.get_mut(id as usize));
                                 Data::large_str_id(id as u64)
                             } else {
@@ -2556,15 +2393,9 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     // again.
                     let base = recursion_stack.len();
                     for (start, end) in split_ranges {
-                        let dest_array_id = alloc_array(
-                            obj_pool,
-                            map_pool,
-                            free_arrays,
-                            r,
-                            recursion_stack,
-                            gc_array_threshold,
-                            gc,
-                        ) as usize;
+                        let dest_array_id =
+                            alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc)
+                                as usize;
                         unsafe {
                             if dest_array_id < source_array_id {
                                 let (left, right) = obj_pool.split_at_mut(source_array_id);
@@ -2582,15 +2413,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         recursion_stack.0.push(Data::array(dest_array_id as u32));
                     }
 
-                    let array_id = alloc_array(
-                        obj_pool,
-                        map_pool,
-                        free_arrays,
-                        r,
-                        recursion_stack,
-                        gc_array_threshold,
-                        gc,
-                    );
+                    let array_id =
+                        alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                     let parts = obj_pool.get_mut(array_id as usize);
                     parts.extend(recursion_stack.0.drain(base..));
 
@@ -2600,15 +2424,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             Instr::CallLibFunc(LibFunc::Range, max, dest) => {
                 let min = args.pop().map_or(0, |reg_id| regs[reg_id].as_int());
                 let max = regs[max].as_int();
-                let output_array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let output_array_id =
+                    alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let range_arr = obj_pool.get_mut(output_array_id as usize);
                 range_arr.extend((min..max).map(Data::from));
                 regs[dest] = Data::array(output_array_id);
@@ -2696,10 +2513,9 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = Data::array(alloc_array(
                     obj_pool,
                     map_pool,
-                    free_arrays,
+                    str_pool,
                     r,
                     recursion_stack,
-                    gc_array_threshold,
                     gc,
                 ))
             }
@@ -2713,15 +2529,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     let s = string!(arg);
                     recursion_stack.0.push(s);
                 }
-                let array_id = alloc_array(
-                    obj_pool,
-                    map_pool,
-                    free_arrays,
-                    r,
-                    recursion_stack,
-                    gc_array_threshold,
-                    gc,
-                );
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let list = obj_pool.get_mut(array_id as usize);
                 list.extend(recursion_stack.0.drain(base..));
                 regs[dest] = Data::array(array_id);
