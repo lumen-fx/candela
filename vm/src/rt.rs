@@ -7,10 +7,8 @@
 //! its own source keeps its import paths (`compiler_data::Struct`,
 //! `type_system::DataType`, `expr::Span`).
 
-use crate::array_gc::MIN_GC_THRESHOLD;
-use crate::array_gc::MarkBits;
+pub use crate::gc::GcState;
 use crate::instr::Instr;
-use crate::vm::GcScratch;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::StringPool;
@@ -618,53 +616,6 @@ impl Pools {
             maps,
             strings,
             gc: GcState::default(),
-        }
-    }
-}
-
-/// What the collectors know about the pools between two allocations.
-///
-/// This lives with the pools rather than with one run of the interpreter
-/// because the pools do: a host that calls into a resident program many times
-/// keeps every object the earlier calls left behind, and a collector that
-/// forgot its free lists and started its thresholds over on each call would
-/// run a full mark and sweep on the first few allocations of every call once
-/// the pools had grown past the starting threshold, and would never reuse a
-/// slot the previous call had freed.
-pub struct GcState {
-    /// Object-pool slots (arrays, structs and enums) a collection freed.
-    pub free_arrays: Vec<u32>,
-    /// Map-pool slots a collection freed.
-    pub free_maps: Vec<u32>,
-    /// String-pool slots a collection freed.
-    pub free_strings: Vec<u32>,
-    /// Object-pool length at which the next array collection runs.
-    pub array_threshold: u32,
-    /// Map-pool length at which the next map collection runs.
-    pub map_threshold: u32,
-    /// String-pool length at which the next string collection runs.
-    pub string_threshold: u32,
-    /// The mark bits and work stack a collection uses, kept so they are not
-    /// reallocated on every collection.
-    pub scratch: GcScratch,
-}
-
-impl Default for GcState {
-    fn default() -> Self {
-        Self {
-            free_arrays: Vec::new(),
-            free_maps: Vec::new(),
-            free_strings: Vec::new(),
-            array_threshold: MIN_GC_THRESHOLD,
-            map_threshold: MIN_GC_THRESHOLD,
-            string_threshold: MIN_GC_THRESHOLD,
-            scratch: GcScratch {
-                array_live: MarkBits::default(),
-                map_live: MarkBits::default(),
-                string_live: MarkBits::default(),
-                work: Vec::new(),
-                collections: 0,
-            },
         }
     }
 }

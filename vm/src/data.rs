@@ -1,10 +1,11 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use crate::gc::GcState;
+use crate::gc::alloc_string;
 use crate::rt::EnumType;
 use crate::rt::Struct;
-use crate::vm::{GcScratch, MapPool, RegisterFile, StringPool, char_byte_offset, count_chars};
-use crate::{array_gc::next_threshold, string_gc::string_gc, vm::ObjectPool};
+use crate::vm::{MapPool, ObjectPool, RegisterFile, StringPool, char_byte_offset, count_chars};
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hash::Hash;
@@ -334,41 +335,33 @@ impl Data {
             Self::tagged(NAN_STRING_LARGE | string_pool_id)
         }
     }
-    /// Allocates a string, storing it directly inside the u64 if it's <= 6 characters or inside string_pool if it's bigger
+    /// Allocates a string, storing it directly inside the value if it is six
+    /// bytes or shorter and in the string pool otherwise. A pooled string can
+    /// start a collection, so every value the program still holds has to be
+    /// reachable from `registers` or `recursion_stack`.
+    #[inline(always)]
     pub fn string<S: PoolString>(
         s: S,
-        array_pool: &ObjectPool,
-        map_pool: &MapPool,
+        array_pool: &mut ObjectPool,
+        map_pool: &mut MapPool,
         string_pool: &mut StringPool,
         registers: &RegisterFile,
         recursion_stack: &RegisterFile,
-        free_strings: &mut Vec<u32>,
-        gc_string_threshold: &mut u32,
-        gc: &mut GcScratch,
+        gc: &mut GcState,
     ) -> Self {
         if s.str_len() <= 6 {
             Self::small_str(s.pool_as_str())
         } else {
-            if string_pool.len() >= (*gc_string_threshold as usize) && free_strings.is_empty() {
-                string_gc(
-                    array_pool,
-                    map_pool,
-                    string_pool,
-                    free_strings,
-                    registers,
-                    recursion_stack,
-                    gc,
-                );
-                *gc_string_threshold = next_threshold(string_pool.len(), free_strings.len());
-            }
-            if let Some(id) = free_strings.pop() {
-                s.move_to_slot(string_pool.get_mut(id as usize));
-                Self::tagged(NAN_STRING_LARGE | (id as u64))
-            } else {
-                let string_pool_id = string_pool.len() as u64;
-                s.push_to_pool(string_pool);
-                Self::tagged(NAN_STRING_LARGE | string_pool_id)
-            }
+            let id = alloc_string(
+                s,
+                array_pool,
+                map_pool,
+                string_pool,
+                registers,
+                recursion_stack,
+                gc,
+            );
+            Self::tagged(NAN_STRING_LARGE | id)
         }
     }
     #[inline(always)]

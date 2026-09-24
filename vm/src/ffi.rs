@@ -3,7 +3,7 @@
 // It has been modified by the candela authors. See the NOTICE file.
 use super::Data;
 use super::DataType;
-use super::GcScratch;
+use super::GcState;
 use super::MapPool;
 use super::NULL;
 use super::ObjectPool;
@@ -226,14 +226,12 @@ pub fn c_struct_to_candela_struct(
     c_struct: &[u8],
     field_offsets: &[usize],
     obj_pool: &mut ObjectPool,
-    map_pool: &MapPool,
+    map_pool: &mut MapPool,
     string_pool: &mut StringPool,
     struct_fields: &[(SmolStr, DataType, Span)],
     r: &RegisterFile,
     recursion_stack: &mut RegisterFile,
-    free_strings: &mut Vec<u32>,
-    gc_string_threshold: &mut u32,
-    gc: &mut GcScratch,
+    gc: &mut GcState,
     structs: &[Struct],
 ) -> Vec<Data> {
     // Each field goes onto the recursion stack as it is built, because that
@@ -278,8 +276,6 @@ pub fn c_struct_to_candela_struct(
                         string_pool,
                         r,
                         recursion_stack,
-                        free_strings,
-                        gc_string_threshold,
                         gc,
                     )
                 };
@@ -297,8 +293,6 @@ pub fn c_struct_to_candela_struct(
                     &s.fields,
                     r,
                     recursion_stack,
-                    free_strings,
-                    gc_string_threshold,
                     gc,
                     structs,
                 );
