@@ -13347,3 +13347,60 @@ pub fn a_reassigned_variable_takes_its_first_value_without_a_move() {
     }
     assert_eq!(run_output(src), "28.0\n");
 }
+
+/// A first value that already lives somewhere else is copied into the
+/// variable's register, since writing the variable must leave that place
+/// alone: another variable, a constant, a parameter, or the start of a loop.
+#[test]
+pub fn a_reassigned_variable_leaves_where_its_first_value_came_from_alone() {
+    let src = "
+        fn g(p: int) -> int {
+            let q = p;
+            q = q + 10;
+            return p * 100 + q;
+        }
+        fn main() {
+            let a = 5;
+            let b = a;
+            b = b + 1;
+            let c = 5;
+            c = c * 3;
+            let d = 5;
+            let start = a + 1;
+            for i in start..8 { d = d + i; }
+            print(a, b, c, d, start, g(2));
+            let xs = [1, 2];
+            let ys = xs;
+            ys = [3];
+            print(xs, ys);
+            for i in 0..2 {
+                let t = i * 2;
+                t = t + 1;
+                print(t);
+            }
+        }
+    ";
+    assert_eq!(run_output(src), "5\n6\n15\n18\n6\n212\n[1,2]\n[3]\n1\n3\n");
+}
+
+/// Declaring a variable from another one and then writing either leaves the
+/// other as it was, in code that runs once as much as in a loop or a function.
+#[test]
+pub fn writing_a_copied_variable_leaves_the_original_alone() {
+    let body = "
+        let a = 5;
+        let b = a;
+        b = 7;
+        let c = 1;
+        let d = c;
+        c += 1;
+        let xs = [1];
+        let ys = xs;
+        xs = [2];
+        print(a, b, c, d, xs, ys);
+    ";
+    let src = format!(
+        "fn f(n: int) {{ {body} }}\nfn main() {{ {body} f(1); for k in 0..1 {{ {body} }} }}"
+    );
+    assert_eq!(run_output(&src), "5\n7\n2\n1\n[2]\n[1]\n".repeat(3));
+}
