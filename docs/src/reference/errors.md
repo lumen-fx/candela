@@ -125,7 +125,8 @@ of itself without end. See [generics](../language/generics.md).
 
 **Import and library errors.** An import path that cannot be read, a bare import
 whose symbols collide with names already in scope, a `dylib` library that cannot
-be opened, and a symbol the library does not export. See
+be opened, a symbol the library does not export, and a `dylib` signature naming
+a type C has no representation for (`no_c_representation`). See
 [modules](../language/modules.md) and [C libraries](../integration/c-libraries.md).
 
 **No entry point.** A program is entered through `main`, so a run, a build and
@@ -250,8 +251,7 @@ resumes at the `catch`, so a failure deep in a helper is handled where the work
 was started. This covers your own functions and the standard library modules
 written in candela.
 
-Two things end a program without being catchable: `exit()` with a non-zero
-status, and a type that cannot cross the C boundary in a `dylib` signature.
+`exit()` with a non-zero status ends a program without being catchable.
 
 ## Artifact load errors
 

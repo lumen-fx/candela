@@ -50,3 +50,38 @@ fn a_void_c_function_runs() {
 
     assert_eq!(value, Value::Int(42));
 }
+
+/// A type with no C shape in a signature is a compile error at the signature,
+/// naming the function and the type, not a panic when the calling interface is
+/// built.
+#[test]
+fn a_type_with_no_c_shape_is_a_compile_error() {
+    let root = ffi_fixture::scratch_dir("void", "no_c_shape");
+    let _library = ffi_fixture::build_cdylib(&root, "voidret", FIXTURE);
+    let script = root.join("app.cdl");
+    let filename = script.to_str().expect("scratch path is utf-8");
+
+    for (signature, name, type_name) in [
+        ("bool stored();", "stored", "bool"),
+        ("store({string: int});", "store", "{string: int}"),
+        ("store(int | string);", "store", "int|string"),
+    ] {
+        let src = format!("dylib \"voidret\" {{\n    {signature}\n}}\n\nfn main() {{}}\n");
+        let diagnostic = Engine::new()
+            .compile(&src, filename)
+            .err()
+            .expect("the signature is refused");
+        assert_eq!(diagnostic.code, "no_c_representation", "{signature}");
+        assert!(
+            diagnostic.message.contains(type_name),
+            "{}",
+            diagnostic.message
+        );
+        assert_eq!(
+            &src[diagnostic.span.clone()],
+            name,
+            "the report points at the function"
+        );
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
