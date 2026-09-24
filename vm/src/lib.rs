@@ -54,6 +54,7 @@ pub use embed::IntoHostFn;
 pub use embed::IntoHostResult;
 pub use embed::IntoHostValue;
 pub use embed::Value;
+pub use embed::marshal_args;
 pub use embed::marshal_value;
 pub use embed::unmarshal_value;
 

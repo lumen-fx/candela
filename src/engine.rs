@@ -47,6 +47,7 @@ use crate::trampoline::compile_checked;
 use crate::trampoline::compile_trampoline;
 use crate::warnings::collect_warnings;
 use candela_vm::data::Data;
+use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
 use candela_vm::embed::HostError;
 use candela_vm::embed::HostRegistry;
@@ -55,7 +56,7 @@ use candela_vm::embed::IntoHostFn;
 use candela_vm::embed::Value;
 use candela_vm::embed::describe_value;
 use candela_vm::embed::holds_enum;
-use candela_vm::embed::marshal_value;
+use candela_vm::embed::marshal_args;
 use candela_vm::embed::unmarshal_value;
 use candela_vm::errors::Diagnostic;
 use candela_vm::errors::ErrorCtx;
@@ -404,6 +405,7 @@ impl Engine {
             indirect_registers: out.indirect_registers,
             generics: out.generics,
             warnings,
+            calls: FxHashMap::default(),
         };
 
         // Instantiate: run `main` once so top-level state is established before
@@ -446,6 +448,20 @@ pub struct Program {
     indirect_registers: IndirectRegisters,
     /// The warnings the compile raised, in the order it raised them.
     warnings: Vec<Diagnostic>,
+    /// The trampoline compiled for each function and argument types a host
+    /// has called with.
+    calls: FxHashMap<(String, String), CompiledCall>,
+}
+
+/// A host call compiled onto the resident instruction stream.
+#[derive(Clone)]
+struct CompiledCall {
+    /// Where the trampoline starts.
+    start: usize,
+    /// The registers it reads its arguments from, in order.
+    arg_registers: Box<[u16]>,
+    /// The register the call's value lands in.
+    ret_register: u16,
 }
 
 impl Program {
@@ -460,15 +476,15 @@ impl Program {
     /// Invokes the script-defined function `fn_name` with `args`, returning its
     /// value (or [`Value::Null`] for a void function).
     ///
-    /// Each call compiles a small trampoline (which specializes `fn_name` for
-    /// the argument types if it hasn't been already) onto the resident
-    /// instruction stream and runs it against the persistent register/heap
-    /// state, so globals mutated by a previous call remain visible.
+    /// The first call with a given set of argument types compiles a small
+    /// trampoline (which specializes `fn_name` for those types if it hasn't
+    /// been already) onto the resident instruction stream; later calls with
+    /// the same types run it again. It runs against the persistent
+    /// register/heap state, so globals mutated by a previous call remain
+    /// visible.
     ///
-    /// A diagnostic raised while compiling the trampoline (an undeclared name
-    /// at the call site, a type mismatch, a nested call that needed its own
-    /// specialization first) leaves the resident tables exactly as they stood
-    /// before this call began; see [`State::rollback_to`]. The `Program`
+    /// A diagnostic raised while compiling the trampoline leaves the resident
+    /// tables exactly as they stood before this call began, and the `Program`
     /// stays callable afterward.
     ///
     /// # Errors
@@ -497,38 +513,81 @@ impl Program {
             });
         }
 
+        // A call is compiled once per function and argument types, into a
+        // trampoline that reads its arguments from registers of its own, and
+        // every later call with the same types writes them and runs it again.
+        // The key renders the types, since `DataType` equality lets an empty
+        // list stand for a list of anything.
+        let types: Vec<DataType> = args.iter().map(value_datatype).collect();
+        let key = (fn_name.to_owned(), format!("{types:?}"));
+        let call = if let Some(call) = self.calls.get(&key) {
+            marshal_args(
+                args,
+                &call.arg_registers,
+                &mut self.registers,
+                &mut self.pools,
+            );
+            call.clone()
+        } else {
+            let call = self.compile_call(fn_name, args, types)?;
+            self.calls.insert(key, call.clone());
+            call
+        };
+
+        self.execute_from(call.start)?;
+        let ret_id = call.ret_register;
+
+        Ok(unmarshal_value(
+            self.registers[ret_id as usize],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+            &self.enums,
+        ))
+    }
+
+    /// Compiles the trampoline for a call of `fn_name` with arguments of
+    /// `types`, and leaves `args` in the registers it reads them from.
+    ///
+    /// A diagnostic raised while compiling it (an undeclared name at the call
+    /// site, a type mismatch, a nested call that needed its own
+    /// specialization first) leaves the resident tables exactly as they stood
+    /// before; see [`State::rollback_to`].
+    fn compile_call(
+        &mut self,
+        fn_name: &str,
+        args: &[Value],
+        types: Vec<DataType>,
+    ) -> Result<CompiledCall, Diagnostic> {
         // Every table a trampoline compile can grow is snapshotted up front, so
         // a diagnostic raised while compiling it can be undone rather than
         // leaving a half-compiled specialization for a later call to trip on.
         let checkpoint = self.compiler_state().checkpoint();
 
-        // Scalars compile as literal exprs; arrays/maps can't, so they are
-        // allocated into the heap pools now and passed as a pre-seeded variable
-        // that holds the handle in a register the trampoline moves into place.
+        // Each argument is a variable seeded into a register of its own, which
+        // holds this call's value while the trampoline compiles.
+        let arg_registers: Box<[u16]> = args
+            .iter()
+            .map(|_| {
+                self.registers.push(NULL);
+                (self.registers.len() - 1) as u16
+            })
+            .collect();
+        marshal_args(args, &arg_registers, &mut self.registers, &mut self.pools);
+
         let dummy = Span { start: 0, end: 0 };
         let mut arg_exprs: Vec<Expr> = Vec::with_capacity(args.len());
-        let mut seed_vars: Vec<Variable> = Vec::new();
-        for (i, v) in args.iter().enumerate() {
-            if let Some(expr) = value_to_expr(v) {
-                arg_exprs.push(expr);
-            } else {
-                let handle = marshal_value(
-                    v,
-                    &mut self.pools.objs,
-                    &mut self.pools.maps,
-                    &mut self.pools.strings,
-                );
-                let register_id = self.registers.len() as u16;
-                self.registers.push(handle);
-                let name = SmolStr::from(format!("__host_arg{i}"));
-                seed_vars.push(Variable {
-                    name: name.clone(),
-                    register_id,
-                    cell: false,
-                    var_type: value_datatype(v),
-                });
-                arg_exprs.push(Expr::Var(name, dummy));
-            }
+        let mut seed_vars: Vec<Variable> = Vec::with_capacity(args.len());
+        for (i, (&register_id, var_type)) in arg_registers.iter().zip(types).enumerate() {
+            let name = SmolStr::from(format!("__host_arg{i}"));
+            seed_vars.push(Variable {
+                name: name.clone(),
+                register_id,
+                cell: false,
+                var_type,
+            });
+            arg_exprs.push(Expr::Var(name, dummy));
         }
 
         let arg_spans: Box<[Span]> = args.iter().map(|_| dummy).collect();
@@ -553,7 +612,6 @@ impl Program {
             }
         };
 
-        let ret_id = ret_id.unwrap_or(0);
         output.push(Instr::Halt(0));
         use_immediates(
             &mut output,
@@ -563,17 +621,11 @@ impl Program {
         );
         let start = self.instructions.len();
         self.instructions.extend(output);
-
-        self.execute_from(start)?;
-
-        Ok(unmarshal_value(
-            self.registers[ret_id as usize],
-            &self.pools.objs,
-            &self.pools.maps,
-            &self.pools.strings,
-            &self.structs,
-            &self.enums,
-        ))
+        Ok(CompiledCall {
+            start,
+            arg_registers,
+            ret_register: ret_id.unwrap_or(0),
+        })
     }
 
     /// Does up to about `budget` units of garbage collection while the
@@ -677,22 +729,6 @@ impl Program {
         self.registers = std::mem::take(&mut register_file.0);
         result
     }
-}
-
-/// Synthesizes a literal [`Expr`] carrying a scalar [`Value`] so a host argument
-/// can be compiled through the ordinary call path. candela integers are 32-bit, so
-/// [`Value::Int`] is narrowed here. Returns `None` for non-scalars (arrays/maps),
-/// which cannot be expressed as literal exprs and are instead allocated into the
-/// heap pools and passed as a register handle (see [`Program::call`]).
-fn value_to_expr(v: &Value) -> Option<Expr> {
-    Some(match v {
-        Value::Null => Expr::Null,
-        Value::Int(i) => Expr::Int(*i),
-        Value::Float(f) => Expr::Float(*f),
-        Value::Bool(b) => Expr::Bool(*b),
-        Value::String(s) => Expr::String(SmolStr::from(s.as_str())),
-        Value::Array(_) | Value::Map(_) | Value::Enum { .. } => return None,
-    })
 }
 
 /// Infers the candela [`DataType`] of a [`Value`] so a host-provided array/map

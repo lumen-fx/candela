@@ -13,13 +13,17 @@
 
 use crate::data::Data;
 use crate::data::NULL;
+use crate::gc::GcState;
+use crate::gc::alloc_array;
+use crate::gc::alloc_map;
 use crate::rt::DataType;
 use crate::rt::EnumType;
 use crate::rt::HostFnSig;
+use crate::rt::Pools;
 use crate::rt::Struct;
-use crate::vm::CandelaMap;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
+use crate::vm::RegisterFile;
 use crate::vm::StringPool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -954,50 +958,164 @@ impl_into_host_fn!(A0 0, A1 1, A2 2);
 impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3);
 impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 
-/// Allocates a [`Value`] into candela's heap pools and returns the handle [`Data`].
+/// Allocates `v` into candela's heap pools and returns the value to store.
 ///
-/// Scalars become NaN-boxed values directly; arrays/maps are pushed into the
-/// object/map pools (nested structures allocated depth-first) and referenced by
-/// handle. Strings go through [`Data::p_str`], which interns without triggering
-/// the GC. This is safe because these direct pushes never invoke the collector, so
-/// intermediate handles cannot be reclaimed mid-construction.
+/// Scalars become NaN-boxed values directly. A list or map takes its slot the
+/// way one the program builds does, reusing a freed slot when there is one,
+/// so building it can start or carry on a collection. Everything built so far
+/// therefore stays reachable from the roots a collection reads, `registers`
+/// and `recursion_stack`: the outermost container sits on top of
+/// `recursion_stack` while it is filled, and each entry goes into its parent
+/// before anything inside it is allocated. The caller keeps every other value
+/// the program still holds reachable from the roots too, and stores the
+/// result before it allocates again.
+///
+/// A string is interned: one the pool already holds by its text is shared,
+/// since a map finds a string key by its slot.
 pub fn marshal_value(
     v: &Value,
+    registers: &RegisterFile,
+    recursion_stack: &mut RegisterFile,
     objs: &mut ObjectPool,
     maps: &mut MapPool,
     strings: &mut StringPool,
+    gc: &mut GcState,
 ) -> Data {
-    match v {
-        Value::Null => NULL,
-        Value::Int(i) => Data::int(*i),
-        Value::Float(f) => Data::float(*f),
-        Value::Bool(b) => Data::bool(*b),
-        Value::String(s) => Data::p_str(s, strings),
-        Value::Array(items) => {
-            let elems: Vec<Data> = items
-                .iter()
-                .map(|e| marshal_value(e, objs, maps, strings))
-                .collect();
-            let id = objs.len() as u32;
-            objs.push(elems);
-            Data::array(id)
+    let d = Heap {
+        objs: &mut *objs,
+        maps: &mut *maps,
+        strings: &mut *strings,
+        gc: &mut *gc,
+        registers,
+        recursion_stack,
+    }
+    .shell(v);
+    if matches!(v, Value::Array(_) | Value::Map(_)) {
+        recursion_stack.0.push(d);
+        Heap {
+            objs,
+            maps,
+            strings,
+            gc,
+            registers,
+            recursion_stack,
         }
-        Value::Map(entries) => {
-            let mut map = CandelaMap::default();
-            for (k, val) in entries {
-                let key = Data::p_str(k, strings);
-                let value = marshal_value(val, objs, maps, strings);
-                map.insert(key, value);
+        .fill(v, d);
+        recursion_stack.0.pop();
+    }
+    d
+}
+
+/// Writes each of `args` into the matching register of `arg_registers`, with
+/// the register file as the only roots: what a host does between runs.
+pub fn marshal_args(
+    args: &[Value],
+    arg_registers: &[u16],
+    registers: &mut Vec<Data>,
+    pools: &mut Pools,
+) {
+    let mut file = RegisterFile(std::mem::take(registers));
+    let mut stack = RegisterFile(Vec::new());
+    for (arg, &register) in args.iter().zip(arg_registers) {
+        let d = marshal_value(
+            arg,
+            &file,
+            &mut stack,
+            &mut pools.objs,
+            &mut pools.maps,
+            &mut pools.strings,
+            &mut pools.gc,
+        );
+        file.0[register as usize] = d;
+    }
+    *registers = file.0;
+}
+
+/// The pools and collector [`marshal_value`] allocates through.
+struct Heap<'a> {
+    objs: &'a mut ObjectPool,
+    maps: &'a mut MapPool,
+    strings: &'a mut StringPool,
+    gc: &'a mut GcState,
+    registers: &'a RegisterFile,
+    recursion_stack: &'a RegisterFile,
+}
+
+impl Heap<'_> {
+    /// `v` itself: a scalar, a string, or an empty list or map for
+    /// [`Self::fill`] to fill in.
+    fn shell(&mut self, v: &Value) -> Data {
+        match v {
+            Value::Null => NULL,
+            Value::Int(i) => Data::int(*i),
+            Value::Float(f) => Data::float(*f),
+            Value::Bool(b) => Data::bool(*b),
+            Value::String(s) => self.string(s),
+            Value::Array(_) => Data::array(alloc_array(
+                self.objs,
+                self.maps,
+                self.strings,
+                self.registers,
+                self.recursion_stack,
+                self.gc,
+            )),
+            Value::Map(_) => Data::map(alloc_map(
+                self.objs,
+                self.maps,
+                self.strings,
+                self.registers,
+                self.recursion_stack,
+                self.gc,
+            )),
+            // Enums travel outward only: both embedding paths refuse an
+            // argument that holds one (see `holds_enum`) before anything is
+            // marshalled, so this arm is what keeps the match exhaustive
+            // rather than a conversion anything reaches.
+            Value::Enum { .. } => NULL,
+        }
+    }
+
+    /// Fills `d`, the shell [`Self::shell`] made for `v` and already
+    /// reachable from the roots. Each entry goes in before anything inside it
+    /// is allocated.
+    fn fill(&mut self, v: &Value, d: Data) {
+        match v {
+            Value::Array(items) => {
+                let id = d.as_array();
+                self.objs[id].reserve(items.len());
+                for item in items {
+                    let child = self.shell(item);
+                    self.objs[id].push(child);
+                    self.fill(item, child);
+                }
             }
-            let id = maps.len() as u32;
-            maps.push(map);
-            Data::map(id)
+            Value::Map(entries) => {
+                let id = d.as_map();
+                for (k, val) in entries {
+                    let key = self.string(k);
+                    self.maps[id].insert(key, NULL);
+                    let child = self.shell(val);
+                    self.maps[id].insert(key, child);
+                    self.fill(val, child);
+                }
+            }
+            _ => {}
         }
-        // Enums travel outward only: both embedding paths refuse an argument
-        // that holds one (see `holds_enum`) before anything is marshalled, so
-        // this arm is what keeps the match exhaustive rather than a conversion
-        // anything reaches.
-        Value::Enum { .. } => NULL,
+    }
+
+    /// `s` as a value, sharing the pool slot of an equal string.
+    fn string(&mut self, s: &str) -> Data {
+        Data::interned(s, self.strings).unwrap_or_else(|| {
+            Data::string(
+                s.to_owned(),
+                self.objs,
+                self.maps,
+                self.strings,
+                self.registers,
+                self.recursion_stack,
+                self.gc,
+            )
+        })
     }
 }
 

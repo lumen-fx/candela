@@ -2163,3 +2163,141 @@ fn main() {}
         assert_eq!(program.call("g", &[n.into()]).unwrap(), Value::Int(n));
     }
 }
+
+/// Functions a host calls every frame with a fresh list or map argument.
+const PER_FRAME: &str = "
+fn total(xs: int[][]) -> int {
+    let s = 0;
+    for row in xs { for x in row { s = s + x; } }
+    return s;
+}
+fn weigh(m: {string: int[]}) -> int {
+    return m.get(\"first entry\")[0] + m.get(\"second entry\")[1];
+}
+fn double(n: int) -> int { return n * 2; }
+fn main() {}
+";
+
+/// A nested list argument for frame `i`; its elements add up to `3 * i + 3`.
+fn rows(i: i64) -> Value {
+    Value::Array(vec![
+        Value::Array(vec![Value::Int(i), Value::Int(1)]),
+        Value::Array(vec![Value::Int(2 * i), Value::Int(2)]),
+    ])
+}
+
+/// A map argument for frame `i` with long keys, which the script looks up by
+/// the same text; `weigh` answers `2 * i + 1`.
+fn entries(i: i64) -> Value {
+    record(&[
+        (
+            "first entry",
+            Value::Array(vec![Value::Int(i), Value::Int(0)]),
+        ),
+        (
+            "second entry",
+            Value::Array(vec![Value::Int(0), Value::Int(i + 1)]),
+        ),
+    ])
+}
+
+/// The most slots a pool may hold after thousands of calls that each leave
+/// their arguments behind as garbage: the first collection's threshold plus
+/// what a cycle lets the program allocate while it runs.
+const POOL_BOUND: usize = 512;
+
+/// A list or map argument takes a freed slot the way an allocation the script
+/// makes does, so a host that passes one every frame keeps the pools bounded
+/// instead of adding a slot per frame.
+#[test]
+fn per_frame_arguments_reuse_freed_slots() {
+    let mut program = Engine::new()
+        .compile(PER_FRAME, "frames.cdl")
+        .expect("compiles");
+    for i in 0..5000 {
+        assert_eq!(
+            program.call("total", &[rows(i)]).unwrap(),
+            Value::Int(3 * i + 3)
+        );
+        assert_eq!(
+            program.call("weigh", &[entries(i)]).unwrap(),
+            Value::Int(2 * i + 1)
+        );
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the garbage never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}
+
+/// The same with the host collecting a unit at a time between frames, so most
+/// arguments are built while a cycle is marking or sweeping, and nothing an
+/// argument holds is freed while it is built.
+#[test]
+fn per_frame_arguments_stay_whole_mid_cycle() {
+    let mut program = Engine::new()
+        .compile(PER_FRAME, "frames.cdl")
+        .expect("compiles");
+    for i in 0..5000 {
+        program.collect(1);
+        assert_eq!(
+            program.call("total", &[rows(i)]).unwrap(),
+            Value::Int(3 * i + 3)
+        );
+        program.collect(1);
+        assert_eq!(
+            program.call("weigh", &[entries(i)]).unwrap(),
+            Value::Int(2 * i + 1)
+        );
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the garbage never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}
+
+/// A call compiles once per argument types and runs again after that, so a
+/// host can call every frame for as long as it runs: compiling one per call
+/// ran the instruction stream past what a jump can address after some twenty
+/// thousand calls.
+#[test]
+fn a_function_called_every_frame_keeps_answering() {
+    let mut program = Engine::new()
+        .compile(PER_FRAME, "frames.cdl")
+        .expect("compiles");
+    for i in 0..40_000 {
+        assert_eq!(
+            program.call("double", &[Value::Int(i)]).unwrap(),
+            Value::Int(2 * i)
+        );
+    }
+}
+
+/// Each set of argument types gets its own compiled call, so a bare parameter
+/// still takes its type from every call, an empty list included.
+#[test]
+fn a_call_with_new_argument_types_compiles_its_own_entry() {
+    let src = "fn show(x) { return str(x); }\nfn main() {}";
+    let mut program = Engine::new().compile(src, "show.cdl").expect("compiles");
+    let calls = [
+        (Value::Int(1), "1"),
+        (
+            Value::String(String::from("a longer text")),
+            "a longer text",
+        ),
+        (Value::Int(2), "2"),
+        (Value::Array(vec![]), "[]"),
+        (Value::Array(vec![Value::Int(3)]), "[3]"),
+        (
+            Value::Array(vec![Value::String(String::from("x"))]),
+            "[\"x\"]",
+        ),
+        (Value::Int(4), "4"),
+    ];
+    for (arg, shown) in calls {
+        assert_eq!(
+            program.call("show", &[arg]).unwrap(),
+            Value::String(String::from(shown))
+        );
+    }
+}

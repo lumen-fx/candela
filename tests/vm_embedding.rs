@@ -968,3 +968,92 @@ fn a_struct_building_function_answers_every_call() {
         assert_eq!(program.call("g", &[Value::Int(n)]).unwrap(), Value::Int(n));
     }
 }
+
+/// Functions a host calls every frame with a fresh list or map argument.
+const PER_FRAME: &str = "
+    fn total(xs: int[][]) -> int {
+        let s = 0;
+        for row in xs { for x in row { s = s + x; } }
+        return s;
+    }
+    fn weigh(m: {string: int[]}) -> int {
+        return m.get(\"first entry\")[0] + m.get(\"second entry\")[1];
+    }
+    fn main() {}
+";
+
+/// A nested list argument for frame `i`; its elements add up to `3 * i + 3`.
+fn rows(i: i64) -> Value {
+    Value::Array(vec![
+        Value::Array(vec![Value::Int(i), Value::Int(1)]),
+        Value::Array(vec![Value::Int(2 * i), Value::Int(2)]),
+    ])
+}
+
+/// A map argument for frame `i` with long keys, which the script looks up by
+/// the same text; `weigh` answers `2 * i + 1`.
+fn record(i: i64) -> Value {
+    Value::Map(BTreeMap::from([
+        (
+            String::from("first entry"),
+            Value::Array(vec![Value::Int(i), Value::Int(0)]),
+        ),
+        (
+            String::from("second entry"),
+            Value::Array(vec![Value::Int(0), Value::Int(i + 1)]),
+        ),
+    ]))
+}
+
+/// The most slots a pool may hold after thousands of calls that each leave
+/// their arguments behind as garbage: the first collection's threshold plus
+/// what a cycle lets the program allocate while it runs.
+const POOL_BOUND: usize = 512;
+
+/// A list or map argument takes a freed slot the way an allocation the script
+/// makes does, so a host that passes one every frame keeps the pools bounded
+/// instead of adding a slot per frame.
+#[test]
+fn per_frame_arguments_reuse_freed_slots() {
+    let mut program = load(PER_FRAME, "frames.cdl", &HostRegistry::new());
+    program.run();
+    for i in 0..5000 {
+        assert_eq!(
+            program.call("total", &[rows(i)]).unwrap(),
+            Value::Int(3 * i + 3)
+        );
+        assert_eq!(
+            program.call("weigh", &[record(i)]).unwrap(),
+            Value::Int(2 * i + 1)
+        );
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the garbage never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}
+
+/// The same with the host collecting a unit at a time between frames, so most
+/// arguments are built while a cycle is marking or sweeping, and nothing an
+/// argument holds is freed while it is built.
+#[test]
+fn per_frame_arguments_stay_whole_mid_cycle() {
+    let mut program = load(PER_FRAME, "frames.cdl", &HostRegistry::new());
+    program.run();
+    for i in 0..5000 {
+        program.collect(1);
+        assert_eq!(
+            program.call("total", &[rows(i)]).unwrap(),
+            Value::Int(3 * i + 3)
+        );
+        program.collect(1);
+        assert_eq!(
+            program.call("weigh", &[record(i)]).unwrap(),
+            Value::Int(2 * i + 1)
+        );
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the garbage never started a collection");
+    assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
+    assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
+}
