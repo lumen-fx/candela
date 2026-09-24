@@ -106,11 +106,24 @@ impl Hasher for DataHash {
     }
 }
 
+/// The hash a pooled string is filed under as a map key: 64-bit FNV-1a over
+/// its bytes. A map key keeps it in the value, and a `.cdlb` records the key
+/// with it, so it has to come out the same on every machine and in every
+/// build.
+#[must_use]
+pub fn text_hash(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 impl Hash for Data {
     /// Both words in one, so an `int` hashes by its value and every other type
-    /// hashes by its box exactly as it did when the box was the whole value.
-    /// `DataHash` keeps only the last word written, so writing them apart would
-    /// collapse every non-`int` onto the same hash.
+    /// hashes by its box exactly as it did when the box was the whole value,
+    /// except a pooled string stored as a map key, which hashes by its text
+    /// (see [`Data::as_map_key`]). `DataHash` keeps only the last word written,
+    /// so writing them apart would collapse every non-`int` onto the same
+    /// hash.
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.boxed ^ (self.int as u64));
@@ -321,6 +334,24 @@ impl Data {
     #[inline(always)]
     pub const fn large_str_id(id: u64) -> Self {
         Self::tagged(NAN_STRING_LARGE | id)
+    }
+    /// This value as a map stores it for a key. A string in the pool takes a
+    /// hash of its text into its second word, which only an `int` otherwise
+    /// uses, arranged so the value hashes as the text does rather than as the
+    /// slot: two strings with the same text in different slots then land in
+    /// the same bucket, where the map compares them by text. See
+    /// [`crate::vm::KeyByText`].
+    #[inline(always)]
+    #[must_use]
+    pub fn as_map_key(self, string_pool: &StringPool) -> Self {
+        if self.is_large_str() {
+            Self {
+                boxed: self.boxed,
+                int: (text_hash(self.as_str(string_pool)) ^ self.boxed) as i64,
+            }
+        } else {
+            self
+        }
     }
     /// Same as str(), except this never runs the GC because this function is called by the compiler
     #[inline(always)]

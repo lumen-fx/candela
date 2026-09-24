@@ -13598,3 +13598,28 @@ pub fn a_loop_over_a_slice_that_could_change_it_copies_and_bad_ranges_raise_alik
     assert_eq!(debug.code, "slice_out_of_bounds");
     assert_eq!(debug, release);
 }
+
+/// A string longer than six bytes that is built at run time finds the map
+/// entry an equal literal made, and the reverse, in both profiles (#189).
+#[test]
+pub fn a_built_string_finds_the_map_key_with_its_text() {
+    let src = "
+        fn main() {
+            let lit = \"abcdefghijabcdefghijabcdefghij\";
+            let r = \"\";
+            for i in 0..3 {
+                r = r + \"abcdefghij\";
+            }
+            let joined = [\"abcdefghij\", \"abcdefghij\", \"abcdefghij\"].join(\"\");
+            print(r == lit, joined == lit);
+            let m = {\"abcdefghijabcdefghijabcdefghij\": 1};
+            print(m.contains(r), m.contains(joined));
+            let n = {};
+            n.insert(lit, 1);
+            n.insert(joined, 2);
+            print(n.len(), n.get(lit));
+            for k in n.keys() { print(m.get(k)); }
+        }
+    ";
+    assert_eq!(run_output(src), "true\ntrue\ntrue\ntrue\n1\n2\n1\n");
+}

@@ -70,6 +70,51 @@ pub type ObjectPool = Pool<Vec<Data>>;
 pub type CandelaMap = IndexMap<Data, Data, BuildHasherDefault<DataHash>>;
 pub type MapPool = Pool<CandelaMap>;
 
+/// Whether two values are the same as a map key or a list element: the same
+/// value, or two strings with the same text. A string longer than six bytes
+/// lives in the string pool, and the same text can sit in more than one slot.
+#[inline(always)]
+#[must_use]
+pub fn same_key(a: Data, b: Data, strings: &StringPool) -> bool {
+    a == b || (a.is_large_str() && b.is_large_str() && a.as_str(strings) == b.as_str(strings))
+}
+
+/// A key as a map looks it up, matching a stored key by [`same_key`]. It
+/// hashes as [`Data::as_map_key`] files the key, so one that matches sits in
+/// the bucket this looks in.
+pub struct KeyByText<'a> {
+    pub key: Data,
+    pub strings: &'a StringPool,
+}
+
+impl std::hash::Hash for KeyByText<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.as_map_key(self.strings).hash(state);
+    }
+}
+
+impl indexmap::Equivalent<Data> for KeyByText<'_> {
+    fn equivalent(&self, stored: &Data) -> bool {
+        same_key(self.key, *stored, self.strings)
+    }
+}
+
+/// Puts `value` under `key`, replacing the value of a key with the same text
+/// if the map holds one, and answers the value it replaced. Every insert goes
+/// through here, so every key a map holds is filed by [`Data::as_map_key`].
+pub fn map_insert(
+    map: &mut CandelaMap,
+    key: Data,
+    value: Data,
+    strings: &StringPool,
+) -> Option<Data> {
+    if let Some(slot) = map.get_mut(&KeyByText { key, strings }) {
+        return Some(std::mem::replace(slot, value));
+    }
+    map.insert(key.as_map_key(strings), value);
+    None
+}
+
 /// The character count a slot has not been asked for yet.
 const UNCOUNTED: u32 = u32::MAX;
 /// The slot id a cursor that points at no string carries.
@@ -397,7 +442,10 @@ fn obj_eq(
         }
         for (k, v) in x_map {
             if !y_map
-                .get(k)
+                .get(&KeyByText {
+                    key: *k,
+                    strings: string_pool,
+                })
                 .is_some_and(|y_v| obj_eq(*v, *y_v, obj_pool, map_pool, string_pool))
             {
                 return false;
@@ -2027,9 +2075,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 }
             }
             Instr::MapGet(map_reg_id, key_reg_id, dest_reg_id) => {
-                regs[dest_reg_id] = if let Some(elem) =
-                    unsafe { map_pool[regs[map_reg_id].as_map()].get(&regs[key_reg_id]) }
-                {
+                regs[dest_reg_id] = if let Some(elem) = unsafe {
+                    map_pool[regs[map_reg_id].as_map()].get(&KeyByText {
+                        key: regs[key_reg_id],
+                        strings: str_pool,
+                    })
+                } {
                     *elem
                 } else {
                     cold_path();
@@ -2041,7 +2092,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 };
             }
             Instr::MapInsert(map_pool_id, key_reg_id, val_reg_id) => {
-                let old = map_pool[map_pool_id as usize].insert(regs[key_reg_id], regs[val_reg_id]);
+                let old = map_insert(
+                    &mut map_pool[map_pool_id as usize],
+                    regs[key_reg_id],
+                    regs[val_reg_id],
+                    str_pool,
+                );
                 if let Some(old) = old
                     && gc.marking()
                 {
@@ -2049,8 +2105,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 }
             }
             Instr::MapInsertReg(map_reg_id, key_reg_id, val_reg_id) => {
-                let old =
-                    map_pool[regs[map_reg_id].as_map()].insert(regs[key_reg_id], regs[val_reg_id]);
+                let old = map_insert(
+                    &mut map_pool[regs[map_reg_id].as_map()],
+                    regs[key_reg_id],
+                    regs[val_reg_id],
+                    str_pool,
+                );
                 if let Some(old) = old
                     && gc.marking()
                 {
@@ -2064,7 +2124,10 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 // `shift_remove`, not `swap_remove`: the entries after the one
                 // taken out keep their order, and a key put back afterwards
                 // lands at the end.
-                let removed = map_pool[id].shift_remove_entry(&regs[key_reg_id]);
+                let removed = map_pool[id].shift_remove_entry(&KeyByText {
+                    key: regs[key_reg_id],
+                    strings: str_pool,
+                });
                 if let Some((key, value)) = removed
                     && gc.marking()
                 {
@@ -2101,10 +2164,18 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         .into();
                 } else if reg.is_array() {
                     let arg = regs[args.pop_unchecked()];
-                    regs[dest] = obj_pool[reg.as_array()].contains(&arg).into();
+                    regs[dest] = obj_pool[reg.as_array()]
+                        .iter()
+                        .any(|&x| same_key(x, arg, str_pool))
+                        .into();
                 } else if reg.is_map() {
                     let arg = regs[args.pop_unchecked()];
-                    regs[dest] = map_pool[reg.as_map()].contains_key(&arg).into();
+                    regs[dest] = map_pool[reg.as_map()]
+                        .contains_key(&KeyByText {
+                            key: arg,
+                            strings: str_pool,
+                        })
+                        .into();
                 }
             }
             Instr::CallLibFunc(LibFunc::Trim, tgt, dest) => {
@@ -2141,14 +2212,16 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 } else if reg.is_array() {
                     let arr_id = reg.as_array();
                     let element = regs[args.pop_unchecked()];
-                    regs[dest] =
-                        if let Some(idx) = obj_pool[arr_id].iter().position(|x| x == &element) {
-                            idx as i64
-                        } else {
-                            cold_path();
-                            -1
-                        }
-                        .into();
+                    regs[dest] = if let Some(idx) = obj_pool[arr_id]
+                        .iter()
+                        .position(|&x| same_key(x, element, str_pool))
+                    {
+                        idx as i64
+                    } else {
+                        cold_path();
+                        -1
+                    }
+                    .into();
                 }
             }
             Instr::CallLibFunc(LibFunc::IsFloat, tgt, dest) => {

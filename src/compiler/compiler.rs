@@ -34,6 +34,7 @@ use crate::rt::resolve_library_filename;
 use crate::vm::CandelaMap;
 use crate::vm::Pool;
 use crate::vm::StringPool;
+use crate::vm::map_insert;
 use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
 use compiler_data::Ctx;
@@ -1493,9 +1494,19 @@ fn compile_map_literal(
             let key_val = state.registers[key_val_id as usize];
             let id = compile_element(val, as_fn_values, v, ctx, state, output);
             if val.is_constant_literal() {
-                state.pools.maps[map_id].insert(key_val, state.registers[id as usize]);
+                map_insert(
+                    &mut state.pools.maps[map_id],
+                    key_val,
+                    state.registers[id as usize],
+                    &state.pools.strings,
+                );
             } else {
-                state.pools.maps[map_id].insert(key_val, NULL);
+                map_insert(
+                    &mut state.pools.maps[map_id],
+                    key_val,
+                    NULL,
+                    &state.pools.strings,
+                );
                 output.push(Instr::MapInsert(
                     map_id as u16,
                     state.registers.len() as u16,
@@ -1562,9 +1573,19 @@ fn compile_map_literal(
             let key_val = state.registers[key_val_id as usize];
             let val_id = compile_element(val, as_fn_values, v, ctx, state, output);
             if val.is_constant_literal() {
-                state.pools.maps[map_id].insert(key_val, state.registers[val_id as usize]);
+                map_insert(
+                    &mut state.pools.maps[map_id],
+                    key_val,
+                    state.registers[val_id as usize],
+                    &state.pools.strings,
+                );
             } else {
-                state.pools.maps[map_id].insert(key_val, NULL);
+                map_insert(
+                    &mut state.pools.maps[map_id],
+                    key_val,
+                    NULL,
+                    &state.pools.strings,
+                );
                 dynamic.push((key_val, val_id));
             }
         }

@@ -24,6 +24,7 @@ use crate::vm::MapPool;
 use crate::vm::ObjectPool;
 use crate::vm::RegisterFile;
 use crate::vm::StringPool;
+use crate::vm::map_insert;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -1058,9 +1059,9 @@ fn fill(heap: &mut Heap<'_>, v: &Value, d: Data) {
             let id = d.as_map();
             for (k, val) in entries {
                 let key = heap.string(k);
-                heap.maps[id].insert(key, NULL);
+                map_insert(&mut heap.maps[id], key, NULL, heap.strings);
                 let child = shell(heap, val);
-                heap.maps[id].insert(key, child);
+                map_insert(&mut heap.maps[id], key, child, heap.strings);
                 fill(heap, val, child);
             }
         }

@@ -1010,3 +1010,43 @@ fn an_overloaded_operator_roundtrips_through_cdlb() {
         "the artifact must reach the same answers the operator methods give",
     );
 }
+
+/// Strings built at run time find the map entries and list elements equal
+/// literals made, and the reverse, on both paths. A string longer than six
+/// bytes can sit in more than one pool slot, and the artifact carries each
+/// value's hash of its text.
+const STRING_KEY_PROGRAM: &str = "
+fn main() {
+    let lit = \"abcdefghijabcdefghijabcdefghij\";
+    let r = \"\";
+    for i in 0..3 {
+        r = r + \"abcdefghij\";
+    }
+    let joined = [\"abcdefghij\", \"abcdefghij\", \"abcdefghij\"].join(\"\");
+    let m = {\"abcdefghijabcdefghijabcdefghij\": 1};
+    print(m.contains(r), m.contains(joined), m.get(r));
+    let n = {};
+    n.insert(lit, 1);
+    n.insert(joined, 2);
+    n.insert(r, 3);
+    print(n.len(), n.get(lit));
+    n.remove(joined);
+    print(n.len());
+    let xs = [lit];
+    print(xs.contains(r), xs.find(joined));
+    let built = {};
+    built.insert(r, 1);
+    print({\"abcdefghijabcdefghijabcdefghij\": 1} == built);
+}
+";
+
+#[test]
+fn string_keys_match_by_text_across_source_and_artifact() {
+    agrees_across_source_and_artifact(
+        "string_keys_match_by_text_across_source_and_artifact",
+        "strkeys",
+        STRING_KEY_PROGRAM,
+        "true\ntrue\n1\n1\n3\n0\ntrue\n0\ntrue\n",
+        "a string key matches by its text, however the string was made",
+    );
+}
