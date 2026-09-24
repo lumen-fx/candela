@@ -682,15 +682,8 @@ impl Program {
     /// capturing any error as a [`Diagnostic`].
     fn execute_from(&mut self, start: usize) -> Result<(), Diagnostic> {
         let err_ctx = ErrorCtx {
-            instr_src: self.instr_src.clone(),
-            sources: self
-                .sources
-                .iter()
-                .map(|s| Source {
-                    filename: s.filename.clone(),
-                    contents: s.contents.clone(),
-                })
-                .collect(),
+            instr_src: &self.instr_src,
+            sources: &self.sources,
         };
 
         // Move the register file out so the VM can borrow it mutably, then

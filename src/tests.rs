@@ -29,8 +29,8 @@ macro_rules! run_and_check_registers {
             &mut reg,
             &mut arrays,
             &crate::errors::ErrorCtx {
-                instr_src: out.instr_src,
-                sources: vec![Source {
+                instr_src: &out.instr_src,
+                sources: &[Source {
                     filename: filename.into(),
                     contents: String::from($contents),
                 }],
@@ -73,8 +73,8 @@ macro_rules! run {
                 &mut RegisterFile(out.registers),
                 &mut arrays,
                 &crate::errors::ErrorCtx {
-                    instr_src: out.instr_src,
-                    sources: vec![Source {
+                    instr_src: &out.instr_src,
+                    sources: &[Source {
                         filename: filename.into(),
                         contents: String::from($contents),
                     }],
@@ -4514,8 +4514,8 @@ fn run_diag_profile_with(
             &mut RegisterFile(out.registers),
             &mut arrays,
             &crate::errors::ErrorCtx {
-                instr_src: out.instr_src,
-                sources: vec![Source {
+                instr_src: &out.instr_src,
+                sources: &[Source {
                     filename: filename.into(),
                     contents: String::from(src),
                 }],
@@ -7153,8 +7153,8 @@ fn pools_after_run(contents: &str, optimize: bool) -> candela_vm::rt::Pools {
         &mut RegisterFile(out.registers),
         &mut pools,
         &crate::errors::ErrorCtx {
-            instr_src: out.instr_src,
-            sources: vec![Source {
+            instr_src: &out.instr_src,
+            sources: &[Source {
                 filename: filename.into(),
                 contents: String::from(contents),
             }],
@@ -7295,8 +7295,8 @@ pub fn gc_state_persists_across_runs() {
     let mut pools = out.pools;
     let mut reg = RegisterFile(out.registers);
     let err_ctx = crate::errors::ErrorCtx {
-        instr_src: out.instr_src,
-        sources: vec![Source {
+        instr_src: &out.instr_src,
+        sources: &[Source {
             filename: filename.into(),
             contents: String::from(contents),
         }],
@@ -7351,8 +7351,8 @@ pub fn idle_collection_stays_within_its_budget() {
     let mut pools = out.pools;
     let mut reg = RegisterFile(out.registers);
     let err_ctx = crate::errors::ErrorCtx {
-        instr_src: out.instr_src,
-        sources: vec![Source {
+        instr_src: &out.instr_src,
+        sources: &[Source {
             filename: filename.into(),
             contents: String::from(contents),
         }],
@@ -10278,8 +10278,8 @@ pub fn generic_declared_in_an_imported_module() {
         &mut reg,
         &mut arrays,
         &crate::errors::ErrorCtx {
-            instr_src: out.instr_src,
-            sources: out.sources,
+            instr_src: &out.instr_src,
+            sources: &out.sources,
         },
         &out.callsite_registers,
         &[],

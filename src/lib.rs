@@ -184,7 +184,10 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
         &instructions,
         &mut RegisterFile(registers),
         &mut pools,
-        &ErrorCtx { instr_src, sources },
+        &ErrorCtx {
+            instr_src: &instr_src,
+            sources: &sources,
+        },
         &callsite_registers,
         &dyn_lib_fns,
         &structs,
