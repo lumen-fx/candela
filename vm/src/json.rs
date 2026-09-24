@@ -16,6 +16,7 @@ use crate::gc::GcState;
 use crate::gc::Heap;
 use crate::rt::EnumType;
 use crate::rt::Struct;
+use crate::vm::map_insert;
 use crate::vm::{MapPool, ObjectPool, RegisterFile, StringPool};
 
 /// How deeply objects and arrays may nest. Values are read by recursive
@@ -107,9 +108,11 @@ impl JsonParser<'_> {
             }
             self.pos += 1;
             // The key goes in first, so the value's allocation cannot free it.
-            heap.maps[id].insert(key, NULL);
+            // A key the object already had takes the later value, in the place
+            // the first one had.
+            map_insert(&mut heap.maps[id], key, NULL, heap.strings);
             let val = self.parse_value(heap)?;
-            heap.maps[id].insert(key, val);
+            map_insert(&mut heap.maps[id], key, val, heap.strings);
             self.fill(heap, val)?;
             self.skip_ws();
             match self.peek() {
@@ -501,11 +504,11 @@ mod json_tests {
         assert!(json_parse(&doc, &mut obj, &mut map, &mut strings).is_ok());
     }
 
-    /// A string over six bytes is boxed as its pool slot, so two equal strings
-    /// in different slots hash apart. A key stored without interning therefore
-    /// never matches the one a program writes, and `get` misses it.
+    /// A string over six bytes is boxed as its pool slot, and the same text
+    /// can sit in more than one slot. A parsed key is found by its text, the
+    /// way a program looks it up, whatever slot the program's string is in.
     #[test]
-    fn object_keys_are_interned_so_lookup_finds_them() {
+    fn object_keys_are_found_by_their_text() {
         let (mut obj, mut map, mut strings) = pools();
         let parsed = json_parse(
             "{\"n\": 7, \"long_key_name\": 42}",
@@ -518,9 +521,21 @@ mod json_tests {
 
         let short = Data::p_str("n", &mut strings);
         let long = Data::p_str("long_key_name", &mut strings);
+        strings.push(String::from("long_key_name"));
+        let other_slot = Data::large_str_id((strings.len() - 1) as u64);
         let entries = &map[parsed.as_map()];
-        assert_eq!(entries.get(&short).copied().map(Data::as_int), Some(7));
-        assert_eq!(entries.get(&long).copied().map(Data::as_int), Some(42));
+        let get = |key: Data| {
+            entries
+                .get(&crate::vm::KeyByText {
+                    key,
+                    strings: &strings,
+                })
+                .copied()
+                .map(Data::as_int)
+        };
+        assert_eq!(get(short), Some(7));
+        assert_eq!(get(long), Some(42));
+        assert_eq!(get(other_slot), Some(42));
     }
 
     /// A raw multi-byte character is text, not a run of Latin-1 bytes, so it
