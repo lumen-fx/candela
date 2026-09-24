@@ -13404,3 +13404,110 @@ pub fn writing_a_copied_variable_leaves_the_original_alone() {
     );
     assert_eq!(run_output(&src), "5\n7\n2\n1\n[2]\n[1]\n".repeat(3));
 }
+
+/// Two moves where the second refills the register the first read become one
+/// `MovChain`, and rotating values through variables gives the same answer.
+#[test]
+pub fn rotating_values_through_variables_chains_the_moves() {
+    let src = "
+        fn fib(n: int) -> int {
+            let a = 0;
+            let b = 1;
+            let c = 0;
+            for i in 0..n {
+                c = a + b;
+                a = b;
+                b = c;
+            }
+            return a;
+        }
+        fn main() {
+            print(fib(10));
+            let x = 1;
+            let y = 2;
+            x = y;
+            y = x;
+            print(x, y);
+        }
+    ";
+    for optimize in [false, true] {
+        let out = crate::compiler::compile_profile(
+            String::from(src),
+            "chain.cdl",
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+            optimize,
+        );
+        assert!(
+            out.instructions
+                .iter()
+                .any(|instr| matches!(instr, Instr::MovChain(..))),
+            "the rotation is one instruction (release profile: {optimize})"
+        );
+    }
+    assert_eq!(run_output(src), "55\n2\n2\n");
+}
+
+/// A branch that lands on the second of two moves runs only that one, so the
+/// pair stays two instructions.
+#[test]
+pub fn a_move_a_branch_lands_on_is_not_chained() {
+    let src = "
+        fn step(flag: bool, c: int) -> int {
+            let a = 1;
+            let b = c - 1;
+            if flag {
+                a = b;
+            }
+            b = c;
+            return a * 100 + b;
+        }
+        fn main() {
+            print(step(true, 3), step(false, 3));
+        }
+    ";
+    assert_eq!(run_output(src), "203\n103\n");
+}
+
+/// `s.f += x` on a float field is one instruction, and it adds what the field
+/// held before `x` was worked out. A call in `x` could write the field in
+/// between, so that form keeps the read ahead of the call.
+#[test]
+pub fn adding_to_a_float_field_reads_it_before_the_value() {
+    let src = "
+        struct P { x: float, n: int }
+        fn bump(p: P) -> float {
+            p.x = 100.0;
+            return 1.0;
+        }
+        fn main() {
+            let p = P { x: 1.5, n: 1 };
+            let d = 0.25;
+            p.x += d * 2.0;
+            print(p.x);
+            p.x += bump(p);
+            print(p.x);
+            p.n += 2;
+            print(p.n);
+        }
+    ";
+    for optimize in [false, true] {
+        let out = crate::compiler::compile_profile(
+            String::from(src),
+            "field.cdl",
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+            optimize,
+        );
+        let fused = out
+            .instructions
+            .iter()
+            .filter(|instr| matches!(instr, Instr::AddFieldFloat(..)))
+            .count();
+        assert_eq!(
+            fused, 1,
+            "only the addition with no call in it is fused (release profile: {optimize})"
+        );
+    }
+    assert_eq!(run_output(src), "2.0\n3.0\n3\n");
+}

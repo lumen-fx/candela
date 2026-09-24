@@ -131,6 +131,8 @@ been raised for:
   pairs the order the program built them in
 - the loop step and the add-a-constant instructions, which sit among the
   existing instructions and so renumber the ones after them
+- the move chain and the add-to-a-float-field instructions, which renumber the
+  instructions after them the same way
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

@@ -2806,10 +2806,53 @@ fn compile_struct_field_assignment(
     let id = struct_expr
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
+    // `s.f += x` on a float field reads, adds and writes the field in one
+    // instruction. The field is read after `x` is worked out rather than
+    // before, which only a call inside `x` could tell apart, so `x` may hold
+    // none.
+    if let Expr::Add(read, added, _, _) = new_val
+        && let (Expr::GetStructField(read_struct, read_field, _, _), Expr::Var(name, _)) =
+            (read.as_ref(), struct_expr)
+        && read_field == field
+        && matches!(read_struct.as_ref(), Expr::Var(read_name, _) if read_name == name)
+        && state.structs[struct_id as usize].fields[field_index as usize].1 == DataType::Float
+        && new_val_type == DataType::Float
+        && calls_nothing(added, v, ctx, state)
+    {
+        let added_id = added
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id();
+        state.free_reg(added_id, v);
+        output.push(Instr::AddFieldFloat(id, added_id, field_index));
+        return;
+    }
     let new_elem_reg_id = new_val
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
     output.push(Instr::SetFieldStruct(id, new_elem_reg_id, field_index));
+}
+
+/// Whether `expr` is arithmetic on numbers, names, literals and field reads
+/// alone, so working it out runs no candela code and writes nothing.
+fn calls_nothing(expr: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> bool {
+    match expr {
+        Expr::Var(..) | Expr::Float(_) | Expr::Int(_) => true,
+        Expr::GetStructField(inner, _, _, _) => calls_nothing(inner, v, ctx, state),
+        Expr::Add(l, r, _, _)
+        | Expr::Sub(l, r, _, _)
+        | Expr::Mul(l, r, _, _)
+        | Expr::Div(l, r, _, _) => {
+            // An operator on anything but numbers can be a method written in
+            // candela.
+            [l, r].into_iter().all(|side| {
+                matches!(
+                    side.infer_type(v, ctx, state),
+                    DataType::Float | DataType::Int
+                ) && calls_nothing(side, v, ctx, state)
+            })
+        }
+        _ => false,
+    }
 }
 
 fn compile_condition(
@@ -6260,6 +6303,16 @@ pub fn compile_profile(
         });
     }
     use_immediates(&mut instructions, &[], &registers, &const_registers);
+    copies::chain_moves(&mut flow::Program {
+        instructions: &mut instructions,
+        registers: &mut registers,
+        objs: &pools.objs,
+        const_registers: &mut const_registers,
+        instr_src: &mut instr_src,
+        callsite_registers: &mut callsite_registers,
+        functions: &mut functions,
+        indirect: &indirect_registers,
+    });
 
     #[cfg(debug_assertions)]
     if debug {

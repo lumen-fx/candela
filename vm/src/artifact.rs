@@ -89,7 +89,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// the program's order and an artifact from before the change cannot supply it.
 /// Version 12 added the loop step and the add-a-constant instructions, which
 /// sit among the existing ones and so renumber the instructions after them.
-const FORMAT_VERSION: u8 = 12;
+/// Version 13 added the move chain and the add-to-a-float-field instructions,
+/// which renumber the instructions after them the same way.
+const FORMAT_VERSION: u8 = 13;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

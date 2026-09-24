@@ -24,6 +24,8 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
                 | Instr::MapInsert(_, _, _)
                 | Instr::IncInt(_)
                 | Instr::DecInt(_)
+                // Writes two registers, and reads one of them.
+                | Instr::MovChain(_, _, _)
         )
     {
         return false;
@@ -156,7 +158,10 @@ pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
 /// Returns the IDs of all the registers which are modified by the given instructions
 #[must_use]
 pub fn get_tgt_ids(x: &[Instr]) -> Vec<u16> {
-    let mut ids: Vec<u16> = x.iter().filter_map(|i| i.get_tgt_id()).collect();
+    let mut ids: Vec<u16> = Vec::new();
+    for instr in x {
+        instr.for_each_write_reg(|reg| ids.push(reg));
+    }
     ids.sort_unstable();
     ids.dedup();
     ids
@@ -204,11 +209,12 @@ pub fn use_immediates(
     registers: &[Data],
     const_registers: &FxHashMap<Data, u16>,
 ) {
-    let written: FxHashSet<u16> = rest
-        .iter()
-        .chain(instructions.iter())
-        .filter_map(|instr| instr.get_tgt_id())
-        .collect();
+    let mut written: FxHashSet<u16> = FxHashSet::default();
+    for instr in rest.iter().chain(instructions.iter()) {
+        instr.for_each_write_reg(|reg| {
+            written.insert(reg);
+        });
+    }
     let constants: FxHashSet<u16> = const_registers
         .values()
         .copied()
