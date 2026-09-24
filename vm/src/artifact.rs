@@ -39,6 +39,7 @@ use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
 use crate::rt::EnumType;
 use crate::rt::EnumVariant;
+use crate::rt::GcStats;
 use crate::rt::HostFnSig;
 use crate::rt::InstrSrc;
 use crate::rt::LibraryOrigin;
@@ -352,6 +353,31 @@ impl RuntimeProgram {
             &self.structs,
             &self.enums,
         ))
+    }
+
+    /// Does up to about `budget` units of garbage collection while the
+    /// program is idle, and answers whether no collection work is left.
+    ///
+    /// Call it between calls into the program, where the host would otherwise
+    /// wait, such as between frames. It carries on a collection already under
+    /// way, or begins one when the heap has grown enough since the last; on a
+    /// heap that has not, it does nothing and answers `true`. A unit is about
+    /// one object traced or one freed slot, never a length of time, so the
+    /// same calls do the same work on every machine. `collect(u32::MAX)` runs
+    /// a whole collection. Beginning a collection reads every root at once
+    /// whatever the budget.
+    ///
+    /// Once a host has called this, allocations leave more of the work to it
+    /// and begin a collection themselves only when the heap has grown further.
+    pub fn collect(&mut self, budget: u32) -> bool {
+        self.pools.collect(&self.registers, budget)
+    }
+
+    /// What the collector has done over this program's heap, and how large
+    /// the heap is. See [`GcStats`].
+    #[must_use]
+    pub fn gc_stats(&self) -> GcStats {
+        self.pools.gc_stats()
     }
 
     /// The names of every function this artifact exports, in no particular

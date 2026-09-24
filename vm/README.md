@@ -53,6 +53,8 @@ Link this crate alone to run precompiled artifacts: register host functions on a
 `HostRegistry`, load the `.cdlb` against it, and call exported functions by name.
 The [embedding guide](https://candela.lumenfx.dev/integration/embedding/) covers
 both this and the compiler-resident path.
+Call `collect` between frames to collect garbage while nothing waits on the
+program, instead of inside the frame that allocates.
 
 ## Features
 

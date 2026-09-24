@@ -7,7 +7,10 @@
 //! its own source keeps its import paths (`compiler_data::Struct`,
 //! `type_system::DataType`, `expr::Span`).
 
+use crate::data::Data;
 pub use crate::gc::GcState;
+pub use crate::gc::GcStats;
+pub use crate::gc::PoolStats;
 use crate::instr::Instr;
 use crate::vm::MapPool;
 use crate::vm::ObjectPool;
@@ -617,6 +620,25 @@ impl Pools {
             strings,
             gc: GcState::default(),
         }
+    }
+
+    /// Does up to about `budget` units of collection work while the program
+    /// is idle, with `registers` as the roots, and answers whether no
+    /// collection work is left. See [`GcState::collect`].
+    pub fn collect(&mut self, registers: &[Data], budget: u32) -> bool {
+        self.gc.collect(
+            &mut self.objs,
+            &mut self.maps,
+            &mut self.strings,
+            registers,
+            budget,
+        )
+    }
+
+    /// What the collector has done over these pools, and how large they are.
+    #[must_use]
+    pub fn gc_stats(&self) -> GcStats {
+        self.gc.stats(&self.objs, &self.maps, &self.strings)
     }
 }
 
