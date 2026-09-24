@@ -45,9 +45,7 @@ pub fn forward_copies(program: &mut Program<'_>) {
     let mut writes: FxHashMap<u16, usize> = FxHashMap::default();
     let mut reads: FxHashMap<u16, Vec<usize>> = FxHashMap::default();
     for (pos, instr) in instructions.iter().enumerate() {
-        if let Some(reg) = instr.get_tgt_id() {
-            *writes.entry(reg).or_default() += 1;
-        }
+        instr.for_each_write_reg(|reg| *writes.entry(reg).or_default() += 1);
         instr.for_each_read_reg(|reg| reads.entry(reg).or_default().push(pos));
     }
 
@@ -135,4 +133,41 @@ fn carry_span(instr_src: &mut Vec<InstrSrc>, old: Instr, new: Instr) {
             file_id,
         });
     }
+}
+
+/// Joins each pair of moves where the second refills the register the first
+/// read, `b` into `a` and then `c` into `b`, into one `MovChain`. A pair the
+/// second of which a branch can land on stays two moves.
+pub fn chain_moves(program: &mut Program<'_>) {
+    let old = std::mem::take(program.instructions);
+    let lands = branch_targets(&old);
+    let mut joined = vec![false; old.len()];
+    let mut new: Vec<Instr> = Vec::with_capacity(old.len());
+    let mut map: Vec<usize> = Vec::with_capacity(old.len() + 1);
+    let mut pos = 0;
+    while pos < old.len() {
+        map.push(new.len());
+        if let (Instr::Mov(mid, dest), Some(&Instr::Mov(src, refilled))) =
+            (old[pos], old.get(pos + 1))
+            && refilled == mid
+            && dest != mid
+            && !lands[pos + 1]
+        {
+            new.push(Instr::MovChain(dest, mid, src));
+            joined[pos] = true;
+            joined[pos + 1] = true;
+            map.push(new.len());
+            pos += 2;
+            continue;
+        }
+        new.push(old[pos]);
+        pos += 1;
+    }
+    map.push(new.len());
+    if !joined.contains(&true) {
+        *program.instructions = old;
+        return;
+    }
+    relocate(program, &old, &joined, &mut new, &map);
+    *program.instructions = new;
 }

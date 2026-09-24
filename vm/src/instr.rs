@@ -39,6 +39,10 @@ pub enum Instr {
     StrEqJmp(u16, u16, u16),
 
     Mov(u16, u16),
+    /// MovChain(dest, mid, src)\
+    /// dest = mid, then mid = src: two moves where the second refills the
+    /// register the first read, the way `a = b; b = c;` rotates values.
+    MovChain(u16, u16, u16),
     /// SetInt(dest_reg_id, val)\
     /// Writes val directly into dest_reg_id. The operand is narrower than an
     /// `int`, so a wider constant is moved out of its register instead, which
@@ -210,6 +214,10 @@ pub enum Instr {
 
     /// SetFieldStruct(struct_reg_id, new_elem_reg_id, idx)
     SetFieldStruct(u16, u16, u16),
+    /// AddFieldFloat(struct_reg_id, value_reg_id, field_idx)\
+    /// Adds the float in value_reg_id to the float field field_idx of the
+    /// struct, the whole of `s.f += x`.
+    AddFieldFloat(u16, u16, u16),
 
     /// GetIndexArray(array_reg_id, index_reg_id, output_reg_id)
     GetIndexArray(u16, u16, u16),
@@ -349,6 +357,10 @@ impl Instr {
 
     /// The operand naming the register this instruction writes, to look at or
     /// to rewrite. See [`Self::get_tgt_id`].
+    ///
+    /// `MovChain` writes a second register, the one it refills, which this
+    /// does not name; [`Self::for_each_write_reg`] names both. The compiler
+    /// joins moves into it after every pass that rewrites registers.
     pub fn tgt_id_mut(&mut self) -> Option<&mut u16> {
         match self {
             // Instructions that modify no register.
@@ -375,6 +387,7 @@ impl Instr {
             | Self::StoreFuncArg(_)
             | Self::SetElementObj(_, _, _)
             | Self::SetFieldStruct(_, _, _)
+            | Self::AddFieldFloat(_, _, _)
             | Self::MapInsert(_, _, _)
             | Self::MapInsertReg(_, _, _)
             | Self::MapRemove(_, _)
@@ -395,6 +408,7 @@ impl Instr {
             Self::StartErrorCatch(_, y) if *y == u16::MAX => None,
 
             Self::Mov(_, y)
+            | Self::MovChain(y, _, _)
             | Self::SetInt(y, _)
             | Self::SetBool(_, y)
             | Self::CallFunc(_, y)
@@ -471,6 +485,18 @@ impl Instr {
         }
     }
 
+    /// Calls `f` with each register this instruction writes: the one
+    /// [`Self::get_tgt_id`] names, and for `MovChain` the register it refills
+    /// as well.
+    pub fn for_each_write_reg(self, mut f: impl FnMut(u16)) {
+        if let Self::MovChain(_, mid, _) = self {
+            f(mid);
+        }
+        if let Some(reg) = self.get_tgt_id() {
+            f(reg);
+        }
+    }
+
     /// Calls `f` with each register this instruction reads.
     pub fn for_each_read_reg(mut self, mut f: impl FnMut(u16)) {
         self.read_regs_mut(|reg| f(*reg));
@@ -541,6 +567,8 @@ impl Instr {
             | Self::StepIntJmpBack(a, b, _)
             | Self::Push(a, b)
             | Self::SetFieldStruct(a, b, _)
+            | Self::AddFieldFloat(a, b, _)
+            | Self::MovChain(_, a, b)
             | Self::MapGet(a, b, _)
             | Self::MapInsert(_, a, b)
             | Self::MapRemove(a, b)

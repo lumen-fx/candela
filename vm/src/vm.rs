@@ -914,6 +914,10 @@ pub fn execute(
                 continue;
             }
             Instr::Mov(tgt, dest) => regs[dest] = regs.get(tgt),
+            Instr::MovChain(dest, mid, src) => {
+                regs[dest] = regs.get(mid);
+                regs[mid] = regs.get(src);
+            }
             Instr::SetInt(dest, n) => regs[dest] = Data::int(i64::from(n)),
             Instr::SetBool(b, dest) => regs[dest] = b.into(),
             Instr::CallFunc(new_loc, return_id) => {
@@ -1208,6 +1212,14 @@ pub fn execute(
                     shade_overwritten(m.gc, m.str_pool, *slot);
                 }
                 *slot = regs.get(new_elem_reg_id);
+            }
+            // The field holds a float before and after, so the store needs no
+            // barrier: the collector never follows a float.
+            Instr::AddFieldFloat(struct_reg_id, value_reg_id, idx) => {
+                let value = regs[value_reg_id].as_float();
+                let s = m.obj_pool.get_mut(regs[struct_reg_id].as_struct());
+                let slot = unsafe { s.get_unchecked_mut(idx as usize) };
+                *slot = (slot.as_float() + value).into();
             }
             Instr::GetIndexArray(array_reg_id, index, dest) => {
                 let idx = regs[index].as_int();
