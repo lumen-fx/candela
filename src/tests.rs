@@ -7216,6 +7216,58 @@ pub fn strings_past_slot_65536_survive_a_collection() {
 }
 
 #[test]
+pub fn partitioned_lists_survive_a_collection_during_the_partition() {
+    // Partitioning makes one list per run between separators. A collection
+    // that ran while the later ones were being made freed the earlier ones,
+    // and the lists made after it reused their slots.
+    run_and_check_registers!(
+        "
+        fn main() {
+            let src = [];
+            for i in 0..600 {
+                src.push(i);
+                src.push(-1);
+            }
+            let parts = src.partition(-1);
+            let bad = 0;
+            for i in 0..600 {
+                if parts[i].len() != 1 || parts[i][0] != i { bad += 1; }
+            }
+            print(bad);
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn an_interned_key_never_names_a_freed_string() {
+    // Parsing json interns object keys by comparing text across the string
+    // pool. A freed slot kept its text, so a key equal to a dead string was
+    // given that slot, and the next string allocated there overwrote the key.
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            let i = 0;
+            while i < 300 {
+                let t = "garbage_string_" + str(i);
+                i += 1;
+            }
+            let doc = as_map(json_parse("{\"garbage_string_5\": 1}"));
+            let j = 0;
+            while j < 300 {
+                let t = "reuse_every_slot_" + str(j);
+                j += 1;
+            }
+            let k = as_str(doc.keys()[0]);
+            print(k == "garbage_string_" + str(5));
+        }
+        "#,
+        crate::data::TRUE
+    );
+}
+
+#[test]
 pub fn parsed_array_survives_array_gc() {
     // An array a parsed document hangs off its root map is reachable only
     // through that map. The array collector has to follow a map register to
