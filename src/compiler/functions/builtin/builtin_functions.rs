@@ -94,11 +94,13 @@ pub fn builtin_functions(
         "type" => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             let infered = args[0].infer_type(v, ctx, state);
-            state.registers.push(Data::p_str(
+            // The name is a constant: a register the allocator can hand out
+            // again would lose it to whatever lands there before the next run.
+            let name = Data::p_str(
                 format_detailed(&infered, state).as_str(),
                 &mut state.pools.strings,
-            ));
-            Some((state.registers.len() - 1) as u16)
+            );
+            Some(state.const_register(name))
         }
         "float" => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
@@ -183,10 +185,8 @@ pub fn builtin_functions(
                 span,
             );
             let id = if args.is_empty() {
-                state
-                    .registers
-                    .push(Data::p_str("", &mut state.pools.strings));
-                (state.registers.len() - 1) as u16
+                let prompt = Data::p_str("", &mut state.pools.strings);
+                state.const_register(prompt)
             } else {
                 check_arg_type(
                     name,

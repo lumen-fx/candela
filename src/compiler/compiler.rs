@@ -590,10 +590,7 @@ fn compile_array_literal(
 
         if constant_array {
             // The template array is held by a register to prevent it from being freed by the GC
-            let template_reg = {
-                state.registers.push(Data::array(array_id as u32));
-                (state.registers.len() - 1) as u16
-            };
+            let template_reg = state.template_register(Data::array(array_id as u32));
             // `CloneArray` gives the destination its own pool entry and
             // overwrites the register, so what sits there until then is only a
             // placeholder. It names this literal's own template entry rather
@@ -819,12 +816,8 @@ fn compile_struct_literal(
             }
         }
 
-        let template_reg = {
-            state
-                .registers
-                .push(Data::struct_instance(type_id, struct_id as u32));
-            (state.registers.len() - 1) as u16
-        };
+        let template_reg =
+            state.template_register(Data::struct_instance(type_id, struct_id as u32));
         // `CloneStruct` writes the destination register, so until it runs the
         // register holds a placeholder. It names this literal's own template
         // entry, not pool slot 0, so a read of the register file before
@@ -968,12 +961,7 @@ pub(crate) fn compile_enum_construction(
         }
     }
 
-    let template_reg = {
-        state
-            .registers
-            .push(Data::enum_instance(enum_id, pool_idx as u32));
-        (state.registers.len() - 1) as u16
-    };
+    let template_reg = state.template_register(Data::enum_instance(enum_id, pool_idx as u32));
     // `CloneEnum` allocates the destination's own pool entry and overwrites the
     // register, so what sits there until then is only a placeholder. It aims at
     // the template's entry rather than at pool slot 0, which belongs to
@@ -1581,10 +1569,7 @@ fn compile_map_literal(
             }
         }
 
-        let template_reg = {
-            state.registers.push(Data::map(map_id as u32));
-            (state.registers.len() - 1) as u16
-        };
+        let template_reg = state.template_register(Data::map(map_id as u32));
         // `CloneMap` writes the destination register, so until it runs the
         // register holds a placeholder. It names this literal's own template
         // entry, not map-pool slot 0, which belongs to the first map the
@@ -3066,7 +3051,7 @@ fn compile_for_loop(
     );
     // Clean up variables
     v.truncate(v_len);
-    state.free_loop_scope_registers(regs_before, &body, v);
+    state.free_scope_registers(regs_before, &body, v);
     let body_len = body.len() as u16;
 
     // load the element's value into the current_element_id register
@@ -3184,7 +3169,7 @@ fn compile_int_for_loop(
         ctx.no_single_run().advance_offset(output.len() as u16),
         state,
     );
-    state.free_loop_scope_registers(regs_before, &compiled_loop_code, v);
+    state.free_scope_registers(regs_before, &compiled_loop_code, v);
     let compiled_loop_code_len = compiled_loop_code.len() as u16;
 
     // (2) loop_body
@@ -3225,7 +3210,7 @@ fn compile_loop_block(
         ctx.no_single_run().advance_offset(output.len() as u16),
         state,
     );
-    state.free_loop_scope_registers(regs_before, &compiled, v);
+    state.free_scope_registers(regs_before, &compiled, v);
     let code_length = compiled.len() as u16;
     parse_loop_flow_control(&mut compiled, loop_id, code_length + 1, false, true);
     output.extend(compiled);
