@@ -973,6 +973,65 @@ pub fn alloc_string<S: PoolString>(
     }
 }
 
+/// The pools and collector a value built outside the instruction stream
+/// allocates through, with the roots a collection it starts reads.
+///
+/// Every allocation here can start or carry on a collection, so whatever the
+/// builder holds has to be reachable from `registers` or `recursion_stack`
+/// before it allocates again. A nested value is built top-down to keep it so:
+/// the outermost container sits on `recursion_stack` while it is filled, and
+/// each entry goes into its parent before anything inside it is allocated.
+pub(crate) struct Heap<'a> {
+    pub objs: &'a mut ObjectPool,
+    pub maps: &'a mut MapPool,
+    pub strings: &'a mut StringPool,
+    pub gc: &'a mut GcState,
+    pub registers: &'a RegisterFile,
+    pub recursion_stack: &'a mut RegisterFile,
+}
+
+impl Heap<'_> {
+    /// A new empty list.
+    pub fn array(&mut self) -> Data {
+        Data::array(alloc_array(
+            self.objs,
+            self.maps,
+            self.strings,
+            self.registers,
+            self.recursion_stack,
+            self.gc,
+        ))
+    }
+
+    /// A new empty map.
+    pub fn map(&mut self) -> Data {
+        Data::map(alloc_map(
+            self.objs,
+            self.maps,
+            self.strings,
+            self.registers,
+            self.recursion_stack,
+            self.gc,
+        ))
+    }
+
+    /// `s` as a value, sharing the pool slot of an equal string, since a map
+    /// finds a string key by its slot.
+    pub fn string(&mut self, s: &str) -> Data {
+        Data::interned(s, self.strings).unwrap_or_else(|| {
+            Data::string(
+                s,
+                self.objs,
+                self.maps,
+                self.strings,
+                self.registers,
+                self.recursion_stack,
+                self.gc,
+            )
+        })
+    }
+}
+
 /// The deletion barrier: marks `old`, a value a store is about to overwrite or
 /// remove from the heap while marking runs. Out of line, so a store pays one
 /// test of [`GcState::marking`] when no cycle is marking.

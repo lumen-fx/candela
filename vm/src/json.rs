@@ -4,27 +4,19 @@
 //! object becomes a map keyed by strings, an array becomes an array, and a
 //! scalar becomes int/float/string/bool/null. No new runtime type is needed.
 //!
-//! Values are written into the pools with direct pushes rather than the
-//! GC-aware `alloc_*` helpers. A json document is built in one uninterrupted
-//! pass, and a partially built graph is not yet reachable from any register, so
-//! running the collector mid-parse could reclaim it. Direct pushes never invoke
-//! the collector; the slots they add are reclaimed by the next ordinary GC.
+//! Parsed values allocate the way the program's own do, reusing freed slots,
+//! so a parse can start or carry on a collection. The value is built
+//! top-down to stay reachable while it does: the outermost list or map sits on
+//! the recursion stack, a collection root, until the parse ends, and each
+//! entry goes into its parent before anything inside it is allocated. A
+//! string is interned, since a map finds a string key by its slot.
 
 use crate::data::{Data, NULL};
+use crate::gc::GcState;
+use crate::gc::Heap;
 use crate::rt::EnumType;
 use crate::rt::Struct;
-use crate::vm::{CandelaMap, MapPool, ObjectPool, StringPool};
-
-/// Stores a parsed string in the pool and boxes it.
-///
-/// A string over six bytes lives in the pool and is boxed as its slot id, so two
-/// equal strings only compare and hash equal when they share a slot. Map keys go
-/// through here, and a map is keyed by the boxed value, so this interns rather
-/// than pushing blindly: without that, `get` on a parsed object misses every key
-/// longer than six bytes.
-fn store_string(s: &str, str_pool: &mut StringPool) -> Data {
-    Data::p_str(s, str_pool)
-}
+use crate::vm::{MapPool, ObjectPool, RegisterFile, StringPool};
 
 /// How deeply objects and arrays may nest. Values are read by recursive
 /// descent, so without a ceiling a long run of `[` exhausts the native stack
@@ -52,35 +44,27 @@ impl JsonParser<'_> {
         self.bytes.get(self.pos).copied()
     }
 
-    fn parse_value(
-        &mut self,
-        obj_pool: &mut ObjectPool,
-        map_pool: &mut MapPool,
-        str_pool: &mut StringPool,
-    ) -> Result<Data, &'static str> {
+    /// The next value: a scalar, a string, or an empty list or map whose
+    /// opening bracket is consumed, for [`Self::fill`] to fill in once the
+    /// caller has made it reachable.
+    fn parse_value(&mut self, heap: &mut Heap<'_>) -> Result<Data, &'static str> {
         self.skip_ws();
         match self.peek() {
-            Some(b'{') => {
+            Some(open @ (b'{' | b'[')) => {
                 self.depth += 1;
                 if self.depth > MAX_NESTING_DEPTH {
                     return Err("nesting too deep");
                 }
-                let value = self.parse_object(obj_pool, map_pool, str_pool)?;
-                self.depth -= 1;
-                Ok(value)
-            }
-            Some(b'[') => {
-                self.depth += 1;
-                if self.depth > MAX_NESTING_DEPTH {
-                    return Err("nesting too deep");
-                }
-                let value = self.parse_array(obj_pool, map_pool, str_pool)?;
-                self.depth -= 1;
-                Ok(value)
+                self.pos += 1;
+                Ok(if open == b'{' {
+                    heap.map()
+                } else {
+                    heap.array()
+                })
             }
             Some(b'"') => {
                 let s = self.parse_string()?;
-                Ok(store_string(&s, str_pool))
+                Ok(heap.string(&s))
             }
             Some(b't') | Some(b'f') => self.parse_bool(),
             Some(b'n') => self.parse_null(),
@@ -90,20 +74,25 @@ impl JsonParser<'_> {
         }
     }
 
-    fn parse_object(
-        &mut self,
-        obj_pool: &mut ObjectPool,
-        map_pool: &mut MapPool,
-        str_pool: &mut StringPool,
-    ) -> Result<Data, &'static str> {
-        self.pos += 1; // consume '{'
-        let mut map = CandelaMap::default();
+    /// Reads the entries of `d`, a value [`Self::parse_value`] answered, up
+    /// to its closing bracket. Nothing to do for a scalar or a string.
+    fn fill(&mut self, heap: &mut Heap<'_>, d: Data) -> Result<(), &'static str> {
+        if d.is_array() {
+            self.fill_array(heap, d.as_array())?;
+        } else if d.is_map() {
+            self.fill_object(heap, d.as_map())?;
+        } else {
+            return Ok(());
+        }
+        self.depth -= 1;
+        Ok(())
+    }
+
+    fn fill_object(&mut self, heap: &mut Heap<'_>, id: usize) -> Result<(), &'static str> {
         self.skip_ws();
         if self.peek() == Some(b'}') {
             self.pos += 1;
-            let id = map_pool.len() as u32;
-            map_pool.push(map);
-            return Ok(Data::map(id));
+            return Ok(());
         }
         loop {
             self.skip_ws();
@@ -111,60 +100,49 @@ impl JsonParser<'_> {
                 return Err("object key must be a string");
             }
             let key = self.parse_string()?;
-            let key_data = store_string(&key, str_pool);
+            let key = heap.string(&key);
             self.skip_ws();
             if self.peek() != Some(b':') {
                 return Err("expected ':' after object key");
             }
             self.pos += 1;
-            let val = self.parse_value(obj_pool, map_pool, str_pool)?;
-            map.insert(key_data, val);
+            // The key goes in first, so the value's allocation cannot free it.
+            heap.maps[id].insert(key, NULL);
+            let val = self.parse_value(heap)?;
+            heap.maps[id].insert(key, val);
+            self.fill(heap, val)?;
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,
                 Some(b'}') => {
                     self.pos += 1;
-                    break;
+                    return Ok(());
                 }
                 _ => return Err("expected ',' or '}' in object"),
             }
         }
-        let id = map_pool.len() as u32;
-        map_pool.push(map);
-        Ok(Data::map(id))
     }
 
-    fn parse_array(
-        &mut self,
-        obj_pool: &mut ObjectPool,
-        map_pool: &mut MapPool,
-        str_pool: &mut StringPool,
-    ) -> Result<Data, &'static str> {
-        self.pos += 1; // consume '['
-        let mut elems: Vec<Data> = Vec::new();
+    fn fill_array(&mut self, heap: &mut Heap<'_>, id: usize) -> Result<(), &'static str> {
         self.skip_ws();
         if self.peek() == Some(b']') {
             self.pos += 1;
-            let id = obj_pool.len() as u32;
-            obj_pool.push(elems);
-            return Ok(Data::array(id));
+            return Ok(());
         }
         loop {
-            let val = self.parse_value(obj_pool, map_pool, str_pool)?;
-            elems.push(val);
+            let val = self.parse_value(heap)?;
+            heap.objs[id].push(val);
+            self.fill(heap, val)?;
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,
                 Some(b']') => {
                     self.pos += 1;
-                    break;
+                    return Ok(());
                 }
                 _ => return Err("expected ',' or ']' in array"),
             }
         }
-        let id = obj_pool.len() as u32;
-        obj_pool.push(elems);
-        Ok(Data::array(id))
     }
 
     fn parse_string(&mut self) -> Result<String, &'static str> {
@@ -301,18 +279,38 @@ impl JsonParser<'_> {
 
 /// Parses a json document into a `Data` graph. A malformed document returns a
 /// short static reason.
+///
+/// A collection the parse starts reads `registers` and `recursion_stack` as
+/// its roots, so every other value the program still holds has to be
+/// reachable from them, and the caller stores the result before it allocates
+/// again.
 pub fn json_parse(
     input: &str,
     obj_pool: &mut ObjectPool,
     map_pool: &mut MapPool,
     str_pool: &mut StringPool,
+    registers: &RegisterFile,
+    recursion_stack: &mut RegisterFile,
+    gc: &mut GcState,
 ) -> Result<Data, &'static str> {
+    let mut heap = Heap {
+        objs: obj_pool,
+        maps: map_pool,
+        strings: str_pool,
+        gc,
+        registers,
+        recursion_stack,
+    };
     let mut p = JsonParser {
         bytes: input.as_bytes(),
         pos: 0,
         depth: 0,
     };
-    let v = p.parse_value(obj_pool, map_pool, str_pool)?;
+    let v = p.parse_value(&mut heap)?;
+    heap.recursion_stack.0.push(v);
+    let filled = p.fill(&mut heap, v);
+    heap.recursion_stack.0.pop();
+    filled?;
     p.skip_ws();
     if p.pos != p.bytes.len() {
         return Err("trailing characters after value");
@@ -416,12 +414,31 @@ pub fn json_stringify(
 
 #[cfg(test)]
 mod json_tests {
-    use super::{MAX_NESTING_DEPTH, json_parse};
+    use super::MAX_NESTING_DEPTH;
     use crate::data::Data;
-    use crate::vm::{MapPool, ObjectPool, Pool, StringPool};
+    use crate::gc::GcState;
+    use crate::vm::{MapPool, ObjectPool, Pool, RegisterFile, StringPool};
 
     fn pools() -> (ObjectPool, MapPool, StringPool) {
         (Pool(Vec::new()), Pool(Vec::new()), StringPool::default())
+    }
+
+    /// Parses `input` with no roots beside the parse itself.
+    fn json_parse(
+        input: &str,
+        objs: &mut ObjectPool,
+        maps: &mut MapPool,
+        strings: &mut StringPool,
+    ) -> Result<Data, &'static str> {
+        super::json_parse(
+            input,
+            objs,
+            maps,
+            strings,
+            &RegisterFile(Vec::new()),
+            &mut RegisterFile(Vec::new()),
+            &mut GcState::default(),
+        )
     }
 
     #[test]
@@ -504,5 +521,39 @@ mod json_tests {
         .expect("valid array parses");
         let items = &obj[parsed.as_array()];
         assert_eq!(items[0], items[1]);
+    }
+
+    /// A document with thousands of lists and maps starts a collection
+    /// partway through its parse, which marks and sweeps before the parse
+    /// ends, with a dropped earlier parse on the heap for the sweep to free and
+    /// the parse to reuse. What the parse has built so far is reachable only
+    /// through the recursion stack and its parents, and it all survives.
+    #[test]
+    fn a_collection_mid_parse_keeps_the_partial_value() {
+        let entries: Vec<String> = (0..3000)
+            .map(|i| {
+                format!(
+                    "{{\"id\":{i},\"name\":\"an entry named after {i}\",\"tags\":[{i},\"tag {i} of many\"]}}"
+                )
+            })
+            .collect();
+        let doc = format!("[{}]", entries.join(","));
+        let (mut objs, mut maps, mut strings) = pools();
+        let registers = RegisterFile(Vec::new());
+        let mut stack = RegisterFile(Vec::new());
+        let mut gc = GcState::default();
+        let mut parse = |objs: &mut ObjectPool, maps: &mut MapPool, strings: &mut StringPool| {
+            super::json_parse(&doc, objs, maps, strings, &registers, &mut stack, &mut gc)
+                .expect("the document parses")
+        };
+        parse(&mut objs, &mut maps, &mut strings);
+        let parsed = parse(&mut objs, &mut maps, &mut strings);
+        assert!(gc.cycles() > 0, "the parses never started a collection");
+        assert!(stack.0.is_empty(), "the parse left its root behind");
+        let text = super::json_stringify(parsed, &objs, &maps, &strings, &[], &[]);
+        assert!(
+            text == doc,
+            "the parsed value reads back as a different document"
+        );
     }
 }
