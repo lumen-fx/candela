@@ -1589,8 +1589,15 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     // becomes NULL, which is what register 0 expects for a
                     // discarded result.
                     Ok(value) => {
-                        regs[dest] =
-                            crate::embed::marshal_value(&value, obj_pool, map_pool, str_pool);
+                        regs[dest] = crate::embed::marshal_value(
+                            &value,
+                            r,
+                            recursion_stack,
+                            obj_pool,
+                            map_pool,
+                            str_pool,
+                            gc,
+                        );
                     }
                     // The closure raised. Report it where the script called it,
                     // naming the function the way the script spells it.

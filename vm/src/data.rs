@@ -325,20 +325,23 @@ impl Data {
     /// Same as str(), except this never runs the GC because this function is called by the compiler
     #[inline(always)]
     pub fn p_str(s: &str, string_pool: &mut StringPool) -> Self {
-        if s.len() <= 6 {
-            return Self::small_str(s);
-        }
-        let found = string_pool.iter().position(|existing| existing == s);
-        if let Some(id) = found {
-            // The program may hold nothing that reaches this slot, so a cycle
-            // in progress counts it as reached from here on.
-            string_pool.shade(id);
-            Self::tagged(NAN_STRING_LARGE | id as u64)
-        } else {
+        Self::interned(s, string_pool).unwrap_or_else(|| {
             let string_pool_id = string_pool.len() as u64;
             string_pool.push(s.to_owned());
             Self::tagged(NAN_STRING_LARGE | string_pool_id)
+        })
+    }
+    /// `s` as a value without allocating: inline if it is six bytes or
+    /// shorter, else the pool slot already holding it, if one does.
+    pub fn interned(s: &str, string_pool: &mut StringPool) -> Option<Self> {
+        if s.len() <= 6 {
+            return Some(Self::small_str(s));
         }
+        let id = string_pool.iter().position(|existing| existing == s)?;
+        // The program may hold nothing that reaches this slot, so a cycle in
+        // progress counts it as reached from here on.
+        string_pool.shade(id);
+        Some(Self::tagged(NAN_STRING_LARGE | id as u64))
     }
     /// Allocates a string, storing it directly inside the value if it is six
     /// bytes or shorter and in the string pool otherwise. A pooled string can

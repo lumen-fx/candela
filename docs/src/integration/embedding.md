@@ -342,6 +342,10 @@ Invokes a script function by name and returns its value, or `Value::Null` for a
 function that returns nothing. Arguments are `Value`s; `.into()` covers the
 scalars.
 
+The first call with a given set of argument types compiles an entry for it,
+and later calls with the same types reuse that entry, so a function a host
+calls every frame is compiled once.
+
 The call is type-checked against the function's signature, so a wrong argument
 type comes back as a `Diagnostic` rather than corrupting the run. Annotate the
 parameters of a function a host calls. A function called only from the script
@@ -625,6 +629,11 @@ one when it holds what you ask for.
 crosses either way unchanged. Arrays are homogeneous and maps are string-keyed,
 matching how candela types them. A struct read back from a script arrives as a
 `Map` of its fields.
+
+A list or map argument is built in the program's heap the way one the script
+builds is, reusing the space of values the collector has freed. Once the call
+returns, it is garbage unless the script kept it, so a host that passes a fresh
+list every frame does not grow the heap.
 
 An [enum](../language/enums.md) arrives as `Value::Enum`, naming the variant it
 holds and carrying that variant's payload in declaration order; a nullary

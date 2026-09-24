@@ -28,7 +28,7 @@ use crate::embed::HostDispatch;
 use crate::embed::HostRegistry;
 use crate::embed::Value;
 use crate::embed::describe_value;
-use crate::embed::marshal_value;
+use crate::embed::marshal_args;
 use crate::embed::unmarshal_value;
 use crate::embed::value_matches_type;
 use crate::errors::Diagnostic;
@@ -329,19 +329,12 @@ impl RuntimeProgram {
 
         let entry = export.entry;
         let ret_register = export.ret_register as usize;
-        // Copied out so the pools can be borrowed mutably for marshalling; an
-        // argument list is a handful of registers at most.
-        let arg_registers = export.arg_registers.clone();
-
-        for (register, arg) in arg_registers.iter().zip(args) {
-            let handle = marshal_value(
-                arg,
-                &mut self.pools.objs,
-                &mut self.pools.maps,
-                &mut self.pools.strings,
-            );
-            self.registers[*register as usize] = handle;
-        }
+        marshal_args(
+            args,
+            &export.arg_registers,
+            &mut self.registers,
+            &mut self.pools,
+        );
 
         self.execute_from(entry)?;
 
