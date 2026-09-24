@@ -21,7 +21,7 @@ use crate::vm::StringPool;
 pub fn string_gc(
     array_pool: &ObjectPool,
     map_pool: &MapPool,
-    string_pool: &StringPool,
+    string_pool: &mut StringPool,
     free_strings: &mut Vec<u32>,
     registers: &RegisterFile,
     recursion_stack: &RegisterFile,
@@ -33,4 +33,11 @@ pub fn string_gc(
     free_strings.clear();
     gc.string_live
         .push_unmarked(string_pool.len(), free_strings);
+    // A freed slot gives up its text. Interning finds a string by comparing
+    // text across the whole pool, so a freed slot that kept its text would be
+    // handed out as a live string and then overwritten by the next allocation
+    // that reuses the slot.
+    for &id in free_strings.iter() {
+        string_pool.release(id as usize);
+    }
 }

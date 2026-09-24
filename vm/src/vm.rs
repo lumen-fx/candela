@@ -72,6 +72,9 @@ const UNCOUNTED: u32 = u32::MAX;
 /// The slot id a cursor that points at no string carries.
 const NO_STRING: u32 = u32::MAX;
 
+/// The most bytes a freed string slot keeps room for.
+const KEEP_FREED_STRING_CAPACITY: usize = 256;
+
 /// Where a walk over a pooled string stopped.
 #[derive(Clone, Copy)]
 struct StrCursor {
@@ -169,6 +172,17 @@ impl StringPool {
         let slot = unsafe { self.strings.get_unchecked_mut(index) };
         slot.char_len.set(UNCOUNTED);
         &mut slot.text
+    }
+    /// Empties a slot the collector freed. A long string's buffer goes back
+    /// to the allocator rather than waiting in a dead slot for the next
+    /// string written there.
+    pub fn release(&mut self, index: usize) {
+        let text = self.get_mut(index);
+        if text.capacity() > KEEP_FREED_STRING_CAPACITY {
+            *text = String::new();
+        } else {
+            text.clear();
+        }
     }
     /// The character count of the string in `id`, walked once and then
     /// remembered on the slot.
@@ -2534,8 +2548,13 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     }
                     split_ranges.push((start, source_array.len()));
 
-                    // alloc one array per range
-                    let mut sub_arrays: Vec<Data> = Vec::with_capacity(split_ranges.len());
+                    // One array per range. Each goes onto the recursion stack
+                    // as soon as it is made, because that stack is a
+                    // collection root and a Rust-local buffer is not: the next
+                    // range's allocation can run the collector, which would
+                    // free the lists made before it and hand their slots out
+                    // again.
+                    let base = recursion_stack.len();
                     for (start, end) in split_ranges {
                         let dest_array_id = alloc_array(
                             obj_pool,
@@ -2560,7 +2579,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                                 );
                             }
                         }
-                        sub_arrays.push(Data::array(dest_array_id as u32));
+                        recursion_stack.0.push(Data::array(dest_array_id as u32));
                     }
 
                     let array_id = alloc_array(
@@ -2572,7 +2591,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         gc_array_threshold,
                         gc,
                     );
-                    obj_pool[array_id as usize] = sub_arrays;
+                    let parts = obj_pool.get_mut(array_id as usize);
+                    parts.extend(recursion_stack.0.drain(base..));
 
                     regs[dest_register] = Data::array(array_id);
                 }
@@ -2685,6 +2705,14 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             #[cfg(not(target_arch = "wasm32"))]
             Instr::CallLibFunc(LibFunc::Argv, _, dest) => {
+                // The strings are rooted on the recursion stack while the rest
+                // are made, since each one's allocation can run the collector,
+                // and the list is made last for the same reason.
+                let base = recursion_stack.len();
+                for arg in std::env::args().skip(crate::rt::argv_skip()) {
+                    let s = string!(arg);
+                    recursion_stack.0.push(s);
+                }
                 let array_id = alloc_array(
                     obj_pool,
                     map_pool,
@@ -2694,10 +2722,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     gc_array_threshold,
                     gc,
                 );
-                obj_pool[array_id as usize] = std::env::args()
-                    .skip(crate::rt::argv_skip())
-                    .map(|s| string!(s))
-                    .collect::<Vec<Data>>();
+                let list = obj_pool.get_mut(array_id as usize);
+                list.extend(recursion_stack.0.drain(base..));
                 regs[dest] = Data::array(array_id);
             }
             Instr::CallLibFuncVoid(LibFuncVoid::Sort, tgt, _) => {
