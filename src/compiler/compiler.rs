@@ -20,6 +20,7 @@ use crate::compiler::compiler_errors::error_not_literal_map_key;
 use crate::compiler::compiler_errors::error_range_invalid_type;
 use crate::compiler::compiler_errors::error_shift_count_out_of_range;
 use crate::compiler::compiler_errors::error_type_arg_count;
+use crate::compiler::compiler_errors::error_type_has_no_c_representation;
 use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::compiler::imports::ImportResolver;
@@ -5014,6 +5015,29 @@ fn open_logical_dylib(dirs: &[&Path], filename: &str) -> Option<Library> {
     unsafe { Library::new(filename) }.ok()
 }
 
+/// Whether a value of type `ty` has a C shape a `dylib` call can pass or
+/// return: an `int`, a `float`, a `string`, an array, `null` for a function
+/// that returns nothing, or a struct whose fields all have one. `depth` stops a
+/// struct that holds itself from recursing without end.
+fn has_c_representation(ty: &DataType, structs: &[Struct], depth: usize) -> bool {
+    match ty {
+        DataType::Int
+        | DataType::Float
+        | DataType::String
+        | DataType::Array(_)
+        | DataType::Null => true,
+        DataType::Struct(id) => {
+            depth < structs.len()
+                && structs.get(*id as usize).is_some_and(|s| {
+                    s.fields
+                        .iter()
+                        .all(|(_, field, _)| has_c_representation(field, structs, depth + 1))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Opens the library a path import (`dylib "../native/mylib"`) names, and
 /// returns the namespace name its functions live under.
 ///
@@ -5729,6 +5753,23 @@ fn resolve_types(
                     fns,
                     generics,
                 });
+                // Every type a C function takes or returns needs a C shape;
+                // one that has none is refused here, at the signature, rather
+                // than when the calling interface is built from it.
+                if let Some(ty) = fn_args
+                    .iter()
+                    .chain(std::iter::once(&fn_return_type))
+                    .find(|ty| !has_c_representation(ty, structs, 0))
+                {
+                    error_type_has_no_c_representation(
+                        fn_name,
+                        ty,
+                        *fn_name_span,
+                        src_file_idx,
+                        sources,
+                        TypeNames { structs, enums },
+                    );
+                }
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),

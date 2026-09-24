@@ -463,6 +463,49 @@ pub fn error_cannot_load_dynlib(span: Span, file_idx: u16, sources: &[Source]) -
     );
 }
 
+/// A `dylib` signature names a type C has no representation for: a `bool`, an
+/// enum, a map, a union, `any` or a function, or a struct holding one.
+#[inline(never)]
+#[cold]
+pub fn error_type_has_no_c_representation(
+    symbol: &str,
+    ty: &DataType,
+    symbol_span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let type_name = types.of(ty).to_string();
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), symbol_span.into()),
+            )
+            .with_message("Type has no C representation")
+            .with_label(
+                Label::new((src.filename.as_str(), symbol_span.into()))
+                    .with_message(format_args!(
+                        "{} takes or returns {}, which has no C representation",
+                        blue(symbol),
+                        red(&type_name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "A dylib signature takes int, float, string, arrays and structs of those, and returns any of them but an array",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        symbol_span,
+        &format!("{symbol} takes or returns {type_name}, which has no C representation"),
+        "no_c_representation",
+    );
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_cannot_find_dynlib_symbol(

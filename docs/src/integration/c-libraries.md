@@ -89,8 +89,9 @@ directory holding builds for several architectures.
 | struct | the C struct of the same field types, by value |
 | omitted return | `void` |
 
-Anything else has no C representation and is rejected when the signature is
-compiled: `bool`, enums, maps, union types and `any`.
+Anything else has no C representation and is a compile error at the signature
+(`no_c_representation`): `bool`, enums, maps, union types, function types and
+`any`, and a struct holding any of those.
 
 Strings you pass in are copied into a null-terminated buffer that lives for the
 duration of the call, so the C side must not keep the pointer. A string
