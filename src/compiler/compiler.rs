@@ -3124,6 +3124,7 @@ fn compile_int_for_loop(
     // ran once, until the register was shared: a literal start is the
     // constant every earlier-compiled function reads for that literal, and a
     // variable start is the variable itself, so the loop would advance both.
+    let output_len = output.len();
     let start_elem_id = start_elem
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
@@ -3134,7 +3135,7 @@ fn compile_int_for_loop(
         && state.const_registers.values().any(|&v| v == start_elem_id)
     {
         output.push(Instr::SetInt(elem_id, n));
-    } else {
+    } else if !write_scratch_into(output, output_len, start_elem_id, elem_id, v, state) {
         output.push(Instr::Mov(start_elem_id, elem_id));
     }
     let end_elem_id = end_elem
@@ -3340,6 +3341,7 @@ fn compile_var_declaration(
                 .unwrap_id()
         }
     } else {
+        let output_len = output.len();
         let src_id = if as_fn_value {
             compile_fn_value(value, v, ctx, state, output, None)
         } else {
@@ -3349,7 +3351,9 @@ fn compile_var_declaration(
         };
         if !captured && code_modifies_variable(name, remaining_code) {
             let mutable_id = state.alloc_reg();
-            move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
+            if !write_scratch_into(output, output_len, src_id, mutable_id, v, state) {
+                move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
+            }
             mutable_id
         } else {
             src_id
@@ -3417,6 +3421,39 @@ fn join_fn_value_set(
     for arg_types in used_at {
         ensure_indirect_impl(fn_id as usize, &arg_types, span, output, v, ctx, state);
     }
+}
+
+/// Makes the instructions from `from` on write their value into `dest` instead
+/// of `scratch`, so it does not take a move to get there, and answers whether
+/// it did.
+///
+/// It does when `scratch` holds nothing but that value: the last of those
+/// instructions writes it, and it is not a variable's register, a constant or
+/// a register the compiler keeps for itself. A variable written more than once
+/// needs a register of its own, and this is how its first value lands there
+/// directly. `scratch` is free again afterwards.
+fn write_scratch_into(
+    output: &mut [Instr],
+    from: usize,
+    scratch: u16,
+    dest: u16,
+    v: &[Variable],
+    state: &mut State<'_>,
+) -> bool {
+    let fresh = output.len() > from
+        && output[from..]
+            .iter()
+            .rev()
+            .find_map(|instr| instr.get_tgt_id())
+            == Some(scratch)
+        && !v.iter().any(|var| var.register_id == scratch)
+        && !state.const_registers.values().any(|&reg| reg == scratch)
+        && !state.reserved_registers.contains(&scratch);
+    if !fresh || !move_to_id(&mut output[from..], dest) {
+        return false;
+    }
+    state.free_reg(scratch, v);
+    true
 }
 
 fn compile_var_assignment(

@@ -13312,3 +13312,38 @@ pub fn a_type_name_survives_repeated_calls() {
     ";
     assert_eq!(run_output(src), "int\n1\nint\n3\nint\n1\n");
 }
+
+/// A variable written more than once takes the first value it is given
+/// straight into its own register, in both profiles: the instruction that
+/// works the value out writes it there, and no move follows.
+#[test]
+pub fn a_reassigned_variable_takes_its_first_value_without_a_move() {
+    let src = "
+        fn f(a: float, b: float) -> float {
+            let m = (a * a + b * b).sqrt();
+            m = m * 2.0;
+            let s = a * b;
+            s = s + m;
+            for j in int(a) + 1..10 { s = s + 1.0; }
+            return s;
+        }
+        fn main() { print(f(3.0, 4.0)); }
+    ";
+    for optimize in [false, true] {
+        let out = crate::compiler::compile_profile(
+            String::from(src),
+            "moves.cdl",
+            false,
+            &crate::compiler::imports::ImportResolver::new(),
+            optimize,
+        );
+        let moved_on = out.instructions.windows(2).find(
+            |pair| matches!(pair[1], Instr::Mov(from, _) if pair[0].get_tgt_id() == Some(from)),
+        );
+        assert_eq!(
+            moved_on, None,
+            "a value is worked out where its variable lives (release profile: {optimize})"
+        );
+    }
+    assert_eq!(run_output(src), "28.0\n");
+}
