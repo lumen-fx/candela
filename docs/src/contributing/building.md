@@ -145,6 +145,15 @@ runs the root package's suites:
   through the binary and checks it exits cleanly. This is the standard library's
   test suite.
 
+The `gc-torture` feature of `candela-vm` runs a collection cycle on every
+allocation, one unit of work at a time, and checks each finished mark phase
+against a fresh trace from the roots, so a store the collector's barriers miss
+fails the test that made it. Every suite runs this way too:
+
+```sh
+cargo test --workspace --features candela-vm/gc-torture
+```
+
 The other two crates are not reached by a root `cargo test`:
 
 ```sh
@@ -183,6 +192,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets
 cargo test --workspace
 cargo test --features embed
+cargo test --workspace --features candela-vm/gc-torture
 cargo build --target wasm32-unknown-unknown
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   cargo test --target wasm32-unknown-unknown --test wasm_std
@@ -193,8 +203,8 @@ package. Do not add new ones. If a lint is wrong for your case, allow it at the
 narrowest scope with a comment saying why.
 
 Continuous integration builds and tests the whole workspace on Linux, macOS and
-Windows, adds a Linux run with the `embed` feature and a WebAssembly build with its
-tests, and
+Windows, adds Linux runs with the `embed` feature and with `gc-torture`, and a
+WebAssembly build with its tests, and
 gates on `cargo fmt --all --check` and on clippy with warnings denied. A
 separate job exercises the Windows installer end to end when the installer or
 the update logic changes.

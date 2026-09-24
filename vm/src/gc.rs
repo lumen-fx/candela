@@ -25,6 +25,30 @@
 //! Work is counted in units: one per chunk walked, one per 64 slots swept and
 //! one per slot freed. A step is given a budget in these units and stops once
 //! it has spent it.
+//!
+//! The program keeps running between steps, so marking is
+//! snapshot-at-the-beginning: every object reachable when the cycle began is
+//! marked before the sweep starts, whatever the program does to the heap in
+//! the meantime. Three rules keep that true:
+//!
+//! - A store that overwrites or removes a value from a list, struct, cell or
+//!   map while marking runs marks the value it takes out first (the deletion
+//!   barrier, [`shade_overwritten`]). A value the program read out of the heap
+//!   and kept only in a register is still marked that way.
+//! - A list or map whose entries move in place (a removal, a sort, a reverse)
+//!   after marking has walked part of it is walked again from the start
+//!   ([`rescan_list`], [`rescan_map`]), since an entry could have moved from
+//!   the part not yet walked into the part already walked.
+//! - Interning a string hands out a slot found by its text, which the program
+//!   may have held no reference to; the slot is marked as it is handed out.
+//!
+//! Registers and the recursion stack take no barrier. They are read once, when
+//! the cycle begins, and anything they receive later was either reachable then
+//! or allocated since.
+//!
+//! Building with the `gc-torture` feature runs a cycle on every allocation, a
+//! unit of work at a time, and checks at the end of every mark phase that a
+//! fresh trace from the roots finds nothing unmarked.
 
 use crate::data::Data;
 use crate::data::PoolString;
@@ -44,6 +68,14 @@ pub const MIN_GC_THRESHOLD: u32 = 256;
 /// allocator instead of sitting in a dead slot until something reuses it.
 const KEEP_FREED_CAPACITY: usize = 64;
 
+/// Collect on every allocation, a unit at a time, and check every mark phase
+/// against a fresh trace. See the module documentation.
+const TORTURE: bool = cfg!(feature = "gc-torture");
+
+/// The least a threshold falls to: under torture every allocation starts a
+/// cycle.
+const THRESHOLD_FLOOR: u32 = if TORTURE { 0 } else { MIN_GC_THRESHOLD };
+
 /// The most entries of one list or map a single unit of marking walks. A large
 /// list is walked a chunk at a time, so no single step has to walk all of it.
 pub const CHUNK: u32 = 64;
@@ -61,6 +93,12 @@ impl MarkBits {
     pub fn reset(&mut self, len: usize) {
         self.0.clear();
         self.0.resize(len.div_ceil(64), 0);
+    }
+    /// Whether slot `i` is marked.
+    #[inline(always)]
+    #[must_use]
+    pub fn contains(&self, i: usize) -> bool {
+        unsafe { self.0.get_unchecked(i / 64) & (1u64 << (i % 64)) != 0 }
     }
     /// Marks slot `i` and reports whether it was already marked.
     #[inline(always)]
@@ -92,6 +130,9 @@ impl MarkBits {
 /// collection whether anything survived or not.
 #[inline(always)]
 fn next_threshold(pool_len: usize, freed: usize) -> u32 {
+    if TORTURE {
+        return 0;
+    }
     let live = pool_len - freed;
     (live.saturating_mul(2).min(u32::MAX as usize) as u32).max(MIN_GC_THRESHOLD)
 }
@@ -246,9 +287,9 @@ impl Default for GcState {
             free_arrays: Vec::new(),
             free_maps: Vec::new(),
             free_strings: Vec::new(),
-            array_threshold: MIN_GC_THRESHOLD,
-            map_threshold: MIN_GC_THRESHOLD,
-            string_threshold: MIN_GC_THRESHOLD,
+            array_threshold: THRESHOLD_FLOOR,
+            map_threshold: THRESHOLD_FLOOR,
+            string_threshold: THRESHOLD_FLOOR,
             phase: Phase::Idle,
             tracer: Tracer::default(),
             sweep_word: 0,
@@ -260,10 +301,22 @@ impl Default for GcState {
 }
 
 impl GcState {
+    /// Whether this build runs a cycle on every allocation, a unit of work at
+    /// a time, which is what the `gc-torture` feature turns on.
+    pub const TORTURE: bool = TORTURE;
+
     /// How many collections have begun over these pools.
     #[must_use]
     pub const fn cycles(&self) -> u64 {
         self.cycles
+    }
+
+    /// Whether marking is under way, which is when a store has to mark the
+    /// value it overwrites.
+    #[inline(always)]
+    #[must_use]
+    pub(crate) fn marking(&self) -> bool {
+        self.phase == Phase::Mark
     }
 
     /// Whether a cycle is in progress.
@@ -322,6 +375,7 @@ impl GcState {
         objs: &mut ObjectPool,
         maps: &mut MapPool,
         strings: &mut StringPool,
+        roots: [&[Data]; 2],
         budget: u32,
     ) -> bool {
         let mut spent = 0u32;
@@ -337,6 +391,9 @@ impl GcState {
                         spent += 1;
                     }
                     if self.tracer.work.is_empty() {
+                        if TORTURE {
+                            self.verify(objs, maps, strings, roots);
+                        }
                         self.phase = Phase::Sweep(Swept::Arrays);
                         self.sweep_word = 0;
                     }
@@ -463,7 +520,52 @@ impl GcState {
             spent = self.begin(objs, maps, strings, roots);
         }
         self.record(spent);
-        self.step(objs, maps, strings, u32::MAX);
+        let budget = if TORTURE { 1 } else { u32::MAX };
+        self.step(objs, maps, strings, roots, budget);
+    }
+
+    /// Checks a finished mark phase against a fresh trace from `roots`: every
+    /// object the trace reaches that the cycle is responsible for has to be
+    /// marked, or the sweep would free something the program can still read.
+    #[cold]
+    #[inline(never)]
+    fn verify(&self, objs: &ObjectPool, maps: &MapPool, strings: &StringPool, roots: [&[Data]; 2]) {
+        let t = &self.tracer;
+        let mut seen_arrays = vec![false; objs.len()];
+        let mut seen_maps = vec![false; maps.len()];
+        let mut stack: Vec<Data> = roots.iter().flat_map(|r| r.iter().copied()).collect();
+        while let Some(d) = stack.pop() {
+            if d.is_map() {
+                let id = d.as_map();
+                if std::mem::replace(&mut seen_maps[id], true) {
+                    continue;
+                }
+                assert!(
+                    id >= t.map_limit as usize || t.map_marks.contains(id),
+                    "gc-torture: map {id} is reachable but unmarked at the end of marking"
+                );
+                for (k, v) in &maps[id] {
+                    stack.push(*k);
+                    stack.push(*v);
+                }
+            } else if d.is_array() || d.is_struct() || d.is_enum() {
+                let id = d.as_array();
+                if std::mem::replace(&mut seen_arrays[id], true) {
+                    continue;
+                }
+                assert!(
+                    id >= t.array_limit as usize || t.array_marks.contains(id),
+                    "gc-torture: object {id} is reachable but unmarked at the end of marking"
+                );
+                stack.extend_from_slice(&objs[id]);
+            } else if d.is_large_str() {
+                let id = d.get_str_pool_id();
+                assert!(
+                    id >= strings.mark_limit() || strings.marks().contains(id),
+                    "gc-torture: string {id} is reachable but unmarked at the end of marking"
+                );
+            }
+        }
     }
 }
 
@@ -478,6 +580,9 @@ pub fn alloc_array(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u32 {
+    if TORTURE {
+        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
+    }
     if let Some(id) = gc.free_arrays.pop() {
         objs[id as usize].clear();
         return id;
@@ -505,6 +610,9 @@ pub fn alloc_map(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u32 {
+    if TORTURE {
+        gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
+    }
     if let Some(id) = gc.free_maps.pop() {
         maps[id as usize].clear();
         return id;
@@ -533,7 +641,9 @@ pub fn alloc_string<S: PoolString>(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u64 {
-    if gc.free_strings.is_empty() && (gc.active() || strings.len() >= gc.string_threshold as usize)
+    if TORTURE
+        || gc.free_strings.is_empty()
+            && (gc.active() || strings.len() >= gc.string_threshold as usize)
     {
         gc.allocation_step(objs, maps, strings, [&registers.0, &recursion_stack.0]);
     }
@@ -544,5 +654,44 @@ pub fn alloc_string<S: PoolString>(
         let id = strings.len() as u64;
         s.push_to_pool(strings);
         id
+    }
+}
+
+/// The deletion barrier: marks `old`, a value a store is about to overwrite or
+/// remove from the heap while marking runs. Out of line, so a store pays one
+/// test of [`GcState::marking`] when no cycle is marking.
+#[cold]
+#[inline(never)]
+pub fn shade_overwritten(gc: &mut GcState, strings: &mut StringPool, old: Data) {
+    gc.tracer.shade(strings, old);
+}
+
+/// Walks list `id` again from its first entry, if marking has already reached
+/// it. Called after its entries moved in place.
+#[cold]
+#[inline(never)]
+pub fn rescan_list(gc: &mut GcState, id: usize) {
+    let t = &mut gc.tracer;
+    if id < t.array_limit as usize && t.array_marks.contains(id) {
+        t.work.push(Grey {
+            id: id as u32,
+            from: 0,
+            map: false,
+        });
+    }
+}
+
+/// Walks map `id` again from its first entry, if marking has already reached
+/// it. Called after its entries moved in place.
+#[cold]
+#[inline(never)]
+pub fn rescan_map(gc: &mut GcState, id: usize) {
+    let t = &mut gc.tracer;
+    if id < t.map_limit as usize && t.map_marks.contains(id) {
+        t.work.push(Grey {
+            id: id as u32,
+            from: 0,
+            map: true,
+        });
     }
 }

@@ -326,8 +326,13 @@ impl Data {
     #[inline(always)]
     pub fn p_str(s: &str, string_pool: &mut StringPool) -> Self {
         if s.len() <= 6 {
-            Self::small_str(s)
-        } else if let Some(id) = string_pool.iter().position(|existing| existing == s) {
+            return Self::small_str(s);
+        }
+        let found = string_pool.iter().position(|existing| existing == s);
+        if let Some(id) = found {
+            // The program may hold nothing that reaches this slot, so a cycle
+            // in progress counts it as reached from here on.
+            string_pool.shade(id);
             Self::tagged(NAN_STRING_LARGE | id as u64)
         } else {
             let string_pool_id = string_pool.len() as u64;

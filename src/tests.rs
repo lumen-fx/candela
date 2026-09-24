@@ -7185,7 +7185,11 @@ pub fn gc_state_persists_across_runs() {
             0,
         );
     }
-    assert_eq!(pools.gc.cycles(), 1);
+    // Under gc-torture every allocation runs the collector, so the count
+    // says nothing about thresholds there.
+    if !candela_vm::rt::GcState::TORTURE {
+        assert_eq!(pools.gc.cycles(), 1);
+    }
     assert!(pools.objs.len() < 512, "pool grew to {}", pools.objs.len());
 }
 
@@ -7264,6 +7268,175 @@ pub fn an_interned_key_never_names_a_freed_string() {
         }
         "#,
         crate::data::TRUE
+    );
+}
+
+// The collector marks while the program runs, so a value can move between
+// objects during a cycle. These programs move values around while they
+// allocate; under the gc-torture feature every allocation runs a unit of
+// marking, and any value the barriers miss is caught by the trace check at the
+// end of each mark phase or read back wrong here.
+
+#[test]
+pub fn a_value_moved_between_lists_during_marking_survives() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let a = [[0]];
+            let b = [[1000]];
+            for i in 1..200 {
+                a.push([i]);
+                b.push([i + 1000]);
+            }
+            for round in 0..3000 {
+                let k = round % 200;
+                let moved = b[k];
+                b[k] = [round];
+                a[(k + 37) % 200] = moved;
+                let junk = [round, round, round];
+            }
+            let bad = 0;
+            for i in 0..200 {
+                if a[i].len() != 1 { bad += 1; }
+                if b[i].len() != 1 { bad += 1; }
+            }
+            print(bad);
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn a_value_moved_out_of_a_struct_field_during_marking_survives() {
+    run_and_check_registers!(
+        "
+        struct Holder {
+            item: int[],
+        }
+
+        fn main() {
+            let holders = [Holder { item: [0] }];
+            for i in 1..100 {
+                holders.push(Holder { item: [i] });
+            }
+            for round in 0..3000 {
+                let from = holders[round % 100];
+                let to = holders[(round * 7 + 3) % 100];
+                let moved = from.item;
+                from.item = [round];
+                to.item = moved;
+                let junk = [round, round, round];
+            }
+            let bad = 0;
+            for h in holders {
+                if h.item.len() != 1 { bad += 1; }
+            }
+            print(bad);
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn a_captured_variable_reassigned_during_marking_survives() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let current = [0];
+            let read = fn() { return current; };
+            let bad = 0;
+            for round in 1..3000 {
+                let previous = read();
+                current = [round];
+                let junk = [round, round, round];
+                if previous.len() != 1 || read()[0] != round { bad += 1; }
+            }
+            print(bad);
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn map_values_moved_and_removed_during_marking_survive() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let m = {0: [0]};
+            for i in 1..100 {
+                m.insert(i, [i]);
+            }
+            for round in 0..3000 {
+                let k = round % 100;
+                let moved = m.get(k);
+                m.insert(k, [round]);
+                m.insert(1000 + round % 7, moved);
+                m.remove(1000 + (round + 3) % 7);
+                let junk = [round, round, round];
+            }
+            let bad = 0;
+            for v in m.values() {
+                if v.len() != 1 { bad += 1; }
+            }
+            print(bad);
+        }
+        ",
+        0.into()
+    );
+}
+
+#[test]
+pub fn a_long_list_permuted_during_marking_keeps_its_strings() {
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            let words = ["entry number 0"];
+            for i in 1..300 {
+                words.push("entry number " + str(i));
+            }
+            for round in 0..400 {
+                if round % 3 == 0 {
+                    words.sort();
+                } else if round % 3 == 1 {
+                    words.reverse();
+                } else {
+                    let gone = words[round % 300];
+                    words.remove(round % 300);
+                    words.push(gone);
+                }
+                let junk = "temporary string " + str(round);
+            }
+            let bad = 0;
+            for w in words {
+                if !w.starts_with("entry number ") { bad += 1; }
+            }
+            print(bad + words.len());
+        }
+        "#,
+        300.into()
+    );
+}
+
+#[test]
+pub fn a_json_key_interned_during_marking_keeps_its_text() {
+    run_and_check_registers!(
+        r#"
+        fn main() {
+            let bad = 0;
+            for round in 0..300 {
+                let dead = "interned key " + str(round);
+                let doc = as_map(json_parse("{\"interned key " + str(round) + "\": [1, 2]}"));
+                let junk = "unrelated filler " + str(round);
+                let k = as_str(doc.keys()[0]);
+                if k != "interned key " + str(round) { bad += 1; }
+            }
+            print(bad);
+        }
+        "#,
+        0.into()
     );
 }
 
