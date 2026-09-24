@@ -232,9 +232,13 @@ pub fn green<F: std::fmt::Display>(t: F) -> String {
 }
 pub const RESET: &str = "\x1B[0m\x1B[39m";
 
-pub struct ErrorCtx {
-    pub instr_src: Vec<InstrSrc>,
-    pub sources: Vec<Source>,
+/// What a runtime error report is built from: the source span of each
+/// instruction and the text of every source file. It borrows both from the
+/// program that runs, so starting a run costs no copy of either.
+#[derive(Clone, Copy)]
+pub struct ErrorCtx<'a> {
+    pub instr_src: &'a [InstrSrc],
+    pub sources: &'a [Source],
 }
 
 /// The name a call site wrote for the function it calls: its source text up to
@@ -243,7 +247,7 @@ pub struct ErrorCtx {
 #[cold]
 #[inline(never)]
 #[must_use]
-pub fn call_site_name(ctx: &ErrorCtx, instr: Instr) -> &str {
+pub fn call_site_name<'a>(ctx: &ErrorCtx<'a>, instr: Instr) -> &'a str {
     let name = ctx
         .instr_src
         .iter()

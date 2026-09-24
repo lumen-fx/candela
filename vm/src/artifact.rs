@@ -270,7 +270,10 @@ impl RuntimeProgram {
     /// host that wants the error as a value instead runs this inside
     /// [`collect_diagnostic`].
     pub fn run(&mut self) {
-        let err_ctx = self.error_ctx();
+        let err_ctx = ErrorCtx {
+            instr_src: &self.instr_src,
+            sources: &self.sources,
+        };
         let mut register_file = RegisterFile(std::mem::take(&mut self.registers));
         vm::execute(
             &self.instructions,
@@ -382,7 +385,10 @@ impl RuntimeProgram {
     /// Runs the VM against the resident state starting at instruction `start`,
     /// capturing any runtime error as a [`Diagnostic`].
     fn execute_from(&mut self, start: usize) -> Result<(), Diagnostic> {
-        let err_ctx = self.error_ctx();
+        let err_ctx = ErrorCtx {
+            instr_src: &self.instr_src,
+            sources: &self.sources,
+        };
 
         // Move the register file out so the VM can borrow it mutably, then
         // reclaim it (register state must persist across calls).
@@ -419,21 +425,6 @@ impl RuntimeProgram {
 
         self.registers = std::mem::take(&mut register_file.0);
         result
-    }
-
-    /// The instruction/source mapping a runtime error report is built from.
-    fn error_ctx(&self) -> ErrorCtx {
-        ErrorCtx {
-            instr_src: self.instr_src.clone(),
-            sources: self
-                .sources
-                .iter()
-                .map(|s| Source {
-                    filename: s.filename.clone(),
-                    contents: s.contents.clone(),
-                })
-                .collect(),
-        }
     }
 }
 
