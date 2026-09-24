@@ -200,9 +200,25 @@ impl JsonParser<'_> {
                         _ => return Err("invalid escape"),
                     }
                 }
-                // A UTF-8 continuation/lead byte: copy the raw byte through. The
-                // input was a valid `&str`, so byte-wise copying preserves it.
-                _ => out.push(c as char),
+                c if c.is_ascii() => out.push(c as char),
+                // The lead byte of a multi-byte character: the input is a valid
+                // `&str`, so the whole character is copied through as text.
+                c => {
+                    let start = self.pos - 1;
+                    let len = if c >= 0xF0 {
+                        4
+                    } else if c >= 0xE0 {
+                        3
+                    } else {
+                        2
+                    };
+                    let end = (start + len).min(self.bytes.len());
+                    match std::str::from_utf8(&self.bytes[start..end]) {
+                        Ok(ch) => out.push_str(ch),
+                        Err(_) => return Err("invalid utf-8"),
+                    }
+                    self.pos = end;
+                }
             }
         }
     }
@@ -505,6 +521,19 @@ mod json_tests {
         let entries = &map[parsed.as_map()];
         assert_eq!(entries.get(&short).copied().map(Data::as_int), Some(7));
         assert_eq!(entries.get(&long).copied().map(Data::as_int), Some(42));
+    }
+
+    /// A raw multi-byte character is text, not a run of Latin-1 bytes, so it
+    /// reads back equal to the same string written in a program.
+    #[test]
+    fn raw_non_ascii_characters_parse_as_themselves() {
+        for text in ["\u{e9}", "a\u{e9}b", "\u{4e2d}\u{6587} and \u{1f600} here"] {
+            let (mut obj, mut map, mut strings) = pools();
+            let doc = format!("\"{text}\"");
+            let parsed =
+                json_parse(&doc, &mut obj, &mut map, &mut strings).expect("valid string parses");
+            assert_eq!(parsed, Data::p_str(text, &mut strings), "{text:?}");
+        }
     }
 
     /// Equal strings anywhere in a document share one slot, so values compare
