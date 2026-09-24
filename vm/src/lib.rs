@@ -62,6 +62,10 @@ pub use artifact::LoadError;
 pub use artifact::RuntimeProgram;
 pub use artifact::load_program;
 
+// What the collector has done, for a host that collects between frames.
+pub use gc::GcStats;
+pub use gc::PoolStats;
+
 // Where a `dylib` import looks for its library file.
 pub use rt::dylib_dirs;
 pub use rt::set_dylib_dirs;

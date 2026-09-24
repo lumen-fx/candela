@@ -127,6 +127,9 @@ pub use candela_vm::HostRegistry;
 pub use candela_vm::LoadError;
 pub use candela_vm::RuntimeProgram;
 pub use candela_vm::load_program;
+// What the collector has done, read through `gc_stats` on either program type.
+pub use candela_vm::GcStats;
+pub use candela_vm::PoolStats;
 // Where a `dylib` import looks for its library file. Read by a compile and by
 // an artifact load alike, so a host that keeps its libraries in directories of
 // its own sets them once.

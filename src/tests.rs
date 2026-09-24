@@ -7194,6 +7194,77 @@ pub fn gc_state_persists_across_runs() {
 }
 
 #[test]
+pub fn idle_collection_stays_within_its_budget() {
+    // A host collecting between frames asks for a slice of work and has to
+    // get about that much: the budget, plus the one-off read of the roots when
+    // a cycle begins, plus at most one mark word's worth of freed slots.
+    let filename = "test.kl";
+    let contents = "
+        struct Row { label: string, cells: int[] }
+        fn main() {
+            let keep = [];
+            for i in 0..7600 {
+                keep.push(Row { label: \"a row label long enough to pool \" + str(i), cells: [i] });
+                let garbage = [i, i];
+            }
+        }
+    ";
+    let out = compile(
+        String::from(contents),
+        filename,
+        true,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
+    let mut pools = out.pools;
+    let mut reg = RegisterFile(out.registers);
+    let err_ctx = crate::errors::ErrorCtx {
+        instr_src: out.instr_src,
+        sources: vec![Source {
+            filename: filename.into(),
+            contents: String::from(contents),
+        }],
+    };
+    crate::vm::execute(
+        &out.instructions,
+        &mut reg,
+        &mut pools,
+        &err_ctx,
+        &out.callsite_registers,
+        &[],
+        &[],
+        &[],
+        out.allocated_arg_count,
+        out.allocated_call_depth,
+        &[],
+        &[],
+        0,
+    );
+    let budget = 50;
+    let cycles = pools.gc_stats().cycles;
+    let mut calls = 0;
+    loop {
+        let before = pools.gc_stats();
+        let free = before.arrays.free + before.maps.free + before.strings.free;
+        let slots = before.arrays.len + before.maps.len + before.strings.len;
+        // What beginning a cycle may spend reading roots and free slots. The
+        // sweep can overrun by one mark word, which covers 64 slots.
+        let begin = ((free + reg.0.len() + slots / 64) / 64 + 1) as u64;
+        let done = pools.collect(&reg.0, budget);
+        let spent = pools.gc_stats().units - before.units;
+        assert!(
+            spent <= u64::from(budget) + 65 + begin,
+            "a slice of budget {budget} did {spent} units"
+        );
+        calls += 1;
+        if done {
+            break;
+        }
+    }
+    assert!(calls > 1, "a budget of {budget} finished the whole cycle");
+    assert!(pools.gc_stats().cycles > cycles || candela_vm::rt::GcState::TORTURE);
+}
+
+#[test]
 pub fn strings_past_slot_65536_survive_a_collection() {
     // A string's pool slot is as wide as the value that names it. A collection
     // that freed slot 70000 under a narrower id handed the next string a slot

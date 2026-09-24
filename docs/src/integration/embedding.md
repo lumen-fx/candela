@@ -485,6 +485,63 @@ Errors come back as a `CallError`: the name is not exported, the argument count
 or an argument type disagrees with the declaration, or the call raised a runtime
 error, which arrives as the `Diagnostic` it produced.
 
+## Collecting garbage between frames
+
+```rust
+// After the frame's calls, where the event loop would otherwise wait.
+program.collect(2000);
+```
+
+`Program` and `RuntimeProgram` both have `collect`. The collector frees heap
+values the program can no longer reach. Left to itself, it works while the
+program allocates: once a collection is under way, each allocation does a small
+share of it, so no allocation stops the program for long, but the frame that
+allocates pays for the work. `collect` lets the host do that work when nothing
+is waiting on the program, such as between frames.
+
+`collect(budget)` carries on a collection already under way, or begins one when
+the heap has grown enough since the last, and stops after about `budget` units
+of work. It returns `true` when no collection work is left, and `false` when a
+collection is still under way; the next call carries on from where this one
+stopped, and so do the allocations of any call in between. On a heap that has
+not grown, it does nothing and returns `true`, so calling it every frame costs
+next to nothing when there is nothing to collect.
+
+The budget counts work, not time: a unit is about one object traced or one slot
+freed. The same calls do the same work on every machine, in a browser as well,
+where the runtime has no clock to go by. `collect(u32::MAX)` runs a whole
+collection in one call. The call that begins a collection reads every register
+at once whatever the budget, and a call can run past its budget by up to one
+batch of slots, so treat the budget as a target rather than a hard limit.
+
+To pick a budget, time `collect` on the slowest machine you support and raise
+the budget while the call still fits the idle time a frame leaves. A budget too
+small to finish a collection between frames is safe: the allocations of the next
+frame pick up what it leaves.
+
+Once a host has called `collect`, allocations wait for the heap to grow further
+before they begin a collection of their own, which leaves the work to the host.
+A program no host collects for keeps the default thresholds.
+
+### gc_stats
+
+```rust
+let stats: GcStats = program.gc_stats();
+```
+
+What the collector has done over the program's heap, and how large the heap is:
+
+| Field | Meaning |
+| --- | --- |
+| `cycles` | Collections begun |
+| `units` | All collection work done, in budget units |
+| `largest_slice` | The most units one step did, whether an allocation or `collect` asked for it |
+| `arrays`, `maps`, `strings` | Each pool's `len` in slots and how many of them are `free` |
+
+The `arrays` pool holds lists, structs, enum values and functions; `strings`
+holds strings too long to fit inside a value. There are no time fields. To see
+how long collecting takes, time your own `collect` calls.
+
 ## Where an import looks
 
 A script's imports resolve against two things the host can name: the standard

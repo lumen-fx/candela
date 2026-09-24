@@ -30,6 +30,13 @@
 //! one per slot freed. A step is given a budget in these units and stops once
 //! it has spent it.
 //!
+//! A host can do the same work while its program is idle, between frames, by
+//! calling [`GcState::collect`] with a budget of its own. That drives the same
+//! cycle the allocations drive: a cycle an allocation began is carried on by
+//! the host, and the other way round. A host that collects this way is taken
+//! to pace the collector, and the thresholds at which an allocation begins a
+//! cycle rise to leave the work to it.
+//!
 //! The program keeps running between steps, so marking is
 //! snapshot-at-the-beginning: every object reachable when the cycle began is
 //! marked before the sweep starts, whatever the program does to the heap in
@@ -136,18 +143,64 @@ impl MarkBits {
     }
 }
 
-/// The threshold the next collection of a pool runs at: twice what survived
-/// this one. A pool that doubles its live set between collections pays for
-/// each collection with as many fresh allocations as the trace visited, and a
-/// pool whose live set stays flat stops growing instead of doubling on every
-/// collection whether anything survived or not.
+/// The threshold the next collection of a pool runs at: `factor` times what
+/// survived this one. A pool that doubles its live set between collections
+/// pays for each collection with as many fresh allocations as the trace
+/// visited, and a pool whose live set stays flat stops growing instead of
+/// doubling on every collection whether anything survived or not.
 #[inline(always)]
-fn next_threshold(pool_len: usize, freed: usize) -> u32 {
+fn next_threshold(pool_len: usize, freed: usize, factor: usize) -> u32 {
     if TORTURE {
         return 0;
     }
     let live = pool_len - freed;
-    (live.saturating_mul(2).min(u32::MAX as usize) as u32).max(MIN_GC_THRESHOLD)
+    (live.saturating_mul(factor).min(u32::MAX as usize) as u32).max(MIN_GC_THRESHOLD)
+}
+
+/// How far past its live set a pool grows before an allocation begins a cycle,
+/// for a program nobody else collects for.
+const GROWTH: usize = 2;
+
+/// The same, once the host collects between frames: the allocations leave room
+/// for the host to do the work first, and begin a cycle themselves only when
+/// it falls behind.
+const HOST_PACED_GROWTH: usize = 4;
+
+/// The share of a pool its free slots have to fall below before an idle
+/// collection begins a cycle for it: a pool with more free than this has room
+/// to allocate in without growing.
+const IDLE_FREE_SHARE: usize = 8;
+
+/// What the collector has done over a set of pools, and how large they are.
+///
+/// Work is counted in the units a budget is given in, never in time: the count
+/// is the same on every machine and every run, and a host that wants time
+/// measures its own calls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GcStats {
+    /// How many collection cycles have begun.
+    pub cycles: u64,
+    /// Every unit of collection work done, across all cycles.
+    pub units: u64,
+    /// The most units one step did: the longest the collector held up the
+    /// program at once, whether an allocation or the host asked for the step.
+    pub largest_slice: u32,
+    /// The object pool: lists, structs, enum values, functions and closure
+    /// cells.
+    pub arrays: PoolStats,
+    /// The map pool.
+    pub maps: PoolStats,
+    /// The pool of strings too long to sit inside a value.
+    pub strings: PoolStats,
+}
+
+/// How large one pool is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    /// Every slot the pool holds, live or free.
+    pub len: usize,
+    /// The slots on its free list, waiting for an allocation to reuse them.
+    pub free: usize,
 }
 
 /// An object the trace has reached and not yet walked to its end: the list or
@@ -349,6 +402,11 @@ pub struct GcState {
     /// Each pool's free slots held back from the ready lists above: arrays,
     /// maps, strings. See [`FreeSlots`].
     held: [Vec<u32>; 3],
+    /// Each pool's occupied slots when the last cycle swept it: arrays, maps,
+    /// strings. An idle collection measures growth from here.
+    occupied_after: [usize; 3],
+    /// Whether the host has collected, which raises the thresholds.
+    host_paced: bool,
 }
 
 impl Default for GcState {
@@ -372,6 +430,8 @@ impl Default for GcState {
             units: 0,
             largest_slice: 0,
             held: [Vec::new(), Vec::new(), Vec::new()],
+            occupied_after: [0; 3],
+            host_paced: false,
         }
     }
 }
@@ -385,6 +445,105 @@ impl GcState {
     #[must_use]
     pub const fn cycles(&self) -> u64 {
         self.cycles
+    }
+
+    /// What the collector has done over `objs`, `maps` and `strings`, the
+    /// pools this state collects.
+    #[must_use]
+    pub fn stats(&self, objs: &ObjectPool, maps: &MapPool, strings: &StringPool) -> GcStats {
+        GcStats {
+            cycles: self.cycles,
+            units: self.units,
+            largest_slice: self.largest_slice,
+            arrays: PoolStats {
+                len: objs.len(),
+                free: self.free_len(Swept::Arrays),
+            },
+            maps: PoolStats {
+                len: maps.len(),
+                free: self.free_len(Swept::Maps),
+            },
+            strings: PoolStats {
+                len: strings.len(),
+                free: self.free_len(Swept::Strings),
+            },
+        }
+    }
+
+    /// Collection work for a host to do while its program is idle: carries
+    /// the cycle in progress forward by about `budget` units, beginning one
+    /// first if the pools have grown enough since the last to be worth it.
+    /// Answers whether no collection work is left.
+    ///
+    /// `registers` are the roots. The host calls this between calls into the
+    /// program, when the registers are the only roots there are.
+    ///
+    /// Beginning a cycle reads every root at once, whatever the budget; after
+    /// that a step stops within one chunk or one mark word of the budget. A
+    /// cycle begins only when some pool has grown by half its live set (and by
+    /// at least [`MIN_GC_THRESHOLD`] slots) since the last one and has fewer
+    /// than an eighth of its slots free; otherwise the call does nothing.
+    pub fn collect(
+        &mut self,
+        objs: &mut ObjectPool,
+        maps: &mut MapPool,
+        strings: &mut StringPool,
+        registers: &[Data],
+        budget: u32,
+    ) -> bool {
+        self.host_paced = true;
+        if !self.active() && !self.worth_collecting(objs.len(), maps.len(), strings.len()) {
+            return true;
+        }
+        if budget == 0 {
+            return false;
+        }
+        let roots = [registers, &[][..]];
+        let mut spent = 0;
+        if !self.active() {
+            spent = self.begin(objs, maps, strings, roots);
+        }
+        spent += self.advance(objs, maps, strings, roots, budget);
+        // Work the host did is work the allocations no longer owe.
+        self.debt = self.debt.saturating_sub(spent);
+        self.record(spent);
+        !self.active()
+    }
+
+    /// Whether an idle collection should begin a cycle: some pool has grown
+    /// by half its live set since the last cycle and has few free slots left.
+    fn worth_collecting(&self, arrays: usize, maps: usize, strings: usize) -> bool {
+        let lens = [arrays, maps, strings];
+        [Swept::Arrays, Swept::Maps, Swept::Strings]
+            .into_iter()
+            .enumerate()
+            .any(|(i, pool)| {
+                let free = self.free_len(pool);
+                let occupied = lens[i].saturating_sub(free);
+                let live = self.occupied_after[i];
+                let grown = occupied.saturating_sub(live);
+                grown >= (live / 2).max(MIN_GC_THRESHOLD as usize)
+                    && free < lens[i] / IDLE_FREE_SHARE
+            })
+    }
+
+    /// How many free slots `pool` has, ready and held.
+    fn free_len(&self, pool: Swept) -> usize {
+        let (ready, held) = match pool {
+            Swept::Arrays => (&self.free_arrays, &self.held[0]),
+            Swept::Maps => (&self.free_maps, &self.held[1]),
+            Swept::Strings => (&self.free_strings, &self.held[2]),
+        };
+        ready.len() + held.len()
+    }
+
+    /// The factor [`next_threshold`] grows a pool's live set by.
+    const fn growth(&self) -> usize {
+        if self.host_paced {
+            HOST_PACED_GROWTH
+        } else {
+            GROWTH
+        }
     }
 
     /// Whether marking is under way, which is when a store has to mark the
@@ -424,7 +583,7 @@ impl GcState {
     /// Begins a cycle: records each pool's length, holds back and marks every
     /// free slot, and marks what the roots hold. Answers the units it spent,
     /// which it spends whatever the budget, since the roots have to be read
-    /// all at once.
+    /// all at once. The caller adds them to the slice it records.
     fn begin(
         &mut self,
         objs: &ObjectPool,
@@ -467,21 +626,21 @@ impl GcState {
         self.phase = Phase::Mark;
         // One unit per 64 values read, and one per 64 mark words cleared.
         let cleared = (objs.len() + maps.len() + strings.len()) / 64;
-        let spent = ((read + cleared) / 64 + 1).min(u32::MAX as usize) as u32;
-        self.record(spent);
-        spent
+        ((read + cleared) / 64 + 1).min(u32::MAX as usize) as u32
     }
 
-    /// Carries the cycle forward by at most `budget` units, and answers
-    /// whether it is over. A cycle that has not begun is over already.
-    fn step(
+    /// Carries the cycle forward by about `budget` units, and answers the
+    /// units spent. Marking stops at the budget; sweeping can pass it by up to
+    /// one mark word's worth of freed slots. A cycle that has not begun has
+    /// nothing to do. The caller records the slice.
+    fn advance(
         &mut self,
         objs: &mut ObjectPool,
         maps: &mut MapPool,
         strings: &mut StringPool,
         roots: [&[Data]; 2],
         budget: u32,
-    ) -> bool {
+    ) -> u32 {
         let mut spent = 0u32;
         while spent < budget {
             match self.phase {
@@ -514,8 +673,7 @@ impl GcState {
                 }
             }
         }
-        self.record(spent);
-        self.phase == Phase::Idle
+        spent
     }
 
     /// Adds a step of `spent` units to the totals.
@@ -575,7 +733,8 @@ impl GcState {
                     }
                 }
                 if done {
-                    self.array_threshold = next_threshold(limit, self.swept_free);
+                    self.array_threshold = next_threshold(limit, self.swept_free, self.growth());
+                    self.occupied_after[0] = objs.len() - self.free_len(pool);
                     self.phase = Phase::Sweep(Swept::Maps);
                     self.swept_free = self.free_at_begin[1];
                 }
@@ -588,7 +747,8 @@ impl GcState {
                     }
                 }
                 if done {
-                    self.map_threshold = next_threshold(limit, self.swept_free);
+                    self.map_threshold = next_threshold(limit, self.swept_free, self.growth());
+                    self.occupied_after[1] = maps.len() - self.free_len(pool);
                     self.phase = Phase::Sweep(Swept::Strings);
                     self.swept_free = self.free_at_begin[2];
                 }
@@ -602,7 +762,8 @@ impl GcState {
                     strings.release(id as usize);
                 }
                 if done {
-                    self.string_threshold = next_threshold(limit, self.swept_free);
+                    self.string_threshold = next_threshold(limit, self.swept_free, self.growth());
+                    self.occupied_after[2] = strings.len() - self.free_len(pool);
                     strings.end_marking();
                     self.finish();
                 }
@@ -641,10 +802,12 @@ impl GcState {
         roots: [&[Data]; 2],
     ) {
         if TORTURE {
+            let mut spent = 0;
             if !self.active() {
-                self.begin(objs, maps, strings, roots);
+                spent = self.begin(objs, maps, strings, roots);
             }
-            self.step(objs, maps, strings, roots, 1);
+            spent += self.advance(objs, maps, strings, roots, 1);
+            self.record(spent);
             return;
         }
         if self.active() {
@@ -652,7 +815,8 @@ impl GcState {
             if self.debt >= SLICE {
                 let budget = self.debt;
                 self.debt = 0;
-                self.step(objs, maps, strings, roots, budget);
+                let spent = self.advance(objs, maps, strings, roots, budget);
+                self.record(spent);
             }
             return;
         }
@@ -662,7 +826,8 @@ impl GcState {
             Swept::Strings => (strings.len(), self.string_threshold),
         };
         if len >= threshold as usize {
-            self.begin(objs, maps, strings, roots);
+            let spent = self.begin(objs, maps, strings, roots);
+            self.record(spent);
         } else {
             self.free(pool).release_above(0);
         }

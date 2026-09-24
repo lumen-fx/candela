@@ -786,3 +786,165 @@ fn a_bare_body_that_fails_at_any_still_builds() {
     let program = load_program(&bytes, &HostRegistry::new()).expect("artifact must load");
     assert!(!program.exports().any(|name| name == "on_click"));
 }
+
+/// A script shaped like a user interface for the collection tests: `grow`
+/// leaves a list of rows behind in its registers, where the next call still
+/// finds it, and `frame` builds, links, reorders and reads rows of its own.
+/// Rows are built by `row` rather than by a literal in the loop, which keeps
+/// clear of lumen-fx/candela#184.
+const COLLECTING: &str = r#"
+struct Row {
+    label: string,
+    attrs: {string: string},
+    cells: int[],
+}
+
+fn row(label: string, key: string, cell: int) -> Row {
+    return Row { label: label, attrs: {"key": key}, cells: [cell] };
+}
+
+fn grow(n: int) -> int {
+    let rows = [];
+    for i in 0..n {
+        rows.push(row("a row label long enough to pool " + str(i), "an attribute value " + str(i), i));
+    }
+    return n;
+}
+
+fn frame(names: string[], extra: {string: int}, n: int) -> int {
+    let rows = [];
+    for i in 0..n {
+        let name = names[i % names.len()];
+        let r = row(name + " row label long enough to pool " + str(i), "an attribute value " + str(i), i);
+        r.cells.push(extra.get("bonus"));
+        rows.push(r);
+    }
+    for i in 1..n {
+        rows[i].cells.push(rows[i - 1].cells[0]);
+        rows[i - 1].attrs.insert("next", rows[i].label);
+        rows[i - 1].attrs.insert("key", "a replaced attribute value " + str(i));
+    }
+    rows.reverse();
+    let dropped = rows[0];
+    rows.remove(0);
+    let sum = dropped.label.len();
+    for r in rows {
+        sum += r.label.len() + r.attrs.get("key").len() + r.cells.len() + r.cells[0];
+        if r.attrs.contains("next") {
+            sum += r.attrs.get("next").len();
+        }
+    }
+    return sum;
+}
+
+fn main() {}
+"#;
+
+/// Loads [`COLLECTING`] and runs its `main`.
+fn collecting() -> RuntimeProgram {
+    let mut program = load(COLLECTING, "collecting.cdl", &HostRegistry::new());
+    program.run();
+    program
+}
+
+/// The arguments `frame` is called with: a list and a map, which cross the
+/// boundary as fresh heap objects.
+fn frame_args(n: i64) -> [Value; 3] {
+    [
+        Value::Array(vec![
+            Value::String(String::from("first host name")),
+            Value::String(String::from("second host name")),
+        ]),
+        Value::Map(BTreeMap::from([(String::from("bonus"), Value::Int(7))])),
+        Value::Int(n),
+    ]
+}
+
+/// Grows the retained heap a step at a time until an idle collection with
+/// `budget` does some work, and answers what that call returned. The heap
+/// grows between steps so the pools pass the growth an idle collection waits
+/// for whatever the thresholds are.
+fn grow_until_collecting(program: &mut RuntimeProgram, budget: u32) -> bool {
+    for step in 1..200 {
+        program.call("grow", &[Value::Int(step * 300)]).unwrap();
+        let before = program.gc_stats();
+        let done = program.collect(budget);
+        if program.gc_stats().units > before.units {
+            return done;
+        }
+        assert!(done, "a collection that did no work has work left");
+    }
+    panic!("the heap grew without an idle collection ever starting");
+}
+
+/// An unlimited budget runs a whole collection in one call.
+#[test]
+fn collect_with_no_limit_finishes_in_one_call() {
+    let mut program = collecting();
+    let cycles = program.gc_stats().cycles;
+    assert!(grow_until_collecting(&mut program, u32::MAX));
+    assert!(program.gc_stats().cycles > cycles);
+}
+
+/// A heap that has not grown since the last collection gives an idle
+/// collection nothing to do, and it does nothing.
+#[test]
+fn collect_on_a_quiet_heap_does_no_work() {
+    let mut program = collecting();
+    assert!(program.collect(u32::MAX));
+    grow_until_collecting(&mut program, u32::MAX);
+    let before = program.gc_stats();
+    assert!(program.collect(u32::MAX));
+    assert!(program.collect(1));
+    assert_eq!(program.gc_stats(), before);
+}
+
+/// The budget is counted in work, not time, so the same calls with the same
+/// budgets do the same collection work every time.
+#[test]
+fn identical_budgets_give_identical_stats() {
+    let run = || {
+        let mut program = collecting();
+        let mut trace = Vec::new();
+        for step in 1..30 {
+            program.call("grow", &[Value::Int(step * 250)]).unwrap();
+            program.call("frame", &frame_args(40)).unwrap();
+            program.collect(37);
+            trace.push(program.gc_stats());
+        }
+        trace
+    };
+    let first = run();
+    assert!(first.last().unwrap().units > 0);
+    assert_eq!(first, run());
+}
+
+/// A cycle left half done by an idle collection carries on through calls
+/// whose arguments are marshalled into the heap mid-cycle, and nothing any of
+/// them reads is freed under it. Small frames leave most of the cycle to the
+/// idle slices between them; a large one runs it through the sweep.
+#[test]
+fn calls_between_collection_slices_stay_correct() {
+    let mut control = collecting();
+    let small = control.call("frame", &frame_args(8)).unwrap();
+    let large = control.call("frame", &frame_args(300)).unwrap();
+
+    let mut program = collecting();
+    assert!(
+        !grow_until_collecting(&mut program, 1),
+        "one unit finished a whole cycle"
+    );
+    let cycle = program.gc_stats().cycles;
+    let mut calls = 0;
+    loop {
+        assert_eq!(program.call("frame", &frame_args(8)).unwrap(), small);
+        calls += 1;
+        if program.collect(8) || program.gc_stats().cycles > cycle {
+            break;
+        }
+    }
+    assert!(calls > 1, "the cycle ended before a second call");
+    assert_eq!(program.call("frame", &frame_args(300)).unwrap(), large);
+    assert!(program.collect(u32::MAX));
+    assert_eq!(program.call("frame", &frame_args(300)).unwrap(), large);
+}

@@ -64,6 +64,7 @@ use candela_vm::instr::Instr;
 use candela_vm::rt::DataType;
 use candela_vm::rt::DynamicLibFn;
 use candela_vm::rt::EnumType;
+use candela_vm::rt::GcStats;
 use candela_vm::rt::HostFnSig;
 use candela_vm::rt::InstrSrc;
 use candela_vm::rt::Pools;
@@ -573,6 +574,31 @@ impl Program {
             &self.structs,
             &self.enums,
         ))
+    }
+
+    /// Does up to about `budget` units of garbage collection while the
+    /// program is idle, and answers whether no collection work is left.
+    ///
+    /// Call it between calls into the program, where the host would otherwise
+    /// wait, such as between frames. It carries on a collection already under
+    /// way, or begins one when the heap has grown enough since the last; on a
+    /// heap that has not, it does nothing and answers `true`. A unit is about
+    /// one object traced or one freed slot, never a length of time, so the
+    /// same calls do the same work on every machine. `collect(u32::MAX)` runs
+    /// a whole collection. Beginning a collection reads every root at once
+    /// whatever the budget.
+    ///
+    /// Once a host has called this, allocations leave more of the work to it
+    /// and begin a collection themselves only when the heap has grown further.
+    pub fn collect(&mut self, budget: u32) -> bool {
+        self.pools.collect(&self.registers, budget)
+    }
+
+    /// What the collector has done over this program's heap, and how large
+    /// the heap is. See [`GcStats`].
+    #[must_use]
+    pub fn gc_stats(&self) -> GcStats {
+        self.pools.gc_stats()
     }
 
     /// Borrows the resident compiler state a trampoline compile writes into.

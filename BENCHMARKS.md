@@ -62,12 +62,15 @@ through the VM-only embedding path, and times every frame on the host side:
 cargo bench --bench gc_pause
 ```
 
-It reports the median, 99th percentile and longest frame for two shapes:
+It reports the median, 99th percentile and longest frame for three shapes:
 
 - `retained` keeps a tree of about 20,000 nodes alive for one long call and
   rebuilds part of it every frame, which is the pause a large live heap costs.
 - `callbacks` calls into the script once per frame, the way an event loop runs
   a handler, and each call builds and drops a section of 200 nodes.
+- `idle` runs the `callbacks` frames and calls `collect(2000)` between them,
+  where an event loop would wait. It reports the frames and the `collect`
+  calls apart, and how much of the collection work ran between frames.
 
 A frame count as the first argument changes the default of 5000 frames.
 
@@ -75,7 +78,9 @@ The collector does its work a slice at a time. Once a cycle starts, each
 allocation pays for a bounded share of it, so a frame waits for the slices its
 own allocations paid for rather than for a whole collection. On the `retained`
 shape that about halves the slowest frames compared with collecting everything
-at once.
+at once. A host that collects between frames moves work out of the frames: on
+the `idle` shape more than half of it runs in the `collect` calls, and the
+frames themselves run faster than on the `callbacks` shape.
 
 ## Iterative fib(46) x 200000
 
