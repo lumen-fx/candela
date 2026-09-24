@@ -80,8 +80,15 @@ impl Backend {
         }
         let diagnostics = outcome
             .diagnostic
-            .map(|d| vec![to_lsp_diagnostic(&d, &path, &text)])
-            .unwrap_or_default();
+            .iter()
+            .map(|d| to_lsp_diagnostic(d, &path, &text, DiagnosticSeverity::ERROR))
+            .chain(
+                outcome
+                    .warnings
+                    .iter()
+                    .map(|w| to_lsp_diagnostic(w, &path, &text, DiagnosticSeverity::WARNING)),
+            )
+            .collect();
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
             .await;
@@ -120,7 +127,12 @@ impl Backend {
     }
 }
 
-fn to_lsp_diagnostic(d: &CdlDiagnostic, doc_path: &str, doc_text: &str) -> LspDiagnostic {
+fn to_lsp_diagnostic(
+    d: &CdlDiagnostic,
+    doc_path: &str,
+    doc_text: &str,
+    severity: DiagnosticSeverity,
+) -> LspDiagnostic {
     // The first error in a compile can originate from an imported file
     // rather than the buffer itself (e.g. a type error inside a module this
     // document imports). We can only place a precise range against text we
@@ -143,7 +155,7 @@ fn to_lsp_diagnostic(d: &CdlDiagnostic, doc_path: &str, doc_text: &str) -> LspDi
     };
     LspDiagnostic {
         range,
-        severity: Some(DiagnosticSeverity::ERROR),
+        severity: Some(severity),
         code: Some(NumberOrString::String(d.code.clone())),
         code_description: None,
         source: Some("candela".to_owned()),

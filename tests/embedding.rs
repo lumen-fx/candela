@@ -1898,3 +1898,40 @@ fn main() {}
     let mut program = engine.compile(src, "main.cdl").expect("compiles");
     assert_eq!(program.call("read", &["abc".into()]), Ok(Value::Int(3)));
 }
+
+/// `Engine::compile` hands back the warnings the compile raised on the
+/// program. The `any` attempt that failed is undone, so the program stays
+/// callable.
+#[test]
+fn compile_warnings_reach_the_program() {
+    let engine = Engine::new();
+    let src = "
+        fn on_click(id) { let n = 1; n.uppercase(); }
+        fn echo(x) { return x; }
+        fn main() {}
+    ";
+    let mut program = engine
+        .compile(src, "warn.cdl")
+        .expect("warnings do not fail a compile");
+    let codes: Vec<&str> = program.warnings().iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        [
+            "unannotated_host_parameter",
+            "no_host_entry_point",
+            "unannotated_host_parameter"
+        ]
+    );
+    assert!(program.warnings()[2].message.contains("echo"));
+    assert_eq!(
+        program.call("echo", &[Value::Int(2)]).unwrap(),
+        Value::Int(2)
+    );
+    assert!(program.call("on_click", &[Value::Int(1)]).is_err());
+    assert_eq!(
+        program
+            .call("echo", &[Value::String("s".to_owned())])
+            .unwrap(),
+        Value::String("s".to_owned())
+    );
+}

@@ -16,6 +16,7 @@ use candela::RuntimeProgram;
 use candela::Value;
 use candela::build_bytecode;
 use candela::collect_diagnostic;
+use candela::collect_warnings;
 use candela::load_program;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -330,7 +331,7 @@ fn calling_a_name_the_artifact_does_not_export() {
     assert_eq!(
         names,
         ["known"],
-        "a bare parameter has no signature to check"
+        "`x + 1` does not compile with `x` as any, so `bare` gets no entry point"
     );
 
     match program.call("bare", &[Value::Int(1)]) {
@@ -405,8 +406,9 @@ fn a_broken_annotated_function_fails_the_build() {
 }
 
 /// The other half of that rule. A parameter with no annotation has no declared
-/// type to compile the body against, so the body waits for the call that
-/// specialises it and the build stays quiet about it.
+/// type to compile the body against, so in a function the program calls the
+/// body waits for the call that specialises it and the build stays quiet about
+/// it.
 ///
 /// Compiling such a body anyway, at `any`, would refuse the program below: a
 /// method lookup on a receiver whose type is not known yet fails as an unknown
@@ -420,7 +422,12 @@ fn a_bare_parameter_leaves_its_body_to_the_call_that_reaches_it() {
         fn handle(x) { print(x.m()); }
         fn main() { handle(S { a: 41 }); }
     ";
-    let mut program = load(src, "lazy.cdl", &HostRegistry::new());
+    let (bytes, warnings) = collect_warnings(|| {
+        build_bytecode(src.to_owned(), "lazy.cdl", &candela::ImportResolver::new())
+            .expect("source must build to an artifact")
+    });
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut program = load_program(&bytes, &HostRegistry::new()).expect("artifact must load");
     assert!(
         !program.exports().any(|name| name == "handle"),
         "a bare parameter leaves nothing for a host argument to be checked against"
@@ -726,4 +733,56 @@ fn a_lookup_miss_feeding_a_negative_index_through_an_artifact_is_a_diagnostic() 
         }
         other => panic!("expected a runtime error, got: {other:?}"),
     }
+}
+
+/// A function nothing in the program calls is one a host calls by name. With a
+/// bare parameter it is packaged with an entry point that takes `any`, so the
+/// host's call reaches it whatever it passes.
+#[test]
+fn a_host_called_bare_parameter_is_packaged_taking_any() {
+    let src = "
+        fn on_click(id) { return id; }
+        fn main() {}
+    ";
+    let (bytes, warnings) = collect_warnings(|| {
+        build_bytecode(src.to_owned(), "click.cdl", &candela::ImportResolver::new())
+            .expect("source must build to an artifact")
+    });
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].code, "unannotated_host_parameter");
+    let mut program = load_program(&bytes, &HostRegistry::new()).expect("artifact must load");
+    assert_eq!(
+        program.call("on_click", &[Value::Int(3)]).unwrap(),
+        Value::Int(3)
+    );
+    assert_eq!(
+        program
+            .call("on_click", &[Value::String("row-2".to_owned())])
+            .unwrap(),
+        Value::String("row-2".to_owned())
+    );
+}
+
+/// A body that does not compile at `any` costs the entry point, not the build:
+/// the artifact is written and the warning says why the function is missing.
+#[test]
+fn a_bare_body_that_fails_at_any_still_builds() {
+    let src = "fn on_click(id) { let n = 1; n.uppercase(); }\nfn main() {}\n";
+    let (bytes, warnings) = collect_warnings(|| {
+        build_bytecode(
+            src.to_owned(),
+            "broken.cdl",
+            &candela::ImportResolver::new(),
+        )
+        .expect("the build goes on")
+    });
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["unannotated_host_parameter", "no_host_entry_point"]);
+    assert!(
+        warnings[1].message.contains("uppercase"),
+        "{}",
+        warnings[1].message
+    );
+    let program = load_program(&bytes, &HostRegistry::new()).expect("artifact must load");
+    assert!(!program.exports().any(|name| name == "on_click"));
 }

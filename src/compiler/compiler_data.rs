@@ -6,11 +6,13 @@ use super::expr::Span;
 use super::registers::get_tgt_ids;
 use super::type_system::DataType;
 use super::type_system::Generics;
+use super::type_system::GenericsCheckpoint;
 use super::type_system::ReturnAnnotation;
 use super::type_system::TypeCtx;
 use super::type_system::TypeExpr;
 use super::type_system::TypeParams;
 use crate::compiler::FileNamespaces;
+use crate::compiler::FileNamespacesCheckpoint;
 use crate::compiler::Namespace;
 use crate::data::Data;
 use crate::data::NULL;
@@ -323,7 +325,122 @@ pub struct State<'a> {
     pub indirect_registers: &'a mut IndirectRegisters,
 }
 
+/// A checkpoint of the tables a compile attempt grows as it goes, taken by
+/// [`State::checkpoint`] and undone by [`State::rollback_to`] when the attempt
+/// ends in a diagnostic.
+///
+/// Two attempts use it: a host's [`Program::call`](crate::Program::call),
+/// which compiles a trampoline against a program that must stay callable
+/// after a refused call, and the entry-point pass, which tries an `any` entry
+/// point for a host-called function with a bare parameter and keeps building
+/// when the body does not compile at `any`.
+///
+/// This is a handful of lengths, one per table plus one per function and one
+/// per file, not a copy of the tables, so an attempt that succeeds pays for
+/// little more than reading them.
+pub struct CompileCheckpoint {
+    registers: usize,
+    /// The function table itself grows during a compile: an anonymous function
+    /// literal hoists to a fresh entry the first time it is reached, and
+    /// instantiating a generic type lowers every applicable `impl` method the
+    /// same way. A function the aborted attempt hoisted is left holding a
+    /// bytecode address the instruction stream never reached, so it goes back
+    /// with everything else.
+    functions: usize,
+    /// Per function that was already there: how many specialisations it had,
+    /// how many return types it had cached, and the register a value of it
+    /// starts from. A specialisation compiled during the attempt records a
+    /// bytecode address in code that is dropped; a cached return type or an
+    /// entry register can name a specialisation or a register that goes too.
+    fn_state: Box<[(usize, usize, Option<u16>)]>,
+    /// One entry per recursive call site the attempt compiled, each written
+    /// once, at the end of the body that holds the call site, so the length
+    /// alone undoes the growth.
+    callsite_registers: usize,
+    /// Every file's scope length, not only the entry file's: a body compiled
+    /// from an imported module declares into that module's scope.
+    namespaces: FileNamespacesCheckpoint,
+    /// A generic type is instantiated, and an enum's variants added, the first
+    /// time a call site needs it; `structs` and `enums` cover that growth the
+    /// way `functions` covers a closure or a lowered `impl` method.
+    structs: usize,
+    enums: usize,
+    /// Grows in step with the attempt's local instruction buffer, keyed by
+    /// instruction value rather than position. Left behind, a stale entry can
+    /// mislabel a later instruction identical to one the attempt compiled.
+    instr_src: usize,
+    generics: GenericsCheckpoint,
+}
+
 impl State<'_> {
+    /// Snapshots the tables a compile attempt writes into as it goes, so a
+    /// diagnostic raised partway through can be undone with
+    /// [`State::rollback_to`].
+    ///
+    /// The instruction stream needs no entry here: an attempt compiles into a
+    /// local buffer that only reaches the stream once the whole attempt
+    /// succeeds. Everything captured below is written in place, because a
+    /// nested call can only reuse a specialisation another call site already
+    /// produced.
+    #[must_use]
+    pub fn checkpoint(&self) -> CompileCheckpoint {
+        CompileCheckpoint {
+            registers: self.registers.len(),
+            functions: self.fns.len(),
+            fn_state: self
+                .fns
+                .iter()
+                .map(|f| (f.impls.len(), f.return_type_cache.len(), f.entry_register))
+                .collect(),
+            callsite_registers: self.callsite_registers.len(),
+            namespaces: self.namespaces.checkpoint(),
+            structs: self.structs.len(),
+            enums: self.enums.len(),
+            instr_src: self.instr_src.len(),
+            generics: self.generics.checkpoint(),
+        }
+    }
+
+    /// Undoes everything a failed compile attempt wrote to the tables, back to
+    /// `checkpoint`. A successful attempt leaves the tables as they stand and
+    /// commits its bytecode alongside them.
+    pub fn rollback_to(&mut self, checkpoint: &CompileCheckpoint) {
+        // A `const_registers` or `free_registers` entry naming a register at or
+        // past `registers` was added during the aborted attempt (registers only
+        // grow, and a constant is registered the moment its register is
+        // pushed), so it goes with the registers themselves. An entry
+        // `free_registers` lost, because the attempt reused an already-free
+        // register, is not restored: that register is orphaned rather than
+        // double-allocated, which the next compile cannot observe.
+        self.const_registers
+            .retain(|_, &mut reg| (reg as usize) < checkpoint.registers);
+        self.free_registers
+            .retain(|&reg| (reg as usize) < checkpoint.registers);
+        self.registers.truncate(checkpoint.registers);
+
+        self.fns.truncate(checkpoint.functions);
+        for (func, &(impls, cached, entry_register)) in
+            self.fns.iter_mut().zip(checkpoint.fn_state.iter())
+        {
+            func.impls.truncate(impls);
+            func.return_type_cache.truncate(cached);
+            func.entry_register = entry_register;
+        }
+        self.callsite_registers
+            .truncate(checkpoint.callsite_registers);
+
+        self.namespaces.rollback_to(&checkpoint.namespaces);
+
+        // A generic type instantiated during the attempt is cached in
+        // `generics` by rendered name, pointing at the struct or enum entry the
+        // attempt pushed; both go together.
+        self.structs.truncate(checkpoint.structs);
+        self.enums.truncate(checkpoint.enums);
+        self.generics.rollback_to(&checkpoint.generics);
+
+        self.instr_src.truncate(checkpoint.instr_src);
+    }
+
     /// The tables a diagnostic needs to name a struct or an enum the program
     /// declared, rather than printing the bare words `struct` and `enum`.
     #[must_use]

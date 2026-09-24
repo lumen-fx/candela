@@ -38,7 +38,7 @@ use candela::compiler::expr::{Expr, Span};
 use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::ANON_FN_PREFIX;
 use candela::macros::MacroEnv;
-use candela::{Diagnostic, TypeNames, collect_diagnostic};
+use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
 
 /// A function or struct declaration, with enough information to render a
 /// document symbol / hover / go-to-definition target.
@@ -110,6 +110,9 @@ pub struct ProgramSummary {
 pub struct AnalysisOutcome {
     pub diagnostic: Option<Diagnostic>,
     pub summary: Option<ProgramSummary>,
+    /// The warnings a compile that succeeded raised. A warning does not stop
+    /// the compile, so these come with a summary, never with a diagnostic.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Runs candela's compiler (parse + type-check + codegen, no execution) over
@@ -145,16 +148,22 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // The export table `compile_checked` builds describes the functions a host
     // could call into a `.cdlb` artifact. The server writes no artifact, so it
     // takes the compile result and drops the table, as `candela check` does.
-    match macros
-        .scope(move || collect_diagnostic(move || compile_checked(owned, &path, &resolver).0))
-    {
+    // Warnings are collected, never printed: the server talks to the editor
+    // over stdio, where a report would corrupt the protocol.
+    match macros.scope(move || {
+        collect_diagnostic(move || {
+            collect_warnings(move || compile_checked(owned, &path, &resolver).0)
+        })
+    }) {
         Err(diagnostic) => AnalysisOutcome {
             diagnostic: Some(diagnostic),
             summary: None,
+            warnings: Vec::new(),
         },
-        Ok(out) => AnalysisOutcome {
+        Ok((out, warnings)) => AnalysisOutcome {
             diagnostic: None,
             summary: Some(build_summary(&out, text)),
+            warnings,
         },
     }
 }
@@ -746,5 +755,21 @@ mod tests {
         // The entry point compiled for it is a call site, so its return type
         // is inferred and hover has a signature to show.
         assert_eq!(double.signatures, vec![String::from("(int) -> int")]);
+    }
+
+    /// A warning comes back with the summary, and nothing reaches stdout,
+    /// which is the channel the server talks to the editor over.
+    #[test]
+    fn a_warning_comes_back_with_the_summary() {
+        let source = "fn on_click(id) {\n    print(id);\n}\n\nfn main() {}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(outcome.diagnostic.is_none());
+        assert!(outcome.summary.is_some());
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(outcome.warnings[0].code, "unannotated_host_parameter");
+        assert_eq!(
+            source.get(outcome.warnings[0].span.clone()),
+            Some("on_click")
+        );
     }
 }

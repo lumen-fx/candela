@@ -67,7 +67,9 @@ fn plus_one(x: any) -> int {
 ```
 
 A function with a bare parameter has no declared type to compile against, so its
-body is first checked by the call that reaches it.
+body is first checked by the call that reaches it. When nothing in the program
+calls it, a host is expected to, and `candela check` and `candela build` warn
+about each bare parameter and check the body with those parameters typed `any`.
 
 Declaration order does not matter, so a function may call one declared further
 down the file. Two functions cannot share a name: there is no overloading, and a

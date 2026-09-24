@@ -133,6 +133,18 @@ an embedded compile all report a file that declares none. `candela check` does
 not: compiling a file without a `main` is how a library entry checks. See
 [functions](../language/functions.md).
 
+## Warnings
+
+A warning reports something the compile could not check, without stopping it.
+`candela check` and `candela build` print each one as a report and still
+succeed; an embedding host reads them from `Program::warnings`, and the language
+server shows them in the editor. Each carries a code like an error does.
+
+| Code | Meaning |
+| --- | --- |
+| `unannotated_host_parameter` | A function in the file being built that nothing in the program calls leaves a parameter bare. A host calling it by name passes that parameter as `any`, so its body is checked that way. The warning points at the function's name; annotate the parameter with the type the host passes |
+| `no_host_entry_point` | The body of such a function does not compile with its bare parameters typed `any`. The message carries the error the body raised and the span points at it. A packaged `.cdlb` has no entry point for the function, so a host call to it fails as an unknown function |
+
 ## Runtime errors
 
 Raised while the program runs. Each has a kind, which is the string a `catch`
