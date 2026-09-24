@@ -48,6 +48,7 @@ The rest of the tree:
   profile-guided builds. `examples/package/` is a project rather than a loose
   file, and it is what the package-workflow self-test packs.
 - `tests/` holds the Rust integration suites.
+- `benches/` holds the collector pause benchmark and the script it drives.
 - `pgo/` holds the workloads and the small C library used to train the
   profile-guided release builds. Both `candela` and `candela-vm` are built that
   way: `candela` runs the workloads from source, and `candela-vm` runs them as
@@ -172,7 +173,8 @@ status is informational, while the patch status is a required check that fails
 when the diff drops meaningfully below the baseline coverage. Doctests are outside the measurement, since collecting coverage
 from them needs a nightly toolchain.
 
-There is no fuzzing setup. Benchmarking is manual; `BENCHMARKS.md` describes it.
+There is no fuzzing setup. Benchmarking is manual; `BENCHMARKS.md` describes it,
+including the collector pause benchmark, `cargo bench --bench gc_pause`.
 
 ## Before you open a pull request
 

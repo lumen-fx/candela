@@ -149,6 +149,11 @@ path = "src/lib.rs"
 name = "candela"
 path = "src/main.rs"
 
+# How long a collection holds up a frame; see the file's header.
+[[bench]]
+name = "gc_pause"
+harness = false
+
 [profile.dev]
 opt-level = 1
 debug = false

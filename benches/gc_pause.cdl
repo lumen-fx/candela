@@ -1,0 +1,92 @@
+// The script the collector pause benchmark drives (benches/gc_pause.rs). It
+// is shaped like a user interface: a tree of nodes, each with a tag, string
+// attributes, children, text and a click handler, rebuilt a piece at a time.
+
+host "bench" {
+    frame_done();
+}
+
+struct Node {
+    tag: string,
+    attrs: {string: string},
+    children: Node[],
+    text: string,
+    on_click: fn(int) -> int,
+}
+
+fn item(i: int, frame: int) -> Node {
+    let attrs = {"class": "row-item-" + str(i % 17), "data-key": "key-" + str(i) + "-" + str(frame)};
+    let text = "label for item " + str(i) + " in frame " + str(frame);
+    let bump = frame + i;
+    return Node {
+        tag: "list-item",
+        attrs: attrs,
+        children: [],
+        text: text,
+        on_click: fn(x) { return x + bump; },
+    };
+}
+
+fn section(s: int, frame: int, count: int) -> Node {
+    let kids = [item(s * count, frame)];
+    for i in 1..count {
+        kids.push(item(s * count + i, frame));
+    }
+    return Node {
+        tag: "section",
+        attrs: {"id": "section-" + str(s) + "-frame-" + str(frame)},
+        children: kids,
+        text: "",
+        on_click: fn(x) { return x; },
+    };
+}
+
+/// Builds a tree of 100 sections of 200 items and keeps it for the whole
+/// call, then runs `frames` frames against it. Each frame rebuilds one
+/// section and swaps it in, edits an attribute map and a text field, and
+/// replaces an item and its handler, then tells the host the frame is done.
+fn retained(frames: int) -> int {
+    let sections = [section(0, 0, 200)];
+    for s in 1..100 {
+        sections.push(section(s, 0, 200));
+    }
+    let root = Node {
+        tag: "root",
+        attrs: {"id": "application-root"},
+        children: sections,
+        text: "",
+        on_click: fn(x) { return x; },
+    };
+    bench::frame_done();
+    let total = 0;
+    for f in 1..frames + 1 {
+        let k = f % 100;
+        root.children[k] = section(k, f, 200);
+        let row = root.children[(f * 7) % 100].children[f % 200];
+        row.attrs.insert("data-key", "edited-key-" + str(f));
+        row.text = "edited label " + str(f);
+        let by = f % 5 + 1;
+        let owner = root.children[(f * 13) % 100];
+        owner.children[(f * 3) % 200] = Node {
+            tag: "list-item",
+            attrs: {"class": "replaced", "data-frame": "replaced-in-frame-" + str(f)},
+            children: [],
+            text: "replaced item",
+            on_click: fn(x) { return x * by; },
+        };
+        total += row.on_click(f) + owner.children[(f * 3) % 200].on_click(1);
+        bench::frame_done();
+    }
+    return total;
+}
+
+/// One frame's worth of work as an event callback does it: a section of 200
+/// items built, read, and dropped when the call returns.
+fn frame(f: int) -> int {
+    let s = section(f % 100, f, 200);
+    let row = s.children[f % 200];
+    row.attrs.insert("data-key", "edited-key-" + str(f));
+    return s.children.len() + row.on_click(f);
+}
+
+fn main() {}
