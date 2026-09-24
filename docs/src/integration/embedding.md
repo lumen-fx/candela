@@ -444,6 +444,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+The library leaves your process's allocator as you set it. The `candela-vm`
+binary sets glibc's for itself, which makes programs that build and drop big
+lists much faster (see [running an artifact](../getting-started/running.md#run-an-artifact)).
+A host on Linux with glibc gets the same by starting with
+`GLIBC_TUNABLES=glibc.malloc.top_pad=67108864:glibc.malloc.mmap_threshold=33554432`,
+or by calling `mallopt` with those two values before it loads a program.
+
 ### HostRegistry
 
 The table of closures a script's `host` blocks bind to. `register_host_fn`,

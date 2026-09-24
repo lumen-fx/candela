@@ -14,6 +14,36 @@ use std::process::ExitCode;
 
 const USAGE: &str = "Usage:\n  candela-vm <file.cdlb> [arguments...]";
 
+/// Asks glibc's allocator to grow and shrink the heap in large steps, and to
+/// serve large blocks from the heap instead of mapping each one fresh.
+///
+/// A program that builds and drops big lists otherwise spends much of its time
+/// in the kernel, faulting in pages glibc just gave back. With these settings
+/// the heap grows 64 MiB at a time and keeps that much spare when it shrinks,
+/// and a block under 32 MiB comes from the heap and returns to it. This binary
+/// owns its process, so it can choose for the whole process; the library
+/// leaves the allocator to the host that embeds it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+extern "C" fn tune_allocator() {
+    // glibc's `mallopt` parameters, from malloc.h.
+    const M_TOP_PAD: i32 = -2;
+    const M_MMAP_THRESHOLD: i32 = -3;
+    unsafe extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+    }
+    unsafe {
+        mallopt(M_TOP_PAD, 64 << 20);
+        mallopt(M_MMAP_THRESHOLD, 32 << 20);
+    }
+}
+
+/// Runs [`tune_allocator`] as the process starts, before the Rust runtime or
+/// anything else has allocated, so every allocation sees the settings.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[used]
+#[unsafe(link_section = ".init_array")]
+static TUNE_ALLOCATOR: extern "C" fn() = tune_allocator;
+
 fn main() -> ExitCode {
     // The artifact path comes first, and everything after it belongs to the
     // program, which reads it with `argv()`. So an option is only ever an
