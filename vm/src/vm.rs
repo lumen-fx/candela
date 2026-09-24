@@ -17,6 +17,7 @@ use crate::errors::ErrorCtx;
 use crate::errors::call_site_name;
 use crate::errors::throw_error;
 use crate::gc::GcState;
+use crate::gc::MarkBits;
 use crate::gc::alloc_array;
 use crate::gc::alloc_map;
 use crate::instr::Instr;
@@ -108,9 +109,18 @@ struct PooledStr {
 /// that is the route indexing and slicing take. The cursor remembers where the
 /// last walk stopped, so stepping through a multi-byte string forwards resumes
 /// there instead of restarting at its first byte.
+///
+/// The pool also carries the collector's marks for its strings. Interning a
+/// string hands out a slot it found by its text, and the slot it finds has to
+/// count as reached by a cycle in progress, which is what [`Self::shade`] does
+/// without the interning caller needing the collector.
 pub struct StringPool {
     strings: Vec<PooledStr>,
     cursor: Cell<StrCursor>,
+    marks: MarkBits,
+    /// The pool's length when the cycle in progress began. A slot at or past
+    /// it was allocated since, and counts as marked.
+    mark_limit: u32,
 }
 
 impl Default for StringPool {
@@ -125,6 +135,8 @@ impl StringPool {
         Self {
             strings: Vec::with_capacity(capacity),
             cursor: Cell::new(NO_CURSOR),
+            marks: MarkBits::default(),
+            mark_limit: 0,
         }
     }
     #[must_use]
@@ -138,6 +150,8 @@ impl StringPool {
                 })
                 .collect(),
             cursor: Cell::new(NO_CURSOR),
+            marks: MarkBits::default(),
+            mark_limit: 0,
         }
     }
     #[inline(always)]
@@ -171,6 +185,31 @@ impl StringPool {
         let slot = unsafe { self.strings.get_unchecked_mut(index) };
         slot.char_len.set(UNCOUNTED);
         &mut slot.text
+    }
+    /// Starts a cycle's marks: none, over the slots the pool has now.
+    pub(crate) fn begin_marking(&mut self) {
+        self.marks.reset(self.len());
+        self.mark_limit = self.len() as u32;
+    }
+    /// Ends a cycle's marks. Every slot counts as marked until the next cycle
+    /// begins, so shading one is a no-op.
+    pub(crate) const fn end_marking(&mut self) {
+        self.mark_limit = 0;
+    }
+    /// Marks slot `id` as reached by the cycle in progress.
+    #[inline(always)]
+    pub(crate) fn shade(&mut self, id: usize) {
+        if id < self.mark_limit as usize {
+            self.marks.insert(id);
+        }
+    }
+    /// The pool's length when the cycle in progress began.
+    pub(crate) const fn mark_limit(&self) -> usize {
+        self.mark_limit as usize
+    }
+    /// The cycle's marks.
+    pub(crate) const fn marks(&self) -> &MarkBits {
+        &self.marks
     }
     /// Empties a slot the collector freed. A long string's buffer goes back
     /// to the allocator rather than waiting in a dead slot for the next
