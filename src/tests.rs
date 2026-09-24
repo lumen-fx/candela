@@ -7,6 +7,43 @@ use crate::compiler::compiler_data::Source;
 use crate::data::Data;
 use crate::instr::Instr;
 
+/// Runs a compiled program the way the command line does: an error no `try`
+/// catches prints its report and ends the run, which in a test build panics.
+#[allow(clippy::too_many_arguments)] // the VM's own entry point, passed through
+fn run_vm(
+    instructions: &[Instr],
+    r: &mut RegisterFile,
+    pools: &mut crate::rt::Pools,
+    err_ctx: &crate::errors::ErrorCtx<'_>,
+    callsite_registers: &[Vec<u16>],
+    dyn_libs: &[crate::rt::DynamicLibFn],
+    structs: &[crate::rt::Struct],
+    enums: &[crate::rt::EnumType],
+    allocated_arg_count: usize,
+    allocated_call_depth: usize,
+    host_sigs: &[crate::rt::HostFnSig],
+    host_dispatch: &[candela_vm::embed::HostDispatch],
+    start: usize,
+) {
+    if let Err(error) = crate::vm::execute(
+        instructions,
+        r,
+        pools,
+        err_ctx,
+        callsite_registers,
+        dyn_libs,
+        structs,
+        enums,
+        allocated_arg_count,
+        allocated_call_depth,
+        host_sigs,
+        host_dispatch,
+        start,
+    ) {
+        error.report(err_ctx);
+    }
+}
+
 /// Compiles and runs `contents` with the compiler's debug dump on, then
 /// asserts some `print` left `expected` in its register. It does so in both
 /// profiles, since a release build has to reach the same answers.
@@ -24,7 +61,7 @@ macro_rules! run_and_check_registers {
         let instructions = out.instructions;
         let mut arrays = out.pools;
         let mut reg = RegisterFile(out.registers);
-        crate::vm::execute(
+        run_vm(
             &instructions,
             &mut reg,
             &mut arrays,
@@ -68,7 +105,7 @@ macro_rules! run {
                 optimize,
             );
             let mut arrays = out.pools;
-            crate::vm::execute(
+            run_vm(
                 &out.instructions,
                 &mut RegisterFile(out.registers),
                 &mut arrays,
@@ -4432,9 +4469,10 @@ pub fn map_loop() {
 // ---------------------------------------------------------------------------
 // STRUCTURED DIAGNOSTICS
 //
-// The three error funnels (throw_parser_error, throw_compiler_error,
-// throw_error) record a structured `Diagnostic` and unwind instead of printing
-// + exiting whenever `collect_diagnostic` has installed a sink on the thread.
+// The error funnels (throw_parser_error, throw_compiler_error, and
+// RuntimeError::report for a run-time error) record a structured `Diagnostic`
+// and unwind instead of printing + exiting whenever `collect_diagnostic` has
+// installed a sink on the thread.
 // Without a sink the CLI path is byte-for-byte unchanged.
 // ---------------------------------------------------------------------------
 
@@ -4509,7 +4547,7 @@ fn run_diag_profile_with(
             optimize,
         );
         let mut arrays = out.pools;
-        crate::vm::execute(
+        run_vm(
             &out.instructions,
             &mut RegisterFile(out.registers),
             &mut arrays,
@@ -7148,7 +7186,7 @@ fn pools_after_run(contents: &str, optimize: bool) -> candela_vm::rt::Pools {
         optimize,
     );
     let mut pools = out.pools;
-    crate::vm::execute(
+    run_vm(
         &out.instructions,
         &mut RegisterFile(out.registers),
         &mut pools,
@@ -7302,7 +7340,7 @@ pub fn gc_state_persists_across_runs() {
         }],
     };
     for _ in 0..2 {
-        crate::vm::execute(
+        run_vm(
             &out.instructions,
             &mut reg,
             &mut pools,
@@ -7357,7 +7395,7 @@ pub fn idle_collection_stays_within_its_budget() {
             contents: String::from(contents),
         }],
     };
-    crate::vm::execute(
+    run_vm(
         &out.instructions,
         &mut reg,
         &mut pools,
@@ -10273,7 +10311,7 @@ pub fn generic_declared_in_an_imported_module() {
     );
     let mut arrays = out.pools;
     let mut reg = RegisterFile(out.registers);
-    crate::vm::execute(
+    run_vm(
         &out.instructions,
         &mut reg,
         &mut arrays,

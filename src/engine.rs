@@ -701,26 +701,26 @@ impl Program {
         let allocated_arg_count = self.allocated_arg_count;
         let allocated_call_depth = self.allocated_call_depth;
 
-        let result = collect_diagnostic(|| {
-            vm::execute(
-                instructions,
-                &mut register_file,
-                pools,
-                &err_ctx,
-                callsite_registers,
-                dyn_lib_fns,
-                structs,
-                enums,
-                allocated_arg_count,
-                allocated_call_depth,
-                host_sigs,
-                host_dispatch,
-                start,
-            );
-        });
+        // An error comes back as a value, so a call sets up no unwind and
+        // leaves the process panic hook alone.
+        let result = vm::execute(
+            instructions,
+            &mut register_file,
+            pools,
+            &err_ctx,
+            callsite_registers,
+            dyn_lib_fns,
+            structs,
+            enums,
+            allocated_arg_count,
+            allocated_call_depth,
+            host_sigs,
+            host_dispatch,
+            start,
+        );
 
         self.registers = std::mem::take(&mut register_file.0);
-        result
+        result.map_err(|error| error.diagnostic(&err_ctx))
     }
 }
 

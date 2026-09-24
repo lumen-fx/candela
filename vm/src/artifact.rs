@@ -33,7 +33,6 @@ use crate::embed::unmarshal_value;
 use crate::embed::value_matches_type;
 use crate::errors::Diagnostic;
 use crate::errors::ErrorCtx;
-use crate::errors::collect_diagnostic;
 use crate::instr::Instr;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
@@ -265,17 +264,17 @@ pub struct RuntimeProgram {
 impl RuntimeProgram {
     /// Runs the program's `main` to completion.
     ///
-    /// Runtime errors are printed and abort the process (via the VM's
-    /// `throw_error`), matching the full `candela <file.cdl>` path exactly. A
+    /// A runtime error prints its report and ends the process, matching the
+    /// full `candela <file.cdl>` path exactly. A
     /// host that wants the error as a value instead runs this inside
-    /// [`collect_diagnostic`].
+    /// [`collect_diagnostic`](crate::collect_diagnostic).
     pub fn run(&mut self) {
         let err_ctx = ErrorCtx {
             instr_src: &self.instr_src,
             sources: &self.sources,
         };
         let mut register_file = RegisterFile(std::mem::take(&mut self.registers));
-        vm::execute(
+        let result = vm::execute(
             &self.instructions,
             &mut register_file,
             &mut self.pools,
@@ -291,6 +290,9 @@ impl RuntimeProgram {
             0,
         );
         self.registers = std::mem::take(&mut register_file.0);
+        if let Err(error) = result {
+            error.report(&err_ctx);
+        }
     }
 
     /// Invokes the exported function `name` with `args`, returning its value
@@ -405,26 +407,26 @@ impl RuntimeProgram {
         let allocated_arg_count = self.allocated_arg_count;
         let allocated_call_depth = self.allocated_call_depth;
 
-        let result = collect_diagnostic(|| {
-            vm::execute(
-                instructions,
-                &mut register_file,
-                pools,
-                &err_ctx,
-                callsite_registers,
-                dyn_lib_fns,
-                structs,
-                enums,
-                allocated_arg_count,
-                allocated_call_depth,
-                host_sigs,
-                host_dispatch,
-                start,
-            );
-        });
+        // An error comes back as a value, so a call sets up no unwind and
+        // leaves the process panic hook alone.
+        let result = vm::execute(
+            instructions,
+            &mut register_file,
+            pools,
+            &err_ctx,
+            callsite_registers,
+            dyn_lib_fns,
+            structs,
+            enums,
+            allocated_arg_count,
+            allocated_call_depth,
+            host_sigs,
+            host_dispatch,
+            start,
+        );
 
         self.registers = std::mem::take(&mut register_file.0);
-        result
+        result.map_err(|error| error.diagnostic(&err_ctx))
     }
 }
 

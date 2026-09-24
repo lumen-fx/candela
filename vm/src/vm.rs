@@ -14,8 +14,8 @@ use crate::embed::HostDispatch;
 use crate::embed::Value;
 use crate::errors::ErrType;
 use crate::errors::ErrorCtx;
+use crate::errors::RuntimeError;
 use crate::errors::call_site_name;
-use crate::errors::throw_error;
 use crate::gc::GcState;
 use crate::gc::MarkBits;
 use crate::gc::alloc_array;
@@ -467,7 +467,7 @@ fn frame_room(m: &mut Machine<'_>, instructions: &[Instr], i: usize, regs: Regs)
         return Some(catch_error(
             ErrType::CallDepthExceeded(call_site_name(m.err_ctx, instr), CALL_DEPTH_LIMIT),
             instr,
-            m.err_ctx,
+            &mut m.failure,
             &mut m.error_handles,
             &mut m.call_frames,
             &mut m.args,
@@ -493,8 +493,9 @@ fn grow_recursion_stack(stack: &mut Vec<Data>, count: usize) {
     stack.reserve(count);
 }
 
-/// Hands a run-time error to the innermost `try` that is still open, or reports
-/// it and stops the program when none is.
+/// Hands a run-time error to the innermost `try` that is still open. When none
+/// is, it records the error in `failure` and answers [`FAILED`], which ends the
+/// run.
 ///
 /// A caught error unwinds the calls the `try` wrapped, puts the error's name in
 /// the catch's register, and answers the instruction the catch starts at. The
@@ -508,7 +509,7 @@ fn grow_recursion_stack(stack: &mut Vec<Data>, count: usize) {
 fn catch_error(
     err: ErrType,
     instr: Instr,
-    err_ctx: &ErrorCtx<'_>,
+    failure: &mut Option<RuntimeError>,
     error_handles: &mut Vec<ErrorCatch>,
     call_frames: &mut Vec<CallFrame>,
     args: &mut Vec<u16>,
@@ -522,7 +523,8 @@ fn catch_error(
     gc: &mut GcState,
 ) -> usize {
     let Some(err_handle) = error_handles.pop() else {
-        throw_error(err_ctx, instr, err);
+        *failure = Some(RuntimeError::new(instr, err));
+        return FAILED;
     };
     let caught = Data::string(
         err.kind(),
@@ -766,6 +768,10 @@ impl IndexMut<u16> for Regs {
 
 /// What [`run_cold`] answers when the program has stopped.
 const HALTED: usize = usize::MAX;
+/// What [`catch_error`] and [`run_cold`] answer when an error no `try` catches
+/// has stopped the program. It sits just below [`HALTED`], so one comparison
+/// tells either from an instruction index.
+const FAILED: usize = usize::MAX - 1;
 
 /// Everything one run of [`execute`] works with besides the instruction index
 /// and the registers.
@@ -798,8 +804,17 @@ struct Machine<'a> {
     host_call_args: Vec<Value>,
     keep_alive: Vec<Box<[u8]>>,
     error_handles: Vec<ErrorCatch>,
+    /// The error that stopped the run, once one no `try` caught has.
+    failure: Option<RuntimeError>,
 }
 
+/// Runs `instructions` from `start` until the program halts.
+///
+/// # Errors
+///
+/// Returns the [`RuntimeError`] that stopped the program when one no `try`
+/// caught was raised. The registers and pools are left as the error found
+/// them.
 #[allow(unused_unsafe)]
 pub fn execute(
     instructions: &[Instr],
@@ -827,7 +842,7 @@ pub fn execute(
     // Instruction index to begin execution at. `0` runs `main`; the embedding
     // `Program::call` passes the entry index of an appended call trampoline.
     start: usize,
-) {
+) -> Result<(), RuntimeError> {
     // The instruction running, as a pointer: the loop steps and jumps it
     // directly, and turns it back into an index only where one is recorded.
     let base = instructions.as_ptr();
@@ -859,6 +874,7 @@ pub fn execute(
         host_call_args: Vec::new(),
         keep_alive: Vec::new(),
         error_handles: Vec::new(),
+        failure: None,
     };
 
     macro_rules! error_with_catch {
@@ -866,7 +882,7 @@ pub fn execute(
             let resume = catch_error(
                 $err,
                 unsafe { *ip },
-                m.err_ctx,
+                &mut m.failure,
                 &mut m.error_handles,
                 &mut m.call_frames,
                 &mut m.args,
@@ -879,6 +895,9 @@ pub fn execute(
                 m.str_pool,
                 m.gc,
             );
+            if resume == FAILED {
+                break;
+            }
             ip = unsafe { base.add(resume) };
             continue;
         };
@@ -901,6 +920,9 @@ pub fn execute(
                 if m.call_frames.len() == m.call_frames.capacity()
                     && let Some(catch) = frame_room(&mut m, instructions, index_of(base, ip), regs)
                 {
+                    if catch == FAILED {
+                        break;
+                    }
                     ip = unsafe { base.add(catch) };
                     continue;
                 }
@@ -942,6 +964,9 @@ pub fn execute(
                 if m.call_frames.len() == m.call_frames.capacity()
                     && let Some(catch) = frame_room(&mut m, instructions, index_of(base, ip), regs)
                 {
+                    if catch == FAILED {
+                        break;
+                    }
                     ip = unsafe { base.add(catch) };
                     continue;
                 }
@@ -1290,7 +1315,7 @@ pub fn execute(
             | Instr::NewCell(..)
             | Instr::Halt(..) => {
                 let next = run_cold(&mut m, instructions, index_of(base, ip), regs);
-                if next == HALTED {
+                if next >= FAILED {
                     break;
                 }
                 ip = unsafe { base.add(next) };
@@ -1299,6 +1324,7 @@ pub fn execute(
         }
         ip = unsafe { ip.add(1) };
     }
+    m.failure.map_or(Ok(()), Err)
 }
 
 /// The index of the instruction `ip` points at.
@@ -1325,7 +1351,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
         map_pool,
         str_pool,
         gc,
-        err_ctx,
+        err_ctx: _,
         callsite_registers,
         dyn_libs,
         structs,
@@ -1340,13 +1366,13 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
         host_call_args,
         keep_alive,
         error_handles,
+        failure,
     } = m;
     let r: &RegisterFile = r;
     let obj_pool: &mut ObjectPool = obj_pool;
     let map_pool: &mut MapPool = map_pool;
     let str_pool: &mut StringPool = str_pool;
     let gc: &mut GcState = gc;
-    let err_ctx: &ErrorCtx = err_ctx;
     let callsite_registers: &[Vec<u16>] = callsite_registers;
     let dyn_libs: &[DynamicLibFn] = dyn_libs;
     let structs: &[Struct] = structs;
@@ -1376,7 +1402,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             catch_error(
                 $err,
                 unsafe { *instructions.get_unchecked(i) },
-                err_ctx,
+                failure,
                 error_handles,
                 call_frames,
                 args,
