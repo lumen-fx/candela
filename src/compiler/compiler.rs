@@ -5275,6 +5275,7 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
         "std/time.cdl" => Some(include_str!("../../libs/std/time.cdl")),
         "std/random.cdl" => Some(include_str!("../../libs/std/random.cdl")),
+        "std/hash.cdl" => Some(include_str!("../../libs/std/hash.cdl")),
         _ => None,
     }
 }
@@ -5711,7 +5712,7 @@ fn parse_toplevel(
                 if !is_logical || embedded_std_module(path).is_none() =>
             {
                 wasm_error(
-                    "WASM does not support importing files. The standard library modules std/math, std/time and std/random import",
+                    "WASM does not support importing files. The standard library modules std/math, std/time, std/random and std/hash import",
                 )
             }
             import @ (Expr::ImportFile(..) | Expr::ImportDylib(..) | Expr::HostBlock(..)) => {

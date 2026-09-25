@@ -380,3 +380,96 @@ fn main() {
         "artifact with inlined std must load"
     );
 }
+
+/// Builds `libs/std_src/hash/hash.c` into a library directory of its own,
+/// beside a copy of `libs/std`, and answers that directory; `None` where no C
+/// compiler is on the path. The native modules are compiled by the release
+/// workflow, not by cargo, so the test builds the one it needs.
+fn lib_dir_with_hash(tag: &str) -> Option<PathBuf> {
+    let libs = std::env::temp_dir().join(format!("candela_std_hash_{tag}_{}", std::process::id()));
+    let std_dir = libs.join("std");
+    let native_dir = libs.join("std_src").join("hash");
+    std::fs::create_dir_all(&std_dir).expect("create std dir");
+    std::fs::create_dir_all(&native_dir).expect("create native dir");
+    for module in ["hash.cdl", "assert.cdl", "list.cdl"] {
+        std::fs::copy(repo().join("libs/std").join(module), std_dir.join(module))
+            .expect("copy module");
+    }
+    let library = native_dir.join(if cfg!(windows) {
+        "hash.dll"
+    } else if cfg!(target_os = "macos") {
+        "hash.dylib"
+    } else {
+        "hash.so"
+    });
+    let compiler = std::env::var("CC").unwrap_or_else(|_| String::from("cc"));
+    let mut command = Command::new(compiler);
+    command.args(["-O2", "-std=c11", "-shared", "-fPIC", "-o"]);
+    if cfg!(target_os = "macos") {
+        command.arg("-dynamiclib");
+    }
+    let built = command
+        .arg(&library)
+        .arg(repo().join("libs/std_src/hash/hash.c"))
+        .output();
+    match built {
+        Ok(output) if output.status.success() => Some(libs),
+        Ok(output) => panic!(
+            "building hash.c failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        Err(e) => {
+            eprintln!("skipping the hash module test: no C compiler ({e})");
+            None
+        }
+    }
+}
+
+#[test]
+fn hash_module() {
+    let Some(libs) = lib_dir_with_hash("vectors") else {
+        return;
+    };
+    let path = repo().join("libs/std/tests/test_hash.cdl");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command.arg(&path).env("CANDELA_LIB_PATH", &libs);
+    let output = common::output_with_deadline(&mut command, "test_hash");
+    let _ = std::fs::remove_dir_all(&libs);
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("hash ok"),
+        "test_hash exited with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+/// A NUL cannot cross into the C library, so hashing a string that holds one
+/// raises an error instead of hashing the part before it.
+#[test]
+fn hashing_a_nul_raises() {
+    let Some(libs) = lib_dir_with_hash("nul") else {
+        return;
+    };
+    let work = libs.join("work");
+    std::fs::create_dir_all(&work).expect("create work dir");
+    std::fs::write(
+        work.join("prog.cdl"),
+        "import \"std/hash\" as hash;\nfn main() { print(hash::md5(\"a\\0b\")); }\n",
+    )
+    .expect("write program");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
+        .arg("prog.cdl")
+        .current_dir(&work)
+        .env("CANDELA_LIB_PATH", &libs);
+    let output = common::output_with_deadline(&mut command, "hash a NUL");
+    let _ = std::fs::remove_dir_all(&libs);
+    assert!(
+        !output.status.success(),
+        "hashing a NUL ran: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("null byte"), "{stderr}");
+}

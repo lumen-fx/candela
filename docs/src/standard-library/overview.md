@@ -10,10 +10,11 @@ The library ships as candela source. The toolchain installs a `libs` directory
 beside the `candela` executable:
 
 - `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `convert.cdl`,
-  `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`, `option.cdl`, `random.cdl`,
-  `result.cdl`, `set.cdl`, `string.cdl`, `time.cdl`.
+  `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`, `option.cdl`,
+  `random.cdl`, `result.cdl`, `set.cdl`, `string.cdl`, `time.cdl`.
 - `libs/std_src/` holds the C sources and the compiled dynamic libraries for the
-  three modules that call into native code: `math`, `random`, and `time`.
+  four modules that call into native code: `hash`, `math`, `random`, and
+  `time`.
 
 Set `CANDELA_LIB_PATH` to point at a different `libs` directory. The variable
 names the directory that contains `std/` and `std_src/`, and it overrides the
@@ -24,19 +25,19 @@ Rust host that embeds candela names it with `Engine::with_lib_dir` instead; see
 Because the modules are ordinary source files, the compiler links the ones you
 import into your program. A `.cdlb` artifact built from a program that imports
 only pure-candela modules runs under `candela-vm` with no library directory
-present. The `math`, `random`, and `time` modules bind a dynamic library, so a
-`.cdlb` that uses them records the binding recipe and needs the `libs` directory
-when it runs; `candela-vm` finds it the way the compiler does, through
-`CANDELA_LIB_PATH` or beside its own binary. See
+present. The `hash`, `math`, `random`, and `time` modules bind a dynamic
+library, so a `.cdlb` that uses them records the binding recipe and needs the
+`libs` directory when it runs; `candela-vm` finds it the way the compiler does,
+through `CANDELA_LIB_PATH` or beside its own binary. See
 [artifacts](../reference/artifacts.md).
 
 ## In a browser
 
 The WebAssembly build has no file system and loads no dynamic library. It
-carries `math`, `random` and `time` inside itself and runs their native half on
-its own functions, so `import "std/math" as math;` works there as it does on a
-desktop, with the same functions. A `.cdlb` built on a
-desktop that imports them runs in the browser as well. The other modules do not
+carries `hash`, `math`, `random` and `time` inside itself and runs their native
+half on its own functions, so `import "std/math" as math;` works there as it
+does on a desktop, with the same functions. A `.cdlb` built on a desktop that
+imports them runs in the browser as well. The other modules do not
 import in a browser.
 
 ## Importing a module
@@ -99,6 +100,7 @@ when your file already binds the name `list`.
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
 | [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` methods over the built-in conversions |
+| [hash](hash.md) | md5, sha1 and sha256 digests of a string, as hex |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
 | [list](list.md) | Reductions, slicing, and higher-order methods on arrays |
 | [map](map.md) | Extra map methods: `is_empty` and `get_or` |

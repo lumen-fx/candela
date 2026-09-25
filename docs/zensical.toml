@@ -53,6 +53,7 @@ nav = [
      "standard-library/builtins.md",
      "standard-library/assert.md",
      "standard-library/convert.md",
+     "standard-library/hash.md",
      "standard-library/json.md",
      "standard-library/list.md",
      "standard-library/map.md",

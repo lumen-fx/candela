@@ -1,0 +1,16 @@
+/// Digests of a string: md5, sha1 and sha256, each as lowercase hex.
+///
+/// The digest covers the string's UTF-8 bytes. md5 and sha1 are for ids and
+/// checksums, not for security.
+dylib "../std_src/hash/hash" {
+    string candela_md5(string);
+    string candela_sha1(string);
+    string candela_sha256(string);
+}
+
+/// The md5 digest of `s`, as 32 lowercase hex digits.
+fn md5(s) { return hash::candela_md5(s); }
+/// The sha1 digest of `s`, as 40 lowercase hex digits.
+fn sha1(s) { return hash::candela_sha1(s); }
+/// The sha256 digest of `s`, as 64 lowercase hex digits.
+fn sha256(s) { return hash::candela_sha256(s); }

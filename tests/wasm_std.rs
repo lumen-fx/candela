@@ -1,8 +1,8 @@
 //! The standard library's native modules in the browser build.
 //!
-//! `std/math`, `std/time` and `std/random` bind a C library on a desktop. The
-//! browser build carries those modules and runs their bindings on the
-//! runtime's own functions instead, so the same imports work there. Run with
+//! `std/math`, `std/time`, `std/random` and `std/hash` bind a C library on a
+//! desktop. The browser build carries those modules and runs their bindings on
+//! the runtime's own functions instead, so the same imports work there. Run with
 //! `cargo test --target wasm32-unknown-unknown --test wasm_std` and
 //! `wasm-bindgen-test-runner` as the target's runner.
 
@@ -143,6 +143,27 @@ fn main() {
 }
 "#);
     assert_eq!(out.trim(), "true");
+}
+
+/// The digests a desktop's C library gives for the same text.
+#[wasm_bindgen_test]
+fn hash_answers_what_a_desktop_answers() {
+    let out = run(r#"
+import "std/hash" as hash;
+fn main() {
+    print(hash::md5("OfflinePlayer:Notch"));
+    print(hash::sha1("abc"));
+    print(hash::sha256(""));
+}
+"#);
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "b50ad385829da141a2167e7d7539ba7f",
+            "a9993e364706816aba3e25717850c26c9cd0d89d",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ]
+    );
 }
 
 /// An artifact records the std bindings by name; the browser's runtime binds
