@@ -16,9 +16,12 @@
 //! - Idle: nothing to do. A cycle begins when a pool that has reached its
 //!   threshold is down to its reserve of free slots: enough for the program
 //!   to allocate from while the cycle marks, so the pool does not have to
-//!   grow for it. While the cycle runs, every allocation pays for a share of
-//!   its work, done a slice at a time, so the program never stops for more
-//!   than one slice.
+//!   grow for it. A cycle also begins at the next allocation once the program
+//!   has allocated more bytes since the last cycle than its byte threshold,
+//!   so a program that allocates few but large lists does not grow its heap
+//!   far past what it keeps. While the cycle runs, every allocation, and
+//!   every [`DEBT_BYTES`] allocated, pays for a share of its work, done a
+//!   slice at a time, so the program never stops for more than one slice.
 //! - Mark: beginning a cycle records how long each pool is, marks every slot
 //!   already on a free list, and marks what the roots hold. Marking then walks
 //!   the objects it has reached, a chunk of at most [`CHUNK`] entries at a time,
@@ -95,6 +98,24 @@ const ALLOC_DEBT: u32 = 16;
 /// once it reaches this, which bounds how long one allocation stops the
 /// program.
 const SLICE: u32 = 512;
+
+/// The least the byte threshold is: the bytes a program allocates before its
+/// first collection by bytes, and the floor under every later threshold. A
+/// program whose heap stays under it is paced by its object count alone.
+pub const MIN_BYTE_THRESHOLD: usize = 8 << 20;
+
+/// Bytes allocated while a cycle runs that pay for the same share of its work
+/// as one allocation does, [`ALLOC_DEBT`] units. A program building large
+/// lists allocates few objects, and this keeps a cycle it is in from lasting
+/// for as many bytes as the whole heap holds.
+pub const DEBT_BYTES: usize = 8 << 10;
+
+/// What one list element costs in bytes.
+pub const LIST_ENTRY_BYTES: usize = size_of::<Data>();
+
+/// What one map entry costs in bytes: the key, the value, the hash the entry
+/// keeps and the index slot that finds it.
+pub const MAP_ENTRY_BYTES: usize = 2 * size_of::<Data>() + 2 * size_of::<usize>();
 
 /// The most entries of one list or map a single unit of marking walks. A large
 /// list is walked a chunk at a time, so no single step has to walk all of it.
@@ -240,6 +261,8 @@ struct Tracer {
     array_limit: u32,
     map_limit: u32,
     work: Vec<Grey>,
+    /// The bytes the lists, maps and pooled strings marked so far hold.
+    live_bytes: usize,
 }
 
 impl Tracer {
@@ -266,7 +289,7 @@ impl Tracer {
                 });
             }
         } else if d.is_large_str() {
-            strings.shade(d.get_str_pool_id());
+            self.live_bytes += strings.shade_counted(d.get_str_pool_id());
         }
     }
 
@@ -280,6 +303,9 @@ impl Tracer {
         let from = g.from as usize;
         if g.map {
             let map = &maps[g.id as usize];
+            if from == 0 {
+                self.live_bytes += map.capacity() * MAP_ENTRY_BYTES;
+            }
             let end = map.len().min(from + CHUNK as usize);
             if let Some(entries) = map.get_range(from..end) {
                 for (k, v) in entries {
@@ -295,6 +321,9 @@ impl Tracer {
             }
         } else {
             let list = &objs[g.id as usize];
+            if from == 0 {
+                self.live_bytes += list.capacity() * LIST_ENTRY_BYTES;
+            }
             let end = list.len().min(from + CHUNK as usize);
             if from < end {
                 for &e in unsafe { list.get_unchecked(from..end) } {
@@ -407,6 +436,17 @@ pub struct GcState {
     occupied_after: [usize; 3],
     /// Whether the host has collected, which raises the thresholds.
     host_paced: bool,
+    /// Bytes allocated since the last cycle began, as far as the allocations
+    /// that report them say: list and map buffers and pooled strings.
+    bytes: usize,
+    /// The bytes past which an allocation begins a cycle.
+    byte_threshold: usize,
+    /// The count of `bytes` at which [`note_bytes`](Self::note_bytes) next
+    /// has something to do: the threshold while no cycle runs, the next debt
+    /// step while one does.
+    byte_trigger: usize,
+    /// The bytes the last finished mark phase found live.
+    live_bytes: usize,
 }
 
 impl Default for GcState {
@@ -432,6 +472,14 @@ impl Default for GcState {
             held: [Vec::new(), Vec::new(), Vec::new()],
             occupied_after: [0; 3],
             host_paced: false,
+            bytes: 0,
+            byte_threshold: MIN_BYTE_THRESHOLD,
+            byte_trigger: if TORTURE {
+                usize::MAX
+            } else {
+                MIN_BYTE_THRESHOLD
+            },
+            live_bytes: 0,
         }
     }
 }
@@ -482,7 +530,9 @@ impl GcState {
     /// that a step stops within one chunk or one mark word of the budget. A
     /// cycle begins only when some pool has grown by half its live set (and by
     /// at least [`MIN_GC_THRESHOLD`] slots) since the last one and has fewer
-    /// than an eighth of its slots free; otherwise the call does nothing.
+    /// than an eighth of its slots free, or the program has allocated half as
+    /// many bytes as the last cycle found live (and at least
+    /// [`MIN_BYTE_THRESHOLD`]); otherwise the call does nothing.
     pub fn collect(
         &mut self,
         objs: &mut ObjectPool,
@@ -511,8 +561,13 @@ impl GcState {
     }
 
     /// Whether an idle collection should begin a cycle: some pool has grown
-    /// by half its live set since the last cycle and has few free slots left.
+    /// by half its live set since the last cycle and has few free slots left,
+    /// or the program has allocated half as many bytes as the last cycle found
+    /// live (and at least [`MIN_BYTE_THRESHOLD`]).
     fn worth_collecting(&self, arrays: usize, maps: usize, strings: usize) -> bool {
+        if self.bytes >= (self.live_bytes / 2).max(MIN_BYTE_THRESHOLD) {
+            return true;
+        }
         let lens = [arrays, maps, strings];
         [Swept::Arrays, Swept::Maps, Swept::Strings]
             .into_iter()
@@ -595,6 +650,9 @@ impl GcState {
         self.cycles += 1;
         self.mark_units = 0;
         self.debt = 0;
+        self.bytes = 0;
+        self.byte_trigger = if TORTURE { usize::MAX } else { DEBT_BYTES };
+        self.tracer.live_bytes = 0;
         self.free(Swept::Arrays).hold_all();
         self.free(Swept::Maps).hold_all();
         self.free(Swept::Strings).hold_all();
@@ -779,7 +837,13 @@ impl GcState {
     /// for allocations to take without asking the collector.
     fn finish(&mut self) {
         self.phase = Phase::Idle;
+        self.live_bytes = self.tracer.live_bytes;
         if !TORTURE {
+            self.byte_threshold = self
+                .live_bytes
+                .saturating_mul(self.growth())
+                .max(MIN_BYTE_THRESHOLD);
+            self.byte_trigger = self.byte_threshold;
             let reserve = self.reserve;
             self.free(Swept::Arrays).release_above(reserve);
             self.free(Swept::Maps).release_above(reserve);
@@ -790,8 +854,9 @@ impl GcState {
     /// What an allocation does when its pool has no ready slot. With a cycle
     /// running it adds ALLOC_DEBT units to what the program owes, and a step
     /// pays the debt off once it reaches SLICE. With none running, a pool at
-    /// its threshold begins one; a pool below it makes its reserve ready, since
-    /// it has room to grow before it needs a cycle.
+    /// its threshold begins one, and so does any pool once the bytes allocated
+    /// since the last cycle pass the byte threshold; otherwise the pool makes
+    /// its reserve ready, since it has room to grow before it needs a cycle.
     #[inline(never)]
     fn on_empty(
         &mut self,
@@ -813,8 +878,10 @@ impl GcState {
         if self.active() {
             self.debt += ALLOC_DEBT;
             if self.debt >= SLICE {
-                let budget = self.debt;
-                self.debt = 0;
+                // Bytes can run the debt up by more than a slice at once, and
+                // what is past one slice waits for the next allocation.
+                let budget = self.debt.min(SLICE);
+                self.debt -= budget;
                 let spent = self.advance(objs, maps, strings, roots, budget);
                 self.record(spent);
             }
@@ -825,12 +892,48 @@ impl GcState {
             Swept::Maps => (maps.len(), self.map_threshold),
             Swept::Strings => (strings.len(), self.string_threshold),
         };
-        if len >= threshold as usize {
+        if len >= threshold as usize || self.bytes >= self.byte_threshold {
             let spent = self.begin(objs, maps, strings, roots);
             self.record(spent);
         } else {
             self.free(pool).release_above(0);
         }
+    }
+
+    /// Counts `n` bytes the program has just allocated: a list or map buffer
+    /// that grew, or a pooled string. Past the byte threshold the next
+    /// allocation begins a cycle; while one runs, every [`DEBT_BYTES`] add to
+    /// what the allocations owe it.
+    #[inline(always)]
+    pub(crate) fn note_bytes(&mut self, n: usize) {
+        self.bytes += n;
+        if self.bytes >= self.byte_trigger {
+            self.bytes_due();
+        }
+    }
+
+    /// [`note_bytes`](Self::note_bytes) once the count reaches its trigger.
+    #[cold]
+    #[inline(never)]
+    fn bytes_due(&mut self) {
+        if self.active() {
+            let steps = (self.bytes - self.byte_trigger) / DEBT_BYTES + 1;
+            let owed = u32::try_from(steps)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(ALLOC_DEBT);
+            self.debt = self.debt.saturating_add(owed);
+            self.byte_trigger = self.bytes.saturating_add(DEBT_BYTES);
+            // The debt is paid at the next allocation, where the roots are at
+            // hand. Every free slot is held while a cycle runs, so it asks.
+            return;
+        }
+        // A cycle has to begin where the roots are at hand, which is an
+        // allocation. Holding every free slot back makes the next one ask the
+        // collector, whichever pool it is in, and it begins the cycle.
+        self.byte_trigger = usize::MAX;
+        self.free(Swept::Arrays).hold_all();
+        self.free(Swept::Maps).hold_all();
+        self.free(Swept::Strings).hold_all();
     }
 
     /// Checks a finished mark phase against a fresh trace from `roots`: every
@@ -955,6 +1058,7 @@ pub fn alloc_string<S: PoolString>(
     recursion_stack: &RegisterFile,
     gc: &mut GcState,
 ) -> u64 {
+    gc.note_bytes(s.str_len());
     let slot = match gc.free_strings.pop() {
         Some(id) => Some(id),
         None => {

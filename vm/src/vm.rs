@@ -17,6 +17,8 @@ use crate::errors::ErrorCtx;
 use crate::errors::RuntimeError;
 use crate::errors::call_site_name;
 use crate::gc::GcState;
+use crate::gc::LIST_ENTRY_BYTES;
+use crate::gc::MAP_ENTRY_BYTES;
 use crate::gc::MarkBits;
 use crate::gc::alloc_array;
 use crate::gc::alloc_map;
@@ -250,6 +252,17 @@ impl StringPool {
     pub(crate) fn shade(&mut self, id: usize) {
         if id < self.mark_limit as usize {
             self.marks.insert(id);
+        }
+    }
+    /// [`shade`](Self::shade) for the trace: answers the bytes the string
+    /// holds when this marked it, and nothing when it was marked already or
+    /// was allocated since the cycle began.
+    #[inline(always)]
+    pub(crate) fn shade_counted(&mut self, id: usize) -> usize {
+        if id < self.mark_limit as usize && !self.marks.insert(id) {
+            unsafe { self.strings.get_unchecked(id).text.capacity() }
+        } else {
+            0
         }
     }
     /// The pool's length when the cycle in progress began.
@@ -577,6 +590,35 @@ fn frame_room(m: &mut Machine<'_>, instructions: &[Instr], i: usize, regs: Regs)
     m.call_frames
         .reserve_exact(depth.max(64).min(CALL_DEPTH_LIMIT - depth));
     None
+}
+
+/// Makes room in a full list for one more element, and tells the collector
+/// the bytes the list grew by. Out of line, so a push that has room pays one
+/// test.
+#[cold]
+#[inline(never)]
+fn grow_list(list: &mut Vec<Data>, gc: &mut GcState) {
+    let before = list.capacity();
+    list.reserve(1);
+    gc.note_bytes((list.capacity() - before) * LIST_ENTRY_BYTES);
+}
+
+/// Inserts into a map through [`map_insert`], and tells the collector the
+/// bytes the map grew by when it had to.
+#[inline(always)]
+fn map_insert_counted(
+    map: &mut CandelaMap,
+    key: Data,
+    value: Data,
+    strings: &StringPool,
+    gc: &mut GcState,
+) -> Option<Data> {
+    let before = map.capacity();
+    let old = map_insert(map, key, value, strings);
+    if map.capacity() != before {
+        gc.note_bytes(map.capacity().saturating_sub(before) * MAP_ENTRY_BYTES);
+    }
+    old
 }
 
 /// Makes room on the recursion stack for `count` more saved registers.
@@ -1342,9 +1384,17 @@ pub fn execute(
                 *slot = value;
             }
             Instr::Push(array, element) => {
-                m.obj_pool
-                    .get_mut(regs[array].as_array())
-                    .push(regs.get(element));
+                let list = m.obj_pool.get_mut(regs[array].as_array());
+                if list.len() == list.capacity() {
+                    grow_list(list, m.gc);
+                }
+                // There is room, so the element is written in place, which is
+                // the push without its capacity test.
+                unsafe {
+                    let len = list.len();
+                    list.as_mut_ptr().add(len).write(regs.get(element));
+                    list.set_len(len + 1);
+                }
             }
             Instr::CloneStruct(src_reg, dest_reg) => {
                 let new_id = alloc_array(
@@ -1767,6 +1817,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[value_reg_id] = Data::function(array_id);
             }
             Instr::CloneArray(src_reg, dest_reg, len) => {
+                gc.note_bytes(len as usize * LIST_ENTRY_BYTES);
                 let src_id = regs[src_reg].as_array();
                 let new_id =
                     alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc) as usize;
@@ -1808,6 +1859,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     combined.reserve(arr_a.len() + arr_b.len());
                     combined.extend_from_slice(arr_a);
                     combined.extend_from_slice(arr_b);
+                    gc.note_bytes(combined.capacity() * LIST_ENTRY_BYTES);
                 }
                 regs[dest] = Data::array(array_id);
             }
@@ -2039,6 +2091,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                             );
                     }
                 }
+                gc.note_bytes(obj_pool[new_array_id as usize].capacity() * LIST_ENTRY_BYTES);
                 regs[dest_reg_id] = Data::array(new_array_id);
             }
             // A string is indexed by character, so the position has to be
@@ -2137,11 +2190,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 };
             }
             Instr::MapInsert(map_pool_id, key_reg_id, val_reg_id) => {
-                let old = map_insert(
+                let old = map_insert_counted(
                     &mut map_pool[map_pool_id as usize],
                     regs[key_reg_id],
                     regs[val_reg_id],
                     str_pool,
+                    gc,
                 );
                 if let Some(old) = old
                     && gc.marking()
@@ -2150,11 +2204,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 }
             }
             Instr::MapInsertReg(map_reg_id, key_reg_id, val_reg_id) => {
-                let old = map_insert(
+                let old = map_insert_counted(
                     &mut map_pool[regs[map_reg_id].as_map()],
                     regs[key_reg_id],
                     regs[val_reg_id],
                     str_pool,
+                    gc,
                 );
                 if let Some(old) = old
                     && gc.marking()
@@ -2183,6 +2238,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             Instr::CloneMap(src_reg, dest_reg) => {
                 let new_map = map_pool[regs[src_reg].as_map()].clone();
+                gc.note_bytes(new_map.capacity() * MAP_ENTRY_BYTES);
                 let new_id = alloc_map(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 unsafe {
                     map_pool[new_id as usize] = new_map;
@@ -2309,6 +2365,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                     obj_pool[array_id as usize] =
                         obj_pool[reg.as_array()].repeat(repeat_count as usize);
+                    gc.note_bytes(obj_pool[array_id as usize].capacity() * LIST_ENTRY_BYTES);
                     regs[dest] = Data::array(array_id);
                 }
             }
@@ -2439,6 +2496,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let out = obj_pool.get_mut(out_id as usize);
                 out.clear();
                 out.extend(keys);
+                gc.note_bytes(out.capacity() * LIST_ENTRY_BYTES);
                 regs[dest] = Data::array(out_id);
             }
             Instr::CallLibFunc(LibFunc::Values, tgt, dest) => {
@@ -2448,6 +2506,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let out = obj_pool.get_mut(out_id as usize);
                 out.clear();
                 out.extend(vals);
+                gc.note_bytes(out.capacity() * LIST_ENTRY_BYTES);
                 regs[dest] = Data::array(out_id);
             }
             Instr::CallLibFunc(LibFunc::JsonParse, tgt, dest) => {
@@ -2623,11 +2682,13 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         obj_pool.get_mut(output_id as usize).push(part);
                     }
                     recursion_stack.0.pop();
+                    gc.note_bytes(obj_pool[output_id as usize].capacity() * LIST_ENTRY_BYTES);
                     regs[dest_register] = Data::array(output_id);
                 } else if source.is_array() {
                     let source_array_id = source.as_array();
                     let separator = regs[separator];
                     let source_array = &obj_pool[source_array_id];
+                    let source_len = source_array.len();
 
                     let mut split_ranges: Vec<(usize, usize)> =
                         Vec::with_capacity(source_array.len() + 1);
@@ -2673,6 +2734,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                     let parts = obj_pool.get_mut(array_id as usize);
                     parts.extend(recursion_stack.0.drain(base..));
+                    gc.note_bytes(source_len * LIST_ENTRY_BYTES);
 
                     regs[dest_register] = Data::array(array_id);
                 }
@@ -2684,6 +2746,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
                 let range_arr = obj_pool.get_mut(output_array_id as usize);
                 range_arr.extend((min..max).map(Data::from));
+                gc.note_bytes(range_arr.capacity() * LIST_ENTRY_BYTES);
                 regs[dest] = Data::array(output_array_id);
             }
             Instr::CallLibFunc(LibFunc::JoinStringArray, tgt, dest) => {

@@ -2261,6 +2261,47 @@ fn per_frame_arguments_stay_whole_mid_cycle() {
     assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
 }
 
+/// A script that allocates few objects but large ones: each turn builds one
+/// long list by `range` and one by `push`, and drops both.
+const FEW_LARGE: &str = "
+fn churn(n: int) -> int {
+    let total = 0;
+    for i in 0..n {
+        let big = range(0, 50000);
+        let grown = [];
+        for j in 0..50000 {
+            grown.push(j);
+        }
+        total = total + big.len() + grown.len();
+    }
+    return total;
+}
+fn main() {}
+";
+
+/// A cycle begins once the program has allocated more bytes than the byte
+/// threshold, not only once a pool holds enough objects: two hundred large
+/// lists are far below the object threshold, and without pacing by bytes each
+/// one stayed allocated until the program ended.
+#[test]
+fn few_large_allocations_start_a_collection() {
+    let mut program = Engine::new()
+        .compile(FEW_LARGE, "large.cdl")
+        .expect("compiles");
+    assert_eq!(
+        program.call("churn", &[Value::Int(100)]).unwrap(),
+        Value::Int(100 * 100_000)
+    );
+    // Under gc-torture every allocation does one unit of a cycle in place of
+    // any pacing, so there is no threshold to check.
+    if candela_vm::rt::GcState::TORTURE {
+        return;
+    }
+    let stats = program.gc_stats();
+    assert!(stats.cycles > 0, "the bytes never started a collection");
+    assert!(stats.arrays.len < 64, "{stats:?}");
+}
+
 /// A call compiles once per argument types and runs again after that, so a
 /// host can call every frame for as long as it runs: compiling one per call
 /// ran the instruction stream past what a jump can address after some twenty

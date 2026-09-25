@@ -508,8 +508,12 @@ program.collect(2000);
 values the program can no longer reach. Left to itself, it works while the
 program allocates: once a collection is under way, each allocation does a small
 share of it, so no allocation stops the program for long, but the frame that
-allocates pays for the work. `collect` lets the host do that work when nothing
-is waiting on the program, such as between frames.
+allocates pays for the work. A collection begins when the heap holds enough
+more objects than the last one left, or when the program has allocated enough
+more bytes than the last one found in use, so a program that builds a few large
+lists is collected as well as one that builds many small values. `collect` lets
+the host do that work when nothing is waiting on the program, such as between
+frames.
 
 `collect(budget)` carries on a collection already under way, or begins one when
 the heap has grown enough since the last, and stops after about `budget` units
