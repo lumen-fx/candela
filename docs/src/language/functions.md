@@ -70,6 +70,8 @@ A function with a bare parameter has no declared type to compile against, so its
 body is first checked by the call that reaches it. When nothing in the program
 calls it, a host is expected to, and `candela check` and `candela build` warn
 about each bare parameter and check the body with those parameters typed `any`.
+A file with no `main` is a library, so checking it warns about none of this:
+the files that import it call its functions and supply the types.
 
 Declaration order does not matter, so a function may call one declared further
 down the file. Two functions cannot share a name: there is no overloading, and a

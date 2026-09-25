@@ -1998,8 +1998,9 @@ fn check_reports_what_a_compile_reports() {
     }
 }
 
-/// A check wants no `main`, binds no `host` block to a closure, and hands back
-/// the warnings the compile raised.
+/// A check binds no `host` block to a closure and hands back the warnings the
+/// compile raised. It wants no `main`, and a file without one is a library,
+/// which is not warned about bare parameters.
 #[test]
 fn check_returns_warnings_and_needs_no_host() {
     let engine = Engine::new();
@@ -2008,10 +2009,14 @@ fn check_returns_warnings_and_needs_no_host() {
         fn on_click(id) { return app::width(\"x\"); }
     ";
     let warnings = engine
-        .check(src, "host.cdl")
+        .check(&format!("{src}fn main() {{}}\n"), "host.cdl")
         .expect("nothing is registered and it checks");
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].code, "unannotated_host_parameter");
+    let warnings = engine
+        .check(src, "host.cdl")
+        .expect("a check wants no main");
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 /// The script the collection tests drive: `grow` leaves a list of rows behind
