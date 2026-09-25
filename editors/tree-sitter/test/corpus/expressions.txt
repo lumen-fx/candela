@@ -873,3 +873,55 @@ fn main() {
             (type_identifier))
           (arguments
             (identifier)))))))
+
+================================================================================
+Struct update and defaults (docs/src/language/types.md)
+================================================================================
+
+fn main() {
+    let heading = Style { size: 18, bold: true, ..body };
+    run("build", Options { ..Default::default() });
+    let o = Options::default();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (integer_literal))
+            (field_initializer
+              (identifier)
+              (boolean_literal))
+            (struct_base
+              (identifier)))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (string_literal)
+            (struct_literal
+              (identifier)
+              (field_initializer_list
+                (struct_base
+                  (call_expression
+                    (qualified_identifier
+                      (identifier)
+                      (identifier))
+                    (arguments))))))))
+      (let_declaration
+        (identifier)
+        (call_expression
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (arguments))))))

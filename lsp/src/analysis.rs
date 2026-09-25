@@ -281,6 +281,7 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         | Expr::ImportFile(..)
         | Expr::StructDeclare(..)
         | Expr::EnumDeclare(..)
+        | Expr::StructDefault(..)
         | Expr::NamespacedRef(..) => {}
 
         Expr::Match(scrutinee, arms, wildcard, _) => {
@@ -309,9 +310,12 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 visit_expr(v, src_file, out);
             }
         }
-        Expr::Struct(path, fields, span, _) => {
+        Expr::Struct(path, fields, span, _, base) => {
             for (_, val, _, _) in fields.iter() {
                 visit_expr(val, src_file, out);
+            }
+            if let Some(base) = base {
+                visit_expr(&base.0, src_file, out);
             }
             if let Some(name) = path.last() {
                 out.push(RefSite {

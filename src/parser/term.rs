@@ -47,8 +47,34 @@ fn parse_struct(
     type_args: Box<[TypeExpr]>,
 ) -> Expr {
     let mut fields: Vec<(SmolStr, Expr, Span, Span)> = Vec::with_capacity(4);
+    let mut base: Option<Box<(Expr, Span)>> = None;
     let end: u32;
     loop {
+        // `..base` closes the literal: every field it does not write is taken
+        // from `base`, the way Rust's struct update syntax reads.
+        if parser.peek_token() == Token::RangeDot {
+            parser.next_token();
+            let base_start = parser.peek_token_span().start;
+            let base_expr = parse_expr(parser);
+            base = Some(Box::new((
+                base_expr,
+                (base_start, parser.last_token_end as u32).into(),
+            )));
+            let (next_token, span) = parser.next_token();
+            if next_token != Token::RBrace {
+                cold_path();
+                parser.error(
+                    span,
+                    ParserErr::UnexpectedToken(
+                        Token::RBrace,
+                        next_token,
+                        "The `..base` of a struct literal comes last.",
+                    ),
+                );
+            }
+            end = span.end;
+            break;
+        }
         let (next_token, field_name_span) = parser.next_token();
         let field_name = if let Token::Identifier(i) = next_token {
             SmolStr::new(i)
@@ -95,7 +121,13 @@ fn parse_struct(
         }
     }
 
-    Expr::Struct(namespace, Box::from(fields), (start, end).into(), type_args)
+    Expr::Struct(
+        namespace,
+        Box::from(fields),
+        (start, end).into(),
+        type_args,
+        base,
+    )
 }
 
 /// Parses what follows a committed type-argument list: a call, a struct

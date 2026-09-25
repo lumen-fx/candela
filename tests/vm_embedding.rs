@@ -1098,3 +1098,80 @@ fn json_parse_every_frame_stays_whole_mid_cycle() {
     assert!(stats.arrays.len < POOL_BOUND, "{stats:?}");
     assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
 }
+
+/// A struct a `host` block declares survives the artifact: the build records
+/// it with the program's other structs, the load checks the registration
+/// against its fields, and the closure receives it as a record.
+#[test]
+fn a_host_struct_binds_and_crosses_from_an_artifact() {
+    let src = r#"
+host "process" {
+    struct StartOptions {
+        cwd: string = ".",
+        end_at_exit: bool = true,
+    }
+    bool start(string, StartOptions);
+}
+
+fn in_dir(dir: string) -> bool {
+    return process::start("java", process::StartOptions { cwd: dir, ..Default::default() });
+}
+
+fn main() {}
+"#;
+    let options = HostType::Struct(vec![
+        (String::from("cwd"), HostType::String),
+        (String::from("end_at_exit"), HostType::Bool),
+    ]);
+    let seen: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn_typed(
+        "process",
+        "start",
+        vec![HostType::String, options],
+        HostType::Bool,
+        move |args: &[Value]| {
+            sink.borrow_mut().push(args[1].clone());
+            Ok(Value::Bool(true))
+        },
+    );
+    let mut program = load(src, "process.cdl", &hosts);
+    program.run();
+    assert_eq!(
+        program.call("in_dir", &["instances/a".into()]).unwrap(),
+        Value::Bool(true)
+    );
+    let expected: BTreeMap<String, Value> = [
+        (String::from("cwd"), Value::from("instances/a")),
+        (String::from("end_at_exit"), Value::Bool(true)),
+    ]
+    .into();
+    assert_eq!(*seen.borrow(), vec![Value::Map(expected)]);
+
+    // A registration whose struct has other fields does not bind.
+    let mut wrong = HostRegistry::new();
+    wrong.register_host_fn_typed(
+        "process",
+        "start",
+        vec![
+            HostType::String,
+            HostType::Struct(vec![(String::from("cwd"), HostType::String)]),
+        ],
+        HostType::Bool,
+        |_args: &[Value]| Ok(Value::Bool(true)),
+    );
+    let bytes = build_bytecode(
+        src.to_owned(),
+        "process.cdl",
+        &candela::ImportResolver::new(),
+    )
+    .expect("builds");
+    match load_program(&bytes, &wrong).err() {
+        Some(LoadError::HostBinding(HostBindError::SignatureMismatch(message))) => {
+            assert!(message.contains("process::start"), "{message}");
+        }
+        Some(other) => panic!("wrong load error: {other}"),
+        None => panic!("a mismatched host struct must not bind"),
+    }
+}

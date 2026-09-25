@@ -273,6 +273,10 @@ zero. Both bounds must be `int`. Either bound may equal the length, and a slice
 that falls outside the value raises `slice_out_of_bounds`. There is no `a[i..]`
 form; give the upper bound.
 
+The same `..` closes a struct literal, `Point { x: 1, ..origin }`, where it takes
+the fields the literal does not write from another value; see
+[types](../language/types.md#building-from-another-value).
+
 ```rust
 let word = "candela";
 print(word[0]);      // c
@@ -290,8 +294,8 @@ Maps are not indexed with `[]`. Use the `get` method; see
 ## Access and calls
 
 `.` reads a struct field or calls a method on a value. `::` separates the parts
-of a namespaced name: a module bound with `import ... as`, an enum variant, or a
-function inside either.
+of a namespaced name: a module bound with `import ... as`, an enum variant, a
+`host` block's struct, or a function inside any of them.
 
 ```rust
 print(point.x);

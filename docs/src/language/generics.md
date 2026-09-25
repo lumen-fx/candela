@@ -261,9 +261,9 @@ fn main() {
 ## Leaving type arguments off
 
 A missing type argument is never an error. A call falls back to inference, a
-struct literal takes its arguments from its field values, a type parameter that
-neither pins is `any`, and a generic type named in a type position without
-arguments is the dynamic `any` slot:
+struct literal takes its arguments from its field values or from its `..base`,
+a type parameter that neither pins is `any`, and a generic type named in a type
+position without arguments is the dynamic `any` slot:
 
 ```rust
 fn describe(c: Cell) {

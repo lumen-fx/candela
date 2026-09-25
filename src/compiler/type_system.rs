@@ -5,6 +5,7 @@ use super::expr::Expr;
 use super::expr::METHOD_SEP;
 use super::expr::Span;
 use super::expr::UNARY_MINUS_METHOD;
+use super::expr::is_default_call;
 use super::expr::is_operator_method;
 use super::expr::is_unary_operator_method;
 use super::expr::mangle_method;
@@ -24,6 +25,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Struct;
 use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_errors::error_default_without_type;
 use crate::compiler::compiler_errors::error_instantiation_depth;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_invalid_type;
@@ -45,8 +47,10 @@ use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
 use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
+use crate::compiler::functions::fill_call_defaults;
 use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::dyn_lib_receiver;
+use crate::compiler::methods::fill_method_defaults;
 use crate::compiler::methods::infer_operator_method;
 use crate::compiler::resolve_enum_variant;
 use crate::rt::FnValue;
@@ -292,6 +296,19 @@ struct TypeTemplate {
     /// that file's namespace whatever file the instantiation is written in.
     file_idx: u16,
     body: TemplateBody,
+    /// The `= value` each field of a struct template was declared with, empty
+    /// when none was; handed to every instantiation.
+    defaults: Box<[Option<(Expr, Span)>]>,
+}
+
+/// The `= value` a struct's fields were declared with, and the file the
+/// declaration was written in, which is the scope the values compile in.
+#[derive(Debug, Clone)]
+pub struct StructDefaults {
+    pub file_idx: u16,
+    /// One entry per field, `None` for a field declared without a value, with
+    /// the span the value was written at.
+    pub values: Box<[Option<(Expr, Span)>]>,
 }
 
 /// One type made from a generic declaration: which declaration, the name it is
@@ -375,6 +392,10 @@ pub struct Generics {
     /// function it calls.
     bindings: Vec<BindingFrame>,
     depth: u32,
+    /// The declared field values of every struct that has any, by struct id.
+    /// Kept here because this table travels with every compile against a
+    /// program, and an instantiation of a generic struct adds to it.
+    struct_defaults: FxHashMap<u16, StructDefaults>,
 }
 
 impl Generics {
@@ -438,6 +459,35 @@ impl Generics {
             .iter()
             .rfind(|t| t.name == name)
             .map(|t| &*t.params)
+    }
+
+    /// Records the values the fields of struct `id` were declared with,
+    /// replacing whatever an earlier struct of that id left, so an id reused
+    /// after a rollback starts clean.
+    pub fn set_struct_defaults(
+        &mut self,
+        id: u16,
+        file_idx: u16,
+        values: Box<[Option<(Expr, Span)>]>,
+    ) {
+        if values.iter().any(Option::is_some) {
+            self.struct_defaults
+                .insert(id, StructDefaults { file_idx, values });
+        } else {
+            self.struct_defaults.remove(&id);
+        }
+    }
+
+    /// The value field `field` of struct `id` was declared with, and the file
+    /// it was written in.
+    #[must_use]
+    pub fn struct_default(&self, id: u16, field: usize) -> Option<(u16, &Expr, Span)> {
+        let defaults = self.struct_defaults.get(&id)?;
+        defaults
+            .values
+            .get(field)
+            .and_then(Option::as_ref)
+            .map(|(value, span)| (defaults.file_idx, value, *span))
     }
 
     /// For each type parameter of a struct template, the field declared with
@@ -533,12 +583,14 @@ impl Generics {
         params: TypeParams,
         file_idx: u16,
         fields: Box<[(SmolStr, TypeExpr, Span)]>,
+        defaults: Box<[Option<(Expr, Span)>]>,
     ) -> u32 {
         self.templates.push(TypeTemplate {
             name,
             params,
             file_idx,
             body: TemplateBody::Struct(fields),
+            defaults,
         });
         (self.templates.len() - 1) as u32
     }
@@ -557,6 +609,7 @@ impl Generics {
             params,
             file_idx,
             body: TemplateBody::Enum(variants),
+            defaults: Box::from([]),
         });
         (self.templates.len() - 1) as u32
     }
@@ -1024,6 +1077,9 @@ pub fn instantiate(
             id,
             name_span: span,
         });
+        let defaults = ctx.generics.templates[template_idx].defaults.clone();
+        ctx.generics
+            .set_struct_defaults(id, template_file, defaults);
         DataType::Struct(id)
     } else {
         let id = ctx.enums.len() as u16;
@@ -1382,6 +1438,81 @@ pub fn struct_literal_id(
         .unwrap_or_else(|| {
             error_unknown_struct(&name, span, state.sources, ctx.file_idx);
         }) as u16
+}
+
+/// Resolves the struct a literal names.
+///
+/// This is [`struct_literal_id`] with one more source for a generic type's
+/// arguments: a literal that writes none and takes its other fields from a
+/// `..base` of that type is the base's instantiation.
+pub fn literal_struct_id(
+    namespace: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    type_args: &[TypeExpr],
+    base: Option<&Expr>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> u16 {
+    if type_args.is_empty()
+        && let Some(base) = base
+        && !is_default_call(base)
+        && let Some((name, path)) = namespace.split_last()
+        && let Some(template_idx) =
+            find_template(path, name, state.scope(ctx.file_idx), state.generics)
+        && let DataType::Struct(id) = base.infer_type(v, ctx, state)
+        && state
+            .generics
+            .instantiation_of(&DataType::Struct(id))
+            .is_some_and(|(template, _)| template == template_idx)
+    {
+        return id;
+    }
+    struct_literal_id(namespace, fields, type_args, span, v, ctx, state)
+}
+
+/// The struct `S::default()` names.
+///
+/// `path` is a struct (or a generic struct, instantiated at `type_args`)
+/// followed by `default`, and the call passes nothing. `None` leaves the path
+/// to the function lookups.
+pub fn struct_default_target(
+    path: &[SmolStr],
+    args: &[Expr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<u16> {
+    let [module @ .., type_name, method] = path else {
+        return None;
+    };
+    if method != "default" || !args.is_empty() {
+        return None;
+    }
+    let scope = state.scope(ctx.file_idx);
+    let is_struct = scope.resolve(module).is_some_and(|ns| {
+        ns.symbols
+            .iter()
+            .any(|(name, kind)| name == type_name && matches!(kind, SymbolKind::Struct(_)))
+    });
+    let is_template = find_template(module, type_name, scope, state.generics)
+        .is_some_and(|idx| matches!(state.generics.templates[idx].body, TemplateBody::Struct(_)));
+    if !is_struct && !is_template {
+        return None;
+    }
+    let mut type_path = module.to_vec();
+    type_path.push(type_name.clone());
+    Some(struct_literal_id(
+        &type_path,
+        &[],
+        type_args,
+        span,
+        &mut Vec::new(),
+        ctx,
+        state,
+    ))
 }
 
 fn instantiated_struct_id(
@@ -2155,8 +2286,11 @@ pub fn collect_direct_fn_calls(
                 expr_stack.push(value);
             }
             Expr::Array(elems, _) => expr_stack.extend(elems.iter()),
-            Expr::Struct(_, fields, _, _) => {
+            Expr::Struct(_, fields, _, _, base) => {
                 expr_stack.extend(fields.iter().map(|(_, expr, _, _)| expr));
+                if let Some(base) = base {
+                    expr_stack.push(&base.0);
+                }
             }
             Expr::GetStructField(expr, _, _, _) => expr_stack.push(expr),
             Expr::SetStructField(expr, _, value, _, _, _) => {
@@ -3468,7 +3602,30 @@ impl Expr {
                     }
                 }
             }
-            Self::FunctionCall(args, namespace, span, _, type_args) => {
+            Self::FunctionCall(args, namespace, span, args_indexes, type_args) => {
+                // `S::default()` is the struct's default, and `Default::default()`
+                // one whose struct the position it stands in names; see
+                // `handle_functions`, which lowers them in the same order.
+                if let Some(struct_id) =
+                    struct_default_target(namespace, args, type_args, *span, ctx, state)
+                {
+                    return DataType::Struct(struct_id);
+                }
+                if is_default_call(self) {
+                    error_default_without_type(ctx.file_idx, *span, state.sources);
+                }
+                if let Some(filled) =
+                    fill_call_defaults(args, namespace, args_indexes, type_args, v, ctx, state)
+                {
+                    return Self::FunctionCall(
+                        filled,
+                        namespace.clone(),
+                        *span,
+                        args_indexes.clone(),
+                        type_args.clone(),
+                    )
+                    .infer_type(v, ctx, state);
+                }
                 // A call written with type arguments names either a variant of a
                 // generic enum (`Slot<int>::Filled(x)`) or a generic function,
                 // which may itself sit behind a module alias
@@ -3636,6 +3793,27 @@ impl Expr {
                 args_indexes,
                 type_args,
             ) => {
+                if let Some(filled) = fill_method_defaults(
+                    obj,
+                    args,
+                    namespace,
+                    args_indexes,
+                    type_args,
+                    v,
+                    ctx,
+                    state,
+                ) {
+                    return Self::ObjFunctionCall(
+                        obj.clone(),
+                        filled,
+                        namespace.clone(),
+                        *obj_span,
+                        *fn_span,
+                        args_indexes.clone(),
+                        type_args.clone(),
+                    )
+                    .infer_type(v, ctx, state);
+                }
                 let method = namespace.last().unwrap().as_str();
                 // `app.rows(id)` on a `host`/`dylib` block is the namespaced
                 // call written with a dot, so its type is the declared return
@@ -3909,9 +4087,19 @@ impl Expr {
                     );
                 }
             }
-            Self::Struct(namespace, fields, span, type_args) => DataType::Struct(
-                struct_literal_id(namespace, fields, type_args, *span, v, ctx, state),
-            ),
+            Self::Struct(namespace, fields, span, type_args, base) => {
+                DataType::Struct(literal_struct_id(
+                    namespace,
+                    fields,
+                    type_args,
+                    base.as_deref().map(|(b, _)| b),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                ))
+            }
+            Self::StructDefault(struct_id, _) => DataType::Struct(*struct_id),
             Self::AnonymousFunction(args, code, span) => {
                 // An anonymous function is hoisted to a synthetic non-capturing
                 // top-level function and referred to by its Fn id, exactly like a
