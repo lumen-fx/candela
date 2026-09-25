@@ -90,6 +90,22 @@ Run `candela` with no arguments for a REPL.
   parentheses to the embedding program, which returns candela source to parse in
   its place. candela ships no macros of its own and never interprets a region.
 
+## Performance
+
+Median wall-clock time in milliseconds for `candela file.cdl`, against Python 3
+and LuaJIT with its JIT off, on an Intel Core i9-12900K. Lower is faster.
+
+| Program | candela | Python 3 | LuaJIT (-joff) |
+| --- | --- | --- | --- |
+| Recursive fib | 93.7 | 273 | 133 |
+| Iterative fib | 30.3 | 541 | 29.7 |
+| Binary trees | 303 | 743 | 744 |
+| Sqrt loop | 113 | 574 | 67.5 |
+| FizzBuzz | 16.3 | 98.1 | 50.5 |
+
+[BENCHMARKS.md](BENCHMARKS.md) has the full set, the programs, and how to run
+them yourself.
+
 ## Limitations
 
 candela is pre-1.0 and the language is not stable; expect breaking changes
