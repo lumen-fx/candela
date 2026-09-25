@@ -202,34 +202,71 @@ pub enum HostType {
     Unit,
     Array(Box<Self>),
     Map(Box<Self>),
+    /// A struct a `host` block declares, as its fields in declaration order.
+    /// It crosses into the host only, as a [`Value::Map`] keyed by field
+    /// name; a host function cannot return one.
+    Struct(Vec<(String, Self)>),
 }
 
 impl HostType {
     /// Maps a candela [`DataType`] onto the host type kind it marshals as, or
-    /// `None` for a type that cannot cross the boundary.
+    /// `None` for a type that cannot cross the boundary. `structs` is the
+    /// program's struct table, which a struct type is read from.
     #[must_use]
-    pub fn from_datatype(dt: &DataType) -> Option<Self> {
+    pub fn from_datatype(dt: &DataType, structs: &[Struct]) -> Option<Self> {
+        Self::from_datatype_in(dt, structs, &mut Vec::new())
+    }
+
+    /// [`Self::from_datatype`], with the structs being converted on the way
+    /// down: a struct that holds itself has no finite host shape.
+    fn from_datatype_in(dt: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> Option<Self> {
         match dt {
             DataType::Int => Some(Self::Int),
             DataType::Float => Some(Self::Float),
             DataType::Bool => Some(Self::Bool),
             DataType::String => Some(Self::String),
             DataType::Null => Some(Self::Unit),
-            DataType::Array(Some(inner)) => {
-                Some(Self::Array(Box::new(Self::from_datatype(inner)?)))
-            }
+            DataType::Array(Some(inner)) => Some(Self::Array(Box::new(Self::from_datatype_in(
+                inner, structs, open,
+            )?))),
             DataType::Map(kv) => {
                 // Only string-keyed maps cross the boundary.
                 match &kv.0 {
                     Some(DataType::String) | None => {}
                     Some(_) => return None,
                 }
-                let value =
-                    kv.1.as_ref()
-                        .map_or(Some(Self::Unit), Self::from_datatype)?;
+                let value = kv.1.as_ref().map_or(Some(Self::Unit), |t| {
+                    Self::from_datatype_in(t, structs, open)
+                })?;
                 Some(Self::Map(Box::new(value)))
             }
+            DataType::Struct(id) => {
+                if open.contains(id) {
+                    return None;
+                }
+                let declared = structs.get(*id as usize)?;
+                open.push(*id);
+                let fields = declared
+                    .fields
+                    .iter()
+                    .map(|(name, t, _)| {
+                        Some((name.to_string(), Self::from_datatype_in(t, structs, open)?))
+                    })
+                    .collect::<Option<Vec<_>>>();
+                open.pop();
+                fields.map(Self::Struct)
+            }
             _ => None,
+        }
+    }
+
+    /// Whether a struct is part of this shape, which only the host's side of
+    /// a call can take.
+    fn holds_struct(&self) -> bool {
+        match self {
+            Self::Struct(_) => true,
+            Self::Array(inner) | Self::Map(inner) => inner.holds_struct(),
+            Self::Int | Self::Float | Self::Bool | Self::String | Self::Unit => false,
         }
     }
 
@@ -243,6 +280,13 @@ impl HostType {
             Self::Unit => "null".to_owned(),
             Self::Array(inner) => format!("{}[]", inner.describe()),
             Self::Map(value) => format!("{{string: {}}}", value.describe()),
+            Self::Struct(fields) => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(name, t)| format!("{name}: {}", t.describe()))
+                    .collect();
+                format!("struct {{ {} }}", fields.join(", "))
+            }
         }
     }
 }
@@ -519,7 +563,11 @@ impl HostRegistry {
     /// Returns [`HostBindError::Unregistered`] naming every declared function
     /// with no closure behind it, or [`HostBindError::SignatureMismatch`] for
     /// the first closure whose arity or types disagree with the declaration.
-    pub fn bind(&self, sigs: &[HostFnSig]) -> Result<Vec<HostDispatch>, HostBindError> {
+    pub fn bind(
+        &self,
+        sigs: &[HostFnSig],
+        structs: &[Struct],
+    ) -> Result<Vec<HostDispatch>, HostBindError> {
         let missing: Vec<String> = sigs
             .iter()
             .filter(|sig| !self.fns.contains_key(&key_of(sig)))
@@ -532,7 +580,7 @@ impl HostRegistry {
         let mut dispatch = Vec::with_capacity(sigs.len());
         for sig in sigs {
             let registered = &self.fns[&key_of(sig)];
-            validate_host_fn(sig, registered)?;
+            validate_host_fn(sig, registered, structs)?;
             dispatch.push(Rc::clone(&registered.func));
         }
         Ok(dispatch)
@@ -555,7 +603,11 @@ pub(crate) fn qualified_name(namespace: &str, name: &str) -> String {
 
 /// Checks that a registered closure's derived signature matches the `host`
 /// block declaration it is bound to.
-fn validate_host_fn(sig: &HostFnSig, registered: &RegisteredFn) -> Result<(), HostBindError> {
+fn validate_host_fn(
+    sig: &HostFnSig,
+    registered: &RegisteredFn,
+    structs: &[Struct],
+) -> Result<(), HostBindError> {
     let function = qualified_name(&sig.namespace, &sig.name);
     let err = HostBindError::SignatureMismatch;
 
@@ -585,7 +637,7 @@ fn validate_host_fn(sig: &HostFnSig, registered: &RegisteredFn) -> Result<(), Ho
     }
 
     for (idx, want) in registered.arg_types.iter().enumerate() {
-        let declared = HostType::from_datatype(sig.get_arg(idx)).ok_or_else(|| {
+        let declared = HostType::from_datatype(sig.get_arg(idx), structs).ok_or_else(|| {
             err(format!(
                 "host function `{function}` argument {} has a type that cannot cross the host boundary",
                 idx + 1,
@@ -601,11 +653,15 @@ fn validate_host_fn(sig: &HostFnSig, registered: &RegisteredFn) -> Result<(), Ho
         }
     }
 
-    let declared_ret = HostType::from_datatype(sig.get_return_type()).ok_or_else(|| {
-        err(format!(
-            "host function `{function}` has a return type that cannot cross the host boundary",
-        ))
-    })?;
+    // A struct crosses into the host only: the value a host returns would be
+    // marshalled as a map, not as the struct the declaration promises.
+    let declared_ret = HostType::from_datatype(sig.get_return_type(), structs)
+        .filter(|t| !t.holds_struct())
+        .ok_or_else(|| {
+            err(format!(
+                "host function `{function}` has a return type that cannot cross the host boundary",
+            ))
+        })?;
     if declared_ret != registered.ret_type {
         return Err(err(format!(
             "host function `{function}` is declared to return `{}` but the registered closure returns `{}`",

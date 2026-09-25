@@ -10,9 +10,11 @@ use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_operator_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
 use crate::compiler::expr::OperatorForm;
+use crate::compiler::expr::is_default_call;
 use crate::compiler::expr::mangle_method;
 use crate::compiler::expr::operator_method;
 use crate::compiler::expr::operator_method_answers_bool;
+use crate::compiler::functions::fill_default_args;
 use crate::compiler::functions::handle_functions;
 use crate::compiler::functions::handle_value_call;
 use crate::compiler::functions::user_functions::handle_user_function;
@@ -107,6 +109,44 @@ pub fn dyn_lib_receiver<'a>(
     (!v.iter().any(|var| var.name == *name)).then_some(name)
 }
 
+/// The arguments of a method call with each `Default::default()` a
+/// struct-typed parameter of the method receives resolved to that struct's
+/// default, or `None` when there is nothing to resolve. A method is reached
+/// through the receiver's type, so the receiver is typed first.
+pub fn fill_method_defaults(
+    obj: &Expr,
+    args: &[Expr],
+    namespace: &[SmolStr],
+    args_indexes: &[Span],
+    type_args: &[TypeExpr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<Box<[Expr]>> {
+    if !type_args.is_empty() || namespace.len() != 1 || !args.iter().any(is_default_call) {
+        return None;
+    }
+    // A dot call on a `host` or `dylib` block is the path call, which
+    // resolves its own arguments.
+    if dyn_lib_receiver(obj, v, state).is_some() {
+        return None;
+    }
+    let type_name = match obj.infer_type(v, ctx, state) {
+        DataType::Struct(id) => state.structs[id as usize].name.clone(),
+        DataType::Enum(id) => state.enums[id as usize].name.clone(),
+        _ => return None,
+    };
+    let mangled = mangle_method(&type_name, &namespace[0]);
+    let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
+    let params: Vec<Option<DataType>> = state.fns[fn_id]
+        .args
+        .iter()
+        .skip(1)
+        .map(|(_, t)| t.clone())
+        .collect();
+    fill_default_args(args, args_indexes, &params)
+}
+
 pub fn handle_method_calls(
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
@@ -121,6 +161,24 @@ pub fn handle_method_calls(
     args_indexes: &[Span],
     type_args: &[TypeExpr],
 ) -> Option<u16> {
+    if let Some(filled) =
+        fill_method_defaults(obj, args, namespace, args_indexes, type_args, v, ctx, state)
+    {
+        return handle_method_calls(
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            obj,
+            &filled,
+            namespace,
+            obj_span,
+            fn_span,
+            args_indexes,
+            type_args,
+        );
+    }
     let name = namespace[namespace.len() - 1].as_str();
 
     // A dot call whose receiver names a `host` or `dylib` block is the

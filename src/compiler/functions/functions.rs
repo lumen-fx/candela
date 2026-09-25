@@ -3,16 +3,19 @@
 // It has been modified by the candela authors. See the NOTICE file.
 use super::expr::Expr;
 use super::expr::Span;
+use super::expr::is_default_call;
 use super::type_system::DataType;
 use super::type_system::TypeExpr;
 use super::type_system::resolve_generic_call;
 use super::type_system::resolve_generic_variant;
+use super::type_system::struct_default_target;
 use super::type_system::type_args_name_a_variant;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
+use crate::compiler::compiler_errors::error_default_without_type;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type_multiple;
 use crate::compiler::compiler_errors::error_type_not_callable;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
@@ -65,6 +68,91 @@ pub(crate) fn compile_call_args(
                 .unwrap_id()
         })
         .collect()
+}
+
+/// The arguments of a call with each `Default::default()` that sits in a
+/// struct-typed parameter replaced by that struct's default.
+///
+/// `params` is the declared type of each parameter, `None` where it has none.
+/// Returns `None` when nothing was replaced, so a caller that recurses on the
+/// result cannot loop.
+#[must_use]
+pub fn fill_default_args(
+    args: &[Expr],
+    args_indexes: &[Span],
+    params: &[Option<DataType>],
+) -> Option<Box<[Expr]>> {
+    let mut filled = false;
+    let out: Box<[Expr]> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| match params.get(i) {
+            Some(Some(DataType::Struct(id))) if is_default_call(arg) => {
+                filled = true;
+                let span = args_indexes
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| (0_u32, 0_u32).into());
+                Expr::StructDefault(*id, span)
+            }
+            _ => arg.clone(),
+        })
+        .collect();
+    filled.then_some(out)
+}
+
+/// The declared parameter types of the function a call path names, for
+/// [`fill_default_args`]: a `host` or `dylib` function by its block, a user
+/// function by its declaration. `None` when the path names neither, or names
+/// a variable that holds a function.
+#[must_use]
+pub fn declared_param_types(
+    namespace: &[SmolStr],
+    v: &[Variable],
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<Vec<Option<DataType>>> {
+    let (name, path) = namespace.split_last()?;
+    if let [lib_name] = path
+        && let Some(sig) = state
+            .dyn_libs
+            .iter()
+            .find(|lib| lib.name == *lib_name)
+            .and_then(|lib| lib.fns.iter().find(|f| f.name == *name))
+    {
+        return Some(sig.args.iter().cloned().map(Some).collect());
+    }
+    if path.is_empty() && v.iter().any(|var| var.name == *name) {
+        return None;
+    }
+    let fn_id = state.scope(ctx.file_idx).find_function(path, name)?;
+    Some(
+        state.fns[fn_id]
+            .args
+            .iter()
+            .map(|(_, t)| t.clone())
+            .collect(),
+    )
+}
+
+/// [`fill_default_args`] for a call written with a path: the arguments with
+/// `Default::default()` resolved against what the callee declares, or `None`
+/// when the call has none to resolve.
+#[must_use]
+pub fn fill_call_defaults(
+    args: &[Expr],
+    namespace: &[SmolStr],
+    args_indexes: &[Span],
+    type_args: &[TypeExpr],
+    v: &[Variable],
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<Box<[Expr]>> {
+    if !type_args.is_empty() || !args.iter().any(is_default_call) {
+        return None;
+    }
+    let params = declared_param_types(namespace, v, ctx, state)?;
+    fill_default_args(args, args_indexes, &params)
 }
 
 /// Emits the `StoreFuncArg` run for `arg_ids` and releases their registers.
@@ -235,6 +323,37 @@ pub fn handle_functions(
     args_indexes: &[Span],
     type_args: &[TypeExpr],
 ) -> Option<u16> {
+    // `S::default()` builds the struct's default. `Default::default()` builds
+    // the default of the struct the position names, which a struct-typed
+    // parameter does: its argument is resolved here, before the call is
+    // lowered. Anywhere else nothing says which struct it is.
+    if let Some(struct_id) = struct_default_target(namespace, args, type_args, span, ctx, state) {
+        return Some(crate::compiler::compile_struct_default(
+            struct_id, span, v, ctx, state, output,
+        ));
+    }
+    if args.is_empty()
+        && type_args.is_empty()
+        && matches!(namespace, [ty, f] if ty == "Default" && f == "default")
+    {
+        error_default_without_type(ctx.file_idx, span, state.sources);
+    }
+    if let Some(filled) =
+        fill_call_defaults(args, namespace, args_indexes, type_args, v, ctx, state)
+    {
+        return handle_functions(
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            &filled,
+            namespace,
+            span,
+            args_indexes,
+            type_args,
+        );
+    }
     // A call written with type arguments names either a variant of a generic
     // enum (`Slot<int>::Filled(x)`) or a generic function, which may itself sit
     // behind a module alias (`m::first<int>(xs)`). Both resolve against the

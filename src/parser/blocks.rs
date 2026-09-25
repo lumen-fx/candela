@@ -369,6 +369,7 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
     let type_params = parse_type_params(parser);
     parser.next_token_expect(Token::LBrace, "Expected '{'");
     let mut fields: Vec<(SmolStr, TypeExpr, Span)> = Vec::with_capacity(4);
+    let mut defaults: Vec<Option<(Expr, Span)>> = Vec::with_capacity(4);
     loop {
         let (next_token, _) = parser.next_token();
         let field_name = if let Token::Identifier(i) = next_token {
@@ -393,6 +394,17 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
             field_type,
             (field_type_start, field_type_end).into(),
         ));
+        // `name: Type = value` gives the field the value `S::default()` and
+        // `..Default::default()` fill it with.
+        if parser.peek_token() == Token::Equals {
+            parser.next_token();
+            let value_start = parser.peek_token_span().start;
+            let value = parse_expr(parser);
+            let value_end = parser.last_token_end as u32;
+            defaults.push(Some((value, (value_start, value_end).into())));
+        } else {
+            defaults.push(None);
+        }
         let (next_token, span) = parser.next_token();
         if next_token == Token::RBrace {
             break;
@@ -411,7 +423,12 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
             break;
         }
     }
-    Expr::StructDeclare(struct_name, Box::from(fields), span, type_params)
+    let defaults: Box<[Option<(Expr, Span)>]> = if defaults.iter().any(Option::is_some) {
+        Box::from(defaults)
+    } else {
+        Box::from([])
+    };
+    Expr::StructDeclare(struct_name, Box::from(fields), span, type_params, defaults)
 }
 
 /// Parses an `impl Type { fn method(self, ...) { ... } ... }` block.

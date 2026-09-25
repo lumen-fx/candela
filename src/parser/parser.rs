@@ -1370,7 +1370,7 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
-    let (fn_signatures, end) = parse_fn_signature_block(parser);
+    let (fn_signatures, end) = parse_fn_signature_block(parser, None);
     Expr::ImportDylib(path, fn_signatures, (start, end).into())
 }
 
@@ -1378,8 +1378,12 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
 /// `dylib "..." { ... }` and `host "..." { ... }`. The opening `{` must already
 /// have been consumed; this consumes through the closing `}` and returns the
 /// parsed signatures together with the end offset of the `}`.
+///
+/// `structs` is where a `host` block collects the structs it declares; a
+/// `dylib` block passes `None` and declares none.
 fn parse_fn_signature_block(
     parser: &mut Parser<'_>,
+    mut structs: Option<&mut Vec<Expr>>,
 ) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
     let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
     let end: u32;
@@ -1387,6 +1391,26 @@ fn parse_fn_signature_block(
         if parser.peek_token() == Token::RBrace {
             end = parser.next_token().1.end;
             break;
+        }
+        if parser.peek_token() == Token::Struct
+            && let Some(structs) = structs.as_deref_mut()
+        {
+            let declared = parse_struct_declare(parser);
+            if let Expr::StructDeclare(_, _, span, type_params, _) = &declared
+                && !type_params.is_empty()
+            {
+                cold_path();
+                parser.error(
+                    *span,
+                    ParserErr::UnexpectedToken(
+                        Token::LBrace,
+                        Token::OpInf,
+                        "A struct a host block declares takes no type parameters.",
+                    ),
+                );
+            }
+            structs.push(declared);
+            continue;
         }
 
         let type_start = parser.peek_token();
@@ -1487,8 +1511,14 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
         );
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
-    let (fn_signatures, end) = parse_fn_signature_block(parser);
-    Expr::HostBlock(namespace, fn_signatures, (start, end).into())
+    let mut structs: Vec<Expr> = Vec::new();
+    let (fn_signatures, end) = parse_fn_signature_block(parser, Some(&mut structs));
+    Expr::HostBlock(
+        namespace,
+        fn_signatures,
+        (start, end).into(),
+        structs.into_boxed_slice(),
+    )
 }
 
 #[inline(always)]

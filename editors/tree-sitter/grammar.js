@@ -163,8 +163,14 @@ module.exports = grammar({
     field_declaration_list: ($) =>
       seq('{', sepBy1(',', $.field_declaration), optional(','), '}'),
 
+    // `cwd: string = "."`: the value the struct's default gives the field.
     field_declaration: ($) =>
-      seq(field('name', $.identifier), ':', field('type', $._type)),
+      seq(
+        field('name', $.identifier),
+        ':',
+        field('type', $._type),
+        optional(seq('=', field('default', $._expression))),
+      ),
 
     enum_declaration: ($) =>
       seq(
@@ -238,7 +244,9 @@ module.exports = grammar({
     host_block: ($) =>
       seq('host', field('namespace', $.string_literal), field('body', $.signature_list)),
 
-    signature_list: ($) => seq('{', repeat($.function_signature), '}'),
+    // A `host` block also declares the structs its functions take.
+    signature_list: ($) =>
+      seq('{', repeat(choice($.function_signature, $.struct_declaration)), '}'),
 
     // `int add(int, int);`, or `log(string);` for a function returning null.
     // Parameters are types only; `...` marks a variadic host function.
@@ -613,8 +621,21 @@ module.exports = grammar({
         ),
       ),
 
+    // `..base` comes last and supplies every field the literal leaves out.
     field_initializer_list: ($) =>
-      seq('{', sepBy1(',', $.field_initializer), optional(','), '}'),
+      seq(
+        '{',
+        choice(
+          $.struct_base,
+          seq(
+            sepBy1(',', $.field_initializer),
+            optional(seq(',', optional($.struct_base))),
+          ),
+        ),
+        '}',
+      ),
+
+    struct_base: ($) => seq('..', field('value', $._expression)),
 
     field_initializer: ($) =>
       seq(field('name', $.identifier), ':', field('value', $._expression)),

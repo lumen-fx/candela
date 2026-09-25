@@ -29,6 +29,19 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
     format_args!("{type_name}{METHOD_SEP}{method_name}").to_smolstr()
 }
 
+/// Whether `expr` is `Default::default()`: the default of whatever struct type
+/// the position it is written in names.
+#[must_use]
+pub fn is_default_call(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::FunctionCall(args, path, _, _, type_args)
+            if args.is_empty()
+                && type_args.is_empty()
+                && matches!(&**path, [ty, f] if ty == "Default" && f == "default")
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Float(f64),
@@ -41,18 +54,38 @@ pub enum Expr {
     Array(Box<[Self]>, Box<[Span]>),
     /// Map(key-value pairs, span)
     Map(Box<[(Self, Span, Self, Span)]>, Span),
-    /// Struct(name, fields, span, type_args)
+    /// Struct(name, fields, span, type_args, base)
     ///
     /// `type_args` holds the arguments of a generic struct literal
-    /// (`Cell<int>{ value: 3 }`) and is empty otherwise.
+    /// (`Cell<int>{ value: 3 }`) and is empty otherwise. `base` is the
+    /// expression after `..` in a literal written with one
+    /// (`Opts { cwd: "a", ..base }`) with the span it was written at: the
+    /// fields the literal does not write are taken from it.
     Struct(
         Box<[SmolStr]>,
         Box<[(SmolStr, Self, Span, Span)]>,
         Span,
         Box<[TypeExpr]>,
+        Option<Box<(Self, Span)>>,
     ),
-    /// StructDeclare(name, fields, span, type_params)
-    StructDeclare(SmolStr, Box<[(SmolStr, TypeExpr, Span)]>, Span, TypeParams),
+    /// StructDeclare(name, fields, span, type_params, defaults)
+    ///
+    /// `defaults` holds the `= value` each field was declared with and the
+    /// span it was written at, one entry per field, and is empty when no field
+    /// declares one.
+    StructDeclare(
+        SmolStr,
+        Box<[(SmolStr, TypeExpr, Span)]>,
+        Span,
+        TypeParams,
+        Box<[Option<(Self, Span)>]>,
+    ),
+    /// StructDefault(struct_id, span)
+    ///
+    /// The default value of a struct, by its id: what `S::default()` and a
+    /// `Default::default()` whose type the position names lower to. Built by
+    /// the compiler, never by the parser.
+    StructDefault(u16, Span),
     /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params)
     EnumDeclare(
         SmolStr,
@@ -174,15 +207,18 @@ pub enum Expr {
         Span,
     ),
 
-    /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end))
+    /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end), structs)
     ///
     /// Declares a host namespace whose functions are backed by Rust closures
     /// registered on the embedding [`crate::Engine`]. Mirrors [`Self::ImportDylib`]
-    /// but dispatches to a registered closure instead of a C symbol.
+    /// but dispatches to a registered closure instead of a C symbol. `structs`
+    /// holds the [`Self::StructDeclare`]s the block declares, which a script
+    /// names behind the namespace (`process::StartOptions`).
     HostBlock(
         SmolStr,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Span,
+        Box<[Self]>,
     ),
 
     /// ImportFile(path, alias, is_logical, (start, end))
@@ -260,6 +296,7 @@ impl Expr {
                 | Self::Array(_, _)
                 | Self::Map(_, _)
                 | Self::Struct(..)
+                | Self::StructDefault(..)
                 | Self::NamespacedRef(_, _, _)
                 | Self::GetStructField(_, _, _, _)
                 | Self::InlineCondition(_, _, _, _)
@@ -579,9 +616,12 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 scan_free_names(value, depth, bound, out);
             }
         }
-        Expr::Struct(_, fields, _, _) => {
+        Expr::Struct(_, fields, _, _, base) => {
             for (_, value, _, _) in fields {
                 scan_free_names(value, depth, bound, out);
+            }
+            if let Some(base) = base {
+                scan_free_names(&base.0, depth, bound, out);
             }
         }
         Expr::Match(scrutinee, arms, wildcard, _) => {
@@ -692,11 +732,12 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::Null
         | Expr::String(_)
         | Expr::NamespacedRef(_, _, _)
-        | Expr::StructDeclare(_, _, _, _)
+        | Expr::StructDefault(_, _)
+        | Expr::StructDeclare(..)
         | Expr::EnumDeclare(_, _, _, _)
         | Expr::FunctionDecl(_, _, _, _, _, _)
         | Expr::ImportDylib(_, _, _)
-        | Expr::HostBlock(_, _, _)
+        | Expr::HostBlock(..)
         | Expr::ImportFile(_, _, _, _)
         | Expr::Break
         | Expr::Continue => {}

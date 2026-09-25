@@ -178,13 +178,86 @@ pub enum HostType {
     Unit,
     Array(Box<HostType>),
     Map(Box<HostType>),
+    Struct(Vec<(String, HostType)>),
 }
 ```
 
 These are the same types the table above lists, in the order arguments are
 passed. `Unit` is candela's `null`, which is what a function that returns
 nothing declares. `Map` is always string-keyed, so only the value type is
-carried.
+carried. `Struct` is a struct the `host` block declares, as its fields in
+declaration order; see [structs in a host block](#structs-in-a-host-block).
+
+### Structs in a host block
+
+A function that takes a set of options takes them as a struct the `host` block
+declares next to it. Each field gives its type and, if it has one, the value it
+starts with:
+
+```rust
+host "process" {
+    struct StartOptions {
+        cwd: string = ".",
+        env: {string: string},
+        end_at_exit: bool = true,
+    }
+    bool start(string, string[], string, StartOptions);
+}
+```
+
+Inside the block the struct is named bare. A script names it behind the
+namespace, the way it calls the block's functions, and builds it like any
+struct, defaults included:
+
+```rust
+fn launch() -> bool {
+    return process::start("java", ["-jar", "game.jar"], "game",
+        process::StartOptions { cwd: "instances/a", ..Default::default() });
+}
+```
+
+`process::StartOptions::default()` and a bare `Default::default()` in the
+struct's parameter work as well; see [default values](../language/types.md#default-values).
+
+The closure is registered with `register_host_fn_typed`, naming the struct's
+fields in the order the block declares them, and receives the value as a
+`Value::Map` keyed by field name:
+
+```rust
+use candela::{HostType, Value};
+
+engine.register_host_fn_typed(
+    "process",
+    "start",
+    vec![
+        HostType::String,
+        HostType::Array(Box::new(HostType::String)),
+        HostType::String,
+        HostType::Struct(vec![
+            ("cwd".into(), HostType::String),
+            ("env".into(), HostType::Map(Box::new(HostType::String))),
+            ("end_at_exit".into(), HostType::Bool),
+        ]),
+    ],
+    HostType::Bool,
+    |args: &[Value]| {
+        let opts = args[3].as_map().expect("a record");
+        let cwd = opts["cwd"].as_str().unwrap_or(".");
+        Ok(Value::Bool(!cwd.is_empty()))
+    },
+);
+```
+
+The binding checks every field name and type against the declaration, so a
+registration written for another version of the struct is a
+`host_fn_signature_mismatch`, not a missing key at run time. The defaults live
+in the declaration: the script builds the whole value before the call, and the
+closure always receives every field.
+
+A struct crosses into the host only. A host function cannot return one, since
+the value would come back as a map; a declaration that does is refused when it
+binds. A `.cdlb` built from the script records the struct with the program's
+own, so `RuntimeProgram` binds and passes it the same way.
 
 ### register_macro
 

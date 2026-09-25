@@ -739,6 +739,118 @@ pub fn error_struct_no_such_field(
     );
 }
 
+/// The `..base` of a struct literal is not a value of the literal's type.
+pub fn error_struct_base_type(
+    file_idx: u16,
+    struct_name: &SmolStr,
+    base_span: Span,
+    base_type: &DataType,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let given = types.of(base_type);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), base_span.into()),
+            )
+            .with_message("Struct base of the wrong type")
+            .with_label(
+                Label::new((src.filename.as_str(), base_span.into()))
+                    .with_message(format_args!(
+                        "This is a {}, but the fields of {} can only come from another {}",
+                        red(&given),
+                        blue(struct_name),
+                        blue(struct_name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        base_span,
+        &format!(
+            "The base of a {struct_name} literal is of type {given}; it must be a {struct_name}"
+        ),
+        "struct_base_type",
+    );
+}
+
+/// `Default::default()` written where no struct type says which default it is.
+pub fn error_default_without_type(file_idx: u16, span: Span, sources: &[Source]) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("No type to take the default of")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message("Nothing here says which struct this is the default of")
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!("Name the struct: {}", blue("Name::default()")))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        "Default::default() needs a struct type from where it is written; name the struct with Name::default()",
+        "default_without_type",
+    );
+}
+
+/// A struct is defaulted, and one of its fields has neither a declared value
+/// nor a type with an empty value to fall back on.
+pub fn error_struct_field_no_default(
+    file_idx: u16,
+    span: Span,
+    struct_name: &SmolStr,
+    field_name: &SmolStr,
+    field_type: &DataType,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let declared = types.of(field_type);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Struct field has no default")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "Field {} of {} is of type {}, which has no default value",
+                        blue(field_name),
+                        blue(struct_name),
+                        red(&declared)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Declare one: {}",
+                blue(format_args!("{field_name}: {declared} = ..."))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "Field {field_name} of {struct_name} is of type {declared}, which has no default value; declare one with {field_name}: {declared} = ..."
+        ),
+        "struct_field_no_default",
+    );
+}
+
 pub fn error_struct_missing_fields(
     file_idx: u16,
     struct_span: Span,

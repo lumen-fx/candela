@@ -61,7 +61,11 @@ naming the namespace it was looked for in.
 
 **Struct and field errors.** Reading a field a struct does not declare, building
 a struct literal that supplies an unknown field or omits a required one, and
-assigning a value of the wrong type to a field.
+assigning a value of the wrong type to a field. A literal's `..base` of another
+type is `struct_base_type`; a `Default::default()` where no struct type says
+which default it is, `default_without_type`; and the default of a struct with a
+field that has neither a declared value nor an empty one, such as an enum field,
+`struct_field_no_default`. See [types](../language/types.md#default-values).
 
 **Arity and argument errors.** Calling a function with too few or too many
 arguments, or with an argument whose type the parameter does not accept, whether
