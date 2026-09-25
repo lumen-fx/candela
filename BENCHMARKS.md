@@ -75,7 +75,7 @@ It reports the median, 99th percentile and longest frame for three shapes:
 A frame count as the first argument changes the default of 5000 frames.
 
 The collector does its work a slice at a time. Once a cycle starts, each
-allocation pays for a bounded share of it, so a frame waits for the slices its
+allocation, and each few kilobytes allocated, pays for a bounded share of it, so a frame waits for the slices its
 own allocations paid for rather than for a whole collection. On the `retained`
 shape that about halves the slowest frames compared with collecting everything
 at once. A host that collects between frames moves work out of the frames: on
