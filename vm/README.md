@@ -33,7 +33,7 @@ Two things are recorded as recipes rather than contents:
   through the OS loader when the artifact loads, so the shared library has to be
   present on the machine that runs it. Built for WebAssembly, the runtime loads
   no library and binds the standard library's own recipes (`math`, `random`,
-  `time`) to built-in versions instead.
+  `time`, `hash`) to built-in versions instead.
 - **Host functions.** A `host` block stores the namespace, name, signature, and
   whether the function is variadic. The Rust closures behind them come from the
   program that embeds the runtime, which registers them before it loads the

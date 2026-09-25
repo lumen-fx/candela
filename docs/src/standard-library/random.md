@@ -21,7 +21,7 @@ In the WebAssembly build the generator is built in, the same PCG32, so a seeded
 run draws the same sequence in a browser as on a desktop. An unseeded one seeds
 itself from the browser's `crypto.getRandomValues`.
 
-The module binds a small dynamic library, so it is one of the three std modules
+The module binds a small dynamic library, so it is one of the four std modules
 that need that library present at run time. A `.cdlb` built from a program that
 imports `std/random` records the binding by name and re-opens it when the
 artifact runs; see [artifacts](../reference/artifacts.md).
