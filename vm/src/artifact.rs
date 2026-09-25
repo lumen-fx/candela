@@ -733,7 +733,7 @@ impl RuntimeProgram {
         // them all before anything runs, so an unbound call is impossible once
         // the program is loaded.
         let host_sigs: Vec<HostFnSig> = img.host_fns.iter().map(HostFnSig::from).collect();
-        let host_dispatch = hosts.bind(&host_sigs)?;
+        let host_dispatch = hosts.bind(&host_sigs, &structs)?;
 
         let dyn_lib_fns = resolve_dyn_lib_fns(&img.dyn_lib_fns, &structs)?;
 

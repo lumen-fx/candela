@@ -2378,3 +2378,175 @@ fn json_parse_every_frame_reuses_freed_slots() {
         assert!(stats.maps.len < POOL_BOUND, "{stats:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// STRUCTS A HOST BLOCK DECLARES
+// ---------------------------------------------------------------------------
+
+/// A host that takes an options struct: `process::StartOptions`, declared in
+/// the block with a default per field, built by the script with update syntax
+/// and received by the closure as a record of its fields.
+const HOST_STRUCT_PROGRAM: &str = r#"
+host "process" {
+    struct StartOptions {
+        cwd: string = ".",
+        env: {string: string},
+        end_at_exit: bool = true,
+    }
+    bool start(string, string[], string, StartOptions);
+}
+
+fn in_dir(dir: string) -> bool {
+    return process::start("java", ["-jar"], "game", process::StartOptions { cwd: dir, ..Default::default() });
+}
+
+fn plain() -> bool {
+    return process::start("java", [], "game", Default::default());
+}
+
+fn named() -> bool {
+    let opts = process::StartOptions::default();
+    opts.env.insert("A", "1");
+    return process::start("java", [], "game", process::StartOptions { end_at_exit: false, ..opts });
+}
+
+fn main() {}
+"#;
+
+/// The field shape a registration of `process::start` declares.
+fn start_options_type() -> HostType {
+    HostType::Struct(vec![
+        (String::from("cwd"), HostType::String),
+        (
+            String::from("env"),
+            HostType::Map(Box::new(HostType::String)),
+        ),
+        (String::from("end_at_exit"), HostType::Bool),
+    ])
+}
+
+#[test]
+fn a_host_struct_crosses_as_a_record_of_its_fields() {
+    let seen: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "process",
+        "start",
+        vec![
+            HostType::String,
+            HostType::Array(Box::new(HostType::String)),
+            HostType::String,
+            start_options_type(),
+        ],
+        HostType::Bool,
+        move |args: &[Value]| {
+            sink.borrow_mut().push(args[3].clone());
+            Ok(Value::Bool(true))
+        },
+    );
+    let mut program = engine
+        .compile(HOST_STRUCT_PROGRAM, "process.cdl")
+        .expect("compiles");
+
+    assert_eq!(
+        program.call("in_dir", &["instances/a".into()]).unwrap(),
+        Value::Bool(true)
+    );
+    program.call("plain", &[]).unwrap();
+    program.call("named", &[]).unwrap();
+
+    let empty = Value::Map(BTreeMap::new());
+    let env: BTreeMap<String, Value> = [(String::from("A"), Value::from("1"))].into();
+    assert_eq!(
+        *seen.borrow(),
+        vec![
+            record(&[
+                ("cwd", "instances/a".into()),
+                ("env", empty.clone()),
+                ("end_at_exit", true.into()),
+            ]),
+            record(&[
+                ("cwd", ".".into()),
+                ("env", empty),
+                ("end_at_exit", true.into()),
+            ]),
+            record(&[
+                ("cwd", ".".into()),
+                ("env", Value::Map(env)),
+                ("end_at_exit", false.into()),
+            ]),
+        ]
+    );
+}
+
+/// The registration is held to the fields the block declares.
+#[test]
+fn a_host_struct_whose_fields_disagree_is_a_diagnostic() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "process",
+        "start",
+        vec![
+            HostType::String,
+            HostType::Array(Box::new(HostType::String)),
+            HostType::String,
+            HostType::Struct(vec![(String::from("cwd"), HostType::String)]),
+        ],
+        HostType::Bool,
+        |_args: &[Value]| Ok(Value::Bool(true)),
+    );
+    let err = engine
+        .compile(HOST_STRUCT_PROGRAM, "process.cdl")
+        .err()
+        .unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+    assert!(err.message.contains("process::start"), "{}", err.message);
+    assert!(err.message.contains("end_at_exit"), "{}", err.message);
+}
+
+/// A struct crosses into the host only, so a declaration that returns one
+/// does not bind.
+#[test]
+fn a_host_function_cannot_return_a_struct() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "app",
+        "opts",
+        vec![],
+        HostType::Struct(vec![(String::from("n"), HostType::Int)]),
+        |_args: &[Value]| Ok(Value::Null),
+    );
+    let src = r#"
+host "app" {
+    struct Opts { n: int, }
+    Opts opts();
+}
+fn main() {}
+"#;
+    let err = engine.compile(src, "opts.cdl").err().unwrap();
+    assert_eq!(err.code, "host_fn_signature_mismatch");
+    assert!(err.message.contains("return type"), "{}", err.message);
+}
+
+/// A field of the wrong type in a host struct literal is a compile error, the
+/// same as in a struct the script declares.
+#[test]
+fn a_host_struct_field_of_the_wrong_type_does_not_compile() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "process",
+        "start",
+        vec![
+            HostType::String,
+            HostType::Array(Box::new(HostType::String)),
+            HostType::String,
+            start_options_type(),
+        ],
+        HostType::Bool,
+        |_args: &[Value]| Ok(Value::Bool(true)),
+    );
+    let src = HOST_STRUCT_PROGRAM.replace("cwd: dir,", "cwd: 4,");
+    let err = engine.compile(&src, "process.cdl").err().unwrap();
+    assert_eq!(err.code, "struct_field_type_mismatch", "{}", err.message);
+}

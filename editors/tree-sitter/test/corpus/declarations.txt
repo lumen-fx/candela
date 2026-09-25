@@ -370,6 +370,42 @@ host "app" {
         (variadic_parameter)))))
 
 ================================================================================
+Host block declaring a struct with defaults (docs/src/integration/embedding.md)
+================================================================================
+
+host "process" {
+    struct StartOptions {
+        cwd: string = ".",
+        env: {string: string},
+    }
+    bool start(string, StartOptions);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (host_block
+    (string_literal)
+    (signature_list
+      (struct_declaration
+        (identifier)
+        (field_declaration_list
+          (field_declaration
+            (identifier)
+            (type_identifier)
+            (string_literal))
+          (field_declaration
+            (identifier)
+            (map_type
+              (type_identifier)
+              (type_identifier)))))
+      (function_signature
+        (type_identifier)
+        (identifier)
+        (type_identifier)
+        (type_identifier)))))
+
+================================================================================
 Comments (libs/std/string.cdl, libs/std/tests/test_errors.cdl)
 ================================================================================
 

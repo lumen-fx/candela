@@ -375,8 +375,10 @@ impl Engine {
 
         // Bind each declared host function to a registered closure, validating
         // arity + types against the closure's derived signature.
-        let host_dispatch: Vec<HostDispatch> =
-            self.registry.bind(&out.host_fns).map_err(|e| Diagnostic {
+        let host_dispatch: Vec<HostDispatch> = self
+            .registry
+            .bind(&out.host_fns, &out.structs)
+            .map_err(|e| Diagnostic {
                 filename: filename.to_owned(),
                 span: 0..0,
                 message: e.to_string(),

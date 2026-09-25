@@ -13878,3 +13878,238 @@ pub fn a_function_through_an_any_is_called() {
         "Cannot read this function value as function with annotated parameters"
     );
 }
+
+// ---------------------------------------------------------------------------
+// STRUCT UPDATE SYNTAX AND DEFAULTS
+// ---------------------------------------------------------------------------
+
+const OPTS: &str = "
+struct Inner {
+    n: int,
+    tags: string[],
+}
+
+struct Opts {
+    cwd: string = \"here\",
+    retries: int = 3,
+    verbose: bool,
+    ratio: float,
+    env: {string: string},
+    inner: Inner,
+    note: any,
+}
+
+fn show(o: Opts) {
+    print(o.cwd + \" \" + str(o.retries) + \" \" + str(o.verbose) + \" \" + str(o.ratio) + \" \"
+        + str(o.env.len()) + \" \" + str(o.inner.n) + \" \" + str(o.inner.tags.len()) + \" \" + str(o.note));
+}
+";
+
+/// The fields a literal does not write come from the base after `..`, and the
+/// base is left as it was.
+#[test]
+pub fn struct_update_takes_the_unwritten_fields_from_the_base() {
+    let src = format!(
+        "{OPTS}
+fn main() {{
+    let a = Opts {{ cwd: \"a\", retries: 1, verbose: true, ratio: 0.5, env: {{}}, inner: Inner {{ n: 2, tags: [] }}, note: 4 }};
+    let b = Opts {{ retries: 9, ..a }};
+    show(b);
+    show(a);
+    let c = Opts {{ ..b }};
+    show(c);
+}}
+"
+    );
+    assert_eq!(
+        run_output(&src),
+        "a 9 true 0.5 0 2 0 4\na 1 true 0.5 0 2 0 4\na 9 true 0.5 0 2 0 4\n"
+    );
+}
+
+/// A struct's default takes each field's declared value, or the empty value of
+/// its type, a nested struct's own default included; each default builds new
+/// lists and maps, so two defaults share none.
+#[test]
+pub fn a_struct_default_fills_every_field() {
+    let src = format!(
+        "{OPTS}
+fn main() {{
+    show(Opts::default());
+    let d = Opts {{ cwd: \"x\", ..Default::default() }};
+    show(d);
+    d.inner.tags.push(\"t\");
+    d.env.insert(\"k\", \"v\");
+    show(Opts::default());
+    show(Opts {{ inner: Inner {{ n: 7, ..Default::default() }}, ..Default::default() }});
+}}
+"
+    );
+    assert_eq!(
+        run_output(&src),
+        "here 3 false 0.0 0 0 0 null\nx 3 false 0.0 0 0 0 null\n\
+         here 3 false 0.0 0 0 0 null\nhere 3 false 0.0 0 7 0 null\n"
+    );
+}
+
+/// `Default::default()` is the default of the struct its position names: a
+/// typed parameter, a method's typed parameter, and an annotated return.
+#[test]
+pub fn default_resolves_from_the_type_its_position_names() {
+    let src = format!(
+        "{OPTS}
+fn make() -> Opts {{
+    if true {{
+        return Default::default();
+    }}
+    return Opts::default();
+}}
+
+impl Inner {{
+    fn with(self, o: Opts) -> int {{
+        return self.n + o.retries;
+    }}
+}}
+
+fn main() {{
+    show(Default::default());
+    show(make());
+    let i = Inner {{ n: 1, tags: [] }};
+    print(i.with(Default::default()));
+}}
+"
+    );
+    assert_eq!(
+        run_output(&src),
+        "here 3 false 0.0 0 0 0 null\nhere 3 false 0.0 0 0 0 null\n4\n"
+    );
+}
+
+/// Defaults inside a function body, where a literal is built each time the
+/// function runs rather than once.
+#[test]
+pub fn struct_update_and_defaults_inside_a_loop() {
+    let src = "
+struct Opts { cwd: string = \"here\", tags: string[], }
+fn build(cwd: string) -> Opts {
+    let base = Opts { cwd: cwd, ..Default::default() };
+    return Opts { tags: [\"t\"], ..base };
+}
+fn main() {
+    for i in 0..3 {
+        let o = build(str(i));
+        o.tags.push(\"u\");
+        print(o.cwd + \" \" + str(o.tags.len()) + \" \" + str(Opts::default().tags.len()));
+    }
+}
+";
+    assert_eq!(run_output(src), "0 2 0\n1 2 0\n2 2 0\n");
+}
+
+/// A generic struct takes a base of its own instantiation, and defaults at the
+/// types its arguments name.
+#[test]
+pub fn generic_structs_update_and_default() {
+    let src = "
+struct Cell<T> { value: T, label: string = \"cell\", }
+fn main() {
+    let a = Cell<int> { value: 4, label: \"a\" };
+    let b = Cell { value: 5, ..a };
+    print(b.label + \" \" + str(b.value));
+    let c = Cell<int>::default();
+    print(c.label + \" \" + str(c.value));
+}
+";
+    assert_eq!(run_output(src), "a 5\ncell 0\n");
+}
+
+#[test]
+pub fn a_struct_base_of_another_type_is_refused() {
+    let src = "
+struct A { x: int, }
+struct B { x: int, }
+fn main() { let b = B { x: 1 }; let a = A { ..b }; print(a.x); }
+";
+    let d = compile_diag(src, "base.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "struct_base_type");
+    assert_eq!(&src[d.span], "b");
+}
+
+#[test]
+pub fn a_field_the_struct_lacks_is_refused_beside_a_base() {
+    let src = "
+struct A { x: int, }
+fn main() { let a = A { y: 1, ..Default::default() }; print(a.x); }
+";
+    let d = compile_diag(src, "field.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "struct_no_such_field");
+}
+
+#[test]
+pub fn a_written_field_of_the_wrong_type_is_refused_beside_a_base() {
+    let src = "
+struct A { x: int, }
+fn main() { let a = A { x: \"no\", ..Default::default() }; print(a.x); }
+";
+    let d = compile_diag(src, "field.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "struct_field_type_mismatch");
+}
+
+#[test]
+pub fn a_declared_default_of_the_wrong_type_is_refused() {
+    let src = "
+struct A { x: int = \"s\", }
+fn main() { print(A::default().x); }
+";
+    let d = compile_diag(src, "decl.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "struct_field_type_mismatch");
+    assert_eq!(&src[d.span], "\"s\"");
+}
+
+#[test]
+pub fn default_with_no_type_to_take_is_refused() {
+    let src = "
+fn main() { let a = Default::default(); print(a); }
+";
+    let d = compile_diag(src, "none.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "default_without_type");
+}
+
+/// An enum has no empty value, and a struct reached again through its own
+/// fields has no finite one; both ask for a declared default.
+#[test]
+pub fn a_field_with_no_default_value_is_refused() {
+    for src in [
+        "
+enum E { P, Q }
+struct A { e: E, }
+fn main() { print(A::default()); }
+",
+        "
+struct A { b: B, }
+struct B { a: A, }
+fn main() { print(A::default()); }
+",
+    ] {
+        let d = compile_diag(src, "none.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "struct_field_no_default");
+    }
+    // A declared value is what an enum field takes instead.
+    let src = "
+enum E { P, Q }
+struct A { e: E = E::Q, }
+fn main() {
+    match A::default().e {
+        P => { print(1); }
+        Q => { print(2); }
+    }
+}
+";
+    assert_eq!(run_output(src), "2\n");
+}

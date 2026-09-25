@@ -58,6 +58,7 @@ use expr::Span;
 use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
+use expr::is_default_call;
 use functions::handle_functions;
 use functions::handle_value_call;
 use functions::user_functions::check_declared_fn;
@@ -73,11 +74,13 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
+use std::cell::RefCell;
 use std::hash::BuildHasherDefault;
 use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use type_system::DataType;
+use type_system::FnTypeExpr;
 use type_system::Generics;
 use type_system::ReturnAnnotation;
 use type_system::TypeCtx;
@@ -87,11 +90,11 @@ use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
 use type_system::check_operator_method;
 use type_system::collect_direct_fn_calls;
+use type_system::literal_struct_id;
 use type_system::param_type_matches;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
-use type_system::struct_literal_id;
 use type_system::variant_constructor_at;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -707,46 +710,226 @@ fn compile_struct_field_type(
     as_fn_value
 }
 
+/// Where a struct literal takes the fields it does not write from.
+#[derive(Clone, Copy)]
+enum StructFill {
+    /// Nowhere: every field has to be written.
+    Nothing,
+    /// The struct value in this register, a `..base`.
+    Base(u16),
+    /// The values the fields were declared with, or the empty value of each
+    /// field's type: `S::default()` and `..Default::default()`.
+    Defaults,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_struct_literal(
     namespace: &[SmolStr],
     fields: &[(SmolStr, Expr, Span, Span)],
     type_args: &[TypeExpr],
+    base: Option<&(Expr, Span)>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
-    let name = &namespace[namespace.len() - 1];
-    let expected_struct_idx =
-        struct_literal_id(namespace, fields, type_args, span, v, ctx, state) as usize;
-    let type_id = state.structs[expected_struct_idx].id;
+    let expected_struct_idx = literal_struct_id(
+        namespace,
+        fields,
+        type_args,
+        base.map(|(b, _)| b),
+        span,
+        v,
+        ctx,
+        state,
+    ) as usize;
+    let name = state.structs[expected_struct_idx].name.clone();
     let expected_fields_len = state.structs[expected_struct_idx].fields.len();
-    if expected_fields_len < fields.len() {
+    if base.is_some() {
+        // A literal with a base need not write every field, so a count cannot
+        // catch a field the struct does not declare; each is looked up.
+        if let Some(unexpected_field) = fields.iter().find(|(f, _, _, _)| {
+            !state.structs[expected_struct_idx]
+                .fields
+                .iter()
+                .any(|(declared, _, _)| declared == f)
+        }) {
+            compiler_errors::error_struct_no_such_field(
+                ctx.file_idx,
+                &name,
+                state.structs[expected_struct_idx].name_span,
+                unexpected_field.2,
+                &unexpected_field.0,
+                state.sources,
+            )
+        }
+    } else if expected_fields_len < fields.len() {
         let unexpected_field = &fields[expected_fields_len];
         compiler_errors::error_struct_no_such_field(
             ctx.file_idx,
-            name,
+            &name,
             state.structs[expected_struct_idx].name_span,
             unexpected_field.2,
             &unexpected_field.0,
             state.sources,
         )
     }
-    let struct_id = {
-        state.pools.objs.push(Vec::with_capacity(fields.len()));
+    let fill = match base {
+        None => StructFill::Nothing,
+        Some((base, _)) if is_default_call(base) => StructFill::Defaults,
+        Some((base, base_span)) => {
+            let base_type = base.infer_type(v, ctx, state);
+            if base_type != DataType::Struct(state.structs[expected_struct_idx].id) {
+                compiler_errors::error_struct_base_type(
+                    ctx.file_idx,
+                    &name,
+                    *base_span,
+                    &base_type,
+                    state.sources,
+                    state.type_names(),
+                );
+            }
+            StructFill::Base(
+                base.compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id(),
+            )
+        }
+    };
+    let dest = build_struct(
+        expected_struct_idx,
+        fields,
+        fill,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    if let StructFill::Base(base_reg) = fill {
+        state.free_reg(base_reg, v);
+    }
+    dest
+}
+
+/// Lowers the default value of struct `struct_idx`: `S::default()`, and a
+/// `Default::default()` a struct-typed position resolved.
+pub(crate) fn compile_struct_default(
+    struct_idx: u16,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    thread_local! {
+        /// The structs whose defaults are being built, innermost last: a
+        /// struct reached again through its own fields has no finite default.
+        static DEFAULTING: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
+    }
+    /// Pops the struct it pushed, on the way out of a compile error too.
+    struct Leave;
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            DEFAULTING.with(|d| d.borrow_mut().pop());
+        }
+    }
+    if DEFAULTING.with(|d| d.borrow().contains(&struct_idx)) {
+        let s = &state.structs[struct_idx as usize];
+        let (field_name, field_type, _) = s
+            .fields
+            .iter()
+            .find(|(_, t, _)| matches!(t, DataType::Struct(_)))
+            .cloned()
+            .unwrap_or_else(|| (s.name.clone(), DataType::Struct(struct_idx), span));
+        compiler_errors::error_struct_field_no_default(
+            ctx.file_idx,
+            span,
+            &s.name,
+            &field_name,
+            &field_type,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    DEFAULTING.with(|d| d.borrow_mut().push(struct_idx));
+    let _leave = Leave;
+    build_struct(
+        struct_idx as usize,
+        &[],
+        StructFill::Defaults,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+    )
+}
+
+/// The value an unwritten field of a defaulted struct starts with when its
+/// declaration gives none: the empty value of its type. `None` for a type that
+/// has no empty value, an enum or a function.
+fn zero_value(field_type: &DataType, span: Span) -> Option<Expr> {
+    Some(match field_type {
+        DataType::Int => Expr::Int(0),
+        DataType::Float => Expr::Float(0.0),
+        DataType::Bool => Expr::Bool(false),
+        DataType::String => Expr::String(SmolStr::default()),
+        DataType::Null | DataType::Unknown => Expr::Null,
+        DataType::Union(members) if members.contains(&DataType::Null) => Expr::Null,
+        DataType::Array(_) => Expr::Array(Box::from([]), Box::from([span])),
+        DataType::Map(_) => Expr::Map(Box::from([]), span),
+        DataType::Struct(id) => Expr::StructDefault(*id, span),
+        DataType::Union(_) | DataType::Enum(_) | DataType::Fn(_) | DataType::FnValue(_) => {
+            return None;
+        }
+    })
+}
+
+/// Builds a value of struct `struct_idx` from the fields a literal writes and,
+/// for the rest, from `fill`.
+#[allow(clippy::too_many_arguments)]
+fn build_struct(
+    struct_idx: usize,
+    fields: &[(SmolStr, Expr, Span, Span)],
+    fill: StructFill,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let name = state.structs[struct_idx].name.clone();
+    let type_id = state.structs[struct_idx].id;
+    let expected_fields_len = state.structs[struct_idx].fields.len();
+    let pool_idx = {
+        state
+            .pools
+            .objs
+            .push(Vec::with_capacity(expected_fields_len));
         state.pools.objs.len() - 1
     };
-    if ctx.single_run {
-        for field_idx in 0..expected_fields_len {
-            if let Some((_, field_expr, _, field_value_span)) = fields
-                .iter()
-                .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
-            {
+    // Fields whose value is only known when the program runs, as
+    // `(register, field index)`, and the registers this literal took for
+    // itself and hands back once the values are stored.
+    let mut dynamic: Vec<(u16, u16)> = Vec::with_capacity(expected_fields_len);
+    let mut scratch: Vec<u16> = Vec::new();
+    for field_idx in 0..expected_fields_len {
+        let field_name = state.structs[struct_idx].fields[field_idx].0.clone();
+        let written = fields.iter().find(|(f, _, _, _)| *f == field_name);
+        let (id, constant) = match (written, fill) {
+            (Some((_, field_expr, _, field_value_span)), _) => {
+                let resolved;
+                let field_expr = match &state.structs[struct_idx].fields[field_idx].1 {
+                    DataType::Struct(id) if is_default_call(field_expr) => {
+                        resolved = Expr::StructDefault(*id, *field_value_span);
+                        &resolved
+                    }
+                    _ => field_expr,
+                };
                 let as_fn_value = compile_struct_field_type(
-                    name,
-                    expected_struct_idx,
+                    &name,
+                    struct_idx,
                     field_idx,
                     field_expr,
                     *field_value_span,
@@ -756,95 +939,102 @@ fn compile_struct_literal(
                     output,
                 );
                 let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
-                if field_expr.is_constant_literal() {
-                    state
-                        .pools
-                        .objs
-                        .get_mut(struct_id)
-                        .push(state.registers[id as usize]);
-                } else {
-                    output.push(Instr::ObjElemMov(
-                        id,
-                        struct_id as u16,
-                        state.pools.objs[struct_id].len() as u16,
-                    ));
-                    state.pools.objs.get_mut(struct_id).push(NULL);
-                }
-            } else {
-                let missing_elems = (0..expected_fields_len)
-                    .into_iter()
-                    .filter(|i| {
-                        !fields.iter().any(|(f, _, _, _)| {
-                            f == &state.structs[expected_struct_idx].fields[*i].0
-                        })
-                    })
-                    .map(|i| &state.structs[struct_id].fields[i].0)
+                (id, field_expr.is_constant_literal())
+            }
+            (None, StructFill::Base(base_reg)) => {
+                let id = state.alloc_reg();
+                output.push(Instr::GetFieldStruct(base_reg, field_idx as u16, id));
+                scratch.push(id);
+                (id, false)
+            }
+            (None, StructFill::Defaults) => {
+                let field_type = state.structs[struct_idx].fields[field_idx].1.clone();
+                // A declared value compiles in the file that declared it, where
+                // no variable of the literal's scope is visible; the empty value
+                // of the type stands in where none was declared.
+                let (file_idx, value, value_span) = match state
+                    .generics
+                    .struct_default(type_id, field_idx)
+                {
+                    Some((file_idx, value, value_span)) => (file_idx, value.clone(), value_span),
+                    None => (
+                        ctx.file_idx,
+                        zero_value(&field_type, span).unwrap_or_else(|| {
+                            compiler_errors::error_struct_field_no_default(
+                                ctx.file_idx,
+                                span,
+                                &name,
+                                &field_name,
+                                &field_type,
+                                state.sources,
+                                state.type_names(),
+                            )
+                        }),
+                        span,
+                    ),
+                };
+                let value = match &field_type {
+                    DataType::Struct(id) if is_default_call(&value) => {
+                        Expr::StructDefault(*id, value_span)
+                    }
+                    _ => value,
+                };
+                let default_ctx = Ctx { file_idx, ..ctx };
+                let mut scope: Vec<Variable> = Vec::new();
+                let as_fn_value = compile_struct_field_type(
+                    &name,
+                    struct_idx,
+                    field_idx,
+                    &value,
+                    value_span,
+                    &mut scope,
+                    default_ctx,
+                    state,
+                    output,
+                );
+                let id =
+                    compile_element(&value, as_fn_value, &mut scope, default_ctx, state, output);
+                (id, value.is_constant_literal())
+            }
+            (None, StructFill::Nothing) => {
+                let missing_elems = state.structs[struct_idx]
+                    .fields
+                    .iter()
+                    .map(|(f, _, _)| f)
+                    .filter(|f| !fields.iter().any(|(written, _, _, _)| written == *f))
                     .collect::<Vec<&SmolStr>>();
                 compiler_errors::error_struct_missing_fields(
                     ctx.file_idx,
-                    state.structs[expected_struct_idx].name_span,
+                    state.structs[struct_idx].name_span,
                     span,
                     state.sources,
                     &missing_elems,
                 )
             }
+        };
+        if constant {
+            let value = state.registers[id as usize];
+            state.pools.objs.get_mut(pool_idx).push(value);
+        } else if ctx.single_run {
+            output.push(Instr::ObjElemMov(
+                id,
+                pool_idx as u16,
+                state.pools.objs[pool_idx].len() as u16,
+            ));
+            state.pools.objs.get_mut(pool_idx).push(NULL);
+        } else {
+            state.pools.objs.get_mut(pool_idx).push(NULL);
+            dynamic.push((id, field_idx as u16));
         }
+    }
 
+    let dest_reg = if ctx.single_run {
         state
             .registers
-            .push(Data::struct_instance(type_id, struct_id as u32));
+            .push(Data::struct_instance(type_id, pool_idx as u32));
         (state.registers.len() - 1) as u16
     } else {
-        let mut dynamic: Vec<(u16, u16)> = Vec::with_capacity(expected_fields_len);
-        for field_idx in 0..expected_fields_len {
-            if let Some((_, field_expr, _, field_value_span)) = fields
-                .iter()
-                .find(|(f, _, _, _)| f == &state.structs[expected_struct_idx].fields[field_idx].0)
-            {
-                let as_fn_value = compile_struct_field_type(
-                    name,
-                    expected_struct_idx,
-                    field_idx,
-                    field_expr,
-                    *field_value_span,
-                    v,
-                    ctx,
-                    state,
-                    output,
-                );
-                let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
-                if field_expr.is_constant_literal() {
-                    state
-                        .pools
-                        .objs
-                        .get_mut(struct_id)
-                        .push(state.registers[id as usize]);
-                } else {
-                    state.pools.objs.get_mut(struct_id).push(NULL);
-                    dynamic.push((id, field_idx as u16));
-                }
-            } else {
-                let missing_elems = (0..expected_fields_len)
-                    .into_iter()
-                    .filter(|i| {
-                        !fields.iter().any(|(f, _, _, _)| {
-                            f == &state.structs[expected_struct_idx].fields[*i].0
-                        })
-                    })
-                    .map(|i| &state.structs[struct_id].fields[i].0)
-                    .collect::<Vec<&SmolStr>>();
-                compiler_errors::error_struct_missing_fields(
-                    ctx.file_idx,
-                    state.structs[expected_struct_idx].name_span,
-                    span,
-                    state.sources,
-                    &missing_elems,
-                );
-            }
-        }
-
-        let template_reg =
-            state.template_register(Data::struct_instance(type_id, struct_id as u32));
+        let template_reg = state.template_register(Data::struct_instance(type_id, pool_idx as u32));
         // `CloneStruct` writes the destination register, so until it runs the
         // register holds a placeholder. It names this literal's own template
         // entry, not pool slot 0, so a read of the register file before
@@ -853,7 +1043,7 @@ fn compile_struct_literal(
         let dest_reg = {
             state
                 .registers
-                .push(Data::struct_instance(type_id, struct_id as u32));
+                .push(Data::struct_instance(type_id, pool_idx as u32));
             (state.registers.len() - 1) as u16
         };
         output.push(Instr::CloneStruct(template_reg, dest_reg));
@@ -861,7 +1051,11 @@ fn compile_struct_literal(
             output.push(Instr::SetFieldStruct(dest_reg, val_reg, slot));
         }
         dest_reg
+    };
+    for id in scratch {
+        state.free_reg(id, v);
     }
+    dest_reg
 }
 
 /// Resolves a call/reference path to an enum variant `(enum_id, variant_idx)`,
@@ -3914,11 +4108,13 @@ fn compile_var_assignment(
     v[var_pos].var_type = var_type;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_struct_definition(
     name: &SmolStr,
     fields: &[(SmolStr, TypeExpr, Span)],
     span: Span,
     type_params: &TypeParams,
+    defaults: &[Option<(Expr, Span)>],
     ctx: Ctx,
     state: &mut State<'_>,
     _output: &mut Vec<Instr>,
@@ -3929,6 +4125,7 @@ fn compile_struct_definition(
             type_params.clone(),
             ctx.file_idx,
             Box::from(fields),
+            Box::from(defaults),
         );
         state
             .scope_mut(ctx.file_idx)
@@ -3944,6 +4141,9 @@ fn compile_struct_definition(
         id: struct_id,
         name_span: span,
     });
+    state
+        .generics
+        .set_struct_defaults(struct_id, ctx.file_idx, Box::from(defaults));
     let struct_symbol = SymbolKind::Struct((state.structs.len() - 1) as u16);
     state
         .scope_mut(ctx.file_idx)
@@ -4344,10 +4544,24 @@ impl Expr {
                     output,
                 ))
             }
-            Self::Struct(namespace, fields, span, type_args) => {
+            Self::Struct(namespace, fields, span, type_args, base) => {
                 debug_assert!(uses_id);
                 Some(compile_struct_literal(
-                    namespace, fields, type_args, *span, v, ctx, state, output,
+                    namespace,
+                    fields,
+                    type_args,
+                    base.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
+            Self::StructDefault(struct_id, span) => {
+                debug_assert!(uses_id);
+                Some(compile_struct_default(
+                    *struct_id, *span, v, ctx, state, output,
                 ))
             }
             Self::Map(kv_pairs, span) => {
@@ -4817,9 +5031,18 @@ impl Expr {
                 compile_var_assignment(name, value, *span, v, ctx, state, output);
                 None
             }
-            Self::StructDeclare(name, fields, span, type_params) => {
+            Self::StructDeclare(name, fields, span, type_params, defaults) => {
                 debug_assert!(!uses_id);
-                compile_struct_definition(name, fields, *span, type_params, ctx, state, output);
+                compile_struct_definition(
+                    name,
+                    fields,
+                    *span,
+                    type_params,
+                    defaults,
+                    ctx,
+                    state,
+                    output,
+                );
                 None
             }
             Self::EnumDeclare(name, variants, span, type_params) => {
@@ -5574,6 +5797,159 @@ type PendingFns = Vec<(
 /// Registering the finished scope in `file_namespaces` is the caller's: an
 /// imported file's scope is bound into the importer as well, while the entry
 /// file's is needed nowhere else and can be handed over whole.
+/// `code` with each `return Default::default();` in it, at any depth of
+/// nested blocks, returning the default of struct `struct_id` instead. `None`
+/// when there is no such statement. A closure's body is its own function and
+/// is left alone.
+fn resolve_default_returns(code: &[Expr], struct_id: u16) -> Option<Vec<Expr>> {
+    fn block(code: &[Expr], struct_id: u16, changed: &mut bool) -> Box<[Expr]> {
+        code.iter()
+            .map(|stmt| statement(stmt, struct_id, changed))
+            .collect()
+    }
+    fn statement(stmt: &Expr, id: u16, changed: &mut bool) -> Expr {
+        match stmt {
+            Expr::ReturnVal(value) => match value.as_ref() {
+                Some(call @ Expr::FunctionCall(_, _, span, _, _)) if is_default_call(call) => {
+                    *changed = true;
+                    Expr::ReturnVal(Box::new(Some(Expr::StructDefault(id, *span))))
+                }
+                _ => stmt.clone(),
+            },
+            Expr::Condition(cond, body, span, cond_span) => {
+                Expr::Condition(cond.clone(), block(body, id, changed), *span, *cond_span)
+            }
+            Expr::ElseIfBlock(cond, body, span) => {
+                Expr::ElseIfBlock(cond.clone(), block(body, id, changed), *span)
+            }
+            Expr::ElseBlock(body) => Expr::ElseBlock(block(body, id, changed)),
+            Expr::WhileBlock(cond, body, span) => {
+                Expr::WhileBlock(cond.clone(), block(body, id, changed), *span)
+            }
+            Expr::ForLoop(var, iterated, body, span) => Expr::ForLoop(
+                var.clone(),
+                iterated.clone(),
+                block(body, id, changed),
+                *span,
+            ),
+            Expr::IntForLoop(var, first, last, body, span, range_span) => Expr::IntForLoop(
+                var.clone(),
+                first.clone(),
+                last.clone(),
+                block(body, id, changed),
+                *span,
+                *range_span,
+            ),
+            Expr::EvalBlock(body) => Expr::EvalBlock(block(body, id, changed)),
+            Expr::LoopBlock(body) => Expr::LoopBlock(block(body, id, changed)),
+            Expr::TryCatchBlock(try_code, err_var, catch_code) => Expr::TryCatchBlock(
+                block(try_code, id, changed),
+                err_var.clone(),
+                block(catch_code, id, changed),
+            ),
+            Expr::Match(scrutinee, arms, wildcard, span) => Expr::Match(
+                scrutinee.clone(),
+                arms.iter()
+                    .map(|(pattern, body)| (pattern.clone(), block(body, id, changed)))
+                    .collect(),
+                wildcard.as_ref().map(|w| block(w, id, changed)),
+                *span,
+            ),
+            _ => stmt.clone(),
+        }
+    }
+    let mut changed = false;
+    let out = block(code, struct_id, &mut changed);
+    changed.then(|| out.into_vec())
+}
+
+/// Registers the structs a `host "ns" { ... }` block declares. Each is named
+/// behind the block's namespace, `ns::Name`, the way the block's functions are
+/// called, and its type is registered under that name.
+fn declare_host_structs(
+    host_namespace: &SmolStr,
+    host_structs: Box<[Expr]>,
+    src_file_idx: u16,
+    structs: &mut Vec<Struct>,
+    namespace: &mut Namespace,
+    pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
+    generics: &mut Generics,
+) {
+    if host_structs.is_empty() {
+        return;
+    }
+    let local: Vec<SmolStr> = host_structs
+        .iter()
+        .filter_map(|decl| match decl {
+            Expr::StructDeclare(name, ..) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let child = if let Some(idx) = namespace
+        .children
+        .iter()
+        .position(|(name, _)| name == host_namespace)
+    {
+        idx
+    } else {
+        namespace
+            .children
+            .push((host_namespace.clone(), Namespace::default()));
+        namespace.children.len() - 1
+    };
+    for decl in host_structs {
+        let Expr::StructDeclare(name, fields, span, _, defaults) = decl else {
+            continue;
+        };
+        let struct_id = structs.len() as u16;
+        structs.push(Struct {
+            name: format_args!("{host_namespace}::{name}").to_smolstr(),
+            fields: Box::from([]),
+            id: struct_id,
+            name_span: span,
+        });
+        generics.set_struct_defaults(struct_id, src_file_idx, defaults);
+        namespace.children[child]
+            .1
+            .symbols
+            .push((name, SymbolKind::Struct(struct_id)));
+        let fields = fields
+            .iter()
+            .map(|(field, field_type, field_span)| {
+                (
+                    field.clone(),
+                    qualify_host_type(field_type, host_namespace, &local),
+                    *field_span,
+                )
+            })
+            .collect();
+        pending_structs.push((struct_id, src_file_idx, fields));
+    }
+}
+
+/// `t` with every bare name of a struct the same `host` block declares written
+/// behind the block's namespace, which is where the struct is registered. A
+/// block names its own structs bare: `bool start(StartOptions);`.
+fn qualify_host_type(t: &TypeExpr, host_namespace: &SmolStr, local: &[SmolStr]) -> TypeExpr {
+    let qualify = |inner: &TypeExpr| qualify_host_type(inner, host_namespace, local);
+    match t {
+        TypeExpr::Identifier(name, span) if local.contains(name) => {
+            TypeExpr::NamespacedIdentifier(Box::from([host_namespace.clone(), name.clone()]), *span)
+        }
+        TypeExpr::Array(inner) => TypeExpr::Array(Box::new(qualify(inner))),
+        TypeExpr::Map(key, value) => {
+            TypeExpr::Map(Box::new(qualify(key)), Box::new(qualify(value)))
+        }
+        TypeExpr::Union(members) => TypeExpr::Union(members.iter().map(qualify).collect()),
+        TypeExpr::Fn(f) => TypeExpr::Fn(Box::new(FnTypeExpr {
+            args: f.args.iter().map(qualify).collect(),
+            return_type: f.return_type.as_ref().map(qualify),
+            span: f.span,
+        })),
+        other => other.clone(),
+    }
+}
+
 fn parse_toplevel(
     code: Vec<Expr>,
     file_path: &Path,
@@ -5650,7 +6026,7 @@ fn parse_toplevel(
                 pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type, type_params));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
-            Expr::StructDeclare(name, fields, span, type_params) => {
+            Expr::StructDeclare(name, fields, span, type_params, defaults) => {
                 // A generic declaration registers no type of its own: each
                 // instantiation of it becomes an ordinary struct.
                 if !type_params.is_empty() {
@@ -5659,6 +6035,7 @@ fn parse_toplevel(
                         type_params,
                         src_file_idx,
                         fields,
+                        defaults,
                     );
                     namespace
                         .symbols
@@ -5672,10 +6049,51 @@ fn parse_toplevel(
                     id: struct_id,
                     name_span: span,
                 });
+                generics.set_struct_defaults(struct_id, src_file_idx, defaults);
                 namespace
                     .symbols
                     .push((name, SymbolKind::Struct(struct_id)));
                 pending_structs.push((struct_id, src_file_idx, fields));
+            }
+            Expr::HostBlock(host_namespace, fn_signatures, span, host_structs) => {
+                declare_host_structs(
+                    &host_namespace,
+                    host_structs,
+                    src_file_idx,
+                    structs,
+                    namespace,
+                    pending_structs,
+                    generics,
+                );
+                let local: Vec<SmolStr> = namespace
+                    .children
+                    .iter()
+                    .find(|(child, _)| *child == host_namespace)
+                    .map(|(_, ns)| ns.structs().map(|(n, _)| n.clone()).collect())
+                    .unwrap_or_default();
+                let fn_signatures = if local.is_empty() {
+                    fn_signatures
+                } else {
+                    fn_signatures
+                        .iter()
+                        .map(|(fn_name, args, ret, fn_span)| {
+                            (
+                                fn_name.clone(),
+                                args.iter()
+                                    .map(|t| qualify_host_type(t, &host_namespace, &local))
+                                    .collect(),
+                                qualify_host_type(ret, &host_namespace, &local),
+                                *fn_span,
+                            )
+                        })
+                        .collect()
+                };
+                imports.push(Expr::HostBlock(
+                    host_namespace,
+                    fn_signatures,
+                    span,
+                    Box::from([]),
+                ));
             }
             Expr::EnumDeclare(name, variants, span, type_params) => {
                 if !type_params.is_empty() {
@@ -5715,7 +6133,7 @@ fn parse_toplevel(
                     "WASM does not support importing files. The standard library modules std/math, std/time, std/random and std/hash import",
                 )
             }
-            import @ (Expr::ImportFile(..) | Expr::ImportDylib(..) | Expr::HostBlock(..)) => {
+            import @ (Expr::ImportFile(..) | Expr::ImportDylib(..)) => {
                 imports.push(import);
             }
             _ => {}
@@ -5851,7 +6269,7 @@ fn parse_toplevel(
                     is_host: false,
                 });
             }
-            Expr::HostBlock(host_namespace, fn_signatures, span) => {
+            Expr::HostBlock(host_namespace, fn_signatures, span, _) => {
                 pending_host.push((
                     src_file_idx,
                     dynamic_libs.len() as u16,
@@ -6148,6 +6566,13 @@ fn resolve_types(
                     t_span,
                 )
             });
+        // A function declared to return a struct names the struct its
+        // `return Default::default();` statements build.
+        if let Some((DataType::Struct(struct_id), _)) = &fns[fn_id as usize].return_type
+            && let Some(code) = resolve_default_returns(&fns[fn_id as usize].code, *struct_id)
+        {
+            fns[fn_id as usize].code = Rc::from(code);
+        }
     }
     // The signatures a check-only compile bound without a library, which take
     // ids past the end of the bound ones so each still names one function.
