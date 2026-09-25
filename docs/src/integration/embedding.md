@@ -322,7 +322,8 @@ declares without opening its library, so a script whose C library a build step
 has not produced yet still checks; the call sites are type-checked against the
 declared signatures, and a signature naming a type C cannot represent is still
 an error. `host` blocks are not matched against registered closures, and `main`
-is not required. `candela check` and the language server check this way, and
+is not required. A source without `main` is checked as a library, so it raises
+no warning about bare parameters. `candela check` and the language server check this way, and
 `candela::check_only` is the same check for a frontend that wants the compile
 tables it produces.
 

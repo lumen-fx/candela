@@ -127,7 +127,9 @@ pub fn compile_checked_profile(
 /// A function a host would call that leaves a parameter bare gets a warning per
 /// bare parameter and an entry point with those parameters typed `any`. A body
 /// that does not compile that way is undone and reported as a warning, not an
-/// error, so a program that built before still builds.
+/// error, so a program that built before still builds. A file with no `main`
+/// is a library its importers call, so it gets the entry points and none of
+/// the warnings.
 ///
 /// A function's declared parameter types are everything the compiler needs to
 /// check its body, so this pass is where a body that only a host would have
@@ -158,6 +160,13 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         }
     }
 
+    // A file with no `main` is a library: its functions are called by the
+    // files that import it, and those calls specialise the bare parameters,
+    // so it is not told what a host would pass. The `any` entry point is still
+    // tried for a host that loads it anyway. A file the one being built imports
+    // is never looked at here, since only the built file's functions are.
+    let warn = declares_main(out);
+
     // What nothing compiled so far calls is chosen once, before any attempt
     // below compiles a body that calls another candidate, so the choice is the
     // same in both profiles and does not depend on declaration order.
@@ -173,7 +182,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         let bare: Vec<SmolStr> = function
             .args
             .iter()
-            .filter(|(_, ty)| ty.is_none())
+            .filter(|(_, ty)| warn && ty.is_none())
             .map(|(param, _)| param.clone())
             .collect();
         for param in bare {
@@ -205,6 +214,9 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
             }
             Err(error) => {
                 compiler_state(out).rollback_to(&checkpoint);
+                if !warn {
+                    continue;
+                }
                 emit_warning(
                     &out.sources,
                     "No host entry point",
@@ -222,6 +234,15 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         }
     }
     exports
+}
+
+/// Whether the file being built declares `main`, which is what makes it a
+/// program a host loads rather than a library other files import.
+fn declares_main(out: &CompileOutput) -> bool {
+    out.namespaces.root().fns().any(|(name, kind)| {
+        name.as_str() == "main"
+            && matches!(kind, SymbolKind::Fn(fn_id) if out.functions[*fn_id as usize].src_file == 0)
+    })
 }
 
 /// The functions a host would call by name that have a bare parameter, in

@@ -70,7 +70,8 @@ holds and the compile error when it does not. The compile is the one `build`
 does, so an error in the body of a function `main` never calls fails the check
 too, as long as that function is in the file being checked and annotates every
 parameter. A function with a bare parameter that nothing calls is reported with
-a warning instead, and the check still passes; see
+a warning instead, and the check still passes, unless the file has no `main` and
+so is a library its importers call; see
 [warnings](errors.md#warnings). Dependencies are resolved first, so this also
 proves the manifest is satisfiable. A `dylib` block is checked against the
 signatures it declares, and the library it names is not opened, so a program

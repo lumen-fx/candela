@@ -13207,6 +13207,28 @@ pub fn a_bare_function_in_an_imported_module_is_not_warned_about() {
     assert!(exports.is_empty(), "nothing is left for a host to call");
 }
 
+/// A file with no `main` is a library, checked on its own or as a package
+/// entry: the files that import it call its functions and specialise their
+/// bare parameters, so it is not warned about what a host would pass. The
+/// same functions in a file with a `main` are a host's to call (#192).
+#[test]
+pub fn a_library_file_is_not_warned_about_bare_parameters() {
+    let library = "fn shout(s) {\n    return s + \"!\";\n}\n";
+    let (exports, warnings) = checked_with_warnings(library, "shout.cdl");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(exports.is_empty(), "shout's body does not compile at any");
+
+    let with_main = format!("{library}fn main() {{}}\n");
+    let (_, warnings) = checked_with_warnings(&with_main, "shout.cdl");
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["unannotated_host_parameter", "no_host_entry_point"]);
+
+    // A library body that compiles at `any` still gets its entry point.
+    let (exports, warnings) = checked_with_warnings("fn echo(x) { print(x); }\n", "echo.cdl");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(exports.iter().any(|e| e.name == "echo"));
+}
+
 /// A literal's template register is read on every run of the literal, so a
 /// register allocated after the literal's last use in the source must not
 /// land on it: the next call of the function would clone whatever was left
