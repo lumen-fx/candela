@@ -285,7 +285,8 @@ fn main() {
 
 A struct field holds one the same way, and calling the field is the same dot a
 method call uses. Declare the field `fn(params) -> result`; see
-[Function types](#function-types) below.
+[Function types](#function-types) below. Assigning to the field takes any
+function the struct literal would.
 
 ```rust
 struct Button {
@@ -295,6 +296,8 @@ struct Button {
 
 fn main() {
     let b = Button { label: "ok", on_press: fn(x) { return x * 2; } };
+    print(b.on_press(21));
+    b.on_press = fn(x) { return x + 1; };
     print(b.on_press(21));
 }
 ```

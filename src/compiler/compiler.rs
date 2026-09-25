@@ -663,7 +663,14 @@ fn compile_struct_field_type(
         );
     }
     let as_fn_value = as_fn_value && matches!(declared, DataType::FnValue(_));
-    let field_type = if as_fn_value { declared } else { field_type };
+    // A function was just checked against the declared signature, so it
+    // stands for that; anything else is checked as the type it is.
+    let field_type = if as_fn_value && matches!(field_type, DataType::Fn(_) | DataType::FnValue(_))
+    {
+        declared
+    } else {
+        field_type
+    };
     let field = &state.structs[struct_idx].fields[field_idx];
     if !struct_field_type_matches(&field.1, &field_type, state.generics) {
         compiler_errors::error_struct_field_invalid_type(
@@ -2787,43 +2794,36 @@ fn compile_struct_field_assignment(
             state.type_names(),
         );
     };
-    let mut field_index: Option<u16> = None;
     let field_struct = &state.structs[struct_id as usize];
-    let struct_name = &field_struct.name;
-    for (i, (expected_field_name, expected_field_type, expected_field_span)) in
-        field_struct.fields.iter().enumerate()
-    {
-        if expected_field_name == field {
-            if !struct_field_type_matches(expected_field_type, &new_val_type, state.generics) {
-                compiler_errors::error_struct_field_invalid_type(
-                    ctx.file_idx,
-                    struct_name,
-                    *expected_field_span,
-                    expected_field_name,
-                    expected_field_type,
-                    value_span,
-                    &new_val_type,
-                    state.sources,
-                    TypeNames {
-                        structs: state.structs,
-                        enums: state.enums,
-                    },
-                );
-            }
-            field_index = Some(i as u16);
-            break;
-        }
-    }
-    let Some(field_index) = field_index else {
+    let Some(field_index) = field_struct
+        .fields
+        .iter()
+        .position(|(expected_field_name, _, _)| expected_field_name == field)
+    else {
         compiler_errors::error_struct_unknown_field(
             ctx.file_idx,
             field_span,
             field,
-            struct_name,
+            &field_struct.name,
             &field_struct.fields,
             state.sources,
         );
     };
+    let struct_name = field_struct.name.clone();
+    // The value is checked against the field the way a struct literal checks
+    // it, so a field that holds a function takes what the literal would.
+    let as_fn_value = compile_struct_field_type(
+        &struct_name,
+        struct_id as usize,
+        field_index,
+        new_val,
+        value_span,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    let field_index = field_index as u16;
     let id = struct_expr
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
@@ -2847,9 +2847,7 @@ fn compile_struct_field_assignment(
         output.push(Instr::AddFieldFloat(id, added_id, field_index));
         return;
     }
-    let new_elem_reg_id = new_val
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let new_elem_reg_id = compile_element(new_val, as_fn_value, v, ctx, state, output);
     output.push(Instr::SetFieldStruct(id, new_elem_reg_id, field_index));
 }
 
