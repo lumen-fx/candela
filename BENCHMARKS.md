@@ -7,10 +7,40 @@ It has been modified by the candela authors. See the NOTICE file.
 
 These are the programs used to compare Candela against Python 3 and LuaJIT with
 the JIT disabled (`-joff`). Each benchmark is the same workload written three
-times, once per language, so the three runs are directly comparable.
+times, once per language, so the three runs are directly comparable. The two
+LuaJIT programs that differ say so in their sections.
 
 Candela is still experimental, so treat any figure you measure as a snapshot of
 the commit you measured.
+
+## Results
+
+Median wall-clock time in milliseconds, process start-up included. Lower is
+faster.
+
+| Program | Candela | candela-vm | Python 3 | LuaJIT (-joff) |
+| --- | --- | --- | --- | --- |
+| Iterative fib(46) x 200000 | 30.3 | 28.5 | 541 | 29.7 |
+| Recursive fib | 93.7 | 93.8 | 273 | 133 |
+| N-body, `nbody_lua` (N=500000) | 287 | 285 | 2157 | 305 |
+| N-body, `nbody_py` (N=500000) | 360 | 359 | 2225 | 413 |
+| Binary trees (N=16) | 303 | 283 | 743 | 744 |
+| Quicksort (N=10000) | 178 | 155 | 515 | 2260 |
+| Sqrt (N=0 to 9999999) | 113 | 106 | 574 | 67.5 |
+| String.split(), Array.contains() x 50000 | 3.5 | 3.1 | 14.0 | 2.0 |
+| FizzBuzz, 1000000 iterations | 16.3 | 15.9 | 98.1 | 50.5 |
+| Standard library operations x 100000 | 44.2 | 46.7 | 136 | 196 |
+| C FFI call overhead x 10000000 | 193 | 215 | 2512 | 350 |
+
+The Candela column is `candela file.cdl`, the command you run a script with.
+The candela-vm column runs the same program compiled ahead of time with
+`candela build`, the way an application ships it.
+
+Measured on 2026-09-25 at commit 009f1d0, on an Intel Core i9-12900K under Arch
+Linux, with Python 3.14 and LuaJIT 2.1. Both candela binaries are
+profile-guided release builds for x86-64-v3, made the way the release workflow
+makes them. Each program ran 21 times, the languages interleaved, every run
+pinned to one core, and every language printed the same result.
 
 ## Running them
 
@@ -184,6 +214,9 @@ for _ in range(50000):
 print(count)
 ```
 
+The LuaJIT version searches the string with `find` instead of splitting it,
+so it does less work than the other two.
+
 LuaJIT:
 
 ```lua
@@ -350,6 +383,9 @@ for _ in range(100000):
 print(count)
 ```
 
+The LuaJIT version splits on `,` rather than `", "`, so its parts keep a leading
+space and it prints 1300000 where the other two print 1200000.
+
 LuaJIT:
 
 ```lua
@@ -461,7 +497,7 @@ local ffi = require("ffi")
 ffi.cdef[[
     int increment(int x);
 ]]
-local lib = ffi.load("./bench_ffi")
+local lib = ffi.load("./bench_ffi.so")
 
 local x = 0
 for _ = 1, 10000000 do
