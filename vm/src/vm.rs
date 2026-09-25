@@ -26,6 +26,7 @@ use crate::gc::shade_overwritten;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
+use crate::instr::type_code;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
 use crate::rt::EnumType;
@@ -392,6 +393,50 @@ fn str_eq(x: Data, y: Data, string_pool: &StringPool) -> bool {
 #[must_use]
 pub const fn shift_count_in_range(count: i64) -> bool {
     count >= 0 && count < i64::BITS as i64
+}
+
+/// Whether `v` has the type [`type_code`] `code` names.
+fn has_type_code(v: Data, code: i64) -> bool {
+    let id = (code >> type_code::KIND_BITS) as u16;
+    match code & ((1 << type_code::KIND_BITS) - 1) {
+        type_code::INT => v.is_int(),
+        type_code::FLOAT => v.is_float(),
+        type_code::STRING => v.is_string(),
+        type_code::BOOL => v.is_bool(),
+        type_code::NULL => v.is_null(),
+        type_code::LIST => v.is_array() && !v.is_function(),
+        type_code::MAP => v.is_map(),
+        type_code::FUNCTION => v.is_function(),
+        type_code::STRUCT => v.is_struct() && v.struct_type_id() == id,
+        type_code::ENUM => v.is_enum() && v.enum_type_id() == id,
+        _ => false,
+    }
+}
+
+/// The types a list of [`type_code`]s names, as a report writes them.
+#[cold]
+fn type_codes_text(codes: &[Data], structs: &[Struct], enums: &[EnumType]) -> String {
+    let names: Vec<&str> = codes
+        .iter()
+        .map(|code| {
+            let code = code.as_int();
+            let id = (code >> type_code::KIND_BITS) as usize;
+            match code & ((1 << type_code::KIND_BITS) - 1) {
+                type_code::INT => "int",
+                type_code::FLOAT => "float",
+                type_code::STRING => "string",
+                type_code::BOOL => "bool",
+                type_code::NULL => "null",
+                type_code::LIST => "list",
+                type_code::MAP => "map",
+                type_code::FUNCTION => "function",
+                type_code::STRUCT => structs.get(id).map_or("struct", |s| s.name.as_str()),
+                type_code::ENUM => enums.get(id).map_or("enum", |e| e.name.as_str()),
+                _ => "value",
+            }
+        })
+        .collect();
+    names.join("|")
 }
 
 fn obj_eq(
@@ -2495,6 +2540,16 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     regs[dest] = v;
                 } else {
                     error_with_catch!(ErrType::BadDowncast("map", v.type_name()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::AsTypeVal, tgt, dest) => {
+                let codes = &obj_pool[regs[args.pop_unchecked()].as_array()];
+                let v = regs[tgt];
+                if codes.iter().any(|code| has_type_code(v, code.as_int())) {
+                    regs[dest] = v;
+                } else {
+                    let wanted = type_codes_text(codes, structs, enums);
+                    error_with_catch!(ErrType::BadDowncast(&wanted, v.type_name()));
                 }
             }
             Instr::CallLibFunc(LibFunc::StartsWith, source_register, dest_register) => {

@@ -1,6 +1,8 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use super::super::compiler_data::ReturnCheck;
+use super::super::compiler_data::TypeCodes;
 use super::super::expr::Expr;
 use super::super::expr::Span;
 use super::super::registers::get_tgt_ids;
@@ -44,6 +46,7 @@ use crate::data::Data;
 use crate::data::NULL;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
+use crate::instr::type_code;
 use crate::rt::FnValue;
 use crate::rt::InstrSrc;
 use rustc_hash::FxHashSet;
@@ -431,11 +434,13 @@ pub fn handle_user_function(
 }
 
 /// The checked downcast a `return` of an `any` value goes through in a function
-/// declared to return `declared`: the one `as_int`, `as_string` and the rest
-/// call. Only a scalar, a list or a map has one; any other declaration returns
-/// the value unchecked.
-const fn return_downcast(declared: &DataType) -> Option<LibFunc> {
-    match declared {
+/// declared to return `declared`. A scalar, a list or a map has the one
+/// `as_int`, `as_string` and the rest call. A struct, an enum, a function or a
+/// union is checked against a list of type codes, kept in a constant register.
+/// A declaration that takes any value (`any` itself, or a union with `any` in
+/// it) needs no check.
+fn return_check(declared: &DataType, state: &mut State<'_>) -> Option<ReturnCheck> {
+    let builtin = match declared {
         DataType::Int => Some(LibFunc::AsIntVal),
         DataType::Float => Some(LibFunc::AsFloatVal),
         DataType::String => Some(LibFunc::AsStrVal),
@@ -443,7 +448,64 @@ const fn return_downcast(declared: &DataType) -> Option<LibFunc> {
         DataType::Array(_) => Some(LibFunc::AsListVal),
         DataType::Map(_) => Some(LibFunc::AsMapVal),
         _ => None,
+    };
+    if let Some(builtin) = builtin {
+        return Some(ReturnCheck::Builtin(builtin));
     }
+    if !matches!(
+        declared,
+        DataType::Struct(_)
+            | DataType::Enum(_)
+            | DataType::Fn(_)
+            | DataType::FnValue(_)
+            | DataType::Union(_)
+    ) {
+        return None;
+    }
+    let mut codes: Vec<i64> = Vec::new();
+    if !push_type_codes(declared, state, &mut codes) {
+        return None;
+    }
+    let mut held = TypeCodes {
+        codes: [0; 8],
+        len: codes.len() as u8,
+    };
+    if codes.len() > held.codes.len() {
+        return Some(ReturnCheck::TypesIn(state.type_codes_register(&codes)));
+    }
+    held.codes[..codes.len()].copy_from_slice(&codes);
+    Some(ReturnCheck::Types(held))
+}
+
+/// Adds the type codes a value of type `declared` may have to `codes`, and
+/// answers `false` when it may have any type at all.
+fn push_type_codes(declared: &DataType, state: &State<'_>, codes: &mut Vec<i64>) -> bool {
+    let code = match declared {
+        DataType::Int => type_code::INT,
+        DataType::Float => type_code::FLOAT,
+        DataType::String => type_code::STRING,
+        DataType::Bool => type_code::BOOL,
+        DataType::Null => type_code::NULL,
+        DataType::Array(_) => type_code::LIST,
+        DataType::Map(_) => type_code::MAP,
+        DataType::Fn(_) | DataType::FnValue(_) => type_code::FUNCTION,
+        DataType::Struct(id) => {
+            type_code::STRUCT | (i64::from(state.structs[*id as usize].id) << type_code::KIND_BITS)
+        }
+        DataType::Enum(id) => {
+            type_code::ENUM | (i64::from(state.enums[*id as usize].id) << type_code::KIND_BITS)
+        }
+        DataType::Union(members) => {
+            return members
+                .iter()
+                .all(|member| push_type_codes(member, state, codes));
+        }
+        DataType::Unknown => return false,
+    };
+    if !codes.contains(&code) {
+        codes.push(code);
+    }
+    true
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -660,7 +722,7 @@ fn compile_function(
     // Compile the function into instructions using local vars
     let return_downcast = declared_return
         .as_ref()
-        .and_then(|(declared, _)| return_downcast(declared));
+        .and_then(|(declared, _)| return_check(declared, state));
     let parsed = compile_expr(
         fn_code,
         &mut v_temp,

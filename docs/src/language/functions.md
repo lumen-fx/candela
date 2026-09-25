@@ -148,8 +148,9 @@ A generic function declared to return a type parameter the call leaves unbound
 is the exception: `first([1, 2])` has the type the body returns, since the
 declaration names no type until the call does.
 
-A body that returns an `any` value from a function declared `int`, `float`,
-`string`, `bool`, a list or a map checks the value on the way out. A value of
+A body that returns an `any` value from a function declared with a type other
+than `any` checks the value on the way out: a scalar, a list, a map, a struct,
+an enum, a function, or a union, which takes any of its members. A value of
 another type raises `bad_downcast`, which a `catch` can take, the same way
 `as_int` and the other downcasts do.
 

@@ -336,6 +336,27 @@ pub enum LibFunc {
     AsBoolVal = 48,
     AsListVal = 49,
     AsMapVal = 50,
+    /// The checked downcast for a type the ones above do not name: a struct,
+    /// an enum, a function or a union. The argument register holds a list of
+    /// [`type_code`]s, and the value passes when it has any of those types.
+    AsTypeVal = 51,
+}
+
+/// What a value is checked for by [`LibFunc::AsTypeVal`]: a kind, and for a
+/// struct or an enum the type's id above it.
+pub mod type_code {
+    pub const INT: i64 = 1;
+    pub const FLOAT: i64 = 2;
+    pub const STRING: i64 = 3;
+    pub const BOOL: i64 = 4;
+    pub const NULL: i64 = 5;
+    pub const LIST: i64 = 6;
+    pub const MAP: i64 = 7;
+    pub const FUNCTION: i64 = 8;
+    pub const STRUCT: i64 = 9;
+    pub const ENUM: i64 = 10;
+    /// The bits below a type id.
+    pub const KIND_BITS: u32 = 8;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
