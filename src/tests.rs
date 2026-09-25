@@ -13623,3 +13623,54 @@ pub fn a_built_string_finds_the_map_key_with_its_text() {
     ";
     assert_eq!(run_output(src), "true\ntrue\ntrue\ntrue\n1\n2\n1\n");
 }
+
+/// A field that holds a function takes, in an assignment, any function its
+/// struct literal would: an anonymous one, one bound to a variable, or a
+/// declared one by name (#190).
+#[test]
+pub fn assigning_a_function_to_a_function_field_works_like_the_literal() {
+    let src = "
+        struct Button {
+            label: string,
+            on_press: fn(int) -> int,
+        }
+        fn inc(x: int) -> int { return x + 1; }
+        fn main() {
+            let b = Button { label: \"ok\", on_press: fn(x) { return x * 2; } };
+            print(b.on_press(21));
+            b.on_press = fn(x) { return x + 1; };
+            print(b.on_press(21));
+            let f = fn(x) { return x - 1; };
+            b.on_press = f;
+            print(b.on_press(21));
+            b.on_press = inc;
+            print(b.on_press(21));
+        }
+    ";
+    assert_eq!(run_output(src), "42\n22\n20\n22\n");
+    let wrong = "
+        struct Button { on_press: fn(int) -> int }
+        fn main() {
+            let b = Button { on_press: fn(x) { return x * 2; } };
+            b.on_press = 5;
+        }
+    ";
+    let d = compile_diag(wrong, "field.cdl").unwrap_err();
+    assert_eq!(
+        d.message,
+        "Field on_press in struct Button expects type fn(int) -> int, but this expression is of type int"
+    );
+    // The literal refuses the same value: it used to take it and crash on
+    // the call.
+    let literal = "
+        struct Button { on_press: fn(int) -> int }
+        fn main() {
+            let b = Button { on_press: 5 };
+            print(b.on_press(2));
+        }
+    ";
+    assert_eq!(
+        compile_diag(literal, "field.cdl").unwrap_err().message,
+        d.message
+    );
+}
