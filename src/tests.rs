@@ -13674,3 +13674,50 @@ pub fn assigning_a_function_to_a_function_field_works_like_the_literal() {
         d.message
     );
 }
+
+/// An `any` value leaving a function declared to return a struct, an enum, a
+/// function or a union is checked on the way out, like a scalar one: a value
+/// of the declared type passes, anything else raises the catchable
+/// `bad_downcast` (#191).
+#[test]
+pub fn an_any_returned_as_a_struct_enum_function_or_union_is_checked() {
+    let src = "
+        struct P { x: int }
+        struct Q { x: int }
+        enum E { A(int), B }
+        struct Slot { v: any }
+        fn to_p(s: Slot) -> P { return s.v; }
+        fn to_e(s: Slot) -> E { return s.v; }
+        fn to_f(s: Slot) -> fn(int) -> int { return s.v; }
+        fn to_u(s: Slot) -> int|string { return s.v; }
+        fn main() {
+            print(to_p(Slot { v: P { x: 3 } }).x);
+            match to_e(Slot { v: E::A(4) }) {
+                E::A(n) => { print(n); }
+                E::B => { print(0); }
+            }
+            print(to_u(Slot { v: \"six\" }));
+            print(to_u(Slot { v: 7 }));
+            try { to_p(Slot { v: Q { x: 1 } }); } catch e { print(e); }
+            try { to_p(Slot { v: 5 }); } catch e { print(e); }
+            try { to_e(Slot { v: \"x\" }); } catch e { print(e); }
+            try { to_f(Slot { v: 7 }); } catch e { print(e); }
+            try { to_u(Slot { v: 1.5 }); } catch e { print(e); }
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "3\n4\nsix\n7\n".to_owned() + &"bad_downcast\n".repeat(5)
+    );
+    let uncaught = "
+        enum E { A(int), B }
+        struct Slot { v: any }
+        fn to_u(s: Slot) -> E|int { return s.v; }
+        fn main() { to_u(Slot { v: \"x\" }); }
+    ";
+    let [debug, release] = [false, true]
+        .map(|optimize| run_diag_profile(uncaught, "downcast.cdl", optimize).unwrap_err());
+    assert_eq!(debug.code, "bad_downcast");
+    assert_eq!(debug.message, "Cannot read this string value as E|int");
+    assert_eq!(debug, release);
+}

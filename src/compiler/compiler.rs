@@ -48,6 +48,7 @@ use compiler_data::Function;
 use compiler_data::HostFnSig;
 use compiler_data::IndirectRegisters;
 use compiler_data::Pools;
+use compiler_data::ReturnCheck;
 use compiler_data::State;
 use compiler_data::Struct;
 use compiler_data::Variable;
@@ -4042,12 +4043,25 @@ fn compile_return(
     // is checked here, the one place it can be: the call site reads the
     // declared type and compiles against it. The wrong value raises the
     // catchable `bad_downcast`.
-    if let Some(downcast) = ctx.return_downcast
+    if let Some(check) = ctx.return_downcast
         && matches!(x.infer_type(v, ctx, state), DataType::Unknown)
     {
         state.free_reg(id, v);
         let checked_id = state.alloc_reg();
-        output.push(Instr::CallLibFunc(downcast, id, checked_id));
+        match check {
+            ReturnCheck::Builtin(downcast) => {
+                output.push(Instr::CallLibFunc(downcast, id, checked_id));
+            }
+            ReturnCheck::Types(codes) => {
+                let codes = state.type_codes_register(codes.as_slice());
+                output.push(Instr::StoreFuncArg(codes));
+                output.push(Instr::CallLibFunc(LibFunc::AsTypeVal, id, checked_id));
+            }
+            ReturnCheck::TypesIn(codes) => {
+                output.push(Instr::StoreFuncArg(codes));
+                output.push(Instr::CallLibFunc(LibFunc::AsTypeVal, id, checked_id));
+            }
+        }
         id = checked_id;
     }
     if ctx.is_compiling_recursive {

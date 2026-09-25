@@ -342,7 +342,7 @@ pub enum ErrType<'a> {
     JsonParse(&'static str),
     /// A downcast of an `any` value found a different runtime type than the
     /// requested one. Carries (requested, found) type names.
-    BadDowncast(&'static str, &'static str),
+    BadDowncast(&'a str, &'static str),
     /// A registered host function returned an error. Carries the name the
     /// script calls it by and the message the host reported.
     HostFn(&'a str, &'a str),

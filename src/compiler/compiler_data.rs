@@ -232,11 +232,41 @@ pub struct Ctx {
     /// Instruction offset that's only used when compiling a function
     pub offset: u16,
     /// The downcast a `return` of an `any` value goes through inside a
-    /// function declared to return a scalar, a list or a map. The declaration
-    /// types the call site, so a dynamic value leaving the body is checked on
-    /// the way out; a value of a known type was already checked at compile
-    /// time and pays nothing.
-    pub return_downcast: Option<LibFunc>,
+    /// function declared to return a concrete type. The declaration types the
+    /// call site, so a dynamic value leaving the body is checked on the way
+    /// out; a value of a known type was already checked at compile time and
+    /// pays nothing.
+    pub return_downcast: Option<ReturnCheck>,
+}
+
+/// How a `return` checks an `any` value against the declared return type.
+#[derive(Clone, Copy)]
+pub enum ReturnCheck {
+    /// The downcast `as_int`, `as_string` and the rest call, for a scalar, a
+    /// list or a map.
+    Builtin(LibFunc),
+    /// `AsTypeVal` against these type codes, for a struct, an enum, a
+    /// function or a union. The list the instruction reads is made by the
+    /// first `return` that needs it, so a function whose returns are all
+    /// typed adds nothing to the program.
+    Types(TypeCodes),
+    /// `AsTypeVal` against the list of type codes in this register, for a
+    /// union with more members than [`TypeCodes`] holds.
+    TypesIn(u16),
+}
+
+/// Up to eight type codes, held by value so a [`Ctx`] can carry them.
+#[derive(Clone, Copy)]
+pub struct TypeCodes {
+    pub codes: [i64; 8],
+    pub len: u8,
+}
+
+impl TypeCodes {
+    #[must_use]
+    pub fn as_slice(&self) -> &[i64] {
+        &self.codes[..self.len as usize]
+    }
 }
 
 impl Ctx {
@@ -523,6 +553,19 @@ impl State<'_> {
     }
     /// The register a constant lives in, allocated on first use and shared by
     /// every use of the same value.
+    /// The constant register holding a list of these type codes, the one an
+    /// earlier check made when there is one.
+    pub fn type_codes_register(&mut self, codes: &[i64]) -> u16 {
+        let list: Vec<Data> = codes.iter().map(|&code| Data::int(code)).collect();
+        if let Some(&reg) = self.const_registers.iter().find_map(|(data, reg)| {
+            (data.is_array() && self.pools.objs[data.as_array()] == list).then_some(reg)
+        }) {
+            return reg;
+        }
+        self.pools.objs.push(list);
+        let list = Data::array((self.pools.objs.len() - 1) as u32);
+        self.const_register(list)
+    }
     pub fn const_register(&mut self, data: Data) -> u16 {
         if let Some(&id) = self.const_registers.get(&data) {
             return id;
