@@ -142,6 +142,20 @@ pub struct Function {
     pub entry_register: Option<u16>,
 }
 
+impl Function {
+    /// The parameter types a function that annotates every parameter declares,
+    /// which is what a call that cannot be seen passes it. `None` for a
+    /// function with a bare parameter or type parameters, whose types only a
+    /// call site settles.
+    #[must_use]
+    pub fn declared_params(&self) -> Option<Box<[DataType]>> {
+        if self.generics.is_some() {
+            return None;
+        }
+        self.args.iter().map(|(_, ty)| ty.clone()).collect()
+    }
+}
+
 /// The generic side of a function: what its annotations mean once the type
 /// parameters are known.
 ///

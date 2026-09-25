@@ -154,6 +154,12 @@ an enum, a function, or a union, which takes any of its members. A value of
 another type raises `bad_downcast`, which a `catch` can take, the same way
 `as_int` and the other downcasts do.
 
+A function stored in an `any` comes back out as a function type only when it
+annotates every parameter: those annotations are the types it is compiled at,
+since nothing else says what a call through the `any` passes. An anonymous
+function, a function with a bare parameter and a generic function raise
+`bad_downcast` there instead.
+
 ```rust
 fn area(w: int, h: int) -> int {
     return w * h;
