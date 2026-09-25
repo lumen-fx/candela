@@ -41,8 +41,8 @@ The rest of the tree:
 
 - `libs/std/` holds the standard library, written in candela. `libs/std/tests/`
   holds one `.cdl` test program per module.
-- `libs/std_src/` holds the C sources behind the `math`, `random` and `time`
-  modules.
+- `libs/std_src/` holds the C sources behind the `hash`, `math`, `random` and
+  `time` modules.
 - `examples/` holds demo and benchmark programs, most of them alongside Python
   and Lua versions of the same thing. They double as the training corpus for
   profile-guided builds. `examples/package/` is a project rather than a loose

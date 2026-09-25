@@ -12,7 +12,7 @@ import "std/time" as time;
 ```
 
 The module binds a small dynamic library that wraps the platform time functions,
-so it is one of the three std modules that need that library present at run time.
+so it is one of the four std modules that need that library present at run time.
 A `.cdlb` built from a program that imports `std/time` records the binding by
 name and re-opens it when the artifact runs; see
 [artifacts](../reference/artifacts.md).

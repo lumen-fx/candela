@@ -1,0 +1,24 @@
+/// Checks for the `hash` module against the published test vectors. Needs the
+/// module's native library built under `libs/std_src/hash`. Prints "hash ok"
+/// on success; a failed check aborts the run with a message.
+import "std/hash" as hash;
+import "std/assert" as assert;
+
+fn main() {
+    assert::assert_eq(hash::md5(""), "d41d8cd98f00b204e9800998ecf8427e");
+    assert::assert_eq(hash::md5("abc"), "900150983cd24fb0d6963f7d28e17f72");
+    assert::assert_eq(hash::sha1("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    assert::assert_eq(
+        hash::sha256("abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    let two_blocks = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    assert::assert_eq(hash::sha1(two_blocks), "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+    assert::assert_eq(
+        hash::sha256(two_blocks),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
+    // A Minecraft offline-mode name, the md5 a version 3 uuid is built from.
+    assert::assert_eq(hash::md5("OfflinePlayer:Notch"), "b50ad385829da141a2167e7d7539ba7f");
+    print("hash ok");
+}
