@@ -2546,6 +2546,16 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let codes = &obj_pool[regs[args.pop_unchecked()].as_array()];
                 let v = regs[tgt];
                 if codes.iter().any(|code| has_type_code(v, code.as_int())) {
+                    // A function value whose first slot says nowhere was never
+                    // compiled for a call through a value: it reached the `any`
+                    // with a bare parameter or a type parameter, and nothing
+                    // said what a call would pass it.
+                    if v.is_function() && !obj_pool[v.as_array()][0].is_int() {
+                        error_with_catch!(ErrType::BadDowncast(
+                            "function with annotated parameters",
+                            "function"
+                        ));
+                    }
                     regs[dest] = v;
                 } else {
                     let wanted = type_codes_text(codes, structs, enums);

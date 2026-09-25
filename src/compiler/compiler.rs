@@ -453,7 +453,7 @@ pub(crate) fn compile_fn_value(
     if let DataType::Fn(fn_id) = expr.infer_type(v, ctx, state)
         && state.fns[fn_id as usize].captures.is_empty()
     {
-        return compile_fn_entry_value(fn_id as usize, state, output, tgt_id);
+        return compile_fn_entry_value(fn_id as usize, v, ctx, state, output, tgt_id);
     }
     expr.compile(v, ctx, state, output, tgt_id, false, true)
         .unwrap_id()
@@ -461,12 +461,29 @@ pub(crate) fn compile_fn_value(
 
 /// Builds the value of a function that captures nothing: one slot saying where
 /// the body starts, which is what a call through the value jumps to.
+///
+/// A function that annotates every parameter is compiled at those types here,
+/// unless a call through a value already gave it a body. The value can go where
+/// the compiler stops following it, into an `any`, and come back out as a
+/// `fn(...)` type, so no call site would compile it; the annotations say what
+/// such a call passes.
 pub(crate) fn compile_fn_entry_value(
     fn_id: usize,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
     tgt_id: Option<u16>,
 ) -> u16 {
+    if let Some(params) = state.fns[fn_id].declared_params()
+        && !state.fns[fn_id]
+            .impls
+            .iter()
+            .any(|fn_impl| fn_impl.indirect)
+    {
+        let span = state.fns[fn_id].name_span;
+        ensure_indirect_impl(fn_id, &params, span, output, v, ctx, state);
+    }
     let entry_id = state.fn_entry_register(fn_id);
     let value_id = state.alloc_reg_tgt(tgt_id);
     output.push(Instr::EmptyFnValue(value_id));
@@ -4268,6 +4285,20 @@ impl Expr {
                         let dest = state.alloc_reg_tgt(tgt_id);
                         output.push(Instr::LoadCell(cell, dest));
                         Some(dest)
+                    } else if let DataType::Fn(fn_id) = var.var_type
+                        && state.fns[fn_id as usize].captures.is_empty()
+                    {
+                        // A parameter the call settled on one function that
+                        // captures nothing is passed nothing, so reading it as
+                        // a value builds that function's value.
+                        Some(compile_fn_entry_value(
+                            fn_id as usize,
+                            v,
+                            ctx,
+                            state,
+                            output,
+                            tgt_id,
+                        ))
                     } else {
                         Some(var.register_id)
                     }
@@ -4276,7 +4307,7 @@ impl Expr {
                     // wherever it is read rather than called, so a `let`, a
                     // return, a collection element and an argument all hand on
                     // a value a later call can dispatch on.
-                    Some(compile_fn_entry_value(fn_id, state, output, tgt_id))
+                    Some(compile_fn_entry_value(fn_id, v, ctx, state, output, tgt_id))
                 } else if let Some((enum_id, variant_idx)) =
                     variant_constructor(std::slice::from_ref(name), &[], *span, v, ctx, state)
                 {
@@ -4676,18 +4707,12 @@ impl Expr {
                 let fn_id = fn_id as usize;
                 let captures = state.fns[fn_id].captures.clone();
                 if captures.is_empty() {
-                    // A closure that reads nothing around it is the id of a
-                    // function and nothing else, which is what it was before
-                    // capture existed: no environment is built and no register
-                    // is read at the call.
-                    if let Some(&id) = state.const_registers.get(&NULL) {
-                        Some(id)
-                    } else {
-                        let id = state.registers.len() as u16;
-                        state.const_registers.insert(NULL, id);
-                        state.registers.push(NULL);
-                        Some(id)
-                    }
+                    // A closure that reads nothing around it carries no
+                    // environment, so its value is where its body starts and
+                    // nothing else. A call that names it never reads the value,
+                    // but a position the compiler does not follow, such as an
+                    // `any`, holds it.
+                    Some(compile_fn_entry_value(fn_id, v, ctx, state, output, tgt_id))
                 } else {
                     // The value of a closure that captures is where its body
                     // starts followed by its environment: the cells of the

@@ -820,6 +820,21 @@ pub fn ensure_indirect_impl(
     }) {
         return;
     }
+    // A function that annotates every parameter was given a body at those
+    // types when it became a value, and a call whose arguments fit them
+    // reaches that body.
+    if let Some(declared) = state.fns[fn_id].declared_params()
+        && declared.len() == arg_types.len()
+        && state.fns[fn_id].impls.iter().any(|fn_impl| {
+            fn_impl.indirect && arg_types_specialize_equal(&fn_impl.arg_types, &declared)
+        })
+        && declared
+            .iter()
+            .zip(arg_types)
+            .all(|(declared, passed)| param_type_matches(declared, passed, state.generics))
+    {
+        return;
+    }
     // A value carries one body, so the function behind it is compiled once. A
     // second set of argument types would need a second body and the value has
     // nowhere to say which, so it is reported here rather than running the

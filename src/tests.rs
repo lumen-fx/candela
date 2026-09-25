@@ -13721,3 +13721,60 @@ pub fn an_any_returned_as_a_struct_enum_function_or_union_is_checked() {
     assert_eq!(debug.message, "Cannot read this string value as E|int");
     assert_eq!(debug, release);
 }
+
+/// A function that reaches an `any` and comes back out as a `fn(...)` type is
+/// called, not jumped past: one that annotates every parameter has a body at
+/// those types, and one with a bare parameter or a type parameter, which
+/// nothing says how to compile, raises `bad_downcast` on the way out of the
+/// `any` rather than running whatever its first slot pointed at (#194).
+#[test]
+pub fn a_function_through_an_any_is_called() {
+    let src = "
+        struct Slot { v: any }
+        fn double(x: int) -> int { return x * 2; }
+        fn fact(n: int) -> int { if n <= 1 { return 1; } return n * fact(n - 1); }
+        fn show(x: any) { print(x); }
+        fn to_any(x: any) -> any { return x; }
+        fn get(s: Slot) -> fn(int) -> int { return s.v; }
+        fn back(a: any) -> fn(any) { return a; }
+        fn main() {
+            let f = get(Slot { v: double });
+            print(f(4));
+            print(get(Slot { v: fact })(5));
+            let g = back(to_any(show));
+            g(\"hi\");
+            let h = show;
+            h(3);
+            print(Slot { v: double });
+        }
+    ";
+    assert_eq!(run_output(src), "8\n120\nhi\n3\nSlot {v:<fn>}\n");
+
+    let unannotated = "
+        fn id<T>(x: T) -> T { return x; }
+        fn twice(x) { return x * 2; }
+        struct Slot { v: any }
+        fn get(s: Slot) -> fn(int) -> int { return s.v; }
+        fn main() {
+            let k = 10;
+            let add = fn(x) { return x + k; };
+            try { get(Slot { v: twice }); } catch e { print(e); }
+            try { get(Slot { v: id }); } catch e { print(e); }
+            try { get(Slot { v: add }); } catch e { print(e); }
+            try { get(Slot { v: fn(x) { return x; } }); } catch e { print(e); }
+        }
+    ";
+    assert_eq!(run_output(unannotated), "bad_downcast\n".repeat(4));
+    let uncaught = "
+        fn twice(x) { return x * 2; }
+        struct Slot { v: any }
+        fn get(s: Slot) -> fn(int) -> int { return s.v; }
+        fn main() { get(Slot { v: twice })(1); }
+    ";
+    let d = run_diag(uncaught, "through_any.cdl").unwrap_err();
+    assert_eq!(d.code, "bad_downcast");
+    assert_eq!(
+        d.message,
+        "Cannot read this function value as function with annotated parameters"
+    );
+}
