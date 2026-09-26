@@ -29,6 +29,13 @@ use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
 use crate::instr::type_code;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::native::Entry;
+use crate::native::NativeCode;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::native::NativeCtx;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::native::abi;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
 use crate::rt::EnumType;
@@ -561,20 +568,23 @@ fn unwind_to_catch(
 /// calls deep. Answers `None` when the call can go ahead, or the instruction a
 /// catch resumes at.
 ///
-/// The stack never grows past the limit, so a full stack at the limit is the
-/// only way a call is refused, and the calls themselves test one thing: whether
-/// the stack is full.
+/// The calls native code has standing below this run count towards the
+/// depth without being on the stack, so the stack stops short of the limit by
+/// that many, and the calls themselves test one thing: whether the stack is
+/// full.
 #[cold]
 #[inline(never)]
-fn frame_room(m: &mut Machine<'_>, instructions: &[Instr], i: usize, regs: Regs) -> Option<usize> {
+fn frame_room(m: &mut Machine<'_>, i: usize, regs: Regs) -> Option<usize> {
     let depth = m.call_frames.len();
-    if depth >= CALL_DEPTH_LIMIT {
-        let instr = unsafe { *instructions.get_unchecked(i) };
+    let room = CALL_DEPTH_LIMIT - m.native_below;
+    if depth >= room {
+        let instr = m.instr_at(i);
         return Some(catch_error(
             ErrType::CallDepthExceeded(call_site_name(m.err_ctx, instr), CALL_DEPTH_LIMIT),
             instr,
             &mut m.failure,
             &mut m.error_handles,
+            m.handles_floor,
             &mut m.call_frames,
             &mut m.args,
             m.callsite_registers,
@@ -587,8 +597,7 @@ fn frame_room(m: &mut Machine<'_>, instructions: &[Instr], i: usize, regs: Regs)
             m.gc,
         ));
     }
-    m.call_frames
-        .reserve_exact(depth.max(64).min(CALL_DEPTH_LIMIT - depth));
+    m.call_frames.reserve_exact(depth.max(64).min(room - depth));
     None
 }
 
@@ -630,7 +639,8 @@ fn grow_recursion_stack(stack: &mut Vec<Data>, count: usize) {
 
 /// Hands a run-time error to the innermost `try` that is still open. When none
 /// is, it records the error in `failure` and answers [`FAILED`], which ends the
-/// run.
+/// run. A `try` below `floor` belongs to a run further out, which native code
+/// separates from this one; the error travels there as a failure of this run.
 ///
 /// A caught error unwinds the calls the `try` wrapped, puts the error's name in
 /// the catch's register, and answers the instruction the catch starts at. The
@@ -646,21 +656,22 @@ fn catch_error(
     instr: Instr,
     failure: &mut Option<RuntimeError>,
     error_handles: &mut Vec<ErrorCatch>,
+    floor: usize,
     call_frames: &mut Vec<CallFrame>,
     args: &mut Vec<u16>,
     callsite_registers: &[Vec<u16>],
     recursion_stack: &mut RegisterFile,
-    mut regs: Regs,
+    regs: Regs,
     r: &RegisterFile,
     obj_pool: &mut ObjectPool,
     map_pool: &mut MapPool,
     str_pool: &mut StringPool,
     gc: &mut GcState,
 ) -> usize {
-    let Some(err_handle) = error_handles.pop() else {
+    if error_handles.len() <= floor {
         *failure = Some(RuntimeError::new(instr, err));
         return FAILED;
-    };
+    }
     let caught = Data::string(
         err.kind(),
         obj_pool,
@@ -670,6 +681,60 @@ fn catch_error(
         recursion_stack,
         gc,
     );
+    resume_at_catch(
+        caught,
+        error_handles,
+        call_frames,
+        args,
+        callsite_registers,
+        recursion_stack,
+        regs,
+    )
+}
+
+/// Hands an error a run further in already recorded to the innermost `try`
+/// of this run that is still open, the way [`catch_error`] hands one raised
+/// here. When there is none, the error stays this run's failure.
+#[cold]
+#[inline(never)]
+#[cfg(not(target_arch = "wasm32"))]
+fn catch_failure(m: &mut Machine<'_>, error: RuntimeError) -> usize {
+    if m.error_handles.len() <= m.handles_floor {
+        m.failure = Some(error);
+        return FAILED;
+    }
+    let caught = Data::string(
+        error.code.as_str(),
+        m.obj_pool,
+        m.map_pool,
+        m.str_pool,
+        m.r,
+        &m.recursion_stack,
+        m.gc,
+    );
+    resume_at_catch(
+        caught,
+        &mut m.error_handles,
+        &mut m.call_frames,
+        &mut m.args,
+        m.callsite_registers,
+        &mut m.recursion_stack,
+        m.regs,
+    )
+}
+
+/// Unwinds to the innermost open `try`, puts `caught` in its register, and
+/// answers the instruction its catch starts at.
+fn resume_at_catch(
+    caught: Data,
+    error_handles: &mut Vec<ErrorCatch>,
+    call_frames: &mut Vec<CallFrame>,
+    args: &mut Vec<u16>,
+    callsite_registers: &[Vec<u16>],
+    recursion_stack: &mut RegisterFile,
+    mut regs: Regs,
+) -> usize {
+    let err_handle = error_handles.pop_unchecked();
     unwind_to_catch(
         &err_handle,
         call_frames,
@@ -907,6 +972,25 @@ const HALTED: usize = usize::MAX;
 /// has stopped the program. It sits just below [`HALTED`], so one comparison
 /// tells either from an instruction index.
 const FAILED: usize = usize::MAX - 1;
+/// What [`run_cold`] answers when a run native code started on the
+/// interpreter has returned to it.
+const RETURNED: usize = usize::MAX - 2;
+/// What a run answers when a panic in a host function has to unwind past
+/// native code. The panic is held in [`Machine::panic`] and resumed once no
+/// native frame stands between it and the host.
+const PANICKED: usize = usize::MAX - 3;
+
+/// Frames of native code the stack keeps room for, at most: this many bytes
+/// divided by the largest frame one of its functions takes. A call past them
+/// carries on in the interpreter, whose frames live on the heap, so a deep
+/// recursion never runs the thread out of stack.
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_STACK_BYTES: usize = 256 << 10;
+
+/// The stack one trip from native code back into the interpreter takes, in
+/// bytes: the helper and the interpreter's own frame.
+#[cfg(not(target_arch = "wasm32"))]
+const REENTRY_BYTES: usize = 4 << 10;
 
 /// Everything one run of [`execute`] works with besides the instruction index
 /// and the registers.
@@ -920,6 +1004,8 @@ struct Machine<'a> {
     /// The register file, read by the collector to find what is still live.
     /// Instructions reach the registers through [`Regs`].
     r: &'a RegisterFile,
+    regs: Regs,
+    instructions: &'a [Instr],
     obj_pool: &'a mut ObjectPool,
     map_pool: &'a mut MapPool,
     str_pool: &'a mut StringPool,
@@ -941,6 +1027,36 @@ struct Machine<'a> {
     error_handles: Vec<ErrorCatch>,
     /// The error that stopped the run, once one no `try` caught has.
     failure: Option<RuntimeError>,
+    /// The program's machine code, when it carries some this machine runs.
+    native: Option<&'a NativeCode>,
+    /// What native code shares with this run.
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx: NativeCtx,
+    /// Calls native code has standing below the interpreter that are not on
+    /// `call_frames`. They count towards the call depth all the same.
+    native_below: usize,
+    /// How many more native frames the stack keeps room for.
+    #[cfg(not(target_arch = "wasm32"))]
+    native_frames_left: usize,
+    /// The `try`s below this index belong to a run further out than the one
+    /// executing, which native code stands between.
+    handles_floor: usize,
+    /// A panic on its way out past native code.
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl Machine<'_> {
+    /// The instruction the program was compiled with at `i`, for an error to
+    /// name: a call the native code load rewrote reads back as the call it
+    /// was.
+    #[inline(always)]
+    fn instr_at(&self, i: usize) -> Instr {
+        let current = unsafe { *self.instructions.get_unchecked(i) };
+        match self.native {
+            Some(native) => native.original(i, current),
+            None => current,
+        }
+    }
 }
 
 /// Runs `instructions` from `start` until the program halts.
@@ -977,19 +1093,24 @@ pub fn execute(
     // Instruction index to begin execution at. `0` runs `main`; the embedding
     // `Program::call` passes the entry index of an appended call trampoline.
     start: usize,
+    // The machine code the program was loaded with, if any.
+    native: Option<&NativeCode>,
 ) -> Result<(), RuntimeError> {
-    // The instruction running, as a pointer: the loop steps and jumps it
-    // directly, and turns it back into an index only where one is recorded.
-    let base = instructions.as_ptr();
-    let mut ip = unsafe { base.add(start) };
     // Every register access goes through the file's base pointer, which stays
     // put for the whole run: nothing resizes the register file while a program
     // runs. Reading it through `r` instead would reload the pointer from the
     // file on every access.
-    let mut regs = Regs::new(r);
+    let regs = Regs::new(r);
     let recursion_capacity = allocated_call_depth * r.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let dylibs = native.map_or(std::ptr::null(), |n| n.dylibs.as_ptr());
+    #[cfg(not(target_arch = "wasm32"))]
+    let native_frames_left =
+        native.map_or(0, |n| NATIVE_STACK_BYTES / (n.frame_bytes as usize).max(16));
     let mut m = Machine {
         r,
+        regs,
+        instructions,
         obj_pool,
         map_pool,
         str_pool,
@@ -1010,7 +1131,71 @@ pub fn execute(
         keep_alive: Vec::new(),
         error_handles: Vec::new(),
         failure: None,
+        native,
+        #[cfg(not(target_arch = "wasm32"))]
+        ctx: NativeCtx {
+            regs: regs.0,
+            objs: std::ptr::null(),
+            status: abi::STATUS_OK,
+            err_at: 0,
+            err_a: 0,
+            err_b: 0,
+            marking: 0,
+            ret: [0; 2],
+            ceiling: 0,
+            segment_base: 0,
+            dylibs,
+            machine: std::ptr::null_mut(),
+            shade: native_shade,
+            print: native_print,
+            call_vm: native_call_vm,
+            push_roots: native_push_roots,
+            pop_roots: native_pop_roots,
+        },
+        native_below: 0,
+        #[cfg(not(target_arch = "wasm32"))]
+        native_frames_left,
+        handles_floor: 0,
+        panic: None,
     };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let stop = match native.and_then(|n| n.main) {
+        Some(main) if start == 0 => run_native_main(&mut m, main),
+        _ => run(&mut m, start),
+    };
+    // A browser has no memory it lets code run from, so nothing native ever
+    // loads there.
+    #[cfg(target_arch = "wasm32")]
+    let stop = run(&mut m, start);
+    if stop == PANICKED
+        && let Some(payload) = m.panic.take()
+    {
+        std::panic::resume_unwind(payload);
+    }
+    m.failure.map_or(Ok(()), Err)
+}
+
+/// [`run`] out of line, for a run native code starts. [`execute`] has the
+/// loop inlined, where the machine is a local it keeps on its own stack.
+#[inline(never)]
+#[cfg(not(target_arch = "wasm32"))]
+fn run_nested(m: &mut Machine<'_>, start: usize) -> usize {
+    run(m, start)
+}
+
+/// Runs the instructions from `start` until the program halts or fails, or,
+/// in a run native code started, until the call it made returns. Answers
+/// which: [`HALTED`], [`FAILED`], [`RETURNED`] or [`PANICKED`].
+#[allow(unused_unsafe)]
+#[inline(always)]
+fn run(m: &mut Machine<'_>, start: usize) -> usize {
+    let instructions = m.instructions;
+    // The instruction running, as a pointer: the loop steps and jumps it
+    // directly, and turns it back into an index only where one is recorded.
+    let base = instructions.as_ptr();
+    let mut ip = unsafe { base.add(start) };
+    let mut regs = m.regs;
 
     macro_rules! error_with_catch {
         ($err:expr) => {
@@ -1019,6 +1204,7 @@ pub fn execute(
                 unsafe { *ip },
                 &mut m.failure,
                 &mut m.error_handles,
+                m.handles_floor,
                 &mut m.call_frames,
                 &mut m.args,
                 m.callsite_registers,
@@ -1031,7 +1217,7 @@ pub fn execute(
                 m.gc,
             );
             if resume == FAILED {
-                break;
+                return FAILED;
             }
             ip = unsafe { base.add(resume) };
             continue;
@@ -1057,10 +1243,10 @@ pub fn execute(
             Instr::SetBool(b, dest) => regs[dest] = b.into(),
             Instr::CallFunc(new_loc, return_id) => {
                 if m.call_frames.len() == m.call_frames.capacity()
-                    && let Some(catch) = frame_room(&mut m, instructions, index_of(base, ip), regs)
+                    && let Some(catch) = frame_room(m, index_of(base, ip), regs)
                 {
                     if catch == FAILED {
-                        break;
+                        return FAILED;
                     }
                     ip = unsafe { base.add(catch) };
                     continue;
@@ -1101,10 +1287,10 @@ pub fn execute(
             }
             Instr::SaveFrame(relative_func_loc, return_register, callsite_id) => {
                 if m.call_frames.len() == m.call_frames.capacity()
-                    && let Some(catch) = frame_room(&mut m, instructions, index_of(base, ip), regs)
+                    && let Some(catch) = frame_room(m, index_of(base, ip), regs)
                 {
                     if catch == FAILED {
-                        break;
+                        return FAILED;
                     }
                     ip = unsafe { base.add(catch) };
                     continue;
@@ -1468,18 +1654,456 @@ pub fn execute(
             | Instr::MapRemove(..)
             | Instr::CloneMap(..)
             | Instr::NewCell(..)
+            | Instr::NativeExit
             | Instr::Halt(..) => {
-                let next = run_cold(&mut m, instructions, index_of(base, ip), regs);
-                if next >= FAILED {
-                    break;
+                let next = run_cold(m, instructions, index_of(base, ip), regs);
+                if next >= PANICKED {
+                    return next;
                 }
                 ip = unsafe { base.add(next) };
                 continue;
             }
+            // A call into machine code, out of line: what it costs next to the
+            // work of the call is small, and it keeps the loop small.
+            #[cfg(not(target_arch = "wasm32"))]
+            Instr::CallNative(function, ret) => {
+                let next = call_native(m, index_of(base, ip), function, ret, false);
+                if next >= PANICKED {
+                    return next;
+                }
+                ip = unsafe { base.add(next) };
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Instr::CallNativeRec(function, ret) => {
+                let next = call_native(m, index_of(base, ip), function, ret, true);
+                if next >= PANICKED {
+                    return next;
+                }
+                ip = unsafe { base.add(next) };
+                continue;
+            }
+            #[cfg(target_arch = "wasm32")]
+            Instr::CallNative(..) | Instr::CallNativeRec(..) => unsafe { unreachable_unchecked() },
         }
         ip = unsafe { ip.add(1) };
     }
-    m.failure.map_or(Ok(()), Err)
+}
+
+/// Runs a call the load pointed at machine code: `function` of the loaded
+/// code, from the call at instruction `i`, its result bound for `ret`.
+/// `recursive` for a call whose `SaveFrame` has pushed its frame already.
+/// Answers the instruction to carry on at, or why the run stops.
+///
+/// The call runs on the interpreter instead once the stack has no room left
+/// for native frames, which is what keeps a deep recursion from running the
+/// thread out of stack: the interpreter's frames are on the heap.
+#[inline(never)]
+#[cfg(not(target_arch = "wasm32"))]
+fn call_native(m: &mut Machine<'_>, i: usize, function: u16, ret: u16, recursive: bool) -> usize {
+    let native = unsafe { m.native.unwrap_unchecked() };
+    let f = unsafe { native.functions.get_unchecked(function as usize) };
+    // The calls standing, counting the callee's when its frame is pushed.
+    let standing = m.call_frames.len() + m.native_below;
+    if m.native_frames_left == 0 {
+        if !recursive {
+            if m.call_frames.len() == m.call_frames.capacity()
+                && let Some(catch) = frame_room(m, i, m.regs)
+            {
+                return catch;
+            }
+            m.call_frames.push_unchecked(CallFrame {
+                return_addr: i as u16,
+                return_reg: ret,
+                saved_callsite: None,
+            });
+        }
+        return f.loc as usize;
+    }
+    if !recursive && standing >= CALL_DEPTH_LIMIT {
+        m.ctx.status = abi::STATUS_OK;
+        return native_failed(m, i, abi::STATUS_DEPTH);
+    }
+    let depth = if recursive { standing } else { standing + 1 };
+    let below = depth - 1;
+    let ceiling = CALL_DEPTH_LIMIT.min(below + m.native_frames_left);
+    let status = enter_native(m, f.entry, below, ceiling, (ceiling - depth) as i64);
+    if status != abi::STATUS_OK {
+        return native_failed(m, i, status);
+    }
+    let value = Data::from_words(m.ctx.ret[0], m.ctx.ret[1] as i64);
+    let mut regs = m.regs;
+    if recursive {
+        // What `RecursiveReturn` or `VoidReturn` does at the end of the body.
+        let call_frame = m.call_frames.pop_unchecked();
+        if let Some(callsite_id) = call_frame.saved_callsite {
+            restore_saved_registers(
+                callsite_id,
+                m.callsite_registers,
+                &mut m.recursion_stack,
+                regs,
+            );
+        }
+        if f.returns {
+            regs[call_frame.return_reg] = value;
+        }
+        return call_frame.return_addr as usize + 1;
+    }
+    if f.returns {
+        regs[ret] = value;
+    }
+    i + 1
+}
+
+/// Runs `main` as machine code.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_native_main(m: &mut Machine<'_>, main: usize) -> usize {
+    let native = unsafe { m.native.unwrap_unchecked() };
+    let entry = native.functions[main].entry;
+    // `main` stands at depth 0: the functions it calls are the first frames.
+    let ceiling = CALL_DEPTH_LIMIT.min(m.native_frames_left);
+    let status = enter_native(m, entry, 0, ceiling, ceiling as i64);
+    if status == abi::STATUS_OK || status == abi::STATUS_HALT {
+        return HALTED;
+    }
+    match native_failed(m, 0, status) {
+        stop @ (HALTED | FAILED | RETURNED | PANICKED) => stop,
+        resume => run_nested(m, resume),
+    }
+}
+
+/// Calls a native entry point with the context brought up to date, and
+/// answers the status it comes back with.
+#[cfg(not(target_arch = "wasm32"))]
+fn enter_native(m: &mut Machine<'_>, entry: Entry, below: usize, ceiling: usize, rem: i64) -> u32 {
+    let machine: *mut Machine<'_> = m;
+    unsafe {
+        let ctx = &raw mut (*machine).ctx;
+        (*ctx).objs = (*machine).obj_pool.0.as_ptr().cast();
+        (*ctx).marking = u64::from((*machine).gc.marking());
+        (*ctx).machine = machine.cast();
+        (*ctx).status = abi::STATUS_OK;
+        let saved = ((*ctx).ceiling, (*ctx).segment_base);
+        (*ctx).ceiling = ceiling as i64;
+        (*ctx).segment_base = below as i64;
+        let status = entry(ctx, rem);
+        (*ctx).ceiling = saved.0;
+        (*ctx).segment_base = saved.1;
+        status
+    }
+}
+
+/// Raises, in this run, what stopped a call into native code, the way the
+/// instruction it stopped at would have raised it on the interpreter. `i` is
+/// the call the run made into the code.
+#[cold]
+#[inline(never)]
+#[cfg(not(target_arch = "wasm32"))]
+fn native_failed(m: &mut Machine<'_>, i: usize, status: u32) -> usize {
+    // Where the error happened: the instruction the code recorded, or the
+    // call into the code when the call itself was refused.
+    let at = if m.ctx.status == status {
+        m.ctx.err_at as usize
+    } else {
+        i
+    };
+    let err = match status {
+        abi::STATUS_HALT => return HALTED,
+        abi::STATUS_PANIC => return PANICKED,
+        abi::STATUS_VM => {
+            return match m.failure.take() {
+                Some(error) => catch_failure(m, error),
+                None => FAILED,
+            };
+        }
+        abi::STATUS_INDEX => ErrType::IndexOutOfBounds(m.ctx.err_a as usize, m.ctx.err_b),
+        abi::STATUS_SHIFT => ErrType::ShiftCountOutOfRange(m.ctx.err_a),
+        _ => {
+            ErrType::CallDepthExceeded(call_site_name(m.err_ctx, m.instr_at(at)), CALL_DEPTH_LIMIT)
+        }
+    };
+    let instr = m.instr_at(at);
+    catch_error(
+        err,
+        instr,
+        &mut m.failure,
+        &mut m.error_handles,
+        m.handles_floor,
+        &mut m.call_frames,
+        &mut m.args,
+        m.callsite_registers,
+        &mut m.recursion_stack,
+        m.regs,
+        m.r,
+        m.obj_pool,
+        m.map_pool,
+        m.str_pool,
+        m.gc,
+    )
+}
+
+/// The run a helper was called from.
+///
+/// # Safety
+///
+/// `ctx` is the context of a run whose native code is calling the helper, so
+/// the machine it names is alive and nothing else uses it until the helper
+/// returns.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn machine<'a>(ctx: *mut NativeCtx) -> &'a mut Machine<'a> {
+    unsafe { &mut *(*ctx).machine.cast::<Machine<'a>>() }
+}
+
+/// Shades what a store native code makes overwrites, while the collector
+/// marks.
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" fn native_shade(ctx: *mut NativeCtx, boxed: u64, int: u64) {
+    let m = unsafe { machine(ctx) };
+    shade_overwritten(m.gc, m.str_pool, Data::from_words(boxed, int as i64));
+}
+
+/// `print` for native code.
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" fn native_print(ctx: *mut NativeCtx, boxed: u64, int: u64) {
+    let m = unsafe { machine(ctx) };
+    print_value(
+        &mut m.handle,
+        Data::from_words(boxed, int as i64),
+        m.obj_pool,
+        m.map_pool,
+        m.str_pool,
+        m.structs,
+        m.enums,
+    );
+}
+
+/// Keeps `count` values native code holds alive across a call that can
+/// collect, on the stack the collector reads as roots.
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" fn native_push_roots(ctx: *mut NativeCtx, values: *const u64, count: u64) {
+    let m = unsafe { machine(ctx) };
+    push_values(&mut m.recursion_stack, values, count);
+}
+
+/// Drops the `count` values [`native_push_roots`] kept last.
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" fn native_pop_roots(ctx: *mut NativeCtx, count: u64) {
+    let m = unsafe { machine(ctx) };
+    let len = m.recursion_stack.len() - count as usize;
+    m.recursion_stack.0.truncate(len);
+}
+
+/// Pushes `count` values, two words each, onto `stack`.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_values(stack: &mut RegisterFile, values: *const u64, count: u64) {
+    for k in 0..count as usize {
+        let (boxed, int) = unsafe { (*values.add(2 * k), *values.add(2 * k + 1)) };
+        stack.0.push(Data::from_words(boxed, int as i64));
+    }
+}
+
+/// Runs a function on the interpreter for native code: from its first
+/// instruction `entry` until it returns, with its result landing in
+/// `ret_reg`. `at` is the call the code makes, `rem` how far below the
+/// ceiling the calling function stands, and `roots` the `count` values it
+/// holds that have to outlive whatever the function allocates.
+#[cfg(not(target_arch = "wasm32"))]
+extern "C" fn native_call_vm(
+    ctx: *mut NativeCtx,
+    entry: u64,
+    ret_reg: u64,
+    at: u64,
+    rem: i64,
+    roots: *const u64,
+    count: u64,
+) -> u32 {
+    let m = unsafe { machine(ctx) };
+    if cfg!(panic = "unwind") {
+        // A host function may panic, and a panic cannot unwind through
+        // machine code. It is held here and resumed where no native frame
+        // stands in its way.
+        let run =
+            std::panic::AssertUnwindSafe(|| call_vm(m, entry, ret_reg, at, rem, roots, count));
+        match std::panic::catch_unwind(run) {
+            Ok(status) => status,
+            Err(payload) => {
+                let m = unsafe { machine(ctx) };
+                m.panic = Some(payload);
+                m.ctx.status = abi::STATUS_PANIC;
+                abi::STATUS_PANIC
+            }
+        }
+    } else {
+        call_vm(m, entry, ret_reg, at, rem, roots, count)
+    }
+}
+
+/// [`native_call_vm`] itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn call_vm(
+    m: &mut Machine<'_>,
+    entry: u64,
+    ret_reg: u64,
+    at: u64,
+    rem: i64,
+    roots: *const u64,
+    count: u64,
+) -> u32 {
+    let native = unsafe { m.native.unwrap_unchecked() };
+    // The calls standing, the caller's included.
+    let depth = (m.ctx.ceiling - rem) as usize;
+    if depth >= CALL_DEPTH_LIMIT {
+        m.ctx.status = abi::STATUS_DEPTH;
+        m.ctx.err_at = at as u32;
+        return abi::STATUS_DEPTH;
+    }
+    let saved = (
+        m.native_below,
+        m.native_frames_left,
+        m.handles_floor,
+        m.ctx.ceiling,
+        m.ctx.segment_base,
+    );
+    // The native frames of this stretch, and the trip back into the
+    // interpreter, come out of what the stack keeps for native code.
+    let frame = (native.frame_bytes as usize).max(16);
+    let used = depth.saturating_sub(m.ctx.segment_base as usize) + REENTRY_BYTES.div_ceil(frame);
+    m.native_frames_left = m.native_frames_left.saturating_sub(used);
+    m.native_below = depth - m.call_frames.len();
+
+    // The call's frame, returning to where this run ends. The stack keeps
+    // below the limit by the native calls standing under it.
+    let room = CALL_DEPTH_LIMIT - m.native_below;
+    if m.call_frames.capacity() > room {
+        m.call_frames.shrink_to(room.max(m.call_frames.len()));
+    }
+    if m.call_frames.len() == m.call_frames.capacity() {
+        let len = m.call_frames.len();
+        m.call_frames.reserve_exact(len.max(64).min(room - len));
+    }
+    m.call_frames.push(CallFrame {
+        return_addr: (native.exit - 1) as u16,
+        return_reg: ret_reg as u16,
+        saved_callsite: None,
+    });
+    let roots_at = m.recursion_stack.len();
+    push_values(&mut m.recursion_stack, roots, count);
+    m.handles_floor = m.error_handles.len();
+
+    let stop = run_nested(m, entry as usize);
+
+    (
+        m.native_below,
+        m.native_frames_left,
+        m.handles_floor,
+        m.ctx.ceiling,
+        m.ctx.segment_base,
+    ) = saved;
+    m.ctx.objs = m.obj_pool.0.as_ptr().cast();
+    m.ctx.marking = u64::from(m.gc.marking());
+    let status = match stop {
+        RETURNED => {
+            m.recursion_stack.0.truncate(roots_at);
+            return abi::STATUS_OK;
+        }
+        HALTED => abi::STATUS_HALT,
+        PANICKED => abi::STATUS_PANIC,
+        _ => abi::STATUS_VM,
+    };
+    m.ctx.status = status;
+    status
+}
+
+/// Prints `tgt` followed by a newline, the way `print` shows every kind of
+/// value.
+#[inline(never)]
+fn print_value(
+    handle: &mut crate::captured_output::OutputHandle,
+    tgt: Data,
+    obj_pool: &ObjectPool,
+    map_pool: &MapPool,
+    str_pool: &StringPool,
+    structs: &[Struct],
+    enums: &[EnumType],
+) {
+    if tgt.is_string() {
+        outln!(*handle, "{}", tgt.as_str(str_pool));
+    } else if tgt.is_int() {
+        outln!(*handle, "{}", tgt.as_int());
+    } else if tgt.is_float() {
+        outln!(*handle, "{}", format_float(tgt.as_float()));
+    } else if tgt.is_bool() {
+        outln!(*handle, "{}", tgt.as_bool());
+    } else if tgt.is_function() {
+        outln!(*handle, "{FUNCTION_TEXT}");
+    } else if tgt.is_array() {
+        let array = &obj_pool[tgt.as_array()];
+        out!(*handle, "[");
+        for (idx, item) in array.iter().enumerate() {
+            if idx != 0 {
+                out!(*handle, ",");
+            }
+            out!(
+                *handle,
+                "{}",
+                item.format(obj_pool, str_pool, map_pool, structs, enums, false)
+            );
+        }
+        outln!(*handle, "]");
+    } else if tgt.is_struct() {
+        let s = unsafe { structs.get_unchecked(tgt.struct_type_id() as usize) };
+        let s_name = &s.name;
+        let s_fields = &s.fields;
+        out!(*handle, "{s_name} {{");
+        for (idx, item) in obj_pool[tgt.as_struct()].iter().enumerate() {
+            if idx != 0 {
+                out!(*handle, ",");
+            }
+            out!(
+                *handle,
+                "{}:{}",
+                unsafe { &s_fields.get_unchecked(idx).0 },
+                item.format(obj_pool, str_pool, map_pool, structs, enums, false)
+            );
+        }
+        outln!(*handle, "}}");
+    } else if tgt.is_enum() {
+        let e = unsafe { enums.get_unchecked(tgt.enum_type_id() as usize) };
+        let entry = &obj_pool[tgt.as_enum()];
+        let tag = entry[0].as_int() as usize;
+        let variant = unsafe { e.variants.get_unchecked(tag) };
+        if entry.len() <= 1 {
+            outln!(*handle, "{}", variant.name);
+        } else {
+            out!(*handle, "{}(", variant.name);
+            for (idx, item) in entry[1..].iter().enumerate() {
+                if idx != 0 {
+                    out!(*handle, ",");
+                }
+                out!(
+                    *handle,
+                    "{}",
+                    item.format(obj_pool, str_pool, map_pool, structs, enums, false)
+                );
+            }
+            outln!(*handle, ")");
+        }
+    } else if tgt.is_map() {
+        let m = &map_pool[tgt.as_map()];
+        out!(*handle, "{{");
+        for (i, (key, val)) in m.iter().enumerate() {
+            if i != 0 {
+                out!(*handle, ",");
+            }
+            out!(
+                *handle,
+                "{}:{}",
+                key.format(obj_pool, str_pool, map_pool, structs, enums, false),
+                val.format(obj_pool, str_pool, map_pool, structs, enums, false),
+            );
+        }
+        outln!(*handle, "}}");
+    }
 }
 
 /// The index of the instruction `ip` points at.
@@ -1502,6 +2126,8 @@ fn index_of(base: *const Instr, ip: *const Instr) -> usize {
 fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs: Regs) -> usize {
     let Machine {
         r,
+        regs: _,
+        instructions: _,
         obj_pool,
         map_pool,
         str_pool,
@@ -1522,6 +2148,14 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
         keep_alive,
         error_handles,
         failure,
+        native: _,
+        #[cfg(not(target_arch = "wasm32"))]
+            ctx: _,
+        native_below: _,
+        #[cfg(not(target_arch = "wasm32"))]
+            native_frames_left: _,
+        handles_floor,
+        panic: _,
     } = m;
     let r: &RegisterFile = r;
     let obj_pool: &mut ObjectPool = obj_pool;
@@ -1559,6 +2193,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 unsafe { *instructions.get_unchecked(i) },
                 failure,
                 error_handles,
+                *handles_floor,
                 call_frames,
                 args,
                 callsite_registers,
@@ -1965,85 +2600,9 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 str_order!(o1, o2, dest, <=);
             }
             Instr::Print(tgt) => {
-                let tgt = regs[tgt];
-                if tgt.is_string() {
-                    outln!(*handle, "{}", tgt.as_str(str_pool));
-                } else if tgt.is_int() {
-                    outln!(*handle, "{}", tgt.as_int());
-                } else if tgt.is_float() {
-                    outln!(*handle, "{}", format_float(tgt.as_float()));
-                } else if tgt.is_bool() {
-                    outln!(*handle, "{}", tgt.as_bool());
-                } else if tgt.is_function() {
-                    outln!(*handle, "{FUNCTION_TEXT}");
-                } else if tgt.is_array() {
-                    let array = &obj_pool[tgt.as_array()];
-                    out!(*handle, "[");
-                    for (idx, item) in array.iter().enumerate() {
-                        if idx != 0 {
-                            out!(*handle, ",");
-                        }
-                        out!(
-                            *handle,
-                            "{}",
-                            item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                        );
-                    }
-                    outln!(*handle, "]");
-                } else if tgt.is_struct() {
-                    let s = unsafe { structs.get_unchecked(tgt.struct_type_id() as usize) };
-                    let s_name = &s.name;
-                    let s_fields = &s.fields;
-                    out!(*handle, "{s_name} {{");
-                    for (idx, item) in obj_pool[tgt.as_struct()].iter().enumerate() {
-                        if idx != 0 {
-                            out!(*handle, ",");
-                        }
-                        out!(
-                            *handle,
-                            "{}:{}",
-                            unsafe { &s_fields.get_unchecked(idx).0 },
-                            item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                        );
-                    }
-                    outln!(*handle, "}}");
-                } else if tgt.is_enum() {
-                    let e = unsafe { enums.get_unchecked(tgt.enum_type_id() as usize) };
-                    let entry = &obj_pool[tgt.as_enum()];
-                    let tag = entry[0].as_int() as usize;
-                    let variant = unsafe { e.variants.get_unchecked(tag) };
-                    if entry.len() <= 1 {
-                        outln!(*handle, "{}", variant.name);
-                    } else {
-                        out!(*handle, "{}(", variant.name);
-                        for (idx, item) in entry[1..].iter().enumerate() {
-                            if idx != 0 {
-                                out!(*handle, ",");
-                            }
-                            out!(
-                                *handle,
-                                "{}",
-                                item.format(obj_pool, str_pool, map_pool, structs, enums, false)
-                            );
-                        }
-                        outln!(*handle, ")");
-                    }
-                } else if tgt.is_map() {
-                    let m = &map_pool[tgt.as_map()];
-                    out!(*handle, "{{");
-                    for (i, (key, val)) in m.iter().enumerate() {
-                        if i != 0 {
-                            out!(*handle, ",");
-                        }
-                        out!(
-                            *handle,
-                            "{}:{}",
-                            key.format(obj_pool, str_pool, map_pool, structs, enums, false),
-                            val.format(obj_pool, str_pool, map_pool, structs, enums, false),
-                        );
-                    }
-                    outln!(*handle, "}}");
-                }
+                print_value(
+                    handle, regs[tgt], obj_pool, map_pool, str_pool, structs, enums,
+                );
             }
             Instr::SetElementString(string_reg_id, new_str_reg_id, idx) => {
                 let index = regs[idx].as_int();
@@ -2887,6 +3446,10 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             },
             Instr::ThrowError(error_reg_id) => {
                 error_with_catch!(ErrType::Custom(regs[error_reg_id].as_str(str_pool)));
+            }
+            Instr::NativeExit => {
+                i = RETURNED;
+                break;
             }
             Instr::Halt(code) => {
                 cold_path();

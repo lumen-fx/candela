@@ -165,7 +165,8 @@ mod functions;
 mod methods;
 
 mod copies;
-mod flow;
+pub(crate) mod flow;
+pub(crate) mod function_table;
 mod registers;
 mod scalar;
 

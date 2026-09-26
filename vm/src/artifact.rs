@@ -90,8 +90,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// Version 12 added the loop step and the add-a-constant instructions, which
 /// sit among the existing ones and so renumber the instructions after them.
 /// Version 13 added the move chain and the add-to-a-float-field instructions,
-/// which renumber the instructions after them the same way.
-const FORMAT_VERSION: u8 = 13;
+/// which renumber the instructions after them the same way. Version 14 added
+/// the machine code sections ([`ProgramImage::native`]) and the function table
+/// that follows the image ([`FunctionTable`]).
+const FORMAT_VERSION: u8 = 14;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
@@ -130,6 +132,133 @@ pub struct ProgramImage {
     /// compiler emitted for it at build time. This is what lets the VM invoke a
     /// script function by name with no compiler present.
     pub exports: Vec<ExportImage>,
+    /// Machine code for some of the program's functions, one section per
+    /// machine it was built for. The VM runs the first section this machine
+    /// can run and the bytecode for everything else; a program whose sections
+    /// all name another machine runs on bytecode alone. The bytecode stays
+    /// complete either way.
+    pub native: Vec<NativeImage>,
+}
+
+/// Machine code `candela build` generated for one kind of machine, and what
+/// the VM needs to know to run it.
+///
+/// The code has no relocations left: calls between its functions were
+/// resolved when it was laid out, and it reaches the VM only through the
+/// context the VM passes in. Loading it is a copy into memory the VM then
+/// makes executable, and a rewrite of the calls it covers.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NativeImage {
+    /// The version of the contract between the code and the VM: the context
+    /// layout, the helper functions, and the layout of a value. A VM that
+    /// speaks another version runs bytecode.
+    pub abi: u32,
+    pub arch: NativeArch,
+    /// The operating system the calling convention is that of.
+    pub os: NativeOs,
+    /// Instruction set extensions the code uses beyond the architecture's
+    /// baseline, by the names Rust's feature detection uses. The VM checks
+    /// each one on the machine it runs on.
+    pub cpu_features: Vec<String>,
+    /// Where the object pool's per-object vector keeps its size, buffer
+    /// pointer and length, as the build measured it. The code reads objects
+    /// through that layout, so the VM checks it against its own.
+    pub object_layout: [u8; 3],
+    /// The most stack one of the functions takes per call, in bytes. The VM
+    /// sizes how deep native recursion may go from it before a call carries
+    /// on in the interpreter.
+    pub frame_bytes: u32,
+    /// The functions the section holds.
+    pub functions: Vec<NativeFunctionImage>,
+    /// The function that stands in for `main`, when `main` itself was
+    /// compiled.
+    pub main: Option<u32>,
+    /// The call instructions the VM rewrites to call into the section.
+    pub sites: Vec<NativeSiteImage>,
+    pub code: Vec<u8>,
+}
+
+/// An architecture machine code is built for.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeArch {
+    X86_64,
+    Aarch64,
+}
+
+/// An operating system whose calling convention machine code follows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeOs {
+    Linux,
+    MacOs,
+    Windows,
+}
+
+/// One function in a [`NativeImage`].
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NativeFunctionImage {
+    /// The instruction its bytecode starts at.
+    pub loc: u32,
+    /// Where its entry point starts in the section's code.
+    pub offset: u32,
+    /// Whether it returns a value.
+    pub returns: bool,
+}
+
+/// A call instruction the VM points at a native function once it loads.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct NativeSiteImage {
+    /// The instruction, a `CallFunc` or a `CallFuncRecursive`.
+    pub at: u32,
+    /// Its callee, by index into [`NativeImage::functions`].
+    pub function: u32,
+}
+
+/// What the compiler knows about each function of a program, written after
+/// the [`ProgramImage`] in a `.cdlb`.
+///
+/// It is what code generation reads instead of working types out of the
+/// bytecode: where each function starts, which registers its parameters
+/// arrive in, and the type of every value each instruction writes. The VM
+/// never reads it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct FunctionTable {
+    pub functions: Vec<FunctionImage>,
+}
+
+/// One compiled function in a [`FunctionTable`]: `main`, or one
+/// specialisation of a declared function or closure.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FunctionImage {
+    /// The name the function was declared with; `main` for the program's
+    /// entry.
+    pub name: String,
+    /// The instruction the body starts at.
+    pub entry: u32,
+    /// The register each parameter arrives in, in declaration order.
+    pub params: Vec<u16>,
+    /// The type of each parameter.
+    pub param_types: Vec<DataType>,
+    /// What the function returns: `Null` for nothing.
+    pub returns: DataType,
+    /// The register a closure reads its captured environment from.
+    pub env: Option<u16>,
+    /// Whether a call through a function value can reach it.
+    pub indirect: bool,
+    /// The type of the value each instruction of the body writes into each
+    /// register it writes, in instruction order.
+    pub defs: Vec<DefImage>,
+}
+
+/// The type of one value an instruction writes.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DefImage {
+    /// The instruction.
+    pub at: u32,
+    /// The register it writes.
+    pub reg: u16,
+    /// The type of what it writes there. `Unknown` where the compiler cannot
+    /// tell, such as an element of a list built from a literal.
+    pub ty: DataType,
 }
 
 /// Serializable recipe for one dynamic-library binding: enough to re-open the
@@ -261,9 +390,36 @@ pub struct RuntimeProgram {
     sources: Vec<Source>,
     allocated_arg_count: usize,
     allocated_call_depth: usize,
+    /// The program's machine code, when its artifact carries some this
+    /// machine runs.
+    native: Option<crate::native::NativeCode>,
 }
 
 impl RuntimeProgram {
+    /// Loads the first of `sections` this machine can run, and points the
+    /// calls it covers at it. Without one the program runs on bytecode.
+    fn load_native(&mut self, sections: &[NativeImage]) {
+        if sections.is_empty() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let dylibs = self
+            .dyn_lib_fns
+            .iter()
+            .map(|f| f.ptr.as_ptr().cast::<u8>())
+            .collect();
+        #[cfg(target_arch = "wasm32")]
+        let dylibs = Vec::new();
+        self.native = crate::native::load(sections, &mut self.instructions, dylibs);
+    }
+
+    /// How many of the program's functions run as machine code on this
+    /// machine: zero when its artifact carries none this machine runs.
+    #[must_use]
+    pub fn native_functions(&self) -> usize {
+        self.native.as_ref().map_or(0, |n| n.functions.len())
+    }
+
     /// Runs the program's `main` to completion.
     ///
     /// A runtime error prints its report and ends the process, matching the
@@ -290,6 +446,7 @@ impl RuntimeProgram {
             &self.host_sigs,
             &self.host_dispatch,
             0,
+            self.native.as_ref(),
         );
         self.registers = std::mem::take(&mut register_file.0);
         if let Err(error) = result {
@@ -425,6 +582,7 @@ impl RuntimeProgram {
             host_sigs,
             host_dispatch,
             start,
+            self.native.as_ref(),
         );
 
         self.registers = std::mem::take(&mut register_file.0);
@@ -629,6 +787,7 @@ impl RuntimeProgram {
                 .collect(),
             allocated_arg_count: img.allocated_arg_count as usize,
             allocated_call_depth: img.allocated_call_depth as usize,
+            native: None,
         })
     }
 }
@@ -831,21 +990,62 @@ pub fn load_program(bytes: &[u8], hosts: &HostRegistry) -> Result<RuntimeProgram
     if version != FORMAT_VERSION {
         return Err(LoadError::UnsupportedVersion(version));
     }
-    let img: ProgramImage = postcard::from_bytes(&bytes[5..]).map_err(LoadError::Decode)?;
-    RuntimeProgram::from_image(img, hosts)
+    // The function table follows the image, and the VM has no use for it.
+    let (mut img, _table): (ProgramImage, &[u8]) =
+        postcard::take_from_bytes(&bytes[5..]).map_err(LoadError::Decode)?;
+    let sections = std::mem::take(&mut img.native);
+    #[allow(unused_mut)]
+    let mut program = RuntimeProgram::from_image(img, hosts)?;
+    program.load_native(&sections);
+    Ok(program)
 }
 
-/// Serializes a [`ProgramImage`] to `.cdlb` bytes (magic + version + body).
+/// Serializes a [`ProgramImage`] to `.cdlb` bytes (magic + version + body),
+/// followed by the function table when there is one.
 ///
 /// # Errors
 ///
 /// Returns the serialization error as a string if the `postcard` body cannot be
 /// encoded.
-pub fn serialize_image(image: &ProgramImage) -> Result<Vec<u8>, String> {
+pub fn serialize_image(
+    image: &ProgramImage,
+    functions: Option<&FunctionTable>,
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&MAGIC);
     bytes.push(FORMAT_VERSION);
     let body = postcard::to_allocvec(image).map_err(|e| e.to_string())?;
     bytes.extend_from_slice(&body);
+    if let Some(functions) = functions {
+        let table = postcard::to_allocvec(functions).map_err(|e| e.to_string())?;
+        bytes.extend_from_slice(&table);
+    }
     Ok(bytes)
+}
+
+/// Reads a `.cdlb` back into its image and the function table that follows
+/// it, for a tool that works on the program rather than runs it. The table
+/// is `None` for an artifact written without one.
+///
+/// # Errors
+///
+/// Returns a [`LoadError`] if the header is wrong or either part fails to
+/// decode.
+pub fn read_artifact(bytes: &[u8]) -> Result<(ProgramImage, Option<FunctionTable>), LoadError> {
+    if bytes.len() < 5 {
+        return Err(LoadError::Truncated);
+    }
+    if bytes[0..4] != MAGIC {
+        return Err(LoadError::BadMagic);
+    }
+    if bytes[4] != FORMAT_VERSION {
+        return Err(LoadError::UnsupportedVersion(bytes[4]));
+    }
+    let (image, rest): (ProgramImage, &[u8]) =
+        postcard::take_from_bytes(&bytes[5..]).map_err(LoadError::Decode)?;
+    if rest.is_empty() {
+        return Ok((image, None));
+    }
+    let table: FunctionTable = postcard::from_bytes(rest).map_err(LoadError::Decode)?;
+    Ok((image, Some(table)))
 }

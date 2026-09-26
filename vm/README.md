@@ -44,6 +44,11 @@ An artifact also carries an export table: a call trampoline per host-callable
 function, compiled at build time. That is what lets an embedding program invoke
 a script function by name with the compiler absent.
 
+A release build adds machine code for the functions it can compile, and the
+runtime runs them as machine code when the code was built for the machine it
+runs on. It carries a loader for that code, not a code generator. Anywhere the
+code does not fit, it runs the bytecode, which the artifact always carries.
+
 The full contract for the format, including how versions are matched, is in the
 [artifacts reference](https://candela.lumenfx.dev/reference/artifacts/).
 

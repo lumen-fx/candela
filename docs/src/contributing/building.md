@@ -81,11 +81,16 @@ cargo build -p candela-vm --bin candela-vm
 cargo build -p candela-lsp
 ```
 
-Two feature flags matter:
+Three feature flags matter:
 
 - `compiler` is on by default and gates everything the front end needs. It
   exists so the language server and the binary opt into their allocator and
   lexer dependencies rather than every consumer getting them.
+- `native` adds the machine code generator `candela build` uses. It is off by
+  default, so a host that embeds the compiler does not link the generator; every
+  released `candela` is built with it. Build the command line tool with
+  `cargo build --features native` to get artifacts with machine code. It has no
+  effect on WebAssembly.
 - `embed` makes a fatal error unwind instead of ending the process, for building
   candela into a host program. See [embedding](../integration/embedding.md).
 
@@ -154,6 +159,13 @@ fails the test that made it. Every suite runs this way too:
 cargo test --workspace --features candela-vm/gc-torture
 ```
 
+With `--features native`, every suite that builds an artifact runs it as
+machine code, the in-crate programs also run from an artifact with machine code
+and have to print and fail as the interpreter does, and `tests/native.rs` covers
+what only machine code can get wrong: where errors land, the call depth limit,
+the collector's roots and barriers, a panic in a host function, and artifacts
+built for another machine. CI runs the suites this way.
+
 The other two crates are not reached by a root `cargo test`:
 
 ```sh
@@ -189,10 +201,10 @@ including the collector pause benchmark, `cargo bench --bench gc_pause`.
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets
-cargo test --workspace
+cargo clippy --workspace --all-targets --features native
+cargo test --workspace --features native
 cargo test --features embed
-cargo test --workspace --features candela-vm/gc-torture
+cargo test --workspace --features native,candela-vm/gc-torture
 cargo build --target wasm32-unknown-unknown
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   cargo test --target wasm32-unknown-unknown --test wasm_std

@@ -421,7 +421,13 @@ returned is complete.
 Build the script to a `.cdlb` first, with `candela build` or `build_bytecode`,
 then link only `candela-vm` in the program that runs it. Both compile in the
 release profile, which runs the passes that make the program faster; see
-[the CLI reference](../reference/cli.md):
+[the CLI reference](../reference/cli.md). `build_artifact` takes a
+`BuildOptions` to choose the profile and the [machine
+code](../reference/artifacts.md#machine-code) to include; machine code needs the
+`native` feature of `candela-lang`, and without it an artifact carries none.
+`candela-vm` runs an artifact's machine code where it fits the machine, and
+`RuntimeProgram::native_functions` says how many functions run that way. The
+program that runs the artifact depends on the runtime alone:
 
 ```toml
 [dependencies]

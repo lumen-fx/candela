@@ -717,6 +717,7 @@ impl Program {
             host_sigs,
             host_dispatch,
             start,
+            None,
         );
 
         self.registers = std::mem::take(&mut register_file.0);

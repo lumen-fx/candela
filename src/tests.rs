@@ -39,6 +39,7 @@ fn run_vm(
         host_sigs,
         host_dispatch,
         start,
+        None,
     ) {
         error.report(err_ctx);
     }
@@ -90,6 +91,7 @@ macro_rules! run_and_check_registers {
             }
         }), "the program leaves the value in the register it prints (release profile: {optimize})");
         }
+        native_agrees($contents, "test.kl", &crate::compiler::imports::ImportResolver::new());
     };
 }
 
@@ -127,8 +129,73 @@ macro_rules! run {
                 0,
             );
         }
+        native_agrees(
+            $contents,
+            "test.kl",
+            &crate::compiler::imports::ImportResolver::new(),
+        );
     };
 }
+
+/// What a run printed, and how it ended.
+#[cfg(feature = "native")]
+type Outcome = (String, Result<(), crate::Diagnostic>);
+
+/// Runs `run` with output captured on this thread.
+#[cfg(feature = "native")]
+fn captured(run: impl FnOnce() -> Result<(), crate::Diagnostic>) -> Outcome {
+    use candela_vm::captured_output::CAPTURED_OUTPUT;
+    use candela_vm::captured_output::set_capturing;
+    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    let was_capturing = set_capturing(true);
+    let result = run();
+    set_capturing(was_capturing);
+    (CAPTURED_OUTPUT.with(|o| o.take()), result)
+}
+
+/// Builds `src` the way `candela build` does, machine code included, and runs
+/// the artifact the way `candela-vm` does. `None` for a program that does not
+/// build into an artifact, such as one with no `main`.
+#[cfg(feature = "native")]
+fn run_native(
+    src: &str,
+    filename: &str,
+    resolver: &crate::compiler::imports::ImportResolver,
+) -> Option<Outcome> {
+    let bytes = crate::errors::collect_diagnostic(|| {
+        crate::build::build_artifact(
+            String::from(src),
+            filename,
+            resolver,
+            &crate::build::BuildOptions::default(),
+        )
+    })
+    .ok()?
+    .ok()?;
+    let mut program = candela_vm::load_program(&bytes, &candela_vm::HostRegistry::new()).ok()?;
+    Some(captured(|| {
+        crate::errors::collect_diagnostic(|| program.run())
+    }))
+}
+
+/// Checks that `src`, built with machine code, prints what the release
+/// profile prints on the interpreter and stops with the same error at the
+/// same span. A program the build does not make an artifact of is not
+/// checked.
+#[cfg(feature = "native")]
+fn native_agrees(src: &str, filename: &str, resolver: &crate::compiler::imports::ImportResolver) {
+    let Some(native) = run_native(src, filename, resolver) else {
+        return;
+    };
+    let interpreted = captured(|| run_diag_profile_with(src, filename, true, resolver));
+    assert_eq!(
+        interpreted, native,
+        "machine code prints and stops the way the interpreter does"
+    );
+}
+
+#[cfg(not(feature = "native"))]
+const fn native_agrees(_: &str, _: &str, _: &crate::compiler::imports::ImportResolver) {}
 
 #[test]
 pub fn rec_fib_1() {
@@ -4518,6 +4585,11 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
         debug, release,
         "a release build stops where a debug build does"
     );
+    native_agrees(
+        src,
+        filename,
+        &crate::compiler::imports::ImportResolver::new(),
+    );
     debug
 }
 
@@ -4612,6 +4684,11 @@ fn run_output(src: &str) -> String {
     assert_eq!(
         debug, release,
         "a release build prints what a debug build does"
+    );
+    native_agrees(
+        src,
+        "out.cdl",
+        &crate::compiler::imports::ImportResolver::new(),
     );
     debug
 }
@@ -12873,6 +12950,7 @@ fn run_output_std(src: &str) -> String {
         debug, release,
         "a release build prints what a debug build does"
     );
+    native_agrees(src, "out.cdl", &resolver);
     debug
 }
 

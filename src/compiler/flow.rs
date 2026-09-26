@@ -65,6 +65,45 @@ pub const fn is_call(instr: Instr) -> bool {
     )
 }
 
+/// Where control can go after the instruction at `pos`: the next instruction,
+/// a branch target, both, or neither. A call counts as going on to the next
+/// instruction, where it returns to; a `try` also goes to its catch.
+#[must_use]
+pub const fn successors(pos: usize, instr: Instr) -> [Option<usize>; 2] {
+    match instr {
+        Instr::Jmp(size) => [Some(pos + size as usize), None],
+        Instr::JmpBack(size) => [pos.checked_sub(size as usize), None],
+        Instr::Return(_)
+        | Instr::RecursiveReturn(_)
+        | Instr::VoidReturn
+        | Instr::Halt(_)
+        | Instr::ThrowError(_)
+        | Instr::NativeExit => [None, None],
+        _ => [Some(pos + 1), branch_target(pos, instr)],
+    }
+}
+
+/// The instructions a function starting at `entry` runs, in order: every one
+/// reachable from it without entering a call.
+#[must_use]
+pub fn body(instructions: &[Instr], entry: usize) -> Vec<usize> {
+    let mut seen = vec![false; instructions.len()];
+    let mut stack = vec![entry];
+    while let Some(pos) = stack.pop() {
+        if pos >= instructions.len() || seen[pos] {
+            continue;
+        }
+        seen[pos] = true;
+        for next in successors(pos, instructions[pos]).into_iter().flatten() {
+            stack.push(next);
+        }
+    }
+    seen.iter()
+        .enumerate()
+        .filter_map(|(pos, reached)| reached.then_some(pos))
+        .collect()
+}
+
 /// For each position, and one past the end, whether a branch can land there.
 #[must_use]
 pub fn branch_targets(instructions: &[Instr]) -> Vec<bool> {

@@ -127,7 +127,7 @@ publishing.
 
 ## Build an artifact
 
-`candela build` compiles a source file to a `.cdlb` bytecode artifact:
+`candela build` compiles a source file to a `.cdlb` artifact:
 
 ```sh
 candela build hello.cdl
@@ -151,6 +151,14 @@ that call them. Running a source file, the REPL and an embedding host compile in
 the debug profile instead, which skips that work. The program behaves the same
 either way, with the same output, the same errors and the same places in the
 source named in them. `candela build --debug` builds without the release work.
+
+A release build also compiles the functions it can to machine code for the
+machine you build on, and puts it in the artifact beside the bytecode.
+`candela-vm` runs those functions as machine code and the rest on its
+interpreter, with the same results either way. Numeric loops and recursion gain
+the most. An artifact run on a different kind of machine runs the bytecode.
+`--no-native` builds without machine code, and `--target` builds it for another
+machine; see [Artifacts](../reference/artifacts.md#machine-code).
 
 A `.cdlb` holds the whole program, its imports included, so the artifact
 travels on its own. See [Artifacts](../reference/artifacts.md) for what else it
@@ -198,7 +206,8 @@ holds can be a few megabytes larger for it.
 - `candela run [file.cdl] [args...]` runs the project.
 - `candela check [file.cdl]` compiles without running, and without opening a
   `dylib` library.
-- `candela build [file.cdl] [-o out.cdlb] [--debug]` compiles to an artifact.
+- `candela build [file.cdl] [-o out.cdlb] [--debug] [--no-native] [--target <triple>]`
+  compiles to an artifact.
 - `candela add`, `remove`, `fetch`, `update` and `publish` work on the
   project's dependencies.
 - `candela --help` or `-h` prints usage.

@@ -95,6 +95,11 @@ default = ["compiler"]
 # `candela` binary opt into `logos`/`mimalloc` explicitly.
 compiler = ["dep:logos", "dep:mimalloc"]
 embed = ["candela-vm/embed"]
+# Machine code generation for `candela build`: the code generator, which the
+# VM never carries. Off by default, so a host that embeds the compiler for
+# its own dev loop does not link it; every candela command-line tool the
+# project releases is built with it. It does nothing on wasm32.
+native = ["compiler", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:target-lexicon"]
 
 [dependencies]
 # The self-contained runtime core. Strict dependency direction: candela ->
@@ -117,6 +122,11 @@ mimalloc = { version = "0.1.52", optional = true }
 # drop their comments and ordering. The VM never sees a manifest, so this stays
 # out of `candela-vm`.
 toml_edit = "0.25.15"
+# The code generator behind the `native` feature, with the x86-64 and aarch64
+# backends a release build generates code for.
+cranelift-codegen = { version = "0.136.1", optional = true, default-features = false, features = ["std", "x86", "arm64"] }
+cranelift-frontend = { version = "0.136.1", optional = true, default-features = false, features = ["std"] }
+target-lexicon = { version = "0.13.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Pinned to the locked version rather than `*`: crates.io rejects a wildcard

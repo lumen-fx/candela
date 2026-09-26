@@ -77,8 +77,9 @@ Run `candela` with no arguments for a REPL.
   against what the manifest lists. A package is another place an import
   resolves from, so nothing about importing changes.
 - **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
-  bytecode artifact, and `candela-vm` runs it. The runtime binary links no
-  parser, compiler or REPL.
+  artifact, and `candela-vm` runs it. The artifact carries machine code for the
+  functions the code generator handles, beside the bytecode for everything. The
+  runtime binary links no parser, compiler, code generator or REPL.
 - **Editor support.** A language server and five clients live in this
   repository: extensions for VS Code, the IntelliJ-based IDEs and Zed, and the
   grammar and configuration Neovim and Helix install. The VS Code extension

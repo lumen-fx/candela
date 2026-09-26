@@ -79,16 +79,18 @@ whose C library a build step produces checks before that step has run. A `main` 
 a library whose entry only declares functions for other projects to import
 checks like any other file.
 
-### candela build [file.cdl] [-o out.cdlb] [--debug]
+### candela build [file.cdl] [-o out.cdlb] [--debug] [--no-native] [--target <triple>]
 
-Compiles to a `.cdlb` bytecode artifact and writes it out, reporting the path
-and the size. `compile` is accepted as the same command.
+Compiles to a `.cdlb` artifact and writes it out, reporting the path and the
+size. `compile` is accepted as the same command.
 
 ```sh
 candela build
 candela build game.cdl
 candela build game.cdl -o dist/game.cdlb
 candela build game.cdl --debug
+candela build game.cdl --no-native
+candela build game.cdl --target aarch64-apple-darwin
 ```
 
 A build compiles in the release profile, which runs passes that make the
@@ -101,7 +103,16 @@ when nothing in the loop could change the list. The release program prints the s
 output and raises the same errors, with the same messages and spans, as the
 program compiled in the debug profile that `candela <file.cdl>`, `candela run`
 and an embedding host use. `--debug` builds in the debug profile instead, with
-no passes.
+no passes and no machine code.
+
+A release build also puts [machine code](artifacts.md#machine-code) in the
+artifact for the functions the code generator handles, built for the machine
+running the build. `candela-vm` runs those functions as machine code, and on a
+machine the code was not built for it runs the bytecode, which the artifact
+always carries. `--no-native` leaves the machine code out. `--target` builds it
+for another machine instead, named by a target triple: `x86_64` or `aarch64`, on
+Linux (`x86_64-unknown-linux-gnu`), macOS (`aarch64-apple-darwin`) or Windows
+(`x86_64-pc-windows-msvc`). A triple outside those is an error.
 
 With no file, the entry point comes from the manifest. Without `-o` (or its
 long form `--output`), the output name is the input with `.cdl` replaced by
