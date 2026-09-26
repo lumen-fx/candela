@@ -116,10 +116,11 @@ jobs:
       - name: Install cargo-pgo
         run: cargo install cargo-pgo
 
+      # The command-line tool generates machine code for `candela build`.
       - name: Build instrumented binary
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo pgo build -- --target ${{ matrix.target }}
+        run: cargo pgo build -- --target ${{ matrix.target }} --features native
 
       - name: Build PGO dylib (macOS)
         if: runner.os == 'macOS'
@@ -169,12 +170,14 @@ jobs:
       - name: Build final binary
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo pgo optimize -- --target ${{ matrix.target }}
+        run: cargo pgo optimize -- --target ${{ matrix.target }} --features native
 
       # candela-vm is profiled the same way, on the same workloads compiled to
       # .cdlb by the candela just built, with a profile directory of its own so
       # the two sets of profiles never mix. Every leg builds for the machine it
-      # runs on, so the instrumented binary can always run. pgo-dynlib is left
+      # runs on, so the instrumented binary can always run. Each workload runs
+      # twice, as machine code and as bytecode, since the functions machine
+      # code does not cover still run on the interpreter. pgo-dynlib is left
       # out: an artifact finds its library through the loader's search path,
       # which the runner does not point at pgo/.
       - name: Build instrumented candela-vm
@@ -190,9 +193,11 @@ jobs:
           mkdir -p target/pgo-vm-artifacts
           train() {
             local source="$1"; shift
-            local artifact="target/pgo-vm-artifacts/$(basename "$source" .cdl).cdlb"
-            "$candela" build "$source" -o "$artifact"
-            "$vm" "$artifact" "$@"
+            local artifact="target/pgo-vm-artifacts/$(basename "$source" .cdl)"
+            "$candela" build "$source" -o "$artifact.cdlb"
+            "$vm" "$artifact.cdlb" "$@"
+            "$candela" build --no-native "$source" -o "$artifact.bytecode.cdlb"
+            "$vm" "$artifact.bytecode.cdlb" "$@"
           }
           train pgo/pgo-std-library.cdl
           train examples/nbody/nbody_lua.cdl 10000
