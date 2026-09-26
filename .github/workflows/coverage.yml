@@ -9,9 +9,10 @@ name: coverage
 # `candela` package alone, because default-members says so, so candela-vm and
 # candela-lsp only get measured when the workspace is named.
 #
-# Default features only. The `embed` leg ci.yml also runs changes how a fatal
-# error leaves the VM, not which lines the tests execute, so a second
-# instrumented run would report the same code twice.
+# Default features and `native`, which the test legs in ci.yml turn on. The
+# `embed` leg ci.yml also runs changes how a fatal error leaves the VM, not
+# which lines the tests execute, so a second instrumented run would report the
+# same code twice.
 #
 # Doctests are not measured: collecting coverage from them needs nightly, and
 # this builds on stable. ci.yml still runs them.
@@ -66,7 +67,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Collect coverage
-        run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --features native --no-fail-fast --lcov --output-path lcov.info
 
       - name: Upload to Codecov
         if: env.CODECOV_TOKEN != ''

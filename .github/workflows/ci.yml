@@ -5,7 +5,9 @@ name: ci
 
 # Builds and tests the workspace on Linux, macOS, and Windows, and runs the two
 # extra legs candela needs: the `embed` feature, and a wasm32 build with the
-# browser build's own tests.
+# browser build's own tests. The build and test legs turn on the `native`
+# feature, as every released command-line tool does, so each suite that builds
+# an artifact runs it as machine code on every platform.
 #
 # fmt and clippy run on Linux only. Neither is platform dependent.
 
@@ -95,7 +97,7 @@ jobs:
           cache-key: clippy
       # --workspace reaches candela-vm and candela-lsp, which default-members
       # keeps out of a plain cargo command at the repo root.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features native -- -D warnings
       - run: cargo clippy --features embed --all-targets -- -D warnings
 
   test:
@@ -117,9 +119,9 @@ jobs:
           rustflags: ""
           cache-key: test
       - if: needs.changes.outputs.rust == 'true'
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --features native --verbose
       - if: needs.changes.outputs.rust == 'true'
-        run: cargo test --workspace --verbose --no-fail-fast
+        run: cargo test --workspace --features native --verbose --no-fail-fast
 
   test-embed:
     name: test embed
@@ -152,8 +154,8 @@ jobs:
           cache-key: test-gc-torture
       # Every suite again with the collector running on every allocation, a
       # unit of work at a time, and checking each mark phase against a fresh
-      # trace.
-      - run: cargo test --workspace --no-fail-fast --features candela-vm/gc-torture --verbose
+      # trace, machine code included.
+      - run: cargo test --workspace --no-fail-fast --features native,candela-vm/gc-torture --verbose
 
   wasm:
     name: wasm
