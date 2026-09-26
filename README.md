@@ -98,14 +98,15 @@ and LuaJIT with its JIT off, on an Intel Core i9-12900K. Lower is faster.
 
 | Program | candela | Python 3 | LuaJIT (-joff) |
 | --- | --- | --- | --- |
-| Recursive fib | 93.7 | 273 | 133 |
-| Iterative fib | 30.3 | 541 | 29.7 |
-| Binary trees | 303 | 743 | 744 |
-| Sqrt loop | 113 | 574 | 67.5 |
-| FizzBuzz | 16.3 | 98.1 | 50.5 |
+| Recursive fib | 94.2 | 273 | 132 |
+| Iterative fib | 30.3 | 532 | 29.4 |
+| Binary trees | 299 | 759 | 740 |
+| Sqrt loop | 104 | 582 | 68.0 |
+| FizzBuzz | 16.2 | 97.6 | 50.4 |
 
-[BENCHMARKS.md](BENCHMARKS.md) has the full set, the programs, and how to run
-them yourself.
+A `.cdlb` built with `candela build` runs faster again where its functions
+become machine code. [BENCHMARKS.md](BENCHMARKS.md) has the full set, with
+artifacts and LuaJIT's JIT, the programs, and how to run them yourself.
 
 ## Limitations
 

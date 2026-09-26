@@ -5,10 +5,10 @@ It has been modified by the candela authors. See the NOTICE file.
 -->
 # Candela benchmarks
 
-These are the programs used to compare Candela against Python 3 and LuaJIT with
-the JIT disabled (`-joff`). Each benchmark is the same workload written three
-times, once per language, so the three runs are directly comparable. The two
-LuaJIT programs that differ say so in their sections.
+These are the programs used to compare Candela against Python 3 and LuaJIT, with
+its JIT disabled (`-joff`) and enabled. Each benchmark is the same workload
+written three times, once per language, so the runs are directly comparable.
+The two LuaJIT programs that differ say so in their sections.
 
 Candela is still experimental, so treat any figure you measure as a snapshot of
 the commit you measured.
@@ -18,25 +18,28 @@ the commit you measured.
 Median wall-clock time in milliseconds, process start-up included. Lower is
 faster.
 
-| Program | Candela | candela-vm | Python 3 | LuaJIT (-joff) |
-| --- | --- | --- | --- | --- |
-| Iterative fib(46) x 200000 | 30.3 | 28.5 | 541 | 29.7 |
-| Recursive fib | 93.7 | 93.8 | 273 | 133 |
-| N-body, `nbody_lua` (N=500000) | 287 | 285 | 2157 | 305 |
-| N-body, `nbody_py` (N=500000) | 360 | 359 | 2225 | 413 |
-| Binary trees (N=16) | 303 | 283 | 743 | 744 |
-| Quicksort (N=10000) | 178 | 155 | 515 | 2260 |
-| Sqrt (N=0 to 9999999) | 113 | 106 | 574 | 67.5 |
-| String.split(), Array.contains() x 50000 | 3.5 | 3.1 | 14.0 | 2.0 |
-| FizzBuzz, 1000000 iterations | 16.3 | 15.9 | 98.1 | 50.5 |
-| Standard library operations x 100000 | 44.2 | 46.7 | 136 | 196 |
-| C FFI call overhead x 10000000 | 193 | 215 | 2512 | 350 |
+| Program | Candela | candela-vm | Python 3 | LuaJIT (-joff) | LuaJIT |
+| --- | --- | --- | --- | --- | --- |
+| Iterative fib(46) x 200000 | 30.3 | 3.2 | 532 | 29.4 | 3.6 |
+| Recursive fib | 94.2 | 14.8 | 273 | 132 | 20.4 |
+| N-body, `nbody_lua` (N=500000) | 278 | 44.4 | 2151 | 304 | 47.1 |
+| N-body, `nbody_py` (N=500000) | 362 | 361 | 2253 | 418 | 104 |
+| Binary trees (N=16) | 299 | 215 | 759 | 740 | 604 |
+| Quicksort (N=10000) | 170 | 157 | 513 | 2265 | 304 |
+| Sqrt (N=0 to 9999999) | 104 | 13.1 | 582 | 68.0 | 37.5 |
+| String.split(), Array.contains() x 50000 | 3.3 | 2.9 | 13.7 | 1.8 | 0.8 |
+| FizzBuzz, 1000000 iterations | 16.2 | 15.6 | 97.6 | 50.4 | 37.9 |
+| Standard library operations x 100000 | 43.6 | 45.9 | 137 | 196 | 158 |
+| C FFI call overhead x 10000000 | 195 | 9.1 | 2526 | 349 | 3.8 |
 
 The Candela column is `candela file.cdl`, the command you run a script with.
 The candela-vm column runs the same program compiled ahead of time with
-`candela build`, the way an application ships it.
+`candela build`, the way an application ships it: the functions the code
+generator handles run as machine code, and the rest on the interpreter. A
+program whose time goes into strings, maps or allocation runs about as it does
+from source.
 
-Measured on 2026-09-25 at commit d1d610d, on an Intel Core i9-12900K under Arch
+Measured on 2026-09-26 at commit c416050, on an Intel Core i9-12900K under Arch
 Linux, with Python 3.14 and LuaJIT 2.1. Both candela binaries are
 profile-guided release builds for x86-64-v3, made the way the release workflow
 makes them. Each program ran 21 times, the languages interleaved, every run
@@ -45,28 +48,35 @@ pinned to one core, and every language printed the same result.
 ## Running them
 
 Benchmark a release build; a debug build is one optimisation level down and
-tells you nothing useful.
+tells you nothing useful. Build the command line tool with the `native` feature
+so `candela build` puts machine code in the artifacts it writes:
 
 ```sh
-cargo build --release
+cargo build --release --features native
+cargo build --release -p candela-vm --bin candela-vm
 ```
 
 Run one workload in each language:
 
 ```sh
 ./target/release/candela examples/fib/fib.cdl
+./target/release/candela build examples/fib/fib.cdl -o fib.cdlb
+./target/release/candela-vm fib.cdlb
 python3 examples/fib/fib.py
 luajit -joff examples/fib/fib.lua
+luajit examples/fib/fib.lua
 ```
 
-To get comparable timings, run the three under
+To get comparable timings, run them under
 [hyperfine](https://github.com/sharkdp/hyperfine):
 
 ```sh
 hyperfine --runs 150 --warmup 10 \
   './target/release/candela examples/fib/fib.cdl' \
+  './target/release/candela-vm fib.cdlb' \
   'python3 examples/fib/fib.py' \
-  'luajit -joff examples/fib/fib.lua'
+  'luajit -joff examples/fib/fib.lua' \
+  'luajit examples/fib/fib.lua'
 ```
 
 Swap the paths for any other benchmark below. Several benchmarks are listed
