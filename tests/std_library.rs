@@ -404,11 +404,12 @@ fn lib_dir_with_hash(tag: &str) -> Option<PathBuf> {
     });
     let compiler = std::env::var("CC").unwrap_or_else(|_| String::from("cc"));
     let mut command = Command::new(compiler);
-    command.args(["-O2", "-std=c11", "-shared", "-fPIC", "-o"]);
+    command.args(["-O2", "-std=c11", "-shared", "-fPIC"]);
     if cfg!(target_os = "macos") {
         command.arg("-dynamiclib");
     }
     let built = command
+        .arg("-o")
         .arg(&library)
         .arg(repo().join("libs/std_src/hash/hash.c"))
         .output();
