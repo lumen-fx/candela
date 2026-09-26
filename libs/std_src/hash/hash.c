@@ -11,12 +11,20 @@
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
+/* MSVC takes C11's `_Thread_local` only under /std:c11, which a host that
+ * builds this file with its own compiler flags may not pass. */
+#ifdef _MSC_VER
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL _Thread_local
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 /* Large enough for the widest answer, SHA-256's 64 hex digits, and the NUL. */
-static _Thread_local char out[65];
+static THREAD_LOCAL char out[65];
 
 static const char HEX[] = "0123456789abcdef";
 
