@@ -57,6 +57,9 @@ mod engine;
 // The `candela build` path: compile a `.cdl` source into a `.cdlb` artifact.
 #[cfg(feature = "compiler")]
 mod build;
+// Machine code for a built program.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+pub mod native;
 // The command line: the verbs, and the project they read.
 #[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
 mod cli;
@@ -139,6 +142,13 @@ pub use candela_vm::set_dylib_dirs;
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
 pub use build::build_bytecode;
+// The same with the profile and the machine code chosen.
+#[cfg(feature = "compiler")]
+pub use build::BuildOptions;
+#[cfg(feature = "compiler")]
+pub use build::NativeCode;
+#[cfg(feature = "compiler")]
+pub use build::build_artifact;
 // The compile `candela check` and `candela build` both run: the program, and
 // then an entry point for every fully annotated function in it. An out-of-tree
 // frontend that wants to report what the command line reports compiles through
@@ -198,6 +208,7 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
         &[],
         &[],
         0,
+        None,
     ) {
         error.report(&err_ctx);
     }

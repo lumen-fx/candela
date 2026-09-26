@@ -66,9 +66,10 @@ program starts.
 ## The toolchain
 
 Two programs install together. `candela` is the compiler: it runs source files,
-hosts the REPL, and compiles a `.cdl` source file into a `.cdlb` bytecode
-artifact. `candela-vm` is the runtime alone, which runs an artifact and links
-no parser, compiler or REPL.
+hosts the REPL, and compiles a `.cdl` source file into a `.cdlb` artifact,
+bytecode plus machine code for the functions it can compile. `candela-vm` is
+the runtime alone, which runs an artifact and links no parser, compiler or
+REPL.
 
 The standard library ships beside them as candela source, so every function in
 it is readable. `lpm`, the registry client, installs alongside and fetches the

@@ -268,6 +268,26 @@ pub enum Instr {
 
     /// Exits the program with the i32 code if it's != 0
     Halt(u16),
+
+    // The instructions below exist only in a loaded program, never in an
+    // artifact: loading ahead-of-time machine code rewrites the calls it
+    // covers into them. They sit last so the ones an artifact carries keep
+    // their numbers.
+    /// CallNative(function, dest_register_id)\
+    /// A `CallFunc` whose callee runs as machine code: calls native function
+    /// `function` of the loaded program and writes what it returns into
+    /// dest_register_id.
+    #[serde(skip)]
+    CallNative(u16, u16),
+    /// CallNativeRec(function, dest_register_id)\
+    /// A `CallFuncRecursive` whose callee runs as machine code. The
+    /// `SaveFrame` before it has pushed the frame the call returns through.
+    #[serde(skip)]
+    CallNativeRec(u16, u16),
+    /// Where a call machine code makes into the interpreter returns to: the
+    /// run that call started ends here.
+    #[serde(skip)]
+    NativeExit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +444,7 @@ impl Instr {
             | Self::ThrowError(_)
             | Self::StoreCell(_, _)
             | Self::CallIndirect(_) // The preceding SaveFrame carries the return register
+            | Self::NativeExit
             => None,
 
             Self::StartErrorCatch(_, y) if *y == u16::MAX => None,
@@ -434,6 +455,8 @@ impl Instr {
             | Self::SetBool(_, y)
             | Self::CallFunc(_, y)
             | Self::CallFuncRecursive(_, y)
+            | Self::CallNative(_, y)
+            | Self::CallNativeRec(_, y)
             | Self::SaveFrame(_, y, _)
             | Self::AddFloat(_, _, y)
             | Self::AddInt(_, _, y)
@@ -652,6 +675,9 @@ impl Instr {
             | Self::VoidReturn
             | Self::CallFunc(_, _)
             | Self::CallFuncRecursive(_, _)
+            | Self::CallNative(_, _)
+            | Self::CallNativeRec(_, _)
+            | Self::NativeExit
             | Self::SaveFrame(_, _, _)
             | Self::CallDynamicLibFunc(_, _)
             | Self::CallHostFunc(_, _)

@@ -7,7 +7,9 @@
 //! roots those packages unpacked to.
 
 use crate::Cfg;
-use crate::build::build_bytecode_profile;
+use crate::build::BuildOptions;
+use crate::build::NativeCode;
+use crate::build::build_artifact;
 use crate::compiler::compile;
 use crate::compiler::imports::ImportResolver;
 use crate::errors::BOLD;
@@ -36,8 +38,8 @@ const USAGE: &str = "Usage:
   candela new <name>               Start a project
   candela run [file.cdl] [args]    Run the project, or the file given
   candela check [file.cdl]         Compile without running
-  candela build [file.cdl] [-o out.cdlb] [--debug]
-                                   Compile to a bytecode artifact
+  candela build [file.cdl] [-o out.cdlb] [--debug] [--no-native] [--target <triple>]
+                                   Compile to an artifact
   candela add <name>[@requirement] Record a dependency and fetch it
   candela remove <name>            Drop a dependency
   candela fetch [--locked]         Fetch what the manifest lists
@@ -49,7 +51,12 @@ const USAGE: &str = "Usage:
 Options:
   --offline   Resolve from the package cache alone (run, check, build, fetch)
   --locked    Refuse to change candela.lock (fetch)
-  --debug     Build without the release passes, as a run from source compiles (build)
+  --debug     Build without the release passes or machine code, as a run from
+              source compiles (build)
+  --no-native Build without machine code, so the artifact runs on bytecode (build)
+  --target <triple>
+              Generate the machine code for another machine, such as
+              aarch64-apple-darwin (build)
   --cfg <flag | key=value>
               Turn on a flag @cfg(...) tests; repeatable (run, check, build)";
 
@@ -199,7 +206,7 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     let mut file: Option<String> = None;
     let mut output: Option<String> = None;
     let mut offline = false;
-    let mut debug = false;
+    let mut options = BuildOptions::default();
     let mut cfg = Cfg::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -211,7 +218,14 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
                 output = Some(path);
             }
             "--offline" => offline = true,
-            "--debug" => debug = true,
+            "--debug" => options.release = false,
+            "--no-native" => options.native = NativeCode::None,
+            "--target" => {
+                let Some(triple) = args.next() else {
+                    misuse("--target needs a target triple, such as aarch64-apple-darwin");
+                };
+                options.native = NativeCode::Target(triple);
+            }
             _ if file.is_none() && is_source(&arg) => file = Some(arg),
             _ => misuse(&format!(
                 "unexpected argument {RED}{BOLD}{arg}{RESET}. Name the output file with -o or --output"
@@ -231,7 +245,7 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
 
     let contents = read_source(&path);
     let bytes = match cfg
-        .scope(|| build_bytecode_profile(contents, &path.to_string_lossy(), &resolver, !debug))
+        .scope(|| build_artifact(contents, &path.to_string_lossy(), &resolver, &options))
     {
         Ok(bytes) => bytes,
         Err(e) => fail(&format!("cannot build bytecode: {e}")),

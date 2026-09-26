@@ -11,14 +11,17 @@
 //! [`compile_checked_profile`] and recorded in the artifact's export table.
 
 use crate::compiler::CompileOutput;
+use crate::compiler::function_table::function_table;
 use crate::compiler::imports::ImportResolver;
 use crate::trampoline::compile_checked_profile;
 use candela_vm::artifact::DynLibFnImage;
 use candela_vm::artifact::EnumImage;
 use candela_vm::artifact::EnumVariantImage;
 use candela_vm::artifact::ExportImage;
+use candela_vm::artifact::FunctionTable;
 use candela_vm::artifact::HostFnImage;
 use candela_vm::artifact::InstrSrcImage;
+use candela_vm::artifact::NativeImage;
 use candela_vm::artifact::ProgramImage;
 use candela_vm::artifact::SourceImage;
 use candela_vm::artifact::StructImage;
@@ -50,25 +53,113 @@ pub fn build_bytecode(
     filename: &str,
     resolver: &ImportResolver,
 ) -> Result<Vec<u8>, String> {
-    build_bytecode_profile(source, filename, resolver, true)
+    build_artifact(source, filename, resolver, &BuildOptions::default())
 }
 
-/// [`build_bytecode`] in the profile `optimize` names. `true`, the release
-/// profile, is what [`build_bytecode`] and a plain `candela build` use;
-/// `candela build --debug` passes `false` and gets the program exactly as a
-/// run from source compiles it.
-pub fn build_bytecode_profile(
+/// How a program is built into an artifact.
+#[derive(Clone, Debug)]
+pub struct BuildOptions {
+    /// The release profile: the passes that make the program faster to run,
+    /// and machine code. `false` builds the program exactly as a run from
+    /// source compiles it.
+    pub release: bool,
+    /// The machine code the artifact carries.
+    pub native: NativeCode,
+}
+
+impl Default for BuildOptions {
+    /// The release profile, with machine code for the machine building.
+    fn default() -> Self {
+        Self {
+            release: true,
+            native: NativeCode::Host,
+        }
+    }
+}
+
+/// Which machine code a release build puts in the artifact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NativeCode {
+    /// None: the program runs on bytecode everywhere.
+    None,
+    /// Code for the machine the build runs on, when candela generates code
+    /// for it.
+    Host,
+    /// Code for the machine a target triple such as `aarch64-apple-darwin`
+    /// names.
+    Target(String),
+}
+
+/// Compiles a `.cdl` source string to a `.cdlb` artifact the way `options`
+/// asks. [`build_bytecode`] is this with the defaults `candela build` uses.
+///
+/// Machine code covers the functions the code generator handles, and the VM
+/// runs the bytecode for everything else, and for the whole program on a
+/// machine the code was not generated for. A candela built without its
+/// `native` feature generates none.
+///
+/// # Errors
+///
+/// Returns an error string if serialization fails, or if `options` names a
+/// target candela does not generate code for. A compile diagnostic travels by
+/// the error funnel, not through this `Result`.
+pub fn build_artifact(
     source: String,
     filename: &str,
     resolver: &ImportResolver,
-    optimize: bool,
+    options: &BuildOptions,
 ) -> Result<Vec<u8>, String> {
-    let (out, exports) = compile_checked_profile(source, filename, resolver, optimize);
+    let (out, exports) = compile_checked_profile(source, filename, resolver, options.release);
     // An artifact runs from `main`, so packaging a file without one would write
     // a program that cannot start.
     out.require_main();
-    let image = image_from_output(out, exports);
-    serialize_image(&image)
+    let table = function_table(&out);
+    let mut image = image_from_output(out, exports);
+    if options.release {
+        image.native = native_sections(&image, &table, &options.native)?;
+    }
+    serialize_image(&image, Some(&table))
+}
+
+/// The machine code sections for `image`.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+fn native_sections(
+    image: &ProgramImage,
+    table: &FunctionTable,
+    native: &NativeCode,
+) -> Result<Vec<NativeImage>, String> {
+    use crate::native::Target;
+    let target = match native {
+        NativeCode::None => return Ok(Vec::new()),
+        NativeCode::Host => match Target::host() {
+            Some(target) => target,
+            None => return Ok(Vec::new()),
+        },
+        NativeCode::Target(triple) => Target::parse(triple)?,
+    };
+    match crate::native::generate(image, table, &target) {
+        Ok(section) => Ok(section.into_iter().collect()),
+        // The program is sound; the code generator is what refused. A test
+        // build says so, and a release build carries on with bytecode, which
+        // runs the program all the same.
+        Err(e) if cfg!(debug_assertions) => Err(format!("machine code generation failed: {e}")),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Without the code generator there is no machine code to add.
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+fn native_sections(
+    _image: &ProgramImage,
+    _table: &FunctionTable,
+    native: &NativeCode,
+) -> Result<Vec<NativeImage>, String> {
+    match native {
+        NativeCode::Target(triple) => Err(format!(
+            "this candela generates no machine code, so it cannot build for {triple}; it was built without the native feature"
+        )),
+        NativeCode::None | NativeCode::Host => Ok(Vec::new()),
+    }
 }
 
 fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramImage {
@@ -177,5 +268,6 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
         dyn_lib_fns,
         host_fns,
         exports,
+        native: Vec::new(),
     }
 }

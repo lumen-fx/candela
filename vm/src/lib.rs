@@ -32,6 +32,9 @@ pub mod intrinsics;
 // The `.cdlb` bytecode artifact format plus the load/run API.
 pub mod artifact;
 
+// Loading and calling the machine code a `.cdlb` carries.
+pub mod native;
+
 // The garbage collector. Internal to the runtime; its state is reached through
 // `rt::Pools`.
 mod gc;

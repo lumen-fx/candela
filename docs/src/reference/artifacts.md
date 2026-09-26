@@ -44,6 +44,12 @@ The artifact produces the same output as running the source through `candela`.
   it is variadic.
 - An export table: one entry per host-callable function, with the call
   trampoline the compiler emitted for it.
+- Machine code for the functions the code generator handles, for the machine
+  the build ran on or the one `--target` named. See [machine code](#machine-code).
+- The function table: every compiled function with its name, where it starts,
+  the registers and types of its parameters, what it returns, and the type of
+  each value its instructions write. Code generation reads it, and a tool that
+  works on the program can too; `candela-vm` skips it.
 
 The two recipe tables are references, not contents. A dynamic library's bytes
 are never embedded; the runtime re-opens the library by name and re-resolves the
@@ -105,6 +111,39 @@ without the entry. Annotate the parameters with the types the host passes to
 silence the warning and have the body checked at those types. A generic function
 gets no entry either way.
 
+## Machine code
+
+A release build compiles the functions it can to machine code and puts the code
+in the artifact beside the bytecode. `candela-vm` loads it and runs those
+functions as machine code; everything else runs on the interpreter, and a call
+goes between the two either way. The bytecode stays complete, so the same
+artifact runs anywhere `candela-vm` does, with or without the code.
+
+A function runs as machine code when every instruction in it is one the code
+generator handles: arithmetic, comparisons, branches and loops, calls, list
+indexing and struct fields, `print`, and `dylib` calls with `int` and `float`
+arguments. Functions that work with strings, maps, closures, `try` or host
+functions stay on the interpreter for now.
+
+The program behaves the same either way: the same output, the same errors with
+the same messages and spans, the same `try` and `catch`, and the same call depth
+limit. Deep recursion goes on in the interpreter once the machine code has used
+the stack it keeps for itself, so a recursion that would overflow the thread
+still stops at the limit with the usual error.
+
+A section records the architecture and operating system it was built for, the
+processor features it needs, and the layout of the runtime it expects.
+`candela-vm` runs the bytecode instead when any of these does not match the
+machine it runs on, and when the operating system refuses to let memory hold
+code, as iOS does and macOS does for a program built with the hardened runtime.
+The artifact loads either way.
+
+Code is generated for x86-64 and aarch64 on Linux, macOS and Windows, for the
+baseline processor of each. `candela build --no-native` leaves it out, and
+`candela build --target <triple>` builds it for another machine; see [the
+command line](cli.md). A debug build carries none. The WebAssembly runtime runs
+the bytecode.
+
 ## Version compatibility
 
 The file starts with a four-byte marker and a one-byte format version. The
@@ -133,6 +172,7 @@ been raised for:
   existing instructions and so renumber the ones after them
 - the move chain and the add-to-a-float-field instructions, which renumber the
   instructions after them the same way
+- machine code sections, and the function table after the image
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.
