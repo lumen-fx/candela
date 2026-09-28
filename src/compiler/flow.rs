@@ -42,6 +42,22 @@ impl Program<'_> {
         }
         outside
     }
+
+    /// A register holding `value` that nothing writes, made if there is none.
+    /// `written` names the registers some instruction writes: a literal's
+    /// register can still be one, and is then replaced as the literal's
+    /// register by a new one. `None` when the register file has no room left.
+    pub fn constant_register(&mut self, value: Data, written: &FxHashSet<u16>) -> Option<u16> {
+        if let Some(&reg) = self.const_registers.get(&value)
+            && !written.contains(&reg)
+        {
+            return Some(reg);
+        }
+        let reg = u16::try_from(self.registers.len()).ok()?;
+        self.registers.push(value);
+        self.const_registers.insert(value, reg);
+        Some(reg)
+    }
 }
 
 /// Gives `new`, rewritten from `old`, the span `old` has. A runtime error

@@ -586,6 +586,124 @@ pub fn a_struct_kept_in_registers_behaves_as_a_pooled_one() {
     );
 }
 
+/// The instructions a release build of `src` runs.
+fn release_instructions(src: &str) -> Vec<Instr> {
+    crate::compiler::compile_profile(
+        String::from(src),
+        "release.cdl",
+        false,
+        &crate::compiler::imports::ImportResolver::new(),
+        true,
+    )
+    .instructions
+}
+
+/// A release build also keeps in registers a struct held in a field of
+/// another, one written after it was built, and one that is printed. Written
+/// through one of two names that share it, read in a catch after a write, or
+/// carried round a loop and written there, it has to behave as the pooled
+/// struct does, so each of those stays pooled.
+#[test]
+pub fn a_struct_written_nested_or_printed_behaves_as_a_pooled_one() {
+    let src = "
+struct V { x: float, y: float }
+struct Seg { a: V, b: V }
+
+impl V {
+    fn +(self, other: V) -> V { return V { x: self.x + other.x, y: self.y + other.y }; }
+}
+
+fn main() {
+    for i in 0..2 {
+        let s = Seg { a: V { x: 1.0, y: 2.0 }, b: V { x: float(i), y: 0.5 } };
+        let d = s.b.x - s.a.x + s.b.y;
+
+        let m = V { x: 3.0, y: 4.0 } + V { x: 0.0, y: 0.0 };
+        for j in 0..3 {
+            m.x = m.x + 1.0;
+            m.y += 0.5;
+        }
+
+        let a = V { x: 1.0, y: 2.0 } + V { x: 0.0, y: 0.0 };
+        let b = a;
+        b.x = 5.0;
+
+        let c = V { x: 1.0, y: 1.0 } + V { x: 0.0, y: 0.0 };
+        try {
+            let e = c;
+            e.x = 9.0;
+            throw(\"stop\");
+        } catch err {
+            print(c.x);
+        }
+
+        let p = V { x: 0.0, y: 0.0 } + V { x: 0.0, y: 0.0 };
+        let q = p;
+        for j in 0..2 {
+            q.x += 1.0;
+            print(p.x);
+        }
+
+        let t = Seg { a: V { x: 1.0, y: 1.0 }, b: V { x: 2.0, y: 2.0 } };
+        let inner = t.a;
+        inner.x = 7.0;
+
+        print(d, m, a.x, b.x, t.a.x, t);
+    }
+}
+";
+    let once = |i: f64| {
+        format!(
+            "9.0\n1.0\n2.0\n{:?}\nV {{x:6.0,y:5.5}}\n5.0\n5.0\n7.0\nSeg {{a:V {{x:7.0,y:1.0}},b:V {{x:2.0,y:2.0}}}}\n",
+            i - 1.0 + 0.5
+        )
+    };
+    assert_eq!(run_output(src), once(0.0) + &once(1.0));
+}
+
+/// A struct held in a field of another is kept in registers along with it,
+/// written after it was built is too while nothing else holds it, and one
+/// that is printed is built into a pooled object only where it is printed.
+#[test]
+pub fn a_release_build_keeps_nested_written_and_printed_structs_in_registers() {
+    let src = "
+struct V { x: float, y: float }
+struct Seg { a: V, b: V }
+
+fn main() {
+    let total = 0.0;
+    for i in 0..3 {
+        let s = Seg { a: V { x: 1.0, y: 2.0 }, b: V { x: float(i), y: 0.5 } };
+        let a = s.a;
+        a.x += 1.0;
+        a.y = a.y * 2.0;
+        total += s.b.x - a.x + a.y;
+        print(a);
+    }
+    print(total);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "V {x:2.0,y:4.0}\nV {x:2.0,y:4.0}\nV {x:2.0,y:4.0}\n9.0\n"
+    );
+    let instructions = release_instructions(src);
+    let clones: Vec<usize> = instructions
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, instr)| matches!(instr, Instr::CloneStruct(..)).then_some(pos))
+        .collect();
+    assert_eq!(clones.len(), 1, "only the printed copy is built");
+    assert!(matches!(
+        instructions[clones[0] + 1..clones[0] + 4],
+        [
+            Instr::SetFieldStruct(..),
+            Instr::SetFieldStruct(..),
+            Instr::Print(_)
+        ]
+    ));
+}
+
 /// A body copied into its call site raises an error at the span inside the
 /// function, as the call does, even where the caller writes the same element
 /// store on the same registers before or after the call.
