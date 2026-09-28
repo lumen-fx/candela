@@ -52,7 +52,38 @@ use crate::rt::FnValue;
 use crate::rt::InstrSrc;
 use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
+use std::cell::RefCell;
 use std::rc::Rc;
+
+thread_local! {
+    /// The functions whose bodies are being compiled, innermost last.
+    static COMPILING_BODIES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Marks the body of one function as being compiled for as long as it lives,
+/// and unmarks it on the way out of a compile error too.
+struct CompilingBody;
+
+impl CompilingBody {
+    fn enter(fn_id: usize) -> Self {
+        COMPILING_BODIES.with(|bodies| bodies.borrow_mut().push(fn_id));
+        Self
+    }
+}
+
+impl Drop for CompilingBody {
+    fn drop(&mut self) {
+        COMPILING_BODIES.with(|bodies| bodies.borrow_mut().pop());
+    }
+}
+
+/// The function whose own body is being compiled, when the code being
+/// compiled sits in one: the innermost, so a function compiled because a body
+/// calls it answers for its own body and not its caller's.
+#[must_use]
+pub fn body_being_compiled() -> Option<usize> {
+    COMPILING_BODIES.with(|bodies| bodies.borrow().last().copied())
+}
 
 /// The register holding the closure value a call by name reaches: the variable
 /// of that name, read out of its cell where the variable is itself captured.
@@ -724,20 +755,23 @@ fn compile_function(
     let return_downcast = declared_return
         .as_ref()
         .and_then(|(declared, _)| return_check(declared, state));
-    let parsed = compile_expr(
-        fn_code,
-        &mut v_temp,
-        Ctx {
-            is_compiling_recursive: is_recursive,
-            file_idx: fn_file_idx,
-            single_run: false,
-            in_function: true,
-            offset: ctx.offset + output.len() as u16,
-            return_downcast,
-            ..ctx
-        },
-        state,
-    );
+    let parsed = {
+        let _body = CompilingBody::enter(function_id);
+        compile_expr(
+            fn_code,
+            &mut v_temp,
+            Ctx {
+                is_compiling_recursive: is_recursive,
+                file_idx: fn_file_idx,
+                single_run: false,
+                in_function: true,
+                offset: ctx.offset + output.len() as u16,
+                return_downcast,
+                ..ctx
+            },
+            state,
+        )
+    };
     state.generics.pop_bindings();
     for i in anon_fns.into_iter().rev() {
         state.scope_mut(fn_file_idx).symbols.remove(i);

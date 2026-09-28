@@ -45,7 +45,9 @@ method was called on, and its type is the type the `impl` block names. Any name
 works, but `self` is the convention and reads best.
 
 A function in an `impl` block that declares no parameters has no receiver, so
-calling it with a dot is a compile error.
+calling it with a dot is a compile error. The one such function you can call is
+a struct's `default`, by its path: `Options::default()`. It replaces the
+struct's built-in default; see [Default values](types.md#default-values).
 
 Parameters after the first behave exactly like function parameters: name them,
 pass them positionally, and either leave the type to be inferred from the call

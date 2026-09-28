@@ -59,11 +59,14 @@ use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::is_default_call;
+use expr::mangle_method;
 use functions::handle_functions;
 use functions::handle_value_call;
+use functions::user_functions::body_being_compiled;
 use functions::user_functions::check_declared_fn;
 use functions::user_functions::declared_holds_fn_signature;
 use functions::user_functions::ensure_indirect_impl;
+use functions::user_functions::handle_user_function;
 use methods::compile_operator_method;
 use methods::handle_method_calls;
 use registers::int_immediate;
@@ -83,18 +86,22 @@ use type_system::DataType;
 use type_system::FnTypeExpr;
 use type_system::Generics;
 use type_system::ReturnAnnotation;
+use type_system::STRUCT_DEFAULT_METHOD;
 use type_system::TypeCtx;
 use type_system::TypeExpr;
 use type_system::TypeParams;
 use type_system::bare_fn_value_type;
 use type_system::check_if_returns_void;
 use type_system::check_operator_method;
+use type_system::check_struct_default_fn;
 use type_system::collect_direct_fn_calls;
+use type_system::infer_user_fn_return_type;
 use type_system::literal_struct_id;
 use type_system::param_type_matches;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
+use type_system::struct_of_default_fn;
 use type_system::variant_constructor_at;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -778,7 +785,20 @@ fn compile_struct_literal(
     }
     let fill = match base {
         None => StructFill::Nothing,
-        Some((base, _)) if is_default_call(base) => StructFill::Defaults,
+        Some((base, _)) if is_default_call(base) => {
+            match user_struct_default(expected_struct_idx as u16, state) {
+                Some(fn_id) => StructFill::Base(call_user_struct_default(
+                    fn_id,
+                    expected_struct_idx as u16,
+                    span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                )),
+                None => StructFill::Defaults,
+            }
+        }
         Some((base, base_span)) => {
             let base_type = base.infer_type(v, ctx, state);
             if base_type != DataType::Struct(state.structs[expected_struct_idx].id) {
@@ -813,8 +833,74 @@ fn compile_struct_literal(
     dest
 }
 
+/// The `default` function the `impl` block of struct `struct_idx` declares,
+/// which replaces the default the field declarations give. Inside that
+/// function's own body the struct's default is the one the fields give, so the
+/// function can start from `..Default::default()` or `S::default()` without
+/// calling itself.
+fn user_struct_default(struct_idx: u16, state: &State<'_>) -> Option<usize> {
+    let name = mangle_method(
+        &state.structs[struct_idx as usize].name,
+        STRUCT_DEFAULT_METHOD,
+    );
+    let fn_id = state.fns.iter().position(|f| f.name == name)?;
+    (body_being_compiled() != Some(fn_id)).then_some(fn_id)
+}
+
+/// Calls the `default` function of struct `struct_idx`, checking first that
+/// it builds that struct: a function declared without `-> Type` is checked
+/// against what its body returns.
+fn call_user_struct_default(
+    fn_id: usize,
+    struct_idx: u16,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let name = state.fns[fn_id].name.clone();
+    check_struct_default_fn(
+        &state.fns[fn_id],
+        struct_idx,
+        None,
+        state.sources,
+        state.type_names(),
+    );
+    let (returned, returned_span) = match state.fns[fn_id].return_type.clone() {
+        Some(declared) => declared,
+        None => (
+            infer_user_fn_return_type(fn_id, &[], &[], &name, v, ctx, state),
+            state.fns[fn_id].name_span,
+        ),
+    };
+    check_struct_default_fn(
+        &state.fns[fn_id],
+        struct_idx,
+        Some((&returned, returned_span)),
+        state.sources,
+        state.type_names(),
+    );
+    handle_user_function(
+        &name,
+        fn_id,
+        output,
+        v,
+        ctx,
+        state,
+        None,
+        &[],
+        span,
+        &[],
+        &[],
+        None,
+    )
+    .unwrap_id()
+}
+
 /// Lowers the default value of struct `struct_idx`: `S::default()`, and a
-/// `Default::default()` a struct-typed position resolved.
+/// `Default::default()` a struct-typed position resolved. A `default` function
+/// in the struct's `impl` block builds it when there is one.
 pub(crate) fn compile_struct_default(
     struct_idx: u16,
     span: Span,
@@ -834,6 +920,9 @@ pub(crate) fn compile_struct_default(
         fn drop(&mut self) {
             DEFAULTING.with(|d| d.borrow_mut().pop());
         }
+    }
+    if let Some(fn_id) = user_struct_default(struct_idx, state) {
+        return call_user_struct_default(fn_id, struct_idx, span, v, ctx, state, output);
     }
     if DEFAULTING.with(|d| d.borrow().contains(&struct_idx)) {
         let s = &state.structs[struct_idx as usize];
@@ -6573,6 +6662,19 @@ fn resolve_types(
             && let Some(code) = resolve_default_returns(&fns[fn_id as usize].code, *struct_id)
         {
             fns[fn_id as usize].code = Rc::from(code);
+        }
+    }
+    // A struct's own `default` replaces the one its field declarations give,
+    // so it has to be callable the way that one is.
+    for func in fns.iter() {
+        if let Some(struct_id) = struct_of_default_fn(&func.name, structs) {
+            check_struct_default_fn(
+                func,
+                struct_id,
+                func.return_type.as_ref().map(|(t, span)| (t, *span)),
+                sources,
+                TypeNames { structs, enums },
+            );
         }
     }
     // The signatures a check-only compile bound without a library, which take
