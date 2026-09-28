@@ -94,16 +94,24 @@ candela build game.cdl --target aarch64-apple-darwin
 ```
 
 A build compiles in the release profile, which runs passes that make the
-program faster: a small function that calls no other candela function is
-copied into the places that call it, and a struct that is only built, read and
-moved between variables, never returned, stored, passed to a call or printed,
-keeps its fields in registers instead of allocating, and a `for` loop over a
-slice such as `list[1..n]` walks the list itself instead of copying the slice,
-when nothing in the loop could change the list. The release program prints the same
-output and raises the same errors, with the same messages and spans, as the
-program compiled in the debug profile that `candela <file.cdl>`, `candela run`
-and an embedding host use. `--debug` builds in the debug profile instead, with
-no passes and no machine code.
+program faster:
+
+- A small function that calls no other candela function is copied into the
+  places that call it.
+- A struct that never leaves the function that built it keeps its fields in
+  registers instead of allocating. Returning it, storing it in a list or a map,
+  capturing it, comparing it, or passing it to a call that is not copied in
+  keeps it allocated. A struct stored in a field of another one is kept in
+  registers along with it, and so is one whose fields are written after it is
+  built, as long as no other variable holding the same struct is read
+  afterwards. `print` builds the struct where it prints it, and only there.
+- A `for` loop over a slice such as `list[1..n]` walks the list itself instead
+  of copying the slice, when nothing in the loop could change the list.
+
+The release program prints the same output and raises the same errors, with
+the same messages and spans, as the program compiled in the debug profile that
+`candela <file.cdl>`, `candela run` and an embedding host use. `--debug` builds
+in the debug profile instead, with no passes and no machine code.
 
 A release build also puts [machine code](artifacts.md#machine-code) in the
 artifact for the functions the code generator handles, built for the machine

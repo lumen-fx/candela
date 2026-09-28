@@ -7017,7 +7017,7 @@ pub fn compile_profile(
     };
     instructions.push(Instr::Halt(0));
     if optimize {
-        scalar::replace_scalars(&mut flow::Program {
+        let mut program = flow::Program {
             instructions: &mut instructions,
             registers: &mut registers,
             objs: &pools.objs,
@@ -7026,17 +7026,11 @@ pub fn compile_profile(
             callsite_registers: &mut callsite_registers,
             functions: &mut functions,
             indirect: &indirect_registers,
-        });
-        copies::forward_copies(&mut flow::Program {
-            instructions: &mut instructions,
-            registers: &mut registers,
-            objs: &pools.objs,
-            const_registers: &mut const_registers,
-            instr_src: &mut instr_src,
-            callsite_registers: &mut callsite_registers,
-            functions: &mut functions,
-            indirect: &indirect_registers,
-        });
+        };
+        // A struct kept in registers can free one it held in a field, so the
+        // replacement runs again until it finds nothing more.
+        while scalar::replace_scalars(&mut program) {}
+        copies::forward_copies(&mut program);
     }
     use_immediates(&mut instructions, &[], &registers, &const_registers);
     copies::chain_moves(&mut flow::Program {
