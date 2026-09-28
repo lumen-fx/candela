@@ -1346,6 +1346,14 @@ fn carry_span(old: Instr, new: Instr, state: &mut State<'_>) {
 /// does with a register, a pass looking at the program has to assume of all.
 /// Nothing outside the body reads what it writes, so fresh registers change
 /// nothing the program can see.
+///
+/// A runtime error finds its span by the instruction that raised it, so the
+/// copy of one that can raise must not read exactly like an instruction the
+/// caller has elsewhere. One that writes a register writes a fresh one; one
+/// that writes none, such as an element store or a `throw`, would be spelled
+/// with the caller's own registers once its parameters became the arguments,
+/// so a parameter it reads gets a fresh register too. Copy forwarding takes
+/// that move back out where no other instruction would then read alike.
 fn bind_body_registers(
     body: &[Instr],
     bindings: &[(u16, u16)],
@@ -1353,9 +1361,15 @@ fn bind_body_registers(
     state: &mut State<'_>,
 ) -> Vec<Instr> {
     let writes = |reg: u16| body.iter().any(|instr| instr.get_tgt_id() == Some(reg));
+    let mut placed: Vec<u16> = Vec::new();
+    for instr in body {
+        if instr.get_tgt_id().is_none() && state.instr_src.iter().any(|src| src.instr == *instr) {
+            instr.for_each_read_reg(|reg| placed.push(reg));
+        }
+    }
     let mut renamed: Vec<(u16, u16)> = Vec::new();
     for &(param, arg) in bindings {
-        if writes(param) {
+        if writes(param) || placed.contains(&param) {
             state.registers.push(NULL);
             let fresh = (state.registers.len() - 1) as u16;
             output.push(Instr::Mov(arg, fresh));

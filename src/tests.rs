@@ -586,6 +586,26 @@ pub fn a_struct_kept_in_registers_behaves_as_a_pooled_one() {
     );
 }
 
+/// A body copied into its call site raises an error at the span inside the
+/// function, as the call does, even where the caller writes the same element
+/// store on the same registers before or after the call.
+#[test]
+pub fn a_copied_store_raises_where_the_function_does() {
+    for (first, second, span) in [
+        ("l[i] = v;", "put(l, i, v);", "l[i] = v"),
+        ("put(l, i, v);", "l[i] = v;", "l[i] = v"),
+    ] {
+        let src = format!(
+            "fn put(l, i, v) {{\n    l[i] = v;\n}}\n\nfn main() {{\n    let l = [1, 2, 3];\n    for n in 0..1 {{\n        let i = n + 5;\n        let v = 0;\n        try {{\n            {first}\n        }} catch e {{\n            print(\"caught\");\n        }}\n        {second}\n    }}\n}}\n"
+        );
+        let error = run_diag(&src, "store.cdl").unwrap_err();
+        assert_eq!(error.code, "index_out_of_bounds");
+        assert_eq!(&src[error.span.clone()], span);
+        let line = src[..error.span.start].lines().count();
+        assert_eq!(line, if first.starts_with("put") { 15 } else { 2 });
+    }
+}
+
 /// A throw out of a call made inside a `try` skips the return that would have
 /// put the caller's registers back, so the catch does it instead. The save the
 /// aborted call left behind used to stay on the recursion stack, and every
