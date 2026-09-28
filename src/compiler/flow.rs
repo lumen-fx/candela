@@ -9,6 +9,7 @@ use crate::data::Data;
 use crate::instr::Instr;
 use crate::vm::ObjectPool;
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 /// Everything of a compiled program a whole-program pass reads or rewrites.
 pub struct Program<'a> {
@@ -20,6 +21,58 @@ pub struct Program<'a> {
     pub callsite_registers: &'a mut [Vec<u16>],
     pub functions: &'a mut [Function],
     pub indirect: &'a IndirectRegisters,
+}
+
+impl Program<'_> {
+    /// Registers something besides an instruction here reads or writes: the
+    /// null sink, the parameters a call fills (a host calling in fills them
+    /// too), the registers an indirect call passes, and function entries.
+    #[must_use]
+    pub fn outside_registers(&self) -> FxHashSet<u16> {
+        let mut outside: FxHashSet<u16> = FxHashSet::default();
+        outside.insert(0);
+        outside.extend(self.indirect.args.iter().copied());
+        outside.extend(self.indirect.env);
+        for function in self.functions.iter() {
+            outside.extend(function.entry_register);
+            for fn_impl in &function.impls {
+                outside.extend(fn_impl.args_loc.iter().copied());
+                outside.extend(fn_impl.env_loc);
+            }
+        }
+        outside
+    }
+}
+
+/// Gives `new`, rewritten from `old`, the span `old` has. A runtime error
+/// names its place by the first entry for the instruction that raised it.
+pub fn carry_span(instr_src: &mut Vec<InstrSrc>, old: Instr, new: Instr) {
+    if let Some(src) = instr_src.iter().find(|src| src.instr == old) {
+        let (span, file_id) = (src.span, src.file_id);
+        instr_src.push(InstrSrc {
+            instr: new,
+            span,
+            file_id,
+        });
+    }
+}
+
+/// Whether `old` can be rewritten into `new` with any error it raises still
+/// reported where it was. The span table is searched for the first entry
+/// equal to the instruction that raised, so `new` must either be missing from
+/// it or already stand for the same place `old` does.
+#[must_use]
+pub fn keeps_place(instr_src: &[InstrSrc], old: Instr, new: Instr) -> bool {
+    let place = |instr: Instr| {
+        instr_src
+            .iter()
+            .find(|src| src.instr == instr)
+            .map(|src| (src.span, src.file_id))
+    };
+    match place(new) {
+        None => true,
+        found => found == place(old),
+    }
 }
 
 /// Where the branch at `pos` can jump to, for an instruction that branches

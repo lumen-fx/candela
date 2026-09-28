@@ -9,35 +9,24 @@
 //! `t` follows it in the same straight run of instructions, and nothing in
 //! that stretch writes `a`: each read then sees exactly what `a` holds.
 
-use crate::compiler::compiler_data::InstrSrc;
 use crate::compiler::flow::Program;
 use crate::compiler::flow::branch_targets;
+use crate::compiler::flow::carry_span;
 use crate::compiler::flow::ends_straight_run;
 use crate::compiler::flow::is_call;
+use crate::compiler::flow::keeps_place;
 use crate::compiler::flow::relocate;
 use crate::instr::Instr;
 use rustc_hash::FxHashMap;
-use rustc_hash::FxHashSet;
 
 /// Drops every move the module documentation describes.
 pub fn forward_copies(program: &mut Program<'_>) {
     let mut instructions = program.instructions.clone();
     let lands = branch_targets(&instructions);
 
-    // Registers something besides an instruction here reads or writes: the
-    // parameters a call fills, the registers an indirect call passes, function
-    // entries, the null sink, and every register a call saves and puts back.
-    let mut excluded: FxHashSet<u16> = FxHashSet::default();
-    excluded.insert(0);
-    excluded.extend(program.indirect.args.iter().copied());
-    excluded.extend(program.indirect.env);
-    for function in program.functions.iter() {
-        excluded.extend(function.entry_register);
-        for fn_impl in &function.impls {
-            excluded.extend(fn_impl.args_loc.iter().copied());
-            excluded.extend(fn_impl.env_loc);
-        }
-    }
+    // Registers something besides an instruction here reads or writes, and
+    // every register a call saves and puts back.
+    let mut excluded = program.outside_registers();
     for list in program.callsite_registers.iter() {
         excluded.extend(list.iter().copied());
     }
@@ -86,14 +75,26 @@ pub fn forward_copies(program: &mut Program<'_>) {
         if from_written {
             continue;
         }
-        for &at in &uses {
-            let old = instructions[at];
+        let forwarded = |old: Instr| {
             let mut new = old;
             new.read_regs_mut(|reg| {
                 if *reg == to {
                     *reg = from;
                 }
             });
+            new
+        };
+        // A read that can raise an error must still be found at its own span,
+        // so it must not come to read exactly like an instruction elsewhere.
+        if uses.iter().any(|&at| {
+            let old = instructions[at];
+            !keeps_place(program.instr_src, old, forwarded(old))
+        }) {
+            continue;
+        }
+        for &at in &uses {
+            let old = instructions[at];
+            let new = forwarded(old);
             if new != old {
                 carry_span(program.instr_src, old, new);
                 instructions[at] = new;
@@ -121,18 +122,6 @@ pub fn forward_copies(program: &mut Program<'_>) {
     let old = std::mem::take(program.instructions);
     relocate(program, &old, &dropped, &mut new, &map);
     *program.instructions = new;
-}
-
-/// Gives `new`, rewritten from `old`, the span `old` has.
-fn carry_span(instr_src: &mut Vec<InstrSrc>, old: Instr, new: Instr) {
-    if let Some(src) = instr_src.iter().find(|src| src.instr == old) {
-        let (span, file_id) = (src.span, src.file_id);
-        instr_src.push(InstrSrc {
-            instr: new,
-            span,
-            file_id,
-        });
-    }
 }
 
 /// Joins each pair of moves where the second refills the register the first
