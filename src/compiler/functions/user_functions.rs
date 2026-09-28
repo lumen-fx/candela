@@ -38,6 +38,7 @@ use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_enum;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::compiler::compiler_errors::error_invalid_type;
+use crate::compiler::flow::body as flow_body;
 use crate::compiler::flow::branch_target;
 use crate::compiler::flow::ends_straight_run;
 use crate::compiler::functions::compile_call_args;
@@ -1158,7 +1159,8 @@ pub fn declared_holds_fn_signature(declared: &DataType) -> bool {
 /// saves: the ones the body may still read after the call returns.
 ///
 /// A register counts as read after the call when any instruction past the call
-/// reads it, with two exceptions that hold on every path out of the call. The
+/// reads it, or any instruction before it that a loop around the call runs
+/// again, with two exceptions that hold on every path out of the call. The
 /// register the call returns into is written by the return itself, so the value
 /// saved there would never be read. And in the straight run of instructions
 /// that follows the call, up to the first branch or the first place a branch
@@ -1215,24 +1217,7 @@ fn set_saved_registers(
                 straight = false;
             }
             reads.clear();
-            match instr {
-                // Saving reads the registers the later call keeps.
-                Instr::SaveFrame(_, _, later) => {
-                    reads.extend_from_slice(&state.callsite_registers[*later as usize]);
-                }
-                // A recursive call reads its parameters where they already
-                // are: an argument that is the parameter itself is not moved
-                // there first, so no instruction names the read.
-                Instr::CallFuncRecursive(target, _) => {
-                    reads.extend_from_slice(params);
-                    for fn_impl in state.fns.iter().flat_map(|f| f.impls.iter()) {
-                        if fn_impl.loc == *target {
-                            reads.extend_from_slice(&fn_impl.args_loc);
-                        }
-                    }
-                }
-                _ => instr.for_each_read_reg(|reg| reads.push(reg)),
-            }
+            instr_reads(*instr, params, state, &mut reads);
             for &reg in &reads {
                 if !written.contains(&reg) && all_written_regs.binary_search(&reg).is_ok() {
                     live.push(reg);
@@ -1267,9 +1252,45 @@ fn set_saved_registers(
                 straight = false;
             }
         }
+        // A loop around the call runs the instructions before the call again
+        // once it returns, so whatever they read is read after the call too.
+        for pos in flow_body(body, call_pos + 1) {
+            if pos > call_pos {
+                break;
+            }
+            reads.clear();
+            instr_reads(body[pos], params, state, &mut reads);
+            for &reg in &reads {
+                if !written.contains(&reg) && all_written_regs.binary_search(&reg).is_ok() {
+                    live.push(reg);
+                }
+            }
+        }
         live.sort_unstable();
         live.dedup();
         state.callsite_registers[callsite as usize] = live;
+    }
+}
+
+/// The registers `instr` reads, as [`set_saved_registers`] counts them.
+fn instr_reads(instr: Instr, params: &[u16], state: &State<'_>, reads: &mut Vec<u16>) {
+    match instr {
+        // Saving reads the registers the later call keeps.
+        Instr::SaveFrame(_, _, later) => {
+            reads.extend_from_slice(&state.callsite_registers[later as usize]);
+        }
+        // A recursive call reads its parameters where they already are: an
+        // argument that is the parameter itself is not moved there first, so
+        // no instruction names the read.
+        Instr::CallFuncRecursive(target, _) => {
+            reads.extend_from_slice(params);
+            for fn_impl in state.fns.iter().flat_map(|f| f.impls.iter()) {
+                if fn_impl.loc == target {
+                    reads.extend_from_slice(&fn_impl.args_loc);
+                }
+            }
+        }
+        _ => instr.for_each_read_reg(|reg| reads.push(reg)),
     }
 }
 

@@ -309,6 +309,67 @@ pub fn a_recursive_call_inside_the_arguments_of_another_keeps_its_own_saves() {
     );
 }
 
+/// A loop around a recursive call runs the instructions before the call again
+/// once it returns, so what they read has to survive the call. A `for` loop
+/// reads its list only at the top of each turn, before the call, and used to
+/// come back from the call walking the list the inner level left in the
+/// register.
+#[test]
+pub fn a_loop_around_a_recursive_call_keeps_what_it_reads_before_the_call() {
+    assert_eq!(
+        run_output(
+            r#"
+            fn kids(n: int) -> string[] {
+                if n == 0 { return ["a", "b", "c"]; }
+                if n == 1 { return ["x", "y"]; }
+                return [];
+            }
+            fn walk(depth: int) -> int {
+                let names = kids(depth);
+                let count = 0;
+                for name in names {
+                    count = count + 1;
+                    if name == "a" || name == "x" {
+                        count = count + walk(depth + 1);
+                    }
+                }
+                return count;
+            }
+            fn nested(depth: int) -> int {
+                let rows = kids(depth);
+                let count = 0;
+                for r in rows {
+                    for c in kids(depth) {
+                        count = count + 1;
+                        if r == "a" && c == "a" {
+                            count = count + nested(depth + 1);
+                        }
+                    }
+                }
+                return count;
+            }
+            fn tally(depth: int) -> int {
+                let limit = kids(depth).len();
+                let i = 0;
+                let count = 0;
+                while i < limit {
+                    count = count + 1;
+                    if i == 0 {
+                        count = count + tally(depth + 1);
+                    }
+                    i = i + 1;
+                }
+                return count;
+            }
+            fn main() {
+                print(walk(0), nested(0), tally(0));
+            }
+            "#
+        ),
+        "5\n13\n5\n"
+    );
+}
+
 /// A register the code after a call overwrites before reading holds nothing
 /// the call has to save, but only on the path through that code. A throw out
 /// of the call lands on the catch instead, which reads what the register held
