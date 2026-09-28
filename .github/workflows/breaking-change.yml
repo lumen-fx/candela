@@ -1,0 +1,44 @@
+name: breaking change
+
+# A pull request that breaks something carries the C-Breaking-Change label and
+# adds a migration note under docs/migration/unreleased/, and one without the
+# other fails here. The release publishes those notes as its migration guide,
+# so a break with no note ships with nothing telling anyone what to change.
+#
+# It runs again when a label is added or taken off, so fixing the label turns it
+# green without a new push. scripts/check-breaking-change.py holds the rules and
+# runs locally against `gh pr view --json labels,files`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notes:
+    name: migration note
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # `gh pr view` lists at most 100 files, so the files come from the REST
+      # listing, which pages, reshaped into what `gh pr view` prints.
+      - name: Read the labels and the changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels > "$RUNNER_TEMP/labels.json"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+            --jq '.[] | {path: .filename, changeType: (.status | ascii_upcase)}' \
+            | jq -s '{files: .}' > "$RUNNER_TEMP/files.json"
+          jq -s '.[0] * .[1]' "$RUNNER_TEMP/labels.json" "$RUNNER_TEMP/files.json" \
+            > "$RUNNER_TEMP/pr.json"
+
+      - name: Check the label against the notes
+        run: python3 scripts/check-breaking-change.py "$RUNNER_TEMP/pr.json"

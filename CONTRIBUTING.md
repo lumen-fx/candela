@@ -70,3 +70,21 @@ embedding, whole-program runs and the REPL, and `libs/std/tests` covers the
 standard library.
 
 Keep the code fast, then simplify it as far as it goes without giving that back.
+
+## Breaking changes
+
+A change is breaking when someone on the previous release has to do something
+to keep working after upgrading: a program that stops compiling or behaves
+differently, a `.cdlb` that has to be rebuilt, a removed or renamed standard
+library function, a changed CLI flag, or a change to the Rust embedding API.
+
+Label the pull request `C-Breaking-Change` and add a note to
+`docs/migration/unreleased/` in the same pull request, one file per break,
+named for it (`call-has-declared-return-type.md`). The first line is
+`# <what broke>`, in one line. The rest says what changed, who it affects, and
+what to do, with the code before and after. Keep it ASCII.
+
+The `breaking change` check fails when the label is there without a note or a
+note is there without the label. The release that ships the change files the
+note under its own version, lists it in the release notes, and the docs site
+renders it into the migration guide.
