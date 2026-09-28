@@ -75,6 +75,18 @@ jobs:
     needs: artifacts
     runs-on: ubuntu-latest
     steps:
+      # The whole history, for the tags: the notes name the release before this
+      # one.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The breaking changes this release carries, read from the migration
+      # notes in the tag's tree. Empty when there are none, and the body is then
+      # the generated notes alone.
+      - name: Write the migration notes
+        run: scripts/migration-notes.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/migration-notes.md"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -89,6 +101,8 @@ jobs:
             artifacts/*.zip
             artifacts/*.msi
             artifacts/sha256sums.txt
+          # GitHub puts the generated list of pull requests after this body.
+          body_path: ${{ runner.temp }}/migration-notes.md
           generate_release_notes: true
 
   # The other two channels a release goes out on. Both run at this run's ref,
@@ -114,6 +128,15 @@ jobs:
   # to main, which leaves a release asking nothing of anyone once the tag is
   # pushed.
   #
+  # The same commit files the release's migration notes. The notes in
+  # docs/migration/unreleased/ of the tag's tree are the ones this release
+  # shipped, and scripts/release-fragments.sh moves exactly those into
+  # docs/migration/<tag>/. A note merged to main after the tag is not in that
+  # tree, so it stays unreleased and goes out with the next release. The move
+  # happens even when main is already at the next version, since leaving the
+  # notes behind would credit them to the next release; it is then committed on
+  # its own.
+  #
   # It pushes over SSH with the BUMP_DEPLOY_KEY deploy key rather than with the
   # workflow token, for two reasons. A deploy key is a bypass actor the main
   # ruleset names, so the push is allowed where the token's would be refused;
@@ -126,13 +149,15 @@ jobs:
   # corrected by one more commit, while a number that follows a rule somebody
   # has to remember is not. Tags in any other shape, a prerelease among them,
   # are left alone, because incrementing one is a decision rather than an
-  # increment.
+  # increment. Their migration notes stay unreleased too: a prerelease is never
+  # the release the docs site builds from, so the notes belong to the plain
+  # vX.Y.Z that follows it.
   #
   # Re-running the workflow after fixing a build leg reaches this job again, and
-  # finds main already at the next version, so it stops before it commits
-  # anything. The same check is what keeps a re-run of an older release from
-  # walking main backwards, and it is read off main each time round rather than
-  # off the tree this run started with.
+  # finds main already at the next version with the notes already filed, so it
+  # stops before it commits anything. The same check is what keeps a re-run of
+  # an older release from walking main backwards, and it is read off main each
+  # time round rather than off the tree this run started with.
   #
   # The push is never forced. A main that moved under a long build refuses the
   # push instead of losing the commit that moved it, and the retry takes main
@@ -163,9 +188,13 @@ jobs:
           released="${TAG#v}"
           if ! printf '%s' "$released" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::notice::${TAG} is not a plain vX.Y.Z tag, so what comes after it is a choice; bump by hand"
+            echo "::notice::the migration notes stay in docs/migration/unreleased/ for the release that follows ${TAG}"
             exit 0
           fi
           next="${released%.*}.$(( 10#${released##*.} + 1 ))"
+
+          # The tag's tree says which migration notes this release shipped.
+          git fetch --quiet --depth=1 origin "+refs/tags/${TAG}:refs/tags/${TAG}"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -196,41 +225,60 @@ jobs:
               exit 1
             fi
 
+            scripts/release-fragments.sh "$TAG"
+
             # A bump that already landed, or a re-run of an older release after
             # later ones went out. Either way main is where it should be or
             # further on, and bumping would walk it backwards.
+            bump="$next"
             oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
             if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
               echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+              bump=""
+            fi
+
+            if [ -z "$bump" ] && git diff --cached --quiet; then
+              echo "::notice::no version to bump and no migration notes to file"
               exit 0
+            fi
+            by_hand="scripts/release-fragments.sh ${TAG}"
+            if [ -n "$bump" ]; then
+              by_hand="${by_hand} and scripts/bump-version.py ${bump}"
             fi
 
             # Failing here rather than reporting and stopping. Without the push
             # main goes on calling itself a version that is already released,
-            # and the next tag of that number is rejected for disagreeing with
-            # the manifest, so this has to be visible on the release run.
+            # or holding notes that shipped as unreleased, and either is wrong
+            # the next time a tag is cut, so this has to be visible on the
+            # release run.
             if [ -z "${DEPLOY_KEY:-}" ]; then
-              echo "release.yml: BUMP_DEPLOY_KEY is not set, so main stays at ${current} while ${TAG} is out." >&2
-              echo "Add the secret and re-run this workflow, or run scripts/bump-version.py ${next} on main by hand." >&2
+              echo "release.yml: BUMP_DEPLOY_KEY is not set, so main is left as it was while ${TAG} is out." >&2
+              echo "Add the secret and re-run this workflow, or run ${by_hand} on main by hand." >&2
               exit 1
             fi
 
-            python3 scripts/bump-version.py "$next"
-            if git diff --quiet; then
-              echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
-              exit 1
+            if [ -n "$bump" ]; then
+              python3 scripts/bump-version.py "$bump"
+              if git diff --quiet; then
+                echo "release.yml: bump-version.py changed nothing on the way to ${bump}" >&2
+                exit 1
+              fi
+              git commit -qam "chore: set the version to ${bump}"
+              done_what="main is at ${bump}"
+            else
+              git commit -qm "docs: file the migration notes that shipped in ${TAG}"
+              done_what="the migration notes are filed under ${TAG}"
             fi
-            git commit -am "chore: set the version to ${next}"
 
             if git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
-              echo "main is at ${next}"
+              echo "$done_what"
               exit 0
             fi
 
             if [ "$attempt" -ge 3 ]; then
-              echo "release.yml: pushing ${next} was refused, so main stays at ${current} while ${TAG} is out." >&2
+              echo "release.yml: pushing to main was refused, so main is left as it was while ${TAG} is out." >&2
               echo "Either main is moving faster than this job can follow, or the deploy key is not a bypass actor on the main ruleset." >&2
-              echo "Fix the bypass and re-run this workflow, or run scripts/bump-version.py ${next} on main by hand." >&2
+              echo "Fix the bypass and re-run this workflow, or run ${by_hand} on main by hand." >&2
               exit 1
             fi
             echo "::notice::the push was refused; taking main again and re-deciding"

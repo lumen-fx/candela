@@ -56,7 +56,11 @@ The rest of the tree:
 - `msi/` holds the WiX package definition and the script that builds the Windows
   installer.
 - `scripts/` holds the release tooling: `bump-version.py`, which sets the
-  version the tree calls itself, and the checklist for cutting a release.
+  version the tree calls itself, `release-fragments.sh` and
+  `migration-notes.sh`, which file a release's migration notes and write them
+  into its release notes, `check-breaking-change.py`, which checks a pull
+  request's breaking-change label against its notes, and the checklist for
+  cutting a release.
 - `editors/vscode/` holds the VS Code extension: the language server client,
   the TextMate grammar, and snippets.
 - `editors/jetbrains/` holds the plugin for the IntelliJ-based IDEs. It is a
@@ -67,7 +71,9 @@ The rest of the tree:
   generated parser is committed, so an editor needs no tree-sitter CLI.
 - `editors/zed/` holds the Zed extension, which builds the tree-sitter grammar
   from this repository and carries its own copy of the queries.
-- `docs/` holds this documentation site.
+- `docs/` holds this documentation site. `docs/migration/` sits outside it and
+  holds the migration notes breaking changes add, one directory per release;
+  the site renders them as the migration guide.
 
 ## Building
 

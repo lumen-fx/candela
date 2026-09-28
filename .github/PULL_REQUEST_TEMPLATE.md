@@ -15,3 +15,5 @@ How you checked it: the commands you ran, plus any program you ran through both
       `vm/` or `lsp/`; a plain `cargo test` at the root builds only the
       `candela` package
 - [ ] docs under `docs/` updated, if this changes the language or the CLI
+- [ ] `C-Breaking-Change` label and a note in `docs/migration/unreleased/`, if
+      this breaks something for users of the last release

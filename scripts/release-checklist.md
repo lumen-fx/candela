@@ -28,14 +28,41 @@ the asset names come from the tag.
 `build-artifacts.yml`, which builds the toolchain for each platform and
 packages the archives, the Windows installer, the embedding library and the
 WebAssembly build, and writes `sha256sums.txt` over the lot. `release.yml`
-publishes them as the GitHub release. A leg that fails takes the release with
-it, so a partial set of archives never goes out; fix what failed and re-run the
-workflow.
+publishes them as the GitHub release, with the migration notes the tag carries
+at the top of the release notes (see [migration notes](#migration-notes)). A
+leg that fails takes the release with it, so a partial set of archives never
+goes out; fix what failed and re-run the workflow.
 
 It then calls `publish.yml` and `publish-extensions.yml`, and commits
-`chore: set the version to X.Y.Z+1` straight to `main`, so the tag is the last
-thing a release asks anyone to type. Only `main` moves; the release keeps the
-tree the tag pointed at.
+`chore: set the version to X.Y.Z+1` straight to `main`, with the release's
+migration notes filed under its version in the same commit, so the tag is the
+last thing a release asks anyone to type. Only `main` moves; the release keeps
+the tree the tag pointed at.
+
+## Migration notes
+
+A pull request that breaks something adds a note to
+`docs/migration/unreleased/` (see `CONTRIBUTING.md`). So in the tree a tag
+points at, that directory holds the notes for the release the tag cuts, and the
+tag does two things with them.
+
+The release job runs `scripts/migration-notes.sh`, which reads the notes out of
+the tag's tree and writes a `## Migrating from <previous tag>` section: a link to
+the migration guide at `https://docs.lumenfx.dev/candela/migration/<tag>/` and
+each note's heading as a list. That section is the release body, and GitHub puts
+its generated list of pull requests after it. A release with no notes gets the
+generated list alone.
+
+For a plain `vX.Y.Z` tag, the bump job runs `scripts/release-fragments.sh`,
+which moves exactly the notes the tag's tree lists from
+`docs/migration/unreleased/` to `docs/migration/<tag>/` on `main`. A prerelease
+tag moves nothing, so its notes belong to the release that follows it. A note merged after the tag is not in that
+tree, so it stays in `unreleased/` for the next release. The docs site renders
+each version directory, and `unreleased/` of the release it builds from, as the
+migration guide.
+
+To see what a tag's release notes will say before you push it, tag locally and
+run `scripts/migration-notes.sh v0.0.5 notes.md`.
 
 ## The crates and the extensions
 
@@ -87,21 +114,26 @@ exists, so a version that has not shipped resolves to nothing and says so.
 The bump is always the next patch, whatever kind of release the tag was. To go
 somewhere else, run `scripts/bump-version.py 0.2.0` on `main` afterwards.
 
-The job reports what it decided. It stops without committing when the decision
-is not its to make:
+The job reports what it decided:
 
 - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes are left alone,
   because what follows one is a choice. Run `scripts/bump-version.py` yourself.
+  The migration notes stay in `docs/migration/unreleased/` too, and go out with
+  the plain `vX.Y.Z` release that follows; the prerelease's own release notes
+  still list them.
 - `main is at N, at or past ...`. The bump already landed, or this is a re-run
-  of an older release after a later one went out. Nothing to do.
+  of an older release after a later one went out. The job then commits only the
+  migration notes, as `docs: file the migration notes that shipped in <tag>`.
+- `no version to bump and no migration notes to file`. Nothing to do.
 
-It fails, rather than reporting and stopping, when the bump is owed and it
-cannot make it. `main` would otherwise go on calling itself a version that is
-already released, and the next tag of that number gets rejected for disagreeing
-with the manifest:
+It fails, rather than reporting and stopping, when a bump or a move of the notes
+is owed and it cannot make it. `main` would otherwise go on calling itself a
+version that is already released, and the next tag of that number gets rejected
+for disagreeing with the manifest, or the next release would claim notes this
+one shipped:
 
 - `BUMP_DEPLOY_KEY is not set`. Add the secret and re-run the workflow.
-- `pushing N was refused`. The deploy key is no longer a bypass actor on the
+- `pushing to main was refused`. The deploy key is no longer a bypass actor on the
   `main` ruleset, or `main` is moving faster than the job can follow. It takes
   `main` again and re-decides twice before giving up.
 - `the tree would not come out at N`. A version literal changed shape, or one
@@ -110,7 +142,8 @@ with the manifest:
 
 Re-running a release is safe here too. The job reads the version off `main` each
 time round rather than off the tree the run started with, so a second run finds
-`main` already at the number it would set and commits nothing. The push is never
+`main` already at the number it would set, with the notes already filed, and
+commits nothing. The push is never
 forced, so a `main` that moved during a long build refuses the push instead of
 losing what moved it.
 
