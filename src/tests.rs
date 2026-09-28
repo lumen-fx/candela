@@ -598,6 +598,161 @@ fn release_instructions(src: &str) -> Vec<Instr> {
     .instructions
 }
 
+/// A release build works out an operation whose operands it knows, including
+/// ones that reach it through a variable, a struct field kept in registers or
+/// the argument of a copied body, and a branch on a known condition. What the
+/// program prints stays what a debug build prints, down to the last bit of a
+/// float.
+#[test]
+pub fn a_release_build_folds_what_it_knows() {
+    let src = "
+struct P { a: int, b: float }
+
+fn twice(x: int) -> int { return x * 2; }
+fn half(x: float) -> float { return x / 2.0; }
+
+fn work() {
+    let total = 0;
+    let sum = 0.0;
+    let words = \"\";
+    for i in 0..3 {
+        let k = 4;
+        let m = k * 3 - 1;
+        let q = m / 4 + m % 4 + k ^ 2;
+        let bits = (k << 40 >> 38) + (~k & 255 | 1) + (k ^^ 6);
+        let p = P { a: 7, b: 1.5 };
+        let r = p.a * twice(k) - -k;
+        let g = half(p.b) * 3.0 + 0.1;
+        let tiny = 0.1;
+        let huge = 1e308;
+        let odd = g % 0.75 - tiny / 3.0;
+        let nan = huge * 10.0 - huge * 10.0;
+        let t = \"ab\" + \"cd\";
+        let u = t + \"e\";
+        let same = u == \"abcde\" && !(u < \"abc\") && u != \"x\" && u >= t;
+        if same {
+            total += m + q + r + bits;
+        }
+        if k > 10 || m <= 1 {
+            total -= 1000;
+        }
+        let zero = 0.0;
+        let neg = -zero;
+        sum += g + odd + neg;
+        words = words + u;
+        if i == 2 {
+            print(total, sum, words, nan != nan);
+        }
+    }
+}
+
+fn main() {
+    work();
+}
+";
+    let printed = run_output(src);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines[0], "1083");
+    assert_eq!(lines[2], "abcdeabcdeabcde");
+    // The bodies of `twice` and `half` stay where they are for a call the
+    // release build does not copy, each with its one operation.
+    let instructions = release_instructions(src);
+    let count = |kind: fn(&Instr) -> bool| instructions.iter().filter(|instr| kind(instr)).count();
+    assert_eq!(count(|instr| matches!(instr, Instr::MulInt(..))), 1);
+    assert_eq!(count(|instr| matches!(instr, Instr::DivFloat(..))), 1);
+    let left: Vec<&Instr> = instructions
+        .iter()
+        .filter(|instr| {
+            matches!(
+                instr,
+                Instr::DivInt(..)
+                    | Instr::ModInt(..)
+                    | Instr::PowInt(..)
+                    | Instr::ShlInt(..)
+                    | Instr::ShrInt(..)
+                    | Instr::BitXorInt(..)
+                    | Instr::MulFloat(..)
+                    | Instr::StrEq(..)
+                    | Instr::InfStr(..)
+                    | Instr::SupEqStr(..)
+                    | Instr::SupIntJmp(..)
+                    | Instr::IsFalseJmp(..)
+            )
+        })
+        .collect();
+    assert!(left.is_empty(), "left unfolded: {left:?}");
+}
+
+/// An operation that raises an error when it runs stays in a release build and
+/// raises it there, with the same name at the same span, even though every
+/// operand is known when the program is compiled.
+#[test]
+pub fn a_release_build_leaves_a_raising_operation_to_the_run() {
+    for (body, code, text) in [
+        ("let d = 0; return n / d;", "division_by_zero", "n / d"),
+        ("let d = 0; return n % d;", "modulo_by_zero", "n % d"),
+        // The debug build names no span for these three; the release build
+        // has to name the same nothing.
+        ("let e = 0 - 1; return n ^ e;", "negative_exponent", ""),
+        ("let c = 64; return n << c;", "shift_count_out_of_range", ""),
+        (
+            "let c = 0 - 1; return n >> c;",
+            "shift_count_out_of_range",
+            "",
+        ),
+    ] {
+        let src = format!(
+            "fn f(n: int) -> int {{ {body} }}\n\nfn main() {{\n    for i in 0..2 {{\n        print(f(7));\n    }}\n}}\n"
+        );
+        let error = run_diag(&src, "raise.cdl").unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(&src[error.span], text);
+    }
+}
+
+/// A release build leaves alone an `int` operation whose result does not
+/// fit, and `^` on floats, whose result comes from the math library of the
+/// machine that runs the program.
+#[test]
+pub fn a_release_build_leaves_an_overflow_and_a_float_power_to_the_run() {
+    let overflow = "
+fn f(n: int) -> int {
+    let m = 9223372036854775807;
+    return n + m;
+}
+
+fn main() {
+    for i in 0..2 {
+        print(f(1));
+    }
+}
+";
+    assert!(
+        release_instructions(overflow)
+            .iter()
+            .any(|instr| matches!(instr, Instr::AddInt(..) | Instr::AddIntImm(..))),
+        "the overflowing addition is still in the program"
+    );
+    let power = "
+fn f(x: float) -> float {
+    let e = 0.5;
+    return x ^ e;
+}
+
+fn main() {
+    for i in 0..2 {
+        print(f(2.0));
+    }
+}
+";
+    assert!(
+        release_instructions(power)
+            .iter()
+            .any(|instr| matches!(instr, Instr::PowFloat(..)))
+    );
+    assert_eq!(run_output(power).lines().count(), 2);
+}
+
 /// A release build also keeps in registers a struct held in a field of
 /// another, one written after it was built, and one that is printed. Written
 /// through one of two names that share it, read in a catch after a write, or
@@ -659,6 +814,65 @@ fn main() {
         )
     };
     assert_eq!(run_output(src), once(0.0) + &once(1.0));
+}
+
+/// What a release build knows about a register holds only where every way in
+/// agrees: a catch can be reached from anywhere in its `try`, a recursive call
+/// puts the caller's registers back, and a loop brings round what its last
+/// turn left. A struct written after it was built in a recursive function
+/// behaves as a pooled one too.
+#[test]
+pub fn a_release_build_knows_nothing_a_catch_a_call_or_a_loop_could_change() {
+    let src = "
+struct V { x: float, y: float }
+
+impl V {
+    fn +(self, other: V) -> V { return V { x: self.x + other.x, y: self.y + other.y }; }
+}
+
+fn caught(n: int) -> int {
+    let x = 1;
+    try {
+        x = 2;
+        if n > 0 {
+            throw(\"e\");
+        }
+        x = 3;
+    } catch e {
+        return x * 10;
+    }
+    return x;
+}
+
+fn deep(n: int) -> int {
+    let k = 5;
+    if n > 0 {
+        k = deep(n - 1) + 1;
+    }
+    return k * 2;
+}
+
+fn walk(n: int) -> float {
+    let v = V { x: float(n), y: 0.0 } + V { x: 0.5, y: 0.0 };
+    v.x += 1.0;
+    if n > 0 {
+        let w = walk(n - 1);
+        v.y = w;
+    }
+    return v.x + v.y;
+}
+
+fn main() {
+    let step = 1;
+    let total = 0;
+    for i in 0..4 {
+        total += step;
+        step = step * 2;
+    }
+    print(caught(0), caught(1), deep(3), walk(3), total);
+}
+";
+    assert_eq!(run_output(src), "3\n20\n94\n12.0\n15\n");
 }
 
 /// A struct held in a field of another is kept in registers along with it,

@@ -169,6 +169,7 @@ mod methods;
 
 mod copies;
 pub(crate) mod flow;
+mod fold;
 pub(crate) mod function_table;
 mod registers;
 mod scalar;
@@ -7021,6 +7022,7 @@ pub fn compile_profile(
             instructions: &mut instructions,
             registers: &mut registers,
             objs: &pools.objs,
+            strings: &mut pools.strings,
             const_registers: &mut const_registers,
             instr_src: &mut instr_src,
             callsite_registers: &mut callsite_registers,
@@ -7030,6 +7032,7 @@ pub fn compile_profile(
         // A struct kept in registers can free one it held in a field, so the
         // replacement runs again until it finds nothing more.
         while scalar::replace_scalars(&mut program) {}
+        fold::fold_constants(&mut program);
         copies::forward_copies(&mut program);
     }
     use_immediates(&mut instructions, &[], &registers, &const_registers);
@@ -7037,6 +7040,7 @@ pub fn compile_profile(
         instructions: &mut instructions,
         registers: &mut registers,
         objs: &pools.objs,
+        strings: &mut pools.strings,
         const_registers: &mut const_registers,
         instr_src: &mut instr_src,
         callsite_registers: &mut callsite_registers,
