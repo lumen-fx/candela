@@ -49,6 +49,7 @@ use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::fill_call_defaults;
 use crate::compiler::functions::resolve_callee;
+use crate::compiler::methods::check_receiver;
 use crate::compiler::methods::dyn_lib_receiver;
 use crate::compiler::methods::fill_method_defaults;
 use crate::compiler::methods::infer_operator_method;
@@ -2952,6 +2953,13 @@ pub fn infer_user_fn_return_type(
     if already_inferring {
         return declared_return.unwrap_or(DataType::Unknown);
     }
+    // A call can reach inference before anything checks how many arguments it
+    // passes. The body cannot be walked with a parameter left unbound or an
+    // argument bound to no parameter, so the call takes the declared type and
+    // compiling it reports the count.
+    if infered_arg_types.len() != state.fns[fn_id].args.len() {
+        return declared_return.unwrap_or(DataType::Unknown);
+    }
 
     let func = &state.fns[fn_id];
     let fn_args = func.args.clone();
@@ -3846,6 +3854,7 @@ impl Expr {
                     let struct_name = state.structs[struct_id as usize].name.clone();
                     let mangled = mangle_method(&struct_name, method);
                     if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+                        check_receiver(fn_id, method, *fn_span, ctx, state);
                         let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                         arg_types.push(DataType::Struct(struct_id));
                         for a in args {
@@ -3899,6 +3908,7 @@ impl Expr {
                     let enum_name = state.enums[enum_id as usize].name.clone();
                     let mangled = mangle_method(&enum_name, method);
                     if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+                        check_receiver(fn_id, method, *fn_span, ctx, state);
                         let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                         arg_types.push(DataType::Enum(enum_id));
                         for a in args {
@@ -3934,6 +3944,7 @@ impl Expr {
                 if let Some(fn_id) = crate::compiler::methods::impl_method_on_builtin(
                     method, &obj_type, args, v, ctx, state,
                 ) {
+                    check_receiver(fn_id, method, *fn_span, ctx, state);
                     let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                     arg_types.push(obj_type.clone());
                     for a in args {

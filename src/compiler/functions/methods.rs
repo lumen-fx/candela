@@ -6,9 +6,11 @@ use crate::cold_path;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_data::{Ctx, State};
+use crate::compiler::compiler_errors::error_method_without_receiver;
 use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_operator_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
+use crate::compiler::expr::METHOD_SEP;
 use crate::compiler::expr::OperatorForm;
 use crate::compiler::expr::is_default_call;
 use crate::compiler::expr::mangle_method;
@@ -82,6 +84,29 @@ pub fn impl_method_on_builtin(
     }
     let mangled = mangle_method(type_name, name);
     state.fns.iter().position(|f| f.name == mangled)
+}
+
+/// Refuses a dot call that reaches `impl` function `fn_id` when the function
+/// declares no parameters: nothing would receive the value in front of the
+/// dot. Inference and compilation both reach a dot call, and whichever gets
+/// there first reports it.
+pub fn check_receiver(fn_id: usize, method: &str, span: Span, ctx: Ctx, state: &State<'_>) {
+    let func = &state.fns[fn_id];
+    if !func.args.is_empty() {
+        return;
+    }
+    let type_name = func
+        .name
+        .split_once(METHOD_SEP)
+        .map_or(func.name.as_str(), |(type_name, _)| type_name);
+    error_method_without_receiver(
+        method,
+        type_name,
+        span,
+        (func.name_span, func.src_file),
+        ctx.file_idx,
+        state.sources,
+    );
 }
 
 /// The `host` or `dylib` block a dot call's receiver names, when that receiver
@@ -216,6 +241,7 @@ pub fn handle_method_calls(
         let struct_name = state.structs[struct_id as usize].name.clone();
         let mangled = mangle_method(&struct_name, name);
         if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+            check_receiver(fn_id, name, fn_span, ctx, state);
             // Prepend the receiver as argument 0, then reuse the ordinary
             // user-function call path; the VM sees a normal function call. Type
             // arguments the call is written with bind the method's own type
@@ -277,6 +303,7 @@ pub fn handle_method_calls(
         let enum_name = state.enums[enum_id as usize].name.clone();
         let mangled = mangle_method(&enum_name, name);
         if let Some(fn_id) = state.fns.iter().position(|f| f.name == mangled) {
+            check_receiver(fn_id, name, fn_span, ctx, state);
             let call_type_args = if type_args.is_empty() {
                 Vec::new()
             } else {
@@ -313,6 +340,7 @@ pub fn handle_method_calls(
     // arguments resolve against the method's own type parameters, exactly as
     // on a struct method.
     if let Some(fn_id) = impl_method_on_builtin(name, &obj_type, args, v, ctx, state) {
+        check_receiver(fn_id, name, fn_span, ctx, state);
         let call_type_args = if type_args.is_empty() {
             Vec::new()
         } else {

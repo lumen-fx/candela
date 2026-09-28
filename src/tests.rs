@@ -6037,6 +6037,86 @@ pub fn method_error_unknown() {
     );
 }
 
+/// An `impl` function declared with no parameters has nothing to receive the
+/// value in front of a dot, on a struct, an enum or a built-in type, whether
+/// the call's value is used or not.
+#[test]
+pub fn a_function_without_a_receiver_is_refused_as_a_method() {
+    for (src, type_name) in [
+        (
+            "
+struct S { x: int }
+impl S { fn make() -> S { return S { x: 7 }; } }
+fn main() {
+    let s = S { x: 1 }.make();
+    print(str(s.x));
+}
+",
+            "S",
+        ),
+        (
+            "
+struct S { x: int }
+impl S { fn make() -> S { return S { x: 7 }; } }
+fn main() { S { x: 1 }.make(); }
+",
+            "S",
+        ),
+        (
+            "
+enum E { A, B }
+impl E { fn make() -> int { return 1; } }
+fn main() { let e = E::A; print(e.make()); }
+",
+            "E",
+        ),
+        (
+            "
+impl list { fn make() -> int { return 1; } }
+fn main() { let l = [1]; print(l.make()); }
+",
+            "list",
+        ),
+    ] {
+        let d = compile_diag(src, "recv.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "method_without_receiver", "{src}");
+        assert_eq!(&src[d.span], "make()", "{src}");
+        assert!(
+            d.message.contains("make")
+                && d.message.contains(type_name)
+                && d.message.contains("takes no receiver"),
+            "message: {:?}",
+            d.message
+        );
+    }
+}
+
+/// A call with the wrong number of arguments is reported as such, where its
+/// value is used as well as where it is not.
+#[test]
+pub fn a_used_call_with_the_wrong_argument_count_is_refused() {
+    for src in [
+        "
+fn f() -> int { return 1; }
+fn main() { let s = f(5); print(s); }
+",
+        "
+fn f(x) { return x + 1; }
+fn main() { let s = f(); print(s); }
+",
+        "
+struct S { x: int }
+impl S { fn m(self) -> int { return self.x; } }
+fn main() { let s = S { x: 1 }.m(5); print(s); }
+",
+    ] {
+        let d = compile_diag(src, "arity.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "arity_mismatch", "{src}");
+    }
+}
+
 #[test]
 pub fn method_error_duplicate() {
     let src = "

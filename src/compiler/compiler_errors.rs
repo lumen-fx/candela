@@ -1452,6 +1452,67 @@ pub fn error_no_such_method(
     )
 }
 
+/// A dot call that reaches an `impl` function declared with no parameters,
+/// which has no receiver to take the value in front of the dot.
+#[cold]
+#[inline(never)]
+pub fn error_method_without_receiver(
+    method: &str,
+    type_name: &str,
+    span: Span,
+    decl: (Span, u16),
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let decl_src = &sources[decl.1 as usize];
+            let report = Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Function takes no receiver")
+            .with_label(
+                Label::new((decl_src.filename.as_str(), decl.0.into()))
+                    .with_message(format_args!(
+                        "{} is declared with no parameters",
+                        blue(method)
+                    ))
+                    .with_color(ariadne::Color::Blue),
+            )
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} in impl {} takes no receiver, so it cannot be called on a value",
+                        red(method),
+                        blue(type_name),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            );
+            let report = if method == "default" {
+                report.with_help(format_args!(
+                    "Call it by its path: {}",
+                    blue(format_args!("{type_name}::default()"))
+                ))
+            } else {
+                report.with_help(format_args!(
+                    "Give it the receiver as its first parameter: {}",
+                    blue(format_args!("fn {method}(self)"))
+                ))
+            };
+            report.finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "{method} in impl {type_name} takes no receiver, so it cannot be called on a value"
+        ),
+        "method_without_receiver",
+    )
+}
+
 /// Generic diagnostic for enum-specific compile errors (unknown variant, wrong
 /// payload arity, non-identifier pattern binder, non-exhaustive match).
 #[cold]

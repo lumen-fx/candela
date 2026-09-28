@@ -73,7 +73,9 @@ that type was declared with `name: type` or taken from another call. The report
 labels the declaration as well as the call. A function that declares `-> Type`
 and returns something else is reported against the annotation. A call has the
 type its function declares, so an argument taken from a call is checked against
-the declared return type, not against what the body returns.
+the declared return type, not against what the body returns. A dot call that
+reaches an `impl` function declared with no parameters is
+`method_without_receiver`: nothing would receive the value in front of the dot.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,

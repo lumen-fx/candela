@@ -44,6 +44,9 @@ against, and a method can take type parameters of its own
 method was called on, and its type is the type the `impl` block names. Any name
 works, but `self` is the convention and reads best.
 
+A function in an `impl` block that declares no parameters has no receiver, so
+calling it with a dot is a compile error.
+
 Parameters after the first behave exactly like function parameters: name them,
 pass them positionally, and either leave the type to be inferred from the call
 or pin it with `name: type`. A method takes a `-> Type` return annotation on the
