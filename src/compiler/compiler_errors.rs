@@ -805,6 +805,42 @@ pub fn error_default_without_type(file_idx: u16, span: Span, sources: &[Source])
     );
 }
 
+/// A `default` function in an `impl` block on a struct that cannot stand in
+/// for the struct's default: it takes parameters, or returns another type.
+#[cold]
+#[inline(never)]
+pub fn error_struct_default_signature(
+    title: &'static str,
+    message: &str,
+    help: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message(title)
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(message)
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(help)
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        message,
+        "struct_default_signature",
+    )
+}
+
 /// A struct is defaulted, and one of its fields has neither a declared value
 /// nor a type with an empty value to fall back on.
 pub fn error_struct_field_no_default(

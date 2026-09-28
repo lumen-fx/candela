@@ -14516,6 +14516,149 @@ fn main() {
     assert_eq!(run_output(src), "a 5\ncell 0\n");
 }
 
+/// A `default` function in a struct's `impl` block replaces the default its
+/// fields give, on every path that builds one.
+#[test]
+pub fn a_default_function_replaces_the_derived_default() {
+    let src = "
+struct S { x: int }
+impl S { fn default() -> S { return S { x: 7 }; } }
+fn main() {
+    let s = S::default();
+    print(s.x);
+}
+";
+    assert_eq!(run_output(src), "7\n");
+
+    let src = "
+struct S { x: int, y: int = 2 }
+impl S { fn default() -> S { return S { x: 7, y: 3 }; } }
+struct T { s: S, n: int }
+fn take(s: S) -> int { return s.x; }
+fn make() -> S { return Default::default(); }
+fn main() {
+    print(S::default().x);
+    let a = S { y: 9, ..Default::default() };
+    print(str(a.x) + \" \" + str(a.y));
+    print(take(Default::default()));
+    print(make().x);
+    let t = T::default();
+    print(str(t.s.x) + \" \" + str(t.s.y) + \" \" + str(t.n));
+    let u = T { n: 1, ..Default::default() };
+    print(str(u.s.x) + \" \" + str(u.n));
+}
+";
+    assert_eq!(run_output(src), "7\n7 9\n7\n7\n7 3 0\n7 1\n");
+}
+
+/// Inside a struct's own `default` function, the struct's default is the one
+/// its fields give, so the function can start from it without calling itself.
+#[test]
+pub fn a_default_function_starts_from_the_derived_default() {
+    let src = "
+struct S { x: int, y: int = 2 }
+fn keep(s: S) -> S { return s; }
+impl S {
+    fn default() -> S {
+        let d = S::default();
+        let e = S { x: 5, ..Default::default() };
+        let f = keep(Default::default());
+        return S { x: d.x + e.x + f.x + 1, y: d.y + e.y + f.y };
+    }
+}
+fn main() {
+    let s = S::default();
+    print(str(s.x) + \" \" + str(s.y));
+}
+";
+    assert_eq!(run_output(src), "6 6\n");
+}
+
+/// A generic struct's `default` function builds the default of each
+/// instantiation, and its return type may be left to the body.
+#[test]
+pub fn a_generic_struct_default_function() {
+    let src = "
+struct Cell<T> { value: T, n: int }
+impl Cell<T> { fn default() { return Cell<T> { n: 3, ..Default::default() }; } }
+struct Holder { c: Cell<int> }
+fn main() {
+    let a = Cell<string>::default();
+    print(str(a.n) + \" [\" + a.value + \"]\");
+    print(Holder::default().c.n);
+}
+";
+    assert_eq!(run_output(src), "3 []\n3\n");
+}
+
+/// A `default` function that cannot stand in for the struct's default is
+/// refused where it is declared: one taking parameters, and one returning
+/// another type, declared or inferred.
+#[test]
+pub fn a_default_function_of_the_wrong_shape_is_refused() {
+    for (src, span) in [
+        (
+            "
+struct S { x: int }
+impl S { fn default(n: int) -> S { return S { x: n }; } }
+fn main() { print(S { x: 1 }.x); }
+",
+            "default",
+        ),
+        (
+            "
+struct S { x: int }
+impl S { fn default(self) -> S { return self; } }
+fn main() { print(S { x: 1 }.default().x); }
+",
+            "default",
+        ),
+        (
+            "
+struct S { x: int }
+impl S { fn default() -> int { return 1; } }
+fn main() { print(S { x: 1 }.x); }
+",
+            "int",
+        ),
+        (
+            "
+struct S { x: int }
+impl S { fn default() { return 1; } }
+fn main() { print(S::default().x); }
+",
+            "default",
+        ),
+        (
+            "
+struct Cell<T> { value: T }
+impl Cell<T> { fn default(self) -> Cell<T> { return self; } }
+fn main() { print(Cell<int>::default().value); }
+",
+            "default",
+        ),
+    ] {
+        let d = compile_diag(src, "default.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "struct_default_signature", "{src}");
+        assert_eq!(&src[d.span], span, "{src}");
+    }
+}
+
+/// A struct's `default` takes no receiver, so a dot call to it is refused and
+/// points at the path call.
+#[test]
+pub fn a_default_function_called_as_a_method_is_refused() {
+    let src = "
+struct S { x: int }
+impl S { fn default() -> S { return S { x: 7 }; } }
+fn main() { print(S { x: 1 }.default().x); }
+";
+    let d = compile_diag(src, "default.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "method_without_receiver");
+}
+
 #[test]
 pub fn a_struct_base_of_another_type_is_refused() {
     let src = "

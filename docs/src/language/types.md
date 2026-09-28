@@ -277,6 +277,37 @@ A declared value is an expression, evaluated each time a default is built, in
 the file that declares the struct and with none of the caller's variables in
 scope. Each default therefore gets lists and maps of its own.
 
+To build the default in code instead, declare a `default` function in the
+struct's `impl` block. It takes no parameters and returns the struct, and it
+replaces the default the fields give everywhere one is built:
+`Window::default()`, `Default::default()`, `..Default::default()`, and a field
+whose type is the struct.
+
+```rust
+struct Window {
+    width: int = 800,
+    height: int = 600,
+    area: int,
+}
+
+impl Window {
+    fn default() -> Window {
+        let w = Window { ..Default::default() };
+        w.area = w.width * w.height;
+        return w;
+    }
+}
+
+fn main() {
+    print(Window::default().area);
+}
+```
+
+Inside that function the struct's default is still the one its fields give, so
+`..Default::default()` and `Window::default()` there start from the declared
+values instead of calling the function again. A `default` that takes parameters
+or returns another type is a compile error.
+
 To give a struct behaviour, write an `impl` block; see [Methods](methods.md).
 To let one struct hold a field of whatever type you name at the point of use,
 give it a type parameter; see [Generics](generics.md).

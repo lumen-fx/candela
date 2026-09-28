@@ -32,6 +32,7 @@ use crate::compiler::compiler_errors::error_invalid_type;
 use crate::compiler::compiler_errors::error_missing_return;
 use crate::compiler::compiler_errors::error_op;
 use crate::compiler::compiler_errors::error_operator_method;
+use crate::compiler::compiler_errors::error_struct_default_signature;
 use crate::compiler::compiler_errors::error_struct_unknown_field;
 use crate::compiler::compiler_errors::error_type_arg_count;
 use crate::compiler::compiler_errors::error_type_args_on_plain_function;
@@ -1328,6 +1329,76 @@ pub fn check_operator_method(
     }
 }
 
+/// The name a struct's own default is declared under in its `impl` block.
+pub const STRUCT_DEFAULT_METHOD: &str = "default";
+
+/// The struct whose `impl` block declares the function named `fn_name` as its
+/// `default`, when it names one.
+#[must_use]
+pub fn struct_of_default_fn(fn_name: &str, structs: &[Struct]) -> Option<u16> {
+    let (type_name, method) = fn_name.split_once(METHOD_SEP)?;
+    if method != STRUCT_DEFAULT_METHOD {
+        return None;
+    }
+    structs.iter().rfind(|s| s.name == type_name).map(|s| s.id)
+}
+
+/// Checks the `default` function an `impl` block on struct `struct_id`
+/// declares.
+///
+/// Every path that builds the struct's default calls it with nothing and takes
+/// the struct from what it hands back, so it declares no parameters and
+/// returns the struct.
+///
+/// `returns` is the type it hands back and the span that says so, when that is
+/// known: the `-> Type` annotation where the function is declared, or what its
+/// body returns once a default is built from it.
+pub fn check_struct_default_fn(
+    func: &Function,
+    struct_id: u16,
+    returns: Option<(&DataType, Span)>,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) {
+    let struct_type = DataType::Struct(struct_id);
+    let struct_name = types.of(&struct_type).to_string();
+    if !func.args.is_empty() {
+        cold_path();
+        error_struct_default_signature(
+            "Default function takes parameters",
+            &format!(
+                "default in impl {struct_name} is declared with {} parameter{}",
+                func.args.len(),
+                if func.args.len() == 1 { "" } else { "s" }
+            ),
+            &format!(
+                "{struct_name}::default() and Default::default() call it with nothing, so it takes no parameters. A method that takes the value needs another name."
+            ),
+            func.name_span,
+            func.src_file,
+            sources,
+        );
+    }
+    if let Some((returned, span)) = returns
+        && *returned != struct_type
+    {
+        cold_path();
+        error_struct_default_signature(
+            "Default function returns another type",
+            &format!(
+                "default in impl {struct_name} returns {}, not {struct_name}",
+                types.of(returned)
+            ),
+            &format!(
+                "It builds the default of {struct_name}, so its return type is {struct_name}."
+            ),
+            span,
+            func.src_file,
+            sources,
+        );
+    }
+}
+
 /// Registers one method of an instantiated `impl` block as the mangled free
 /// function its call sites resolve to.
 fn lower_method(
@@ -1394,6 +1465,19 @@ fn lower_method(
         })),
         entry_register: None,
     });
+    let func = &ctx.fns[ctx.fns.len() - 1];
+    if let Some(struct_id) = struct_of_default_fn(&func.name, ctx.structs) {
+        check_struct_default_fn(
+            func,
+            struct_id,
+            func.return_type.as_ref().map(|(t, span)| (t, *span)),
+            ctx.sources,
+            TypeNames {
+                structs: ctx.structs,
+                enums: ctx.enums,
+            },
+        );
+    }
 }
 
 /// Resolves the struct a literal names, instantiating the generic type when the
