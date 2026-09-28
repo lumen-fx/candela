@@ -105,6 +105,12 @@ program faster:
   registers along with it, and so is one whose fields are written after it is
   built, as long as no other variable holding the same struct is read
   afterwards. `print` builds the struct where it prints it, and only there.
+- An operation on values known when the program is compiled is worked out
+  then: arithmetic, comparisons, logic and joining strings on variables that
+  hold a literal, on fields kept in registers, or on the arguments of a copied
+  function. A branch on a known condition is decided then too. An operation
+  that raises an error when it runs, such as dividing an `int` by zero, stays
+  in the program and raises it there.
 - A `for` loop over a slice such as `list[1..n]` walks the list itself instead
   of copying the slice, when nothing in the loop could change the list.
 

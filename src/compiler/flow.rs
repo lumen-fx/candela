@@ -8,6 +8,7 @@ use crate::compiler::compiler_data::InstrSrc;
 use crate::data::Data;
 use crate::instr::Instr;
 use crate::vm::ObjectPool;
+use crate::vm::StringPool;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
@@ -16,6 +17,7 @@ pub struct Program<'a> {
     pub instructions: &'a mut Vec<Instr>,
     pub registers: &'a mut Vec<Data>,
     pub objs: &'a ObjectPool,
+    pub strings: &'a mut StringPool,
     pub const_registers: &'a mut FxHashMap<Data, u16>,
     pub instr_src: &'a mut Vec<InstrSrc>,
     pub callsite_registers: &'a mut [Vec<u16>],
@@ -41,6 +43,39 @@ impl Program<'_> {
             }
         }
         outside
+    }
+
+    /// Where control enters the code other than by falling through or
+    /// branching: the start of the program, where each function body starts,
+    /// where each function value's body starts, and each catch. For each
+    /// position, and one past the end, whether one enters there.
+    #[must_use]
+    pub fn entries(&self) -> Vec<bool> {
+        let len = self.instructions.len();
+        let mut entry = vec![false; len + 1];
+        entry[0] = true;
+        let mut mark = |pos: usize| {
+            if let Some(slot) = entry.get_mut(pos) {
+                *slot = true;
+            }
+        };
+        for function in self.functions.iter() {
+            for fn_impl in &function.impls {
+                mark(fn_impl.loc as usize);
+            }
+            if let Some(reg) = function.entry_register {
+                let value = self.registers[reg as usize];
+                if value.is_int() {
+                    mark(value.as_int() as usize);
+                }
+            }
+        }
+        for (pos, instr) in self.instructions.iter().enumerate() {
+            if let Instr::StartErrorCatch(size, _) = *instr {
+                mark(pos + size as usize);
+            }
+        }
+        entry
     }
 
     /// A register holding `value` that nothing writes, made if there is none.
@@ -255,6 +290,11 @@ pub fn relocate(
         }
         if after != before {
             new[at] = after;
+            // A branch raises no error, so only a call, which an error names by
+            // its span, needs its span carried.
+            if branch_target(pos, before).is_some() {
+                continue;
+            }
             if let Some(src) = program.instr_src.iter().find(|src| src.instr == before) {
                 let (span, file_id) = (src.span, src.file_id);
                 program.instr_src.push(InstrSrc {
