@@ -14802,3 +14802,44 @@ pub fn an_index_followed_by_another_token_is_a_parse_error() {
     assert_wellformed(&d, src);
     assert_eq!(&src[d.span], ",");
 }
+
+/// `=> expr` is a body that returns one expression: on an anonymous function,
+/// a named function and an impl method, operator methods included, with the
+/// arrow body of a closure running as far as its expression does.
+#[test]
+pub fn an_arrow_body_returns_its_expression() {
+    let src = "
+        struct Rect { w: int, h: int }
+        impl Rect {
+            fn area(self) -> int => self.w * self.h;
+            fn +(self, o: Rect) -> Rect => Rect { w: self.w + o.w, h: self.h + o.h };
+        }
+        fn double(x: int) -> int => x * 2;
+        fn greet(name) => \"hi \" + name;
+        fn apply(f, x) => f(x);
+        fn main() {
+            let k = 10;
+            let addk = fn(x) => x + k;
+            print(addk(5));
+            print(apply(fn(x) => x * 3, 4));
+            let curry = fn(x) => fn(y) => x - y;
+            print(curry(5)(2));
+            let r = Rect { w: 2, h: 3 };
+            print((r + r).area());
+            print(double(4));
+            print(greet(\"bo\"));
+            let fs = {\"inc\": fn(x) => x + 1, \"neg\": fn(x) => 0 - x};
+            print(fs.get(\"inc\")(1));
+        }
+    ";
+    assert_eq!(run_output(src), "15\n12\n3\n24\n8\nhi bo\n2\n");
+}
+
+/// A named function's arrow body ends with `;`, the way a statement does.
+#[test]
+pub fn a_named_arrow_body_needs_its_semicolon() {
+    let src = "fn double(x) => x * 2\nfn main() { print(double(2)); }";
+    let d = compile_diag(src, "arrow.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(&src[d.span], "fn");
+}

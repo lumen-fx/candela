@@ -175,6 +175,20 @@ fn main() {
 `null` is never written in an annotation, alone or in a union, so a function
 that returns nothing leaves the annotation off. See [null](types.md#null).
 
+A function whose body is one returned expression can write it after `=>`
+instead of in a block, ending with `;`. `=> expr;` is the same as
+`{ return expr; }`, and the return annotation is optional as before.
+
+```rust
+fn area(w: int, h: int) -> int => w * h;
+
+fn greet(name) => "hello " + name;
+
+fn main() {
+    print(area(3, 4), greet("Ada"));
+}
+```
+
 Recursion works as you would expect.
 
 ```rust
@@ -198,21 +212,30 @@ memory until the machine stops it. See [errors](../reference/errors.md).
 ## Anonymous functions
 
 `fn(params) { ... }` written in expression position is a value you can store in
-a variable or pass to another function.
+a variable or pass to another function. When the body is one returned
+expression, write it after `=>`: `fn(x) => x * 2` is `fn(x) { return x * 2; }`.
+The expression runs as far as an expression can, so `fn(x) => x + 1` returns the
+sum.
 
 ```rust
 fn main() {
-    let double = fn(x) { return x * 2; };
-    print(double(21));
+    let double = fn(x) => x * 2;
+    let clamp = fn(x) {
+        if x > 10 {
+            return 10;
+        }
+        return x;
+    };
+    print(double(21), clamp(42));
 }
 ```
 
-The parameter list may be empty. `fn() { ... }` is the shape of a callback that
+The parameter list may be empty. `fn() => ...` is the shape of a callback that
 takes nothing, and it is called the same way.
 
 ```rust
 fn main() {
-    let answer = fn() { return 42; };
+    let answer = fn() => 42;
     print(answer());
 }
 ```
@@ -257,7 +280,7 @@ fn twice(x) {
 
 fn main() {
     print(apply_all(twice, [1, 2, 3]));
-    print(apply_all(fn(v) { return v + 1; }, [1, 2]));
+    print(apply_all(fn(v) => v + 1, [1, 2]));
 }
 ```
 
@@ -267,12 +290,12 @@ of the variables the closure captured.
 
 ```rust
 fn compose(f, g) {
-    return fn(x) { return f(g(x)); };
+    return fn(x) => f(g(x));
 }
 
 fn main() {
-    let inc = fn(x) { return x + 1; };
-    let dbl = fn(x) { return x * 2; };
+    let inc = fn(x) => x + 1;
+    let dbl = fn(x) => x * 2;
     print(compose(inc, dbl)(5));
 }
 ```
@@ -282,12 +305,12 @@ called where it stands; there is no need to bind it with `let` first.
 
 ```rust
 fn doubler() {
-    return fn(x) { return x * 2; };
+    return fn(x) => x * 2;
 }
 
 fn main() {
     print(doubler()(21));
-    let fs = [fn(x) { return x + 1; }];
+    let fs = [fn(x) => x + 1];
     print(fs[0](41));
 }
 ```
@@ -304,9 +327,9 @@ struct Button {
 }
 
 fn main() {
-    let b = Button { label: "ok", on_press: fn(x) { return x * 2; } };
+    let b = Button { label: "ok", on_press: fn(x) => x * 2 };
     print(b.on_press(21));
-    b.on_press = fn(x) { return x + 1; };
+    b.on_press = fn(x) => x + 1;
     print(b.on_press(21));
 }
 ```
@@ -331,7 +354,7 @@ fn main() {
     let f = twice;
     print(f(4));
 
-    let fs = [twice, fn(x) { return x + 1; }];
+    let fs = [twice, fn(x) => x + 1];
     print(fs[1](4));
 }
 ```
@@ -357,7 +380,7 @@ fn double(n: int) -> int {
 
 fn main() {
     print(apply(double, 21));
-    print(apply(fn(y) { return y + 1; }, 41));
+    print(apply(fn(y) => y + 1, 41));
 }
 ```
 
@@ -373,10 +396,10 @@ the index, the key or the last assignment put there.
 
 ```rust
 fn main() {
-    let fs = [fn(x) { return x + 1; }, fn(x) { return x * 10; }];
+    let fs = [fn(x) => x + 1, fn(x) => x * 10];
     print(fs[0](4), fs[1](4));
 
-    let ops = {"inc": fn(x) { return x + 1; }, "ten": fn(x) { return x * 10; }};
+    let ops = {"inc": fn(x) => x + 1, "ten": fn(x) => x * 10};
     print(ops.get("ten")(4));
 }
 ```

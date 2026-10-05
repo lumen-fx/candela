@@ -17,9 +17,7 @@ struct Rect {
 }
 
 impl Rect {
-    fn area(self) {
-        return self.w * self.h;
-    }
+    fn area(self) -> int => self.w * self.h;
 
     fn scaled(self, factor) {
         return Rect { w: self.w * factor, h: self.h * factor };
@@ -32,6 +30,10 @@ fn main() {
     print(r.scaled(2).area());
 }
 ```
+
+A method's body is a block, or `=> expr;` for one that returns a single
+expression, the same as a free function's; see
+[Functions](functions.md#returning).
 
 `impl` blocks go at the top level, next to the type they belong to. A type may
 have several. A block on a generic type names the type arguments it is written

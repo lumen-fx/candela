@@ -139,8 +139,12 @@ module.exports = grammar({
         optional(field('type_parameters', $.type_parameters)),
         field('parameters', $.parameter_list),
         optional(field('return_type', $.return_type)),
-        field('body', $.block),
+        field('body', choice($.block, $.expression_body)),
       ),
+
+    // `=> expr;`: a body that evaluates to one expression, the same as
+    // `{ return expr; }`.
+    expression_body: ($) => seq('=>', field('value', $._expression), ';'),
 
     parameter_list: ($) => seq('(', sepByTrailing(',', $.parameter), ')'),
 
@@ -213,7 +217,7 @@ module.exports = grammar({
         field('name', $.operator_name),
         field('parameters', $.parameter_list),
         optional(field('return_type', $.return_type)),
-        field('body', $.block),
+        field('body', choice($.block, $.expression_body)),
       ),
 
     // `-` stands for both subtraction and negation; the parameter count tells
@@ -641,10 +645,17 @@ module.exports = grammar({
     field_initializer: ($) =>
       seq(field('name', $.identifier), ':', field('value', $._expression)),
 
-    // An anonymous function. It takes no return annotation and captures
-    // nothing from the surrounding scope.
+    // An anonymous function. It takes no return annotation. Its body is a
+    // block, or `=> expr`, which runs as far as the expression does, so
+    // `fn(x) => x * 2` returns the product.
     closure_expression: ($) =>
-      seq('fn', field('parameters', $.parameter_list), field('body', $.block)),
+      prec.right(
+        seq(
+          'fn',
+          field('parameters', $.parameter_list),
+          choice(field('body', $.block), seq('=>', field('value', $._expression))),
+        ),
+      ),
 
     // Every branch yields a value, so the `else` is required.
     if_expression: ($) =>

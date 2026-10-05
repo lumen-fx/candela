@@ -931,3 +931,72 @@ fn main() {
             (identifier)
             (identifier))
           (arguments))))))
+
+================================================================================
+Anonymous functions with an expression body (docs/src/language/functions.md)
+================================================================================
+
+fn main() {
+    let ys = xs.map(fn(x) => x * 2);
+    let add = fn(a, b) => a + b;
+    xs.each(fn(x) => print(x));
+    let f = fn(x) => fn(y) => x + y;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (closure_expression
+              (parameter_list
+                (parameter
+                  (identifier)))
+              (binary_expression
+                (identifier)
+                (integer_literal))))))
+      (let_declaration
+        (identifier)
+        (closure_expression
+          (parameter_list
+            (parameter
+              (identifier))
+            (parameter
+              (identifier)))
+          (binary_expression
+            (identifier)
+            (identifier))))
+      (expression_statement
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (closure_expression
+              (parameter_list
+                (parameter
+                  (identifier)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier)))))))
+      (let_declaration
+        (identifier)
+        (closure_expression
+          (parameter_list
+            (parameter
+              (identifier)))
+          (closure_expression
+            (parameter_list
+              (parameter
+                (identifier)))
+            (binary_expression
+              (identifier)
+              (identifier))))))))

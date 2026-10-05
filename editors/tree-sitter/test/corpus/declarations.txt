@@ -792,3 +792,79 @@ fn main() {
           (identifier)
           (arguments
             (string_literal)))))))
+
+================================================================================
+Expression bodies with => (docs/src/language/functions.md)
+================================================================================
+
+fn double(x: int) -> int => x * 2;
+
+impl Rect {
+    fn area(self) -> int => self.w * self.h;
+    fn +(self, o: Rect) -> Rect => Rect { w: self.w + o.w, h: self.h + o.h };
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (type_identifier))
+    (expression_body
+      (binary_expression
+        (identifier)
+        (integer_literal))))
+  (impl_block
+    (type_identifier)
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier)))
+      (return_type
+        (type_identifier))
+      (expression_body
+        (binary_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (field_expression
+            (identifier)
+            (identifier)))))
+    (operator_declaration
+      (operator_name)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier))
+      (expression_body
+        (struct_literal
+          (identifier)
+          (field_initializer_list
+            (field_initializer
+              (identifier)
+              (binary_expression
+                (field_expression
+                  (identifier)
+                  (identifier))
+                (field_expression
+                  (identifier)
+                  (identifier))))
+            (field_initializer
+              (identifier)
+              (binary_expression
+                (field_expression
+                  (identifier)
+                  (identifier))
+                (field_expression
+                  (identifier)
+                  (identifier))))))))))

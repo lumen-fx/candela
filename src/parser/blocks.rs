@@ -84,6 +84,26 @@ pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
     code
 }
 
+/// The body of a function: a block, or `=> expr` for one that evaluates to a
+/// single expression. The arrow form is the block `{ return expr; }`, so the
+/// rest of the compiler sees one shape of body. A declaration ends its arrow
+/// body with `;`, the way a statement ends; an anonymous function's arrow
+/// body ends where the expression does.
+pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
+    if parser.peek_token_opt() != Some(Token::FatArrow) {
+        return parse_block(parser);
+    }
+    parser.next_token();
+    let value = parse_expr(parser);
+    if declaration {
+        parser.next_token_expect(
+            Token::SemiColon,
+            "A function declared with `=>` ends its expression with ';'.",
+        );
+    }
+    vec![Expr::ReturnVal(Box::new(Some(value)))]
+}
+
 /// LBrace Expr RBrace
 #[inline(always)]
 pub fn parse_block_expr(parser: &mut Parser<'_>) -> Expr {
@@ -233,7 +253,7 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         }
     }
     let return_type = parse_return_annotation(parser);
-    let fn_code = parse_block(parser);
+    let fn_code = parse_fn_body(parser, true);
     Expr::FunctionDecl(
         fn_name,
         Box::from(args),
@@ -661,7 +681,7 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
         }
     }
     let return_type = parse_return_annotation(parser);
-    let code = parse_block(parser);
+    let code = parse_fn_body(parser, true);
     // `-` has a binary and a unary form and a type may define both, so the
     // parameter count picks which name this declaration takes. A count that
     // fits neither keeps the symbol it was written with, and the arity check

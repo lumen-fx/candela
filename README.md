@@ -62,7 +62,7 @@ Run `candela` with no arguments for a REPL.
   variants carry payloads, and `match` binds them by pattern.
 - **Methods.** An `impl` block attaches methods to a struct, an enum, or a
   built-in type, called as `value.method()`.
-- **Functions as values.** Pass a named function or an anonymous `fn(x) { ... }`
+- **Functions as values.** Pass a named function or an anonymous `fn(x) => x * 2`
   to another function.
 - **Collections.** List and map literals, a set built on maps, and JSON parsing
   and serialisation in the standard library.

@@ -195,7 +195,7 @@ arr.reduce(init, f)
 ```rust
 fn main() {
     let xs = [1, 2, 3, 4];
-    print(xs.reduce(0, fn(acc, x) { return acc + x; }));
+    print(xs.reduce(0, fn(acc, x) => acc + x));
 }
 ```
 
@@ -255,7 +255,7 @@ place.
 ```rust
 fn main() {
     let xs = [3, 1, 2];
-    print(xs.sort_by(fn(a, b) { return a > b; }));
+    print(xs.sort_by(fn(a, b) => a > b));
     print(xs);
 }
 ```
