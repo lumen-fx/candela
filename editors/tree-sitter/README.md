@@ -52,19 +52,22 @@ path in the `[language-server.candela-lsp]` section.
 ## What it parses
 
 Every declaration form: `import` with and without an alias, `fn` with typed or
-bare parameters and an optional return annotation, `struct` with a field's
+bare parameters, an optional return annotation, and a block or `=> expr;` body,
+`struct` with a field's
 `= value` default, `enum` with payload types, `impl` blocks, and the `dylib` and
 `host` signature blocks including the variadic `...` parameter and the structs
 a `host` block declares. Statements: `let`, assignment and its
 compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
-range, `loop`, `match`, `try`/`catch`, and bare blocks. Expressions carry
+range, `loop`, `try`/`catch`, and bare blocks. `match` stands alone or gives a
+value, its arms take a block or an expression, and `|` separates a pattern's
+alternatives. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates
 before it raises; calls, method calls, field access, indexing, and slicing bind
 tighter than every operator, and a call attaches to what a call or an index
 returned, so `adder(1)(2)` and `fs[0](x)` read as calls. Literals cover
 integers, floats with a decimal point or an exponent or both, strings with
 their escapes, `true`, `false`, `null`, lists, maps, struct literals with an optional
-closing `..base`, and anonymous functions. The type syntax covers arrays, map types, unions,
+closing `..base`, and anonymous functions with a block or an `=> expr` body. The type syntax covers arrays, map types, unions,
 namespaced names, and function types, `fn(int, int) -> int`. A function type's
 return type runs to the end of the type, so `fn(int) -> int[]` returns a list
 and `(fn(int) -> int)[]` is a list of functions.

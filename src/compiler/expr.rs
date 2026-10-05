@@ -101,17 +101,22 @@ pub enum Expr {
     /// `type_args` names the instantiation of a generic enum
     /// (`Slot<int>::Empty`) and is empty otherwise.
     NamespacedRef(Box<[SmolStr]>, Span, Box<[TypeExpr]>),
-    /// Match(scrutinee, arms: [(pattern_expr, body)], wildcard_body, span)
+    /// Match(scrutinee, arms: [(patterns, body)], wildcard_body, span, is_value)
     ///
     /// The arm patterns are parsed as ordinary expressions; the compiler picks
     /// the lowering by the scrutinee's static type. For an enum scrutinee each
     /// pattern is a variant pattern (`Circle(r)` binds the payload); otherwise
-    /// each pattern is an equality test against the scrutinee.
+    /// each pattern is an equality test against the scrutinee. An arm holds one
+    /// pattern per `|` alternative and runs when any of them matches.
+    ///
+    /// `is_value` marks a `match` written where a value goes. Each of its
+    /// bodies is one expression, the arm's value, and it covers every case.
     Match(
         Box<Self>,
-        Box<[(Self, Box<[Self]>)]>,
+        Box<[(Box<[Self]>, Box<[Self]>)]>,
         Option<Box<[Self]>>,
         Span,
+        bool,
     ),
     /// GetStructField(struct_expr, field, struct_span, field_span, value_span)
     GetStructField(Box<Self>, SmolStr, Span, Span),
@@ -303,6 +308,7 @@ impl Expr {
                 | Self::NamespacedRef(_, _, _)
                 | Self::GetStructField(_, _, _, _)
                 | Self::InlineCondition(_, _, _, _)
+                | Self::Match(_, _, _, _, true)
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
                 | Self::ArrayGetSlice(..)
@@ -505,7 +511,7 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
             code_modifies_variable(var_name, try_code)
                 || (err_var != var_name && code_modifies_variable(var_name, catch_code))
         }
-        Expr::Match(_, arms, wildcard, _) => {
+        Expr::Match(_, arms, wildcard, _, _) => {
             arms.iter()
                 .any(|(_, body)| code_modifies_variable(var_name, body))
                 || wildcard
@@ -627,20 +633,22 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 scan_free_names(&base.0, depth, bound, out);
             }
         }
-        Expr::Match(scrutinee, arms, wildcard, _) => {
+        Expr::Match(scrutinee, arms, wildcard, _, _) => {
             scan_free_names(scrutinee, depth, bound, out);
-            for (pattern, body) in arms {
+            for (patterns, body) in arms {
                 let bound_len = bound.len();
                 // An enum pattern binds its payload for the arm body; any
                 // other pattern is a value the scrutinee is compared against.
-                if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
-                    for binder in binders {
-                        if let Expr::Var(name, _) = binder {
-                            bound.push(name.clone());
+                for pattern in patterns {
+                    if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
+                        for binder in binders {
+                            if let Expr::Var(name, _) = binder {
+                                bound.push(name.clone());
+                            }
                         }
+                    } else {
+                        scan_free_names(pattern, depth, bound, out);
                     }
-                } else {
-                    scan_free_names(pattern, depth, bound, out);
                 }
                 scan_block_free_names(body, depth, bound, out);
                 bound.truncate(bound_len);

@@ -329,13 +329,14 @@ See [control flow](../language/control-flow.md).
 ## Symbols that are not operators
 
 - `|` is not an operator where a type is read: it separates the members of a
-  union type, as in `int | string`. Where an expression is read it is bitwise
-  or. Nothing is ambiguous about that, because a type and an expression never
-  stand in the same place.
+  union type, as in `int | string`. In a `match` pattern it separates
+  alternatives, as in `1 | 2 => ...`. Everywhere else an expression is read it
+  is bitwise or; parenthesise to use bitwise or inside a pattern, `(a | b)`.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
-- `->` gives the return type in a `dylib` or `host` signature, and `=>`
-  separates a `match` pattern from its body.
+- `->` gives the return type in a `dylib` or `host` signature. `=>` means
+  "evaluates to": it separates a `match` pattern from its body, and gives a
+  function a body of one expression, as in `fn(x) => x * 2`.
 
 ## Constant expressions
 

@@ -1549,6 +1549,95 @@ pub fn error_method_without_receiver(
     )
 }
 
+/// Reports a `match` used as a value that has no `_` arm while its
+/// scrutinee is not an enum, so no list of arms can be seen to cover it.
+#[cold]
+#[inline(never)]
+pub fn error_match_value_without_wildcard(span: Span, file_idx: u16, sources: &[Source]) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Match used as a value does not cover every case")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message("This match has no value when no arm matches")
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Add a last arm {} that gives the value for every other case",
+                blue("_ => ...")
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        "A match used as a value needs a `_` arm unless it matches an enum and lists every variant",
+        "match_without_wildcard",
+    )
+}
+
+/// Reports a `|` alternative of a match arm that binds other names, or the
+/// same names at other types, than the first alternative of that arm. The
+/// arm body reads its bindings whichever alternative matched.
+#[cold]
+#[inline(never)]
+pub fn error_pattern_bindings_differ(
+    expected: &[(SmolStr, DataType)],
+    found: &[(SmolStr, DataType)],
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let list = |bound: &[(SmolStr, DataType)]| {
+        if bound.is_empty() {
+            return String::from("nothing");
+        }
+        bound
+            .iter()
+            .map(|(name, ty)| format!("{name}: {}", types.of(ty)))
+            .collect::<Vec<String>>()
+            .join(", ")
+    };
+    let expected = list(expected);
+    let found = list(found);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Pattern alternatives bind different names")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This alternative binds {}, the first one binds {}",
+                        red(&found),
+                        blue(&expected)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "The arm body runs whichever alternative matched, so every alternative binds the same names at the same types",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "This alternative binds {found}, but the first alternative of the arm binds {expected}"
+        ),
+        "pattern_bindings_differ",
+    )
+}
+
 /// Reports a dot call whose receiver names a `host` or `dylib` block rather
 /// than a value. A block is a namespace, and a namespace is reached with `::`.
 #[cold]

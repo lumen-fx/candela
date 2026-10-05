@@ -1483,19 +1483,130 @@ fn resolve_qualified_pattern_enum(
     (pattern_enum as u16, variant_idx as u16)
 }
 
+/// The span a variant pattern was written at, or `fallback` for one that
+/// carries none of its own.
+const fn pattern_span(pattern: &Expr, fallback: Span) -> Span {
+    match pattern {
+        Expr::Var(_, span)
+        | Expr::NamespacedRef(_, span, _)
+        | Expr::FunctionCall(_, _, span, _, _) => *span,
+        _ => fallback,
+    }
+}
+
+/// The names one resolved alternative binds, each with the type of the payload
+/// it binds, in name order.
+fn alternative_bindings(
+    enum_id: u16,
+    (variant_idx, binders): &(u16, Vec<SmolStr>),
+    state: &State<'_>,
+) -> Vec<(SmolStr, DataType)> {
+    let payload = &state.enums[enum_id as usize].variants[*variant_idx as usize].payload;
+    let mut bound: Vec<(SmolStr, DataType)> = binders
+        .iter()
+        .zip(payload.iter())
+        .filter(|(binder, _)| binder.as_str() != "_")
+        .map(|(binder, ty)| (binder.clone(), ty.clone()))
+        .collect();
+    bound.sort_by(|a, b| a.0.cmp(&b.0));
+    bound
+}
+
+/// Resolves every `|` alternative of an enum arm to the variant it names and
+/// the names it binds, one per payload position.
+///
+/// The arm body reads its bindings whichever alternative matched, so every
+/// alternative has to bind the same names at the same types; one that does
+/// not is reported against itself.
+pub(crate) fn resolve_arm_patterns(
+    enum_id: u16,
+    patterns: &[Expr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<(u16, Vec<SmolStr>)> {
+    let alternatives: Vec<(u16, Vec<SmolStr>)> = patterns
+        .iter()
+        .map(|pattern| resolve_variant_pattern(enum_id, pattern, span, ctx, state))
+        .collect();
+    if let [first, rest @ ..] = alternatives.as_slice() {
+        let expected = alternative_bindings(enum_id, first, state);
+        for (k, alternative) in rest.iter().enumerate() {
+            let found = alternative_bindings(enum_id, alternative, state);
+            if found != expected {
+                compiler_errors::error_pattern_bindings_differ(
+                    &expected,
+                    &found,
+                    pattern_span(&patterns[k + 1], span),
+                    ctx.file_idx,
+                    state.sources,
+                    state.type_names(),
+                );
+            }
+        }
+    }
+    alternatives
+}
+
+/// Declares, for the type walks that read an arm body without compiling it,
+/// the names the arm's pattern binds. Every alternative binds the same ones,
+/// so the first says what they are.
+pub(crate) fn declare_arm_bindings(
+    enum_id: u16,
+    patterns: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
+    for (name, var_type) in alternative_bindings(enum_id, &alternatives[0], state) {
+        v.push(Variable {
+            name,
+            register_id: 0,
+            cell: false,
+            var_type,
+        });
+    }
+}
+
+/// Compiles a match arm's body. A statement match runs it; a match used as a
+/// value runs it into `result`, its last expression being the arm's value.
+fn compile_arm_body(
+    body: &[Expr],
+    result: Option<(u16, bool)>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    if let Some((result, as_fn_value)) = result {
+        compile_inline_condition_branch(body, v, ctx, state, output, result, as_fn_value);
+    } else {
+        let code = compile_expr(body, v, ctx.advance_offset(output.len() as u16), state);
+        output.extend(code);
+    }
+}
+
 /// Lowers a `match` on an enum scrutinee to a variant-tag compare chain with
 /// per-arm payload binding, reusing the ordinary conditional-jump machinery.
+///
+/// Each `|` alternative of an arm tests its own variant and binds its own
+/// payload positions into registers the arm shares, then joins the arm body.
+/// `result` is the register a match used as a value leaves its value in, with
+/// whether that value is a function value, and `None` for a statement.
 #[allow(clippy::too_many_arguments)]
 fn compile_enum_match(
     enum_id: u16,
     scrutinee: &Expr,
-    arms: &[(Expr, Box<[Expr]>)],
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
     wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
+    result: Option<(u16, bool)>,
 ) {
     let scrut_reg = scrutinee
         .compile(v, ctx, state, output, None, false, true)
@@ -1515,65 +1626,95 @@ fn compile_enum_match(
 
     let variant_count = state.enums[enum_id as usize].variants.len();
     let mut covered = vec![false; variant_count];
+    // One entry per alternative: where its test starts and the jump it takes
+    // when the tag is another variant's.
     let mut false_jmps: Vec<usize> = Vec::with_capacity(arms.len());
-    let mut arm_starts: Vec<usize> = Vec::with_capacity(arms.len());
+    let mut alternative_starts: Vec<usize> = Vec::with_capacity(arms.len());
     let mut end_jmps: Vec<usize> = Vec::with_capacity(arms.len());
 
-    for (pattern, body) in arms {
-        let (variant_idx, binders) = resolve_variant_pattern(enum_id, pattern, span, ctx, state);
-        covered[variant_idx as usize] = true;
+    for (patterns, body) in arms {
+        let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
+        // (name, register the body reads, register the payload is read into)
+        let mut slots: Vec<(SmolStr, u16, u16, DataType, bool)> = Vec::new();
+        let mut to_body: Vec<usize> = Vec::new();
+        for (k, (variant_idx, binders)) in alternatives.iter().enumerate() {
+            covered[*variant_idx as usize] = true;
+            alternative_starts.push(output.len());
+            let idx_reg = state.alloc_reg();
+            output.push(Instr::SetInt(idx_reg, i32::from(*variant_idx)));
+            false_jmps.push(output.len());
+            output.push(Instr::NotEqJmp(tag_reg, idx_reg, 0));
+            state.free_reg(idx_reg, v);
 
-        arm_starts.push(output.len());
-        let idx_reg = state.alloc_reg();
-        output.push(Instr::SetInt(idx_reg, i32::from(variant_idx)));
-        false_jmps.push(output.len());
-        output.push(Instr::NotEqJmp(tag_reg, idx_reg, 0));
-        state.free_reg(idx_reg, v);
-
-        // Bind the variant payload into fresh locals for the arm body.
-        let v_arm = v.len();
-        for (i, binder) in binders.iter().enumerate() {
-            if binder.as_str() != "_" {
-                let binder_reg = state.alloc_reg();
-                output.push(Instr::GetFieldStruct(scrut_reg, (i + 1) as u16, binder_reg));
-                let payload_type =
-                    state.enums[enum_id as usize].variants[variant_idx as usize].payload[i].clone();
+            // Bind the variant payload into the arm's locals. The first
+            // alternative allocates them; the others write the same ones.
+            for (i, binder) in binders.iter().enumerate() {
+                if binder.as_str() == "_" {
+                    continue;
+                }
+                let field = (i + 1) as u16;
+                if let Some((_, read_reg, value_reg, _, captured)) =
+                    slots.iter().find(|slot| slot.0 == *binder)
+                {
+                    if *captured {
+                        output.push(Instr::GetFieldStruct(scrut_reg, field, *value_reg));
+                        output.push(Instr::NewCell(*value_reg, *read_reg));
+                    } else {
+                        output.push(Instr::GetFieldStruct(scrut_reg, field, *read_reg));
+                    }
+                    continue;
+                }
+                let value_reg = state.alloc_reg();
+                output.push(Instr::GetFieldStruct(scrut_reg, field, value_reg));
+                let payload_type = state.enums[enum_id as usize].variants[*variant_idx as usize]
+                    .payload[i]
+                    .clone();
                 let captured = code_captures_variable(binder, body);
-                let binder_reg = if captured {
+                let read_reg = if captured {
                     let cell_id = state.alloc_reg();
-                    output.push(Instr::NewCell(binder_reg, cell_id));
+                    output.push(Instr::NewCell(value_reg, cell_id));
                     cell_id
                 } else {
-                    binder_reg
+                    value_reg
                 };
-                v.push(Variable {
-                    name: binder.clone(),
-                    register_id: binder_reg,
-                    cell: captured,
-                    var_type: payload_type,
-                });
+                slots.push((binder.clone(), read_reg, value_reg, payload_type, captured));
+            }
+            if k + 1 < alternatives.len() {
+                to_body.push(output.len());
+                output.push(Instr::Jmp(0));
             }
         }
+        let body_start = output.len();
+        for at in to_body {
+            set_jmp_size(&mut output[at], (body_start - at) as u16);
+        }
 
-        let arm_code = compile_expr(body, v, ctx.advance_offset(output.len() as u16), state);
-        output.extend(arm_code);
+        let v_arm = v.len();
+        for (name, read_reg, _, var_type, captured) in slots {
+            v.push(Variable {
+                name,
+                register_id: read_reg,
+                cell: captured,
+                var_type,
+            });
+        }
+        compile_arm_body(body, result, v, ctx, state, output);
         v.truncate(v_arm);
 
         end_jmps.push(output.len());
         output.push(Instr::Jmp(0));
     }
 
-    // Where a non-matching last arm (and the wildcard, if any) begins.
+    // Where a non-matching last alternative (and the wildcard, if any) begins.
     let after_arms = output.len();
     if let Some(w) = wildcard {
-        let wild_code = compile_expr(w, v, ctx.advance_offset(output.len() as u16), state);
-        output.extend(wild_code);
+        compile_arm_body(w, result, v, ctx, state, output);
     }
     let end = output.len();
 
     for (k, &j) in false_jmps.iter().enumerate() {
-        let target = if k + 1 < arm_starts.len() {
-            arm_starts[k + 1]
+        let target = if k + 1 < alternative_starts.len() {
+            alternative_starts[k + 1]
         } else {
             after_arms
         };
@@ -1647,7 +1788,7 @@ fn pattern_variant_enum(
 /// the first to read an arm body.
 pub(crate) fn check_match_scrutinee_is_enum(
     scrut_type: &DataType,
-    arms: &[(Expr, Box<[Expr]>)],
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
     span: Span,
     v: &[Variable],
     ctx: Ctx,
@@ -1655,7 +1796,8 @@ pub(crate) fn check_match_scrutinee_is_enum(
 ) {
     if let Some(enum_id) = arms
         .iter()
-        .find_map(|(pattern, _)| pattern_variant_enum(pattern, v, ctx, state))
+        .flat_map(|(patterns, _)| patterns.iter())
+        .find_map(|pattern| pattern_variant_enum(pattern, v, ctx, state))
     {
         compiler_errors::error_match_not_enum(
             &state.enums[enum_id as usize].name,
@@ -1668,12 +1810,59 @@ pub(crate) fn check_match_scrutinee_is_enum(
     }
 }
 
+/// The test an arm of an equality `match` runs: the scrutinee, held in the
+/// variable `scrutinee`, equal to any of the arm's `|` alternatives.
+fn equality_arm_test(scrutinee: &SmolStr, patterns: &[Expr], span: Span) -> Expr {
+    let equals = |pattern: &Expr| {
+        Expr::Eq(
+            Box::new(Expr::Var(scrutinee.clone(), span)),
+            Box::new(pattern.clone()),
+            span,
+            span,
+        )
+    };
+    let mut test = equals(&patterns[0]);
+    for pattern in &patterns[1..] {
+        test = Expr::BoolOr(Box::new(test), Box::new(equals(pattern)), span, span);
+    }
+    test
+}
+
+/// The `if` chain an equality `match` runs: one branch per arm, testing the
+/// scrutinee held in `scrutinee`, then the wildcard as the `else`. The first
+/// arm's body comes first, the way a condition holds its own code ahead of
+/// its `else if` blocks.
+fn equality_match_chain(
+    scrutinee: &SmolStr,
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
+    wildcard: Option<&[Expr]>,
+    span: Span,
+) -> (Expr, Box<[Expr]>) {
+    let (first_patterns, first_body) = &arms[0];
+    let mut code: Vec<Expr> = Vec::with_capacity(arms.len() + first_body.len());
+    code.extend(first_body.iter().cloned());
+    for (patterns, body) in &arms[1..] {
+        code.push(Expr::ElseIfBlock(
+            Box::new(equality_arm_test(scrutinee, patterns, span)),
+            body.clone(),
+            span,
+        ));
+    }
+    if let Some(w) = wildcard {
+        code.push(Expr::ElseBlock(Box::from(w)));
+    }
+    (
+        equality_arm_test(scrutinee, first_patterns, span),
+        Box::from(code),
+    )
+}
+
 /// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
 /// with payload binding; any other scrutinee reproduces the equality-chain
 /// lowering (`scrutinee == pattern` per arm) that `match` has always had.
 fn compile_match(
     scrutinee: &Expr,
-    arms: &[(Expr, Box<[Expr]>)],
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
     wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
@@ -1684,45 +1873,86 @@ fn compile_match(
     let scrut_type = scrutinee.infer_type(v, ctx, state);
     if let DataType::Enum(enum_id) = scrut_type {
         compile_enum_match(
-            enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output,
+            enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output, None,
         );
     } else {
         check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
         let obj_var = SmolStr::new_static("[MATCH TEMP]");
-        let (first_pat, first_body) = &arms[0];
-        let mut output_code: Vec<Expr> = Vec::with_capacity(arms.len());
-        output_code.extend(first_body.iter().cloned());
-        for (pat, body) in &arms[1..] {
-            output_code.push(Expr::ElseIfBlock(
-                Box::new(Expr::Eq(
-                    Box::new(Expr::Var(obj_var.clone(), span)),
-                    Box::new(pat.clone()),
-                    span,
-                    span,
-                )),
-                body.clone(),
-                span,
-            ));
-        }
-        if let Some(w) = wildcard {
-            output_code.push(Expr::ElseBlock(Box::from(w)));
-        }
+        let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
         let desugared = Expr::EvalBlock(Box::from([
-            Expr::VarDeclare(obj_var.clone(), Box::new(scrutinee.clone())),
-            Expr::Condition(
-                Box::new(Expr::Eq(
-                    Box::new(Expr::Var(obj_var, span)),
-                    Box::new(first_pat.clone()),
-                    span,
-                    span,
-                )),
-                Box::from(output_code),
-                span,
-                span,
-            ),
+            Expr::VarDeclare(obj_var, Box::new(scrutinee.clone())),
+            Expr::Condition(Box::new(test), code, span, span),
         ]));
         desugared.compile(v, ctx, state, output, None, false, false);
     }
+}
+
+/// Compiles a `match` used as a value into `tgt_id`, or a fresh register, and
+/// returns where the value is.
+///
+/// It covers every case the way an `if` used as a value has an `else`: an
+/// enum match lists every variant or has a `_` arm, and any other match has a
+/// `_` arm.
+fn compile_match_value(
+    scrutinee: &Expr,
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
+    wildcard: Option<&[Expr]>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+    tgt_id: Option<u16>,
+    as_fn_value: bool,
+) -> u16 {
+    let scrut_type = scrutinee.infer_type(v, ctx, state);
+    if let DataType::Enum(enum_id) = scrut_type {
+        let result = state.alloc_reg_tgt(tgt_id);
+        compile_enum_match(
+            enum_id,
+            scrutinee,
+            arms,
+            wildcard,
+            span,
+            v,
+            ctx,
+            state,
+            output,
+            Some((result, as_fn_value)),
+        );
+        return result;
+    }
+    check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
+    if wildcard.is_none() {
+        compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
+    }
+    let scrut_reg = scrutinee
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let obj_var = SmolStr::new_static("[MATCH TEMP]");
+    let v_base = v.len();
+    v.push(Variable {
+        name: obj_var.clone(),
+        register_id: scrut_reg,
+        cell: false,
+        var_type: scrut_type,
+    });
+    let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
+    let result = compile_inline_condition(
+        &test,
+        &code,
+        span,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+        tgt_id,
+        as_fn_value,
+    );
+    v.truncate(v_base);
+    state.free_reg(scrut_reg, v);
+    result
 }
 
 fn compile_map_literal(
@@ -2888,6 +3118,12 @@ fn compile_bool_neg_op(
     id
 }
 
+/// Compiles one branch of a construct used as a value, an `if` or a `match`,
+/// into `tgt_id`: its statements, then its last expression as the value.
+///
+/// `as_fn_value` says the construct's branches give different functions, so
+/// the value is a function value that a call dispatches on rather than one
+/// function the compiler names; see [`merge_fn_types`].
 fn compile_inline_condition_branch(
     branch: &[Expr],
     v: &mut Vec<Variable>,
@@ -2895,6 +3131,7 @@ fn compile_inline_condition_branch(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
     tgt_id: u16,
+    as_fn_value: bool,
 ) {
     let regs_before = state.registers.len() as u16;
     let output_len = output.len();
@@ -2904,17 +3141,16 @@ fn compile_inline_condition_branch(
         ctx.advance_offset(output.len() as u16),
         state,
     ));
-    let val_id = branch[branch.len() - 1]
-        .compile(
-            v,
-            ctx.advance_offset(output.len() as u16),
-            state,
-            output,
-            Some(tgt_id),
-            false,
-            true,
-        )
-        .unwrap_id();
+    // The value compiles onto the end of `output` itself, whose start `ctx`
+    // already places, so its offset is not advanced the way the statements'
+    // separate buffer is.
+    let last = &branch[branch.len() - 1];
+    let val_id = if as_fn_value {
+        compile_fn_value(last, v, ctx, state, output, Some(tgt_id))
+    } else {
+        last.compile(v, ctx, state, output, Some(tgt_id), false, true)
+            .unwrap_id()
+    };
     state.free_scope_registers(regs_before, &output[output_len..], v);
     if val_id != tgt_id {
         output.push(Instr::Mov(val_id, tgt_id));
@@ -2931,6 +3167,7 @@ fn compile_inline_condition(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
     tgt_id: Option<u16>,
+    as_fn_value: bool,
 ) -> u16 {
     let return_id = state.alloc_reg_tgt(tgt_id);
 
@@ -2951,7 +3188,15 @@ fn compile_inline_condition(
     add_cmp_false(condition_id, &mut 0, output, false);
     cmp_markers.push(output.len() - 1);
 
-    compile_inline_condition_branch(&code[..main_code_limit], v, ctx, state, output, return_id);
+    compile_inline_condition_branch(
+        &code[..main_code_limit],
+        v,
+        ctx,
+        state,
+        output,
+        return_id,
+        as_fn_value,
+    );
     if main_code_limit != code.len() {
         output.push(Instr::Jmp(0));
         jmp_markers.push(output.len() - 1);
@@ -2966,13 +3211,13 @@ fn compile_inline_condition(
             add_cmp_false(condition_id, &mut 0, output, false);
             state.free_reg(condition_id, v);
             cmp_markers.push(output.len() - 1);
-            compile_inline_condition_branch(code, v, ctx, state, output, return_id);
+            compile_inline_condition_branch(code, v, ctx, state, output, return_id, as_fn_value);
             output.push(Instr::Jmp(0));
             jmp_markers.push(output.len() - 1);
         } else if let Expr::ElseBlock(code) = elem {
             else_exists = true;
             condition_markers.push(output.len());
-            compile_inline_condition_branch(code, v, ctx, state, output, return_id);
+            compile_inline_condition_branch(code, v, ctx, state, output, return_id, as_fn_value);
         }
     }
     if !else_exists {
@@ -3001,8 +3246,10 @@ fn compile_inline_condition(
             | Instr::InfIntJmp(_, _, jump_size)
             | Instr::NotEqJmp(_, _, jump_size)
             | Instr::ObjNotEqJmp(_, _, jump_size)
+            | Instr::StrNotEqJmp(_, _, jump_size)
             | Instr::EqJmp(_, _, jump_size)
-            | Instr::ObjEqJmp(_, _, jump_size),
+            | Instr::ObjEqJmp(_, _, jump_size)
+            | Instr::StrEqJmp(_, _, jump_size),
         ) = output.get_mut(*y)
         {
             *jump_size = diff as u16;
@@ -4966,6 +5213,7 @@ impl Expr {
             }
             Self::InlineCondition(main_condition, code, span, condition_span) => {
                 debug_assert!(uses_id);
+                let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
                 Some(compile_inline_condition(
                     main_condition,
                     code,
@@ -4976,6 +5224,7 @@ impl Expr {
                     state,
                     output,
                     tgt_id,
+                    as_fn_value,
                 ))
             }
             Self::FunctionCall(args, namespace, markers, args_indexes, type_args) if uses_id => {
@@ -5163,7 +5412,23 @@ impl Expr {
                 compile_enum_definition(name, variants, *span, type_params, ctx, state);
                 None
             }
-            Self::Match(scrutinee, arms, wildcard, span) => {
+            Self::Match(scrutinee, arms, wildcard, span, true) => {
+                debug_assert!(uses_id);
+                let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
+                Some(compile_match_value(
+                    scrutinee,
+                    arms,
+                    wildcard.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    tgt_id,
+                    as_fn_value,
+                ))
+            }
+            Self::Match(scrutinee, arms, wildcard, span, false) => {
                 debug_assert!(!uses_id);
                 compile_match(
                     scrutinee,
@@ -5960,13 +6225,14 @@ fn resolve_default_returns(code: &[Expr], struct_id: u16) -> Option<Vec<Expr>> {
                 err_var.clone(),
                 block(catch_code, id, changed),
             ),
-            Expr::Match(scrutinee, arms, wildcard, span) => Expr::Match(
+            Expr::Match(scrutinee, arms, wildcard, span, is_value) => Expr::Match(
                 scrutinee.clone(),
                 arms.iter()
-                    .map(|(pattern, body)| (pattern.clone(), block(body, id, changed)))
+                    .map(|(patterns, body)| (patterns.clone(), block(body, id, changed)))
                     .collect(),
                 wildcard.as_ref().map(|w| block(w, id, changed)),
                 *span,
+                *is_value,
             ),
             _ => stmt.clone(),
         }

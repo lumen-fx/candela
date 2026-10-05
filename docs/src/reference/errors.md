@@ -41,6 +41,7 @@ Raised while the file is read, before any type is known.
 | Inline `if` without `else` | An `if` used as an expression must produce a value on every path |
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
+| `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
@@ -119,7 +120,11 @@ is an enum, variant patterns on a value that is not one, and a `match` that does
 not cover every variant. The non-exhaustive report lists the variants you left
 out. A qualified pattern is also reported when its qualifier names an enum other
 than the matched value's, or names nothing at all; the report says which enum
-the pattern reaches and which one the match is on.
+the pattern reaches and which one the match is on. A `|` alternative that binds
+other names, or the same names at other types, than the first alternative of
+its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
+on a value that is not an enum, is `match_without_wildcard`. See
+[control flow](../language/control-flow.md#match-as-an-expression).
 
 **Declaration errors.** Defining a function name twice. The report shows both
 definitions. Two `impl` blocks that define one method for the same instantiated

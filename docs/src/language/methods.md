@@ -95,14 +95,10 @@ enum Signal {
 }
 
 impl Signal {
-    fn label(self) {
-        let out = "";
-        match self {
-            Stop => { out = "stop"; }
-            Go => { out = "go"; }
-        }
-        return out;
-    }
+    fn label(self) => match self {
+        Stop => "stop",
+        Go => "go",
+    };
 }
 
 fn main() {

@@ -2387,10 +2387,10 @@ pub fn collect_direct_fn_calls(
                 expr_stack.extend(try_code.iter());
                 expr_stack.extend(catch_code.iter());
             }
-            Expr::Match(scrutinee, arms, wildcard, _) => {
+            Expr::Match(scrutinee, arms, wildcard, _, _) => {
                 expr_stack.push(scrutinee);
-                for (pat, body) in arms {
-                    expr_stack.push(pat);
+                for (patterns, body) in arms {
+                    expr_stack.extend(patterns.iter());
                     expr_stack.extend(body.iter());
                 }
                 if let Some(w) = wildcard {
@@ -2470,7 +2470,7 @@ fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
                 collect_return_shapes(try_code, shapes);
                 collect_return_shapes(catch_code, shapes);
             }
-            Expr::Match(_, arms, wildcard, _) => {
+            Expr::Match(_, arms, wildcard, _, _) => {
                 for (_, body) in arms {
                     collect_return_shapes(body, shapes);
                 }
@@ -2828,7 +2828,7 @@ fn track_return_flow(
                     pin_empty_literal_bindings(args, &declared, v);
                 }
             }
-            Expr::Match(scrutinee, arms, wildcard, span) => {
+            Expr::Match(scrutinee, arms, wildcard, span, _) => {
                 let scrut_type = scrutinee.infer_type(v, ctx, state);
                 let is_enum = matches!(scrut_type, DataType::Enum(_));
                 if !is_enum {
@@ -2842,26 +2842,12 @@ fn track_return_flow(
                     );
                 }
                 let mut all_return = true;
-                for (pat, body) in arms {
+                for (patterns, body) in arms {
                     let v_len = v.len();
                     if let DataType::Enum(enum_id) = scrut_type {
-                        let (vidx, binders) = crate::compiler::resolve_variant_pattern(
-                            enum_id, pat, *span, ctx, state,
+                        crate::compiler::declare_arm_bindings(
+                            enum_id, patterns, *span, v, ctx, state,
                         );
-                        for (i, binder) in binders.iter().enumerate() {
-                            if binder.as_str() != "_" {
-                                let payload_type = state.enums[enum_id as usize].variants
-                                    [vidx as usize]
-                                    .payload[i]
-                                    .clone();
-                                v.push(Variable {
-                                    name: binder.clone(),
-                                    register_id: 0,
-                                    cell: false,
-                                    var_type: payload_type,
-                                });
-                            }
-                        }
                     }
                     let flow = track_return_flow(body, v, ctx, state, fn_name);
                     v.truncate(v_len);
@@ -2952,7 +2938,7 @@ fn block_breaks(code: &[Expr]) -> bool {
         Expr::TryCatchBlock(try_code, _, catch_code) => {
             block_breaks(try_code) || block_breaks(catch_code)
         }
-        Expr::Match(_, arms, wildcard, _) => {
+        Expr::Match(_, arms, wildcard, _, _) => {
             arms.iter().any(|(_, body)| block_breaks(body))
                 || wildcard.as_ref().is_some_and(|w| block_breaks(w))
         }
@@ -3380,7 +3366,9 @@ impl Expr {
             Self::Int(_) => DataType::Int,
             Self::String(_) => DataType::String,
             Self::Bool(_) | Self::Eq(..) | Self::NotEq(..) => DataType::Bool,
-            Self::Null => DataType::Null,
+            // A statement match has no value. One used as a value has the
+            // type its arms give, each read with the names its pattern binds.
+            Self::Null | Self::Match(_, _, _, _, false) => DataType::Null,
             Self::Array(x, _) => DataType::Array(if x.is_empty() {
                 None
             } else {
@@ -4133,23 +4121,33 @@ impl Expr {
                     ),
                 }
             }
+            Self::Match(scrutinee, arms, wildcard, span, true) => {
+                let scrut_type = scrutinee.infer_type(v, ctx, state);
+                let mut types: Vec<DataType> = Vec::with_capacity(arms.len() + 1);
+                for (patterns, body) in arms {
+                    let v_len = v.len();
+                    if let DataType::Enum(enum_id) = scrut_type {
+                        crate::compiler::declare_arm_bindings(
+                            enum_id, patterns, *span, v, ctx, state,
+                        );
+                    }
+                    types.push(body[body.len() - 1].infer_type(v, ctx, state));
+                    v.truncate(v_len);
+                }
+                if let Some(w) = wildcard {
+                    types.push(w[w.len() - 1].infer_type(v, ctx, state));
+                }
+                branch_value_type(types)
+            }
             Self::InlineCondition(_, code, _, _) => {
                 let mut types: Vec<DataType> = Vec::with_capacity(code.len());
                 types.push(code[0].infer_type(v, ctx, state));
                 for t in &code[0..] {
-                    if let Self::ElseIfBlock(_, code, _) = t {
-                        let infered = code[0].infer_type(v, ctx, state);
-                        if !types.contains(&infered) {
-                            types.push(infered);
-                        }
-                    } else if let Self::ElseBlock(code) = t {
-                        let infered = code[0].infer_type(v, ctx, state);
-                        if !types.contains(&infered) {
-                            types.push(infered);
-                        }
+                    if let Self::ElseIfBlock(_, code, _) | Self::ElseBlock(code) = t {
+                        types.push(code[0].infer_type(v, ctx, state));
                     }
                 }
-                DataType::Union(Box::from(types)).check_poly()
+                branch_value_type(types)
             }
             Self::NamespacedRef(path, span, type_args) => {
                 if !type_args.is_empty() {
@@ -4237,6 +4235,26 @@ impl Expr {
             _ => unsafe { unreachable_unchecked() },
         }
     }
+}
+
+/// The type of a construct used as a value, an `if` or a `match`, from the
+/// types its branches give, in order.
+///
+/// Branches that give different functions give a function value, which a call
+/// dispatches on, so every branch's type is kept for that test: `Fn` types
+/// compare equal whichever function they name. Otherwise the branches give a
+/// union of their distinct types.
+fn branch_value_type(types: Vec<DataType>) -> DataType {
+    if let Some(fn_value) = merge_fn_types(&types) {
+        return fn_value;
+    }
+    let mut distinct: Vec<DataType> = Vec::with_capacity(types.len());
+    for t in types {
+        if !distinct.contains(&t) {
+            distinct.push(t);
+        }
+    }
+    DataType::Union(Box::from(distinct)).check_poly()
 }
 
 /// The type a declared function has where a value holds it.

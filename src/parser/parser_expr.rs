@@ -217,7 +217,7 @@ const fn check_op(op: Token, min_precedence: u8) -> Option<(Token, u8)> {
         Token::OpAnd => (2, false),
         Token::OpEq | Token::OpNEq => (3, false),
         Token::OpInf | Token::OpInfEq | Token::OpSup | Token::OpSupEq => (4, false),
-        Token::Pipe => (5, false),
+        Token::Pipe => (PIPE_PRECEDENCE, false),
         Token::OpBitXor => (6, false),
         Token::OpBitAnd => (7, false),
         Token::OpShl | Token::OpShr => (8, false),
@@ -399,6 +399,10 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
     }
     base
 }
+
+/// The binding strength of `|`. A match pattern is read above it, so the `|`
+/// between two alternatives is never taken for bitwise or.
+pub const PIPE_PRECEDENCE: u8 = 5;
 
 #[inline(always)]
 pub fn parse_expr(parser: &mut Parser<'_>) -> Expr {

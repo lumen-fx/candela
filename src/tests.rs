@@ -14843,3 +14843,161 @@ pub fn a_named_arrow_body_needs_its_semicolon() {
     assert_wellformed(&d, src);
     assert_eq!(&src[d.span], "fn");
 }
+
+/// A `match` used as a value: over an int, a string and an enum, with `|`
+/// alternatives that bind the same payload from different positions, a
+/// closure that captures a binding, a nested match, and braced arms that hold
+/// one expression the way an `if` used as a value does.
+#[test]
+pub fn a_match_is_an_expression() {
+    let src = r#"
+        enum Shape { Circle(float), Square(float), Rect(float, float), Dot }
+        fn area(s: Shape) -> float => match s {
+            Shape::Circle(r) => 3.0 * r * r,
+            Square(w) => w * w,
+            Rect(w, h) => w * h,
+            Dot => 0.0,
+        };
+        fn side(s: Shape) -> float => match s {
+            Circle(x) | Square(x) => x,
+            Rect(_, x) => x,
+            _ => 0.0,
+        };
+        fn main() {
+            let n = 2;
+            print(match n { 1 => "one", 2 => "two", _ => "many" });
+            print(match n { 1 | 2 => "low", 3 | 4 => { "mid" } _ => "high" });
+            print(match 7 { 1 | 2 => "low", 3 | 4 => "mid", _ => "high" });
+            print(area(Shape::Rect(2.0, 3.0)), area(Shape::Dot));
+            print(side(Shape::Square(4.0)), side(Shape::Rect(1.0, 7.0)), side(Shape::Dot));
+            let t = match "b" { "a" => 1, "b" => 2, _ => 3 } + 10;
+            print(t);
+            let k = 10;
+            let f = match Shape::Dot { Dot => fn(x) => x + k, _ => fn(x) => x };
+            print(f(1));
+            let c = match Shape::Square(2.5) { Circle(r) | Square(r) => fn() => r, _ => fn() => 0.0 };
+            print(c());
+            print(match n { 2 => match k { 10 => "two-ten", _ => "two" }, _ => "x" });
+            let s = match n { 2 => "was two", _ => "not two" };
+            print(s);
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "two\nlow\nhigh\n6.0\n0.0\n4.0\n7.0\n0.0\n12\n11\n2.5\ntwo-ten\nwas two\n"
+    );
+}
+
+/// A statement `match` takes expression arms separated by `,` next to braced
+/// ones, and `|` alternatives, and runs as it always has.
+#[test]
+pub fn a_statement_match_takes_expression_arms_and_alternatives() {
+    let src = r#"
+        enum Light { Stop, Slow, Go }
+        fn main() {
+            for n in 0..4 {
+                match n {
+                    0 | 1 => print("small"),
+                    2 => {
+                        print("two");
+                    }
+                    _ => print("big")
+                }
+            }
+            for l in [Light::Stop, Light::Slow, Light::Go] {
+                match l {
+                    Stop | Slow => { print("wait"); }
+                    Go => print("go"),
+                }
+            }
+        }
+    "#;
+    assert_eq!(run_output(src), "small\nsmall\ntwo\nbig\nwait\nwait\ngo\n");
+}
+
+/// An `if` used as a value whose condition compares strings takes the branch
+/// the comparison picks.
+#[test]
+pub fn an_if_value_compares_strings() {
+    let src = r#"
+        fn main() {
+            let s = "b";
+            print(if s == "a" { 1 } else { 3 });
+            print(if s != "a" { 1 } else if s == "b" { 2 } else { 3 });
+        }
+    "#;
+    assert_eq!(run_output(src), "3\n1\n");
+}
+
+/// The ways a `match` can fail to read or to cover its cases, each with its
+/// own code, reported where the mistake is.
+#[test]
+pub fn match_mistakes_are_reported() {
+    for (src, code, at) in [
+        (
+            "fn main() { let n = 1; print(match n { 1 => \"a\", 2 => \"b\" }); }",
+            "match_without_wildcard",
+            "match n { 1 => \"a\", 2 => \"b\" }",
+        ),
+        (
+            "enum E { A(int), B(string) }\nfn main() { match E::A(1) { A(x) | B(x) => print(x) } }",
+            "pattern_bindings_differ",
+            "B",
+        ),
+        (
+            "enum E { A(int), B(int), C }\nfn main() { print(match E::C { A(x) | B(y) => 1, C => 2 }); }",
+            "pattern_bindings_differ",
+            "B",
+        ),
+        (
+            "fn main() { match 1 { 1 | _ => print(1) } }",
+            "match_wildcard_alternative",
+            "_",
+        ),
+        (
+            "fn main() { match 1 { 1 => print(1) 2 => print(2) } }",
+            "match_arm_missing_comma",
+            "2",
+        ),
+    ] {
+        let d = compile_diag(src, "m.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}");
+        assert_eq!(&src[d.span], at, "{src}");
+    }
+}
+
+/// An `if` or a `match` used as a value whose branches give different
+/// functions gives a function value, and a call through it runs the function
+/// the branch chose, closures that take no parameters included.
+#[test]
+pub fn a_branch_value_calls_the_function_it_chose() {
+    let src = r#"
+        enum S { A(float), B }
+        fn by_if(n: int) {
+            let c = if n == 1 { fn() => 1.0 } else { fn() => 0.0 };
+            return c();
+        }
+        fn by_if_arg(n: int) {
+            let c = if n == 1 { fn(x) => x + 1 } else { fn(x) => x * 10 };
+            return c(5);
+        }
+        fn by_match(s: S) {
+            let c = match s { A(r) => fn() => 1.0, _ => fn() => 0.0 };
+            return c();
+        }
+        fn by_int_match(n: int) {
+            let c = match n { 1 => fn() => "one", 2 => fn() => "two", _ => fn() => "many" };
+            return c();
+        }
+        fn main() {
+            print(by_if(1), by_if(2), by_if_arg(1), by_if_arg(2));
+            print(by_match(S::A(2.0)), by_match(S::B));
+            print(by_int_match(1), by_int_match(2), by_int_match(3));
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "1.0\n0.0\n6\n50\n1.0\n0.0\none\ntwo\nmany\n"
+    );
+}

@@ -284,10 +284,12 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         | Expr::StructDefault(..)
         | Expr::NamespacedRef(..) => {}
 
-        Expr::Match(scrutinee, arms, wildcard, _) => {
+        Expr::Match(scrutinee, arms, wildcard, _, _) => {
             visit_expr(scrutinee, src_file, out);
-            for (pat, body) in arms.iter() {
-                visit_expr(pat, src_file, out);
+            for (patterns, body) in arms.iter() {
+                for pat in patterns.iter() {
+                    visit_expr(pat, src_file, out);
+                }
                 for b in body.iter() {
                     visit_expr(b, src_file, out);
                 }
@@ -772,6 +774,22 @@ mod tests {
             source.get(outcome.warnings[0].span.clone()),
             Some("on_click")
         );
+    }
+
+    /// A buffer written with a `match` used as a value, `|` alternatives,
+    /// `=>` bodies and an open-ended slice analyses cleanly, and the outline
+    /// shows the function whose body is an arrow.
+    #[test]
+    fn expression_forms_analyze() {
+        let source = "enum Light { Stop, Slow, Go }\n\nfn word(l: Light) -> string => match l {\n    Stop | Slow => \"wait\",\n    Go => \"go\",\n};\n\nfn main() {\n    let xs = [1, 2, 3].map(fn(x) => x * 2);\n    print(word(Light::Go), xs[1..]);\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        assert!(summary.own_functions().any(|f| f.name == "word"));
     }
 
     /// The editor opens no library a `dylib` block names, so a buffer whose C

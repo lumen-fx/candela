@@ -29,7 +29,8 @@ anything but a bool; see [errors](../reference/errors.md). The same holds for
 
 An `if` written where a value is expected produces a value. Each branch is a
 single expression with no semicolon, and an `else` branch is required so that
-every path yields something.
+every path yields something. A [match](#match-as-an-expression) works the same
+way.
 
 ```rust
 fn main() {
@@ -129,34 +130,59 @@ fn main() {
 ## match
 
 `match` compares a value against a list of arms and runs the first that fits.
-Arms are written `pattern => { ... }`, and `_` is the catch-all. A `match` needs
-at least one arm that is not the wildcard, and the wildcard comes last.
+An arm is `pattern => { ... }` with a block, or `pattern => expression,` with
+one expression and a comma before the next arm; the comma after the last arm is
+optional. `_` is the catch-all. A `match` needs at least one arm that is not the
+wildcard, and the wildcard comes last.
 
 ```rust
 fn main() {
     let code = 2;
     match code {
-        1 => { print("one"); }
-        2 => { print("two"); }
-        _ => { print("something else"); }
+        1 => print("one"),
+        2 => {
+            print("two");
+            print("and more");
+        }
+        _ => print("something else"),
     }
 }
 ```
 
 Arms match by equality, so any type you can compare works, strings included.
+`|` between patterns makes one arm for several values.
 
 ```rust
 fn main() {
     match "b" {
-        "a" => { print("first"); }
-        "b" => { print("second"); }
-        _ => { print("other"); }
+        "a" | "b" => print("early"),
+        "c" => print("third"),
+        _ => print("other"),
     }
 }
 ```
 
 Matching an enum matches on the variant instead, and binds the payload; see
 [Enums](enums.md).
+
+### match as an expression
+
+A `match` written where a value is expected produces a value: the value of the
+arm that fits. Like an `if` used as a value, it has to give one on every path,
+so it needs a `_` arm unless it matches an enum and lists every variant. A
+braced arm holds one expression, as the branches of an `if` used as a value do.
+
+```rust
+fn main() {
+    let n = 3;
+    let size = match n {
+        0 => "none",
+        1 | 2 => "few",
+        _ => "many",
+    };
+    print(size);
+}
+```
 
 ## Blocks and scope
 

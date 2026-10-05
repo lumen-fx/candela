@@ -45,10 +45,10 @@ enum Cell { Num(int), Text(string) }
 fn width(cells: Cell[]) -> int {
     let w = 0;
     for c in cells {
-        match c {
-            Cell::Num(n) => { w = w + 1; }
-            Cell::Text(t) => { w = w + t.len(); }
-        }
+        w = w + match c {
+            Cell::Num(_) => 1,
+            Cell::Text(t) => t.len(),
+        };
     }
     return w;
 }
@@ -198,10 +198,10 @@ enum Cell { Num(int), Text(string) }
 fn width(cells: {string: Cell}) -> int {
     let w = 0;
     for name in cells {
-        match cells.get(name) {
-            Cell::Num(n) => { w = w + 1; }
-            Cell::Text(t) => { w = w + t.len(); }
-        }
+        w = w + match cells.get(name) {
+            Cell::Num(_) => 1,
+            Cell::Text(t) => t.len(),
+        };
     }
     return w;
 }

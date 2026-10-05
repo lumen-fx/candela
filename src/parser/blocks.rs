@@ -4,8 +4,10 @@
 use super::ParserErr;
 use super::lexer::Token;
 use super::lexer::parse_string;
+use super::parser_expr::PIPE_PRECEDENCE;
 use super::parser_expr::parse_expr;
 use super::parser_expr::parse_expr_no_struct;
+use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
@@ -707,17 +709,28 @@ pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {
     Expr::LoopBlock(Box::from(parse_block(input)))
 }
 
-/// Parses a `match` block into an [`Expr::Match`] carrying the scrutinee, the
-/// arm patterns (as raw expressions) and their bodies, and an optional wildcard
+/// Parses a `match` statement into an [`Expr::Match`]: the scrutinee, the arm
+/// patterns (as raw expressions) and their bodies, and an optional wildcard
 /// body. The compiler picks the lowering by the scrutinee's static type: an
 /// enum scrutinee gives variant-pattern matching with payload binding; any
 /// other scrutinee gives the equality-chain behavior.
 pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Match);
+    parse_match_arms(parser, start, false)
+}
+
+/// Parses what follows the `match` keyword, which started at `start`.
+///
+/// An arm is `pattern => { ... }` or `pattern => expr`, and an expression arm
+/// is separated from the next by `,`. A pattern is one or more alternatives
+/// separated by `|`. In a statement (`is_value` false) a braced arm is a block
+/// of statements; in a `match` used as a value it holds one expression, the
+/// way the branches of an `if` used as a value do.
+pub fn parse_match_arms(parser: &mut Parser<'_>, start: u32, is_value: bool) -> Expr {
     let match_obj = parse_expr_no_struct(parser);
     parser.next_token_expect(Token::LBrace, "Blocks must be delimited by braces");
-    let mut arms: Vec<(Expr, Box<[Expr]>)> = Vec::with_capacity(2);
+    let mut arms: Vec<(Box<[Expr]>, Box<[Expr]>)> = Vec::with_capacity(2);
     let mut wildcard: Option<Box<[Expr]>> = None;
     let mut has_non_wildcard = false;
     let end: u32;
@@ -731,7 +744,7 @@ pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
             }
             parser.next_token();
             parser.next_token_expect(Token::FatArrow, "Expected '=>'");
-            let code = parse_block(parser);
+            let code = parse_match_arm_body(parser, is_value, true);
             end = parser.peek_token_span().end;
             parser.next_token_expect(
                 Token::RBrace,
@@ -749,11 +762,11 @@ pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
             parser.next_token();
             break;
         } else {
-            let pattern = parse_expr(parser);
+            let patterns = parse_match_patterns(parser);
             parser.next_token_expect(Token::FatArrow, "");
-            let code = parse_block(parser);
+            let code = parse_match_arm_body(parser, is_value, false);
             has_non_wildcard = true;
-            arms.push((pattern, Box::from(code)));
+            arms.push((patterns, Box::from(code)));
         }
     }
     Expr::Match(
@@ -761,7 +774,58 @@ pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
         Box::from(arms),
         wildcard,
         (start, end).into(),
+        is_value,
     )
+}
+
+/// One arm's pattern: alternatives separated by `|`. Each alternative is read
+/// above the precedence of `|`, which in an expression is bitwise or, so
+/// `1 | 2` is two patterns rather than the number 3.
+fn parse_match_patterns(parser: &mut Parser<'_>) -> Box<[Expr]> {
+    let mut patterns: Vec<Expr> = Vec::with_capacity(1);
+    loop {
+        if parser.peek_token() == Token::Identifier("_") {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(span, ParserErr::MatchWildcardAlternative);
+        }
+        patterns.push(parse_expr_with_precedence(parser, PIPE_PRECEDENCE, true));
+        if parser.peek_token() != Token::Pipe {
+            break;
+        }
+        parser.next_token();
+    }
+    Box::from(patterns)
+}
+
+/// The body after an arm's `=>`: a braced block, or an expression followed by
+/// the `,` that separates it from the next arm. The `,` is optional before
+/// the closing brace, and `last` says the wildcard arm is being read, which
+/// the closing brace always follows.
+fn parse_match_arm_body(parser: &mut Parser<'_>, is_value: bool, last: bool) -> Vec<Expr> {
+    if parser.peek_token() == Token::LBrace {
+        return if is_value {
+            vec![parse_block_expr(parser)]
+        } else {
+            parse_block(parser)
+        };
+    }
+    let value = parse_expr(parser);
+    match parser.peek_token_opt() {
+        Some(Token::Comma) => {
+            parser.next_token();
+        }
+        Some(Token::RBrace) => {}
+        _ if last => {}
+        _ => {
+            cold_path();
+            let span = parser
+                .peek_token_opt_span()
+                .unwrap_or_else(|| parser.eof_span());
+            parser.error(span, ParserErr::MatchArmMissingComma);
+        }
+    }
+    vec![value]
 }
 
 pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
