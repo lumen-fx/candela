@@ -102,6 +102,10 @@ fn main() {
 function that returns without a value. It is its own type: no other type accepts
 it, so a variable is never implicitly empty. Test for it with `is_null`.
 
+`null` is a value you write in code, never a type you write in an annotation:
+`x: null`, `-> null` and `int|null` are all rejected. A function that returns
+nothing leaves its return annotation off.
+
 Passing `null` to `print` produces no output, so print a placeholder rather than
 the value itself when a value may be absent. For a value that is optional by
 design, prefer the `Option` enum from the standard library over `null`.
@@ -112,7 +116,8 @@ Type annotations appear on struct fields, enum variant payloads, the signature
 blocks that declare foreign functions, and, where you want them, function
 parameters and return types. The type grammar is the same in all of them.
 
-- `int`, `float`, `bool`, `string`, `null`: the built-in types.
+- `int`, `float`, `bool`, `string`: the built-in types. `null` is not among
+  them; see [null](#null).
 - `T[]`: a list of `T`, for example `string[]` or `int[][]`.
 - `{K: V}`: a map from `K` to `V`, for example `{string: int}`.
 - A struct or enum name: that type.
@@ -243,7 +248,7 @@ struct Options {
 
 `Options::default()` builds a value from those declarations. A field that
 declares none starts empty: `0`, `0.0`, `false`, `""`, `[]`, `{}`, `null` for an
-`any` or a union that includes `null`, and the default of its own type for a
+`any`, and the default of its own type for a
 struct field. An enum or a function has no empty value, so a field of one needs
 a declared value before its struct has a default; asking for the default of such
 a struct is a compile error that names the field.

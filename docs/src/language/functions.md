@@ -172,8 +172,8 @@ fn main() {
 }
 ```
 
-There is no way to write `null` as a type, so a function that returns nothing
-leaves the annotation off.
+`null` is never written in an annotation, alone or in a union, so a function
+that returns nothing leaves the annotation off. See [null](types.md#null).
 
 Recursion works as you would expect.
 
