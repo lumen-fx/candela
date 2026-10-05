@@ -229,6 +229,7 @@ fn main() {
     let s2 = s[0];
     let s3 = s[start..start + count];
     let s4 = s[..2];
+    let s5 = s[1..];
 }
 
 --------------------------------------------------------------------------------
@@ -257,6 +258,11 @@ fn main() {
           (binary_expression
             (identifier)
             (identifier))))
+      (let_declaration
+        (identifier)
+        (slice_expression
+          (identifier)
+          (integer_literal)))
       (let_declaration
         (identifier)
         (slice_expression

@@ -67,14 +67,14 @@ function pushes into it reads back at that type.
 ### Indexing and slicing
 
 Index from zero with `xs[i]`. A slice `xs[start..end]` returns a new list from
-`start` up to but not including `end`, and `xs[..end]` starts at the beginning.
-An index past the end raises at runtime.
+`start` up to but not including `end`. `xs[..end]` starts at the beginning and
+`xs[start..]` runs to the end. An index past the end raises at runtime.
 
 ```rust
 fn main() {
     let xs = [10, 20, 30, 40];
     print(xs[0], xs[3]);
-    print(xs[1..3], xs[..2]);
+    print(xs[1..3], xs[..2], xs[2..]);
     xs[0] = 99;
     print(xs);
 }
@@ -99,6 +99,14 @@ fn main() {
 
 `push`, `sort`, `reverse`, and `remove` change the list in place. `+`
 concatenates two lists into a new one.
+
+The rule holds for every collection method: a method that changes its receiver
+returns nothing (`push`, `remove`, `sort` and `reverse` on a list, `insert` and
+`remove` on a map, `add` and `remove` on a set). Every other method leaves the
+receiver as it was and returns a new value, so `xs.sort_by(f)` and
+`"abc".reverse()` hand back a sorted list and a reversed string. `each`, which
+exists to call a function for its effect, is the one method that returns nothing
+without changing the list.
 
 ```rust
 fn main() {

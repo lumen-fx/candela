@@ -193,7 +193,10 @@ pub enum Expr {
 
     ArrayGetIndex(Box<Self>, Box<Self>, Span),
     /// ArrayGetSlice(array, range_start, range_end, span)
-    ArrayGetSlice(Box<Self>, Box<Self>, Box<Self>, Span),
+    ///
+    /// `range_end` is `None` for an open-ended slice, `a[i..]`, which runs to
+    /// the end of the list or string.
+    ArrayGetSlice(Box<Self>, Box<Self>, Option<Box<Self>>, Span),
     ArrayModify(Box<Self>, Box<Self>, Box<Self>, Span, Span),
 
     /// ForLoop(loop_var_name, loop_array+code, obj_markers)
@@ -697,7 +700,14 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             scan_free_names(base, depth, bound, out);
             scan_free_names(index, depth, bound, out);
         }
-        Expr::ArrayGetSlice(base, start, end, _) | Expr::ArrayModify(base, start, end, _, _) => {
+        Expr::ArrayGetSlice(base, start, end, _) => {
+            scan_free_names(base, depth, bound, out);
+            scan_free_names(start, depth, bound, out);
+            if let Some(end) = end {
+                scan_free_names(end, depth, bound, out);
+            }
+        }
+        Expr::ArrayModify(base, start, end, _, _) => {
             scan_free_names(base, depth, bound, out);
             scan_free_names(start, depth, bound, out);
             scan_free_names(end, depth, bound, out);

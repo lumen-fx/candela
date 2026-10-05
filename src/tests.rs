@@ -14749,3 +14749,56 @@ fn main() {
 ";
     assert_eq!(run_output(src), "2\n");
 }
+
+/// `a[i..]` runs to the end of a list or a string, evaluates what it slices
+/// once, and a loop over one walks the same elements the slice holds.
+#[test]
+pub fn an_open_ended_slice_runs_to_the_end() {
+    let src = r#"
+        fn make() -> int[] {
+            print("made");
+            return [1, 2, 3, 4];
+        }
+        fn main() {
+            let xs = [10, 20, 30, 40];
+            print(xs[1..]);
+            print(xs[4..]);
+            print("hello"[1..]);
+            print(make()[2..]);
+            let total = 0;
+            for x in xs[2..] { total = total + x; }
+            print(total);
+            try { print(xs[5..]); } catch "slice_out_of_bounds" { print("out"); }
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "[20,30,40]\n[]\nello\nmade\n[3,4]\n70\nout\n"
+    );
+}
+
+/// A list's `reverse` changes the list and returns nothing, like every method
+/// that changes its receiver; a string's returns a new string.
+#[test]
+pub fn a_list_reverse_returns_nothing() {
+    let src = r#"
+        fn main() {
+            let xs = [1, 2, 3];
+            let r = xs.reverse();
+            print(type(r));
+            print(xs);
+            print("abc".reverse());
+        }
+    "#;
+    assert_eq!(run_output(src), "null\n[3,2,1]\ncba\n");
+}
+
+/// A slice's bounds are separated by `..`; anything else after the first
+/// bound is a parse error rather than a slice.
+#[test]
+pub fn an_index_followed_by_another_token_is_a_parse_error() {
+    let src = "fn main() { let xs = [1, 2]; print(xs[0, 1]); }";
+    let d = compile_diag(src, "idx.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(&src[d.span], ",");
+}

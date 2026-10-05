@@ -585,16 +585,17 @@ module.exports = grammar({
     index_expression: ($) =>
       prec(PREC.postfix, seq(field('object', $._expression), '[', field('index', $._expression), ']')),
 
-    // `a[low..high]` and `a[..high]`. There is no open-ended `a[low..]`.
+    // `a[low..high]`, `a[..high]` from the start, and `a[low..]` to the end.
     slice_expression: ($) =>
       prec(
         PREC.postfix,
         seq(
           field('object', $._expression),
           '[',
-          optional(field('start', $._expression)),
-          '..',
-          field('end', $._expression),
+          choice(
+            seq(optional(field('start', $._expression)), '..', field('end', $._expression)),
+            seq(field('start', $._expression), '..'),
+          ),
           ']',
         ),
       ),

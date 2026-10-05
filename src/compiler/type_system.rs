@@ -2351,7 +2351,9 @@ pub fn collect_direct_fn_calls(
             Expr::ArrayGetSlice(x, y, z, _) => {
                 expr_stack.push(x);
                 expr_stack.push(y);
-                expr_stack.push(z);
+                if let Some(z) = z {
+                    expr_stack.push(z);
+                }
             }
             Expr::VarDeclare(_, x)
             | Expr::VarAssign(_, x, _)
@@ -4057,10 +4059,21 @@ impl Expr {
                         DataType::Bool
                     }
                     "len" | "find" => DataType::Int,
-                    "repeat" | "reverse" => receiver_type!(
+                    "repeat" => receiver_type!(
                         |t| match t {
                             DataType::String => Some(DataType::String),
                             DataType::Array(element) => Some(DataType::Array(element.clone())),
+                            _ => None,
+                        },
+                        &[DataType::String, DataType::Array(None)]
+                    ),
+                    // A string's reverse is a new string; a list's reverses
+                    // the list in place and, like every method that changes
+                    // its receiver, returns nothing.
+                    "reverse" => receiver_type!(
+                        |t| match t {
+                            DataType::String => Some(DataType::String),
+                            DataType::Array(_) => Some(DataType::Null),
                             _ => None,
                         },
                         &[DataType::String, DataType::Array(None)]

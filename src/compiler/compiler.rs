@@ -2026,7 +2026,7 @@ fn compile_array_indexing(
 fn compile_array_slice(
     array: &Expr,
     idx_start: &Expr,
-    idx_end: &Expr,
+    idx_end: Option<&Expr>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -2060,19 +2060,27 @@ fn compile_array_slice(
     let idx_start_id = idx_start
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-    let idx_end_inferred = idx_end.infer_type(v, ctx, state);
-    if idx_end_inferred != DataType::Int {
-        error_invalid_index_type(
-            &idx_end_inferred,
-            span,
-            ctx.file_idx,
-            state.sources,
-            state.type_names(),
-        );
-    }
-    let idx_end_id = idx_end
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let idx_end_id = if let Some(idx_end) = idx_end {
+        let idx_end_inferred = idx_end.infer_type(v, ctx, state);
+        if idx_end_inferred != DataType::Int {
+            error_invalid_index_type(
+                &idx_end_inferred,
+                span,
+                ctx.file_idx,
+                state.sources,
+                state.type_names(),
+            );
+        }
+        idx_end
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    } else {
+        // `a[i..]` runs to the end, which is the length read when the slice
+        // is taken.
+        let len_id = state.alloc_reg();
+        output.push(Instr::CallLibFunc(LibFunc::Len, id, len_id));
+        len_id
+    };
     output.push(Instr::StoreFuncArg(idx_end_id));
     state.free_reg(idx_start_id, v);
     state.free_reg(idx_end_id, v);
@@ -3421,7 +3429,9 @@ fn compile_slice_for_loop(
     let array_type = list.infer_type(v, ctx, state);
     if !matches!(array_type, DataType::Array(_))
         || start.infer_type(v, ctx, state) != DataType::Int
-        || end.infer_type(v, ctx, state) != DataType::Int
+        || end
+            .as_ref()
+            .is_some_and(|end| end.infer_type(v, ctx, state) != DataType::Int)
     {
         return false;
     }
@@ -3432,9 +3442,15 @@ fn compile_slice_for_loop(
     let start_id = start
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-    let end_id = end
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let end_id = if let Some(end) = end {
+        end.compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    } else {
+        // `a[i..]` runs to the end of the list.
+        let len_id = state.alloc_reg();
+        output.push(Instr::CallLibFunc(LibFunc::Len, list_id, len_id));
+        len_id
+    };
 
     // The walk reads the list, the index and the end out of registers of its
     // own, so a body that reassigns a variable they came from changes nothing.
@@ -4682,7 +4698,14 @@ impl Expr {
             Self::ArrayGetSlice(array, idx_start, idx_end, span) => {
                 debug_assert!(uses_id);
                 Some(compile_array_slice(
-                    array, idx_start, idx_end, *span, v, ctx, state, output,
+                    array,
+                    idx_start,
+                    idx_end.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                    output,
                 ))
             }
             Self::Mul(l, r, span1, span2) => {
