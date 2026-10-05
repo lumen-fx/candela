@@ -76,16 +76,41 @@ enum Event {
 fn main() {
     let e = Event::Click(3, 4);
     match e {
-        Click(x, y) => { print(x + y); }
-        Key(name) => { print(name); }
-        Quit => { print("quit"); }
+        Click(x, y) => print(x + y),
+        Key(name) => print(name),
+        Quit => print("quit"),
     }
 }
 ```
 
-A payload binding introduces a variable for the arm's block. Use `_` in a
+A payload binding introduces a variable for the arm's body. Use `_` in a
 payload position to ignore it, and `_` as a whole arm for everything not listed.
 A wildcard arm comes last.
+
+`|` joins variants that share an arm. Every alternative binds the same names at
+the same types, since the arm runs whichever of them matched; one that binds
+other names is a compile error.
+
+```rust
+enum Shape {
+    Circle(float),
+    Square(float),
+    Rect(float, float),
+}
+
+fn main() {
+    let s = Shape::Square(2.0);
+    let side = match s {
+        Circle(d) | Square(d) => d,
+        Rect(w, _) => w,
+    };
+    print(side);
+}
+```
+
+A `match` used as a value on an enum that lists every variant needs no `_`
+arm, as above. See [match as an
+expression](control-flow.md#match-as-an-expression).
 
 candela matches variant arms only when it knows which enum the value is. A
 parameter takes the type its call site passes it, so matching a parameter works
@@ -144,14 +169,10 @@ enum Colour {
 }
 
 impl Colour {
-    fn hex(self) {
-        let out = "";
-        match self {
-            Red => { out = "#f00"; }
-            Green => { out = "#0f0"; }
-        }
-        return out;
-    }
+    fn hex(self) => match self {
+        Red => "#f00",
+        Green => "#0f0",
+    };
 }
 
 fn main() {
@@ -172,8 +193,8 @@ import "std/option";
 fn main() {
     let found = Some(5);
     match found {
-        Some(v) => { print(v); }
-        None => { print("nothing"); }
+        Some(v) => print(v),
+        None => print("nothing"),
     }
     print(None.unwrap_or(0));
 }

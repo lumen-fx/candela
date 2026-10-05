@@ -369,7 +369,6 @@ module.exports = grammar({
         $.while_statement,
         $.for_statement,
         $.loop_statement,
-        $.match_statement,
         $.try_statement,
         $.block,
         $.struct_declaration,
@@ -378,7 +377,8 @@ module.exports = grammar({
 
     // A block-bodied expression stands alone as a statement; anything else
     // needs the semicolon.
-    expression_statement: ($) => choice(seq($._expression, ';'), prec(1, $.if_expression)),
+    expression_statement: ($) =>
+      choice(seq($._expression, ';'), prec(1, $.if_expression), prec(1, $.match_expression)),
 
     let_declaration: ($) =>
       seq('let', field('name', $.identifier), '=', field('value', $._expression), ';'),
@@ -419,16 +419,39 @@ module.exports = grammar({
 
     loop_statement: ($) => seq('loop', field('body', $.block)),
 
-    match_statement: ($) =>
+    // A `match` stands alone as a statement or gives a value where one is
+    // expected, the way an `if` does.
+    match_expression: ($) =>
       seq('match', field('value', $._expression), field('body', $.match_arm_list)),
 
-    match_arm_list: ($) => seq('{', repeat($.match_arm), '}'),
+    // An arm is `pattern => { ... }`, or `pattern => expr` followed by a `,`
+    // that the last arm may leave off.
+    match_arm_list: ($) =>
+      seq(
+        '{',
+        repeat(choice($.match_arm, alias($._expression_match_arm, $.match_arm))),
+        optional(alias($._last_match_arm, $.match_arm)),
+        '}',
+      ),
 
-    // Arms are not comma-separated. A pattern is an expression: an enum
-    // variant with bindings, a qualified name, or a literal compared for
-    // equality. `_` is the wildcard, and it comes last.
-    match_arm: ($) =>
-      seq(field('pattern', $._expression), '=>', field('body', $.block)),
+    match_arm: ($) => seq(field('pattern', $.match_pattern), '=>', field('body', $.block)),
+
+    _expression_match_arm: ($) =>
+      seq(field('pattern', $.match_pattern), '=>', field('value', $._expression), ','),
+
+    _last_match_arm: ($) =>
+      seq(field('pattern', $.match_pattern), '=>', field('value', $._expression)),
+
+    // A pattern is an expression: an enum variant with bindings, a qualified
+    // name, or a literal compared for equality. `|` separates alternatives and
+    // binds looser than any operator inside one, so `1 | 2` is two patterns
+    // rather than bitwise or; `(a | b)` is the or. `_` is the wildcard, and it
+    // comes last.
+    match_pattern: ($) =>
+      seq(
+        field('alternative', $._expression),
+        repeat(prec(PREC.bit_or + 1, seq('|', field('alternative', $._expression)))),
+      ),
 
     try_statement: ($) => seq('try', field('body', $.block), repeat1($.catch_clause)),
 
@@ -473,6 +496,7 @@ module.exports = grammar({
         $.parenthesized_expression,
         $.closure_expression,
         $.if_expression,
+        $.match_expression,
         $.macro_invocation,
       ),
 

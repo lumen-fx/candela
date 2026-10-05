@@ -17,6 +17,7 @@ use crate::parser::TypeArgFollow;
 use crate::parser::blocks::parse_block_expr;
 use crate::parser::blocks::parse_condition_expr;
 use crate::parser::blocks::parse_fn_body;
+use crate::parser::blocks::parse_match_arms;
 use crate::parser::expand_macro;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
@@ -352,6 +353,8 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 ),
             }
         }
+        // A match used as a value.
+        Token::Match => parse_match_arms(parser, t_span.start, true),
         // Inline condition
         Token::If => {
             let (condition, condition_span) = parse_condition_expr(parser);

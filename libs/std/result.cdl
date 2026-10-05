@@ -4,8 +4,8 @@
 ///     import "std/result";
 ///     let r = Ok(5);
 ///     match r {
-///         Ok(v) => { print(v); }
-///         Err(e) => { print(e); }
+///         Ok(v) => print(v),
+///         Err(e) => print(e),
 ///     }
 ///
 /// The helpers are methods on the value (`r.unwrap()`, `r.is_ok()`). This
@@ -24,20 +24,16 @@ enum Result<T, E> {
 
 impl Result<T, E> {
     /// True when the result is `Ok`.
-    fn is_ok(self) {
-        match self {
-            Ok(_) => { return true; }
-            Err(_) => { return false; }
-        }
-    }
+    fn is_ok(self) => match self {
+        Ok(_) => true,
+        Err(_) => false,
+    };
 
     /// True when the result is `Err`.
-    fn is_err(self) {
-        match self {
-            Ok(_) => { return false; }
-            Err(_) => { return true; }
-        }
-    }
+    fn is_err(self) => match self {
+        Ok(_) => false,
+        Err(_) => true,
+    };
 
     /// Returns the success value, or raises when the result is `Err`.
     fn unwrap(self) -> T {
@@ -60,14 +56,10 @@ impl Result<T, E> {
     }
 
     /// Returns the success value, or `default` when the result is `Err`.
-    fn unwrap_or(self, default: T) -> T {
-        let value = default;
-        match self {
-            Ok(v) => { value = v; }
-            Err(e) => { value = default; }
-        }
-        return value;
-    }
+    fn unwrap_or(self, default: T) -> T => match self {
+        Ok(v) => v,
+        Err(_) => default,
+    };
 
     /// Applies `f` to the success value, returning a new result. An `Err`
     /// passes through without calling `f`.

@@ -121,6 +121,12 @@ enum ParserErr<'a> {
     TryBlockNoCatch,
     MatchBlockNoNonWildcardArm,
     MatchBlockZeroArms,
+    /// An expression arm of a `match` followed by another arm with no `,`
+    /// between them.
+    MatchArmMissingComma,
+    /// `_` written as one of a pattern's `|` alternatives, where it would
+    /// make the others pointless. The wildcard stands alone, as the last arm.
+    MatchWildcardAlternative,
     /// A `fn` declaration written inside a block rather than at the top level
     /// of a file.
     NestedFunctionDeclaration,
@@ -172,6 +178,8 @@ impl ParserErr<'_> {
             ParserErr::TryBlockNoCatch => "try_block_no_catch",
             ParserErr::MatchBlockNoNonWildcardArm => "match_block_no_non_wildcard_arm",
             ParserErr::MatchBlockZeroArms => "match_block_zero_arms",
+            ParserErr::MatchArmMissingComma => "match_arm_missing_comma",
+            ParserErr::MatchWildcardAlternative => "match_wildcard_alternative",
             ParserErr::NestedFunctionDeclaration => "nested_function_declaration",
             ParserErr::LegacyNamespacedImport(_) => "legacy_namespaced_import",
             ParserErr::ImportPathBadExtension => "import_path_bad_extension",
@@ -240,12 +248,18 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::TryBlockNoCatch => {
             "A {BLUE}{BOLD}try{RESET} block must have at least one {BLUE}{BOLD}catch{RESET} block"
         }
-        ParserErr::MatchBlockNoNonWildcardArm => {
+        ParserErr::MatchBlockNoNonWildcardArm => &format!(
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one non-wildcard arm{RESET}"
-        }
-        ParserErr::MatchBlockZeroArms => {
+        ),
+        ParserErr::MatchBlockZeroArms => &format!(
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one arm{RESET}"
-        }
+        ),
+        ParserErr::MatchArmMissingComma => &format!(
+            "An arm written {BLUE}{BOLD}pattern => expression{RESET} ends with a {BOLD}','{RESET} before the next arm"
+        ),
+        ParserErr::MatchWildcardAlternative => &format!(
+            "{BLUE}{BOLD}_{RESET} stands alone as the last arm of a match, not as one of a pattern's {BOLD}|{RESET} alternatives"
+        ),
         ParserErr::NestedFunctionDeclaration => {
             "Functions declare at the top level of a file, not inside a block. Move this declaration out of the enclosing block"
         }
