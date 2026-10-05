@@ -249,7 +249,7 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                     base = Expr::ArrayGetSlice(
                         Box::new(base),
                         Box::from(Expr::Int(0)),
-                        Box::new(upper_bound),
+                        Some(Box::new(upper_bound)),
                         base_span,
                     );
                 } else {
@@ -260,16 +260,31 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                         base_span.end = next_token_span.end;
                         base =
                             Expr::ArrayGetIndex(Box::new(base), Box::new(lower_bound), base_span);
-                    } else {
-                        let upper_bound = parse_expr(parser);
+                    } else if next_token == Token::RangeDot {
+                        // `a[i..]` runs to the end; `a[i..j]` stops before `j`.
+                        let upper_bound = if parser.peek_token_opt() == Some(Token::RBracket) {
+                            None
+                        } else {
+                            Some(Box::new(parse_expr(parser)))
+                        };
                         parser.next_token_expect(Token::RBracket, "Unmatched ']'. Invalid slice.");
                         let end = parser.last_token_end as u32;
                         base_span.end = end;
                         base = Expr::ArrayGetSlice(
                             Box::new(base),
                             Box::from(lower_bound),
-                            Box::new(upper_bound),
+                            upper_bound,
                             base_span,
+                        );
+                    } else {
+                        cold_path();
+                        parser.error(
+                            next_token_span,
+                            ParserErr::UnexpectedToken(
+                                Token::RBracket,
+                                next_token,
+                                "An index ends with ']', a slice reads `a[i..j]` or `a[i..]`.",
+                            ),
                         );
                     }
                 }

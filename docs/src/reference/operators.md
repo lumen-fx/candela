@@ -269,9 +269,9 @@ negative index does not count from the end, and an out-of-range index raises the
 catchable `index_out_of_bounds`.
 
 `a[i..j]` takes a slice from `i` up to but not including `j`. `a[..j]` starts at
-zero. Both bounds must be `int`. Either bound may equal the length, and a slice
-that falls outside the value raises `slice_out_of_bounds`. There is no `a[i..]`
-form; give the upper bound.
+zero and `a[i..]` runs to the end. The bounds must be `int`. Either bound may
+equal the length, and a slice that falls outside the value raises
+`slice_out_of_bounds`.
 
 The same `..` closes a struct literal, `Point { x: 1, ..origin }`, where it takes
 the fields the literal does not write from another value; see

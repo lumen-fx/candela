@@ -399,7 +399,9 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         Expr::ArrayGetSlice(base, s, e, _) => {
             visit_expr(base, src_file, out);
             visit_expr(s, src_file, out);
-            visit_expr(e, src_file, out);
+            if let Some(e) = e {
+                visit_expr(e, src_file, out);
+            }
         }
         Expr::ArrayModify(base, idx, val, _, _) => {
             visit_expr(base, src_file, out);
