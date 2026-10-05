@@ -51,52 +51,43 @@ fn main() {}
     assert_eq!(result, Value::Int(1));
 }
 
-/// A host namespace is reached with a dot as well as with `::`, including for a
-/// function that returns nothing and is called as a statement.
+/// A host block is a namespace, reached with `::`. A dot on the block's name
+/// is a compile error whose help names the `::` spelling, for a call used as a
+/// value and for one written as a statement.
 #[test]
-fn host_fn_reached_through_a_dot() {
-    let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let recorder = Rc::clone(&seen);
-
+fn host_fn_dot_call_is_refused() {
     let mut engine = Engine::new();
     engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
-    engine.register_host_fn("app", "note", move |line: &str| {
-        recorder.borrow_mut().push(line.to_owned());
-    });
+    engine.register_host_fn("app", "note", |_: &str| {});
 
-    let src = r#"
-host "app" {
+    for body in ["return app.rows(id);", "app.note(id); return 0;"] {
+        let src = format!(
+            r#"
+host "app" {{
     int rows(string);
     note(string);
+}}
+
+fn count(id: string) -> int {{
+    {body}
+}}
+
+fn main() {{ print(count("board")); }}
+"#
+        );
+        let err = engine.compile(&src, "main.cdl").err().expect(body);
+        assert_eq!(err.code, "block_dot_call", "{body}");
+        assert!(
+            err.message.contains("app::"),
+            "the message names the :: spelling: {:?}",
+            err.message
+        );
+    }
 }
 
-fn count(id: string) -> int {
-    app.note(id);
-    return app.rows(id);
-}
-
-fn both(id: string) -> bool {
-    return app.rows(id) == app::rows(id);
-}
-
-fn main() {}
-"#;
-
-    let mut program = engine.compile(src, "main.cdl").expect("compiles");
-    assert_eq!(
-        program.call("count", &["board".into()]).expect("call ok"),
-        Value::Int(5)
-    );
-    assert_eq!(
-        program.call("both", &["board".into()]).expect("call ok"),
-        Value::Bool(true)
-    );
-    assert_eq!(seen.borrow().as_slice(), ["board".to_owned()]);
-}
-
-/// A variable takes the name back: with `app` bound to a value, `app.rows(id)`
-/// is that value's own method and the host block is reachable only through
-/// `::`.
+/// A variable of a host block's name is a value: with `app` bound to one,
+/// `app.rows(id)` is that value's own method, and the block is still reached
+/// through `::`.
 #[test]
 fn variable_shadows_the_host_block() {
     let mut engine = Engine::new();

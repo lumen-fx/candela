@@ -6,6 +6,7 @@ use crate::cold_path;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_data::{Ctx, State};
+use crate::compiler::compiler_errors::error_block_dot_call;
 use crate::compiler::compiler_errors::error_method_without_receiver;
 use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_operator_method;
@@ -17,7 +18,6 @@ use crate::compiler::expr::mangle_method;
 use crate::compiler::expr::operator_method;
 use crate::compiler::expr::operator_method_answers_bool;
 use crate::compiler::functions::fill_default_args;
-use crate::compiler::functions::handle_functions;
 use crate::compiler::functions::handle_value_call;
 use crate::compiler::functions::user_functions::handle_user_function;
 use crate::compiler::type_system::DataType;
@@ -109,29 +109,28 @@ pub fn check_receiver(fn_id: usize, method: &str, span: Span, ctx: Ctx, state: &
     );
 }
 
-/// The `host` or `dylib` block a dot call's receiver names, when that receiver
-/// is a namespace rather than a value: `app.rows(id)` with a `host "app"` block
-/// in scope and no variable called `app`.
-///
-/// Both spellings of such a call mean the same thing, so the dot form routes to
-/// the path `app::rows(id)` already takes. A variable wins: once `app` names a
-/// value in scope, the dot is that value's method call and the block is
-/// reachable only through `::`.
-pub fn dyn_lib_receiver<'a>(
-    obj: &'a Expr,
+/// Refuses a dot call whose receiver names a `host` or `dylib` block rather
+/// than a value: `app.rows(id)` with a `host "app"` block in scope and no
+/// variable called `app`. A block is a namespace, reached as `app::rows(id)`.
+/// A variable of the block's name is a value, and the dot is its method call.
+pub fn reject_block_dot_call(
+    obj: &Expr,
+    method: &str,
     v: &[Variable],
+    ctx: Ctx,
     state: &State<'_>,
-) -> Option<&'a SmolStr> {
-    let Expr::Var(name, _) = obj else {
-        return None;
+) {
+    let Expr::Var(name, span) = obj else {
+        return;
     };
     // The block table is checked before the locals because it is empty in a
     // program that declares no `host` or `dylib` block, so an ordinary method
     // call pays one emptiness check here and nothing else.
-    if !state.dyn_libs.iter().any(|lib| lib.name == *name) {
-        return None;
+    if state.dyn_libs.iter().any(|lib| lib.name == *name) && !v.iter().any(|var| var.name == *name)
+    {
+        cold_path();
+        error_block_dot_call(name, method, *span, ctx.file_idx, state.sources);
     }
-    (!v.iter().any(|var| var.name == *name)).then_some(name)
 }
 
 /// The arguments of a method call with each `Default::default()` a
@@ -151,11 +150,7 @@ pub fn fill_method_defaults(
     if !type_args.is_empty() || namespace.len() != 1 || !args.iter().any(is_default_call) {
         return None;
     }
-    // A dot call on a `host` or `dylib` block is the path call, which
-    // resolves its own arguments.
-    if dyn_lib_receiver(obj, v, state).is_some() {
-        return None;
-    }
+    reject_block_dot_call(obj, &namespace[0], v, ctx, state);
     let type_name = match obj.infer_type(v, ctx, state) {
         DataType::Struct(id) => state.structs[id as usize].name.clone(),
         DataType::Enum(id) => state.enums[id as usize].name.clone(),
@@ -206,26 +201,8 @@ pub fn handle_method_calls(
     }
     let name = namespace[namespace.len() - 1].as_str();
 
-    // A dot call whose receiver names a `host` or `dylib` block is the
-    // namespaced call written with a dot. Prepend the block's name and hand it
-    // to the path `app::rows(id)` takes. This comes before the receiver is
-    // typed as a value, where a block's name resolves to no variable.
-    if namespace.len() == 1
-        && let Some(lib_name) = dyn_lib_receiver(obj, v, state)
-    {
-        let path = [lib_name.clone(), namespace[0].clone()];
-        return handle_functions(
-            output,
-            v,
-            ctx,
-            state,
-            tgt_id,
-            args,
-            &path,
-            fn_span,
-            args_indexes,
-            type_args,
-        );
+    if namespace.len() == 1 {
+        reject_block_dot_call(obj, name, v, ctx, state);
     }
 
     let obj_type = obj.infer_type(v, ctx, state);

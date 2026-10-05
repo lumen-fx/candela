@@ -32,9 +32,10 @@ dylib "mylib" {
 ```
 
 The functions live in a namespace named after the library, so you call them as
-`z::zlibVersion()` or `z.zlibVersion()`; both spellings name the same function.
-A variable takes the name back: where `z` holds a value, `z.zlibVersion()` is
-that value's own method and the library is reachable only through `z::`.
+`z::zlibVersion()`. The block's name is a namespace, not a value, so
+`z.zlibVersion()` is a compile error (`block_dot_call`). A variable named `z` is
+a value: `z.zlibVersion()` calls its own method, and the library stays reachable
+through `z::`.
 Wrapping each function in an ordinary candela function is the usual way to give
 callers a tidier surface.
 

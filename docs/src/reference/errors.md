@@ -57,7 +57,8 @@ Raised by the type checker once the file parses.
 namespace that does not resolve. These reports suggest the closest name in scope
 when there is one. A namespace a `host` or `dylib` block declares resolves like
 any other, so a call it has no function for is reported against the function,
-naming the namespace it was looked for in.
+naming the namespace it was looked for in. A dot call on a block's name, `app.rows(id)`,
+is `block_dot_call`: a block is reached with `::`.
 
 **Struct and field errors.** Reading a field a struct does not declare, building
 a struct literal that supplies an unknown field or omits a required one, and
