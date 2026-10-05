@@ -156,11 +156,11 @@ fn double(x) {
 fn main() {
     let xs = [1, 2, 3, 4];
     print(xs.map(double));
-    print(xs.filter(fn(x) { return x % 2 == 0; }));
-    print(xs.reduce(0, fn(a, b) { return a + b; }));
+    print(xs.filter(fn(x) => x % 2 == 0));
+    print(xs.reduce(0, fn(a, b) => a + b));
     print(xs.sum(), xs.min(), xs.max(), xs.first(), xs.last());
     print(xs.take(2), xs.drop(2), xs.unique(), xs.chunk(2));
-    print(xs.any(fn(x) { return x > 3; }), xs.all(fn(x) { return x > 0; }));
+    print(xs.any(fn(x) => x > 3), xs.all(fn(x) => x > 0));
 }
 ```
 

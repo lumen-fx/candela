@@ -85,7 +85,7 @@ any array with no import at all:
 ```rust
 fn main() {
     let xs = [1, 2, 3, 4];
-    print(xs.map(fn(x) { return x * 2; }));
+    print(xs.map(fn(x) => x * 2));
     print(xs.sum());
 }
 ```

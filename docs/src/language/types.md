@@ -15,7 +15,7 @@ up before it runs.
 | Absent value | `null` | `null` |
 | List | `T[]` | `[1, 2, 3]` |
 | Map | `{K: V}` | `{"a": 1}` |
-| Function | `fn(A) -> R` | `fn(x) { return x; }` |
+| Function | `fn(A) -> R` | `fn(x) => x` |
 
 `int` is a signed 64-bit integer and `float` is double precision. A numeric
 literal with a decimal point is a `float`; without one it is an `int`. An

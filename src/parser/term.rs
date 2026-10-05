@@ -14,9 +14,9 @@ use crate::compiler::expr::Span;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
-use crate::parser::blocks::parse_block;
 use crate::parser::blocks::parse_block_expr;
 use crate::parser::blocks::parse_condition_expr;
+use crate::parser::blocks::parse_fn_body;
 use crate::parser::expand_macro;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
@@ -450,10 +450,8 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             //         (start, end).into(),
             //     )
             // } else
-            if next_token == Some(Token::LBrace) {
-                // returns null
-                // let return_type = SmolStr::new_static("null");
-                let fn_code = parse_block(parser);
+            if matches!(next_token, Some(Token::LBrace | Token::FatArrow)) {
+                let fn_code = parse_fn_body(parser, false);
                 Expr::AnonymousFunction(
                     Box::from(args),
                     Box::from(fn_code),
@@ -464,7 +462,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 parser.error(
                     span,
                     ParserErr::UnexpectedTokenStr(
-                        "'->' (return type) OR '{' (function code block)",
+                        "'{' (function body) OR '=>' (expression body)",
                         next_token.unwrap(),
                         "",
                     ),
