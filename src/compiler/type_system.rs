@@ -51,9 +51,9 @@ use crate::compiler::functions::Callee;
 use crate::compiler::functions::fill_call_defaults;
 use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::check_receiver;
-use crate::compiler::methods::dyn_lib_receiver;
 use crate::compiler::methods::fill_method_defaults;
 use crate::compiler::methods::infer_operator_method;
+use crate::compiler::methods::reject_block_dot_call;
 use crate::compiler::resolve_enum_variant;
 use crate::rt::FnValue;
 use rustc_hash::FxHashMap;
@@ -64,7 +64,6 @@ use std::cell::RefCell;
 use std::hint::cold_path;
 use std::hint::unreachable_unchecked;
 use std::rc::Rc;
-use std::slice;
 
 pub use crate::rt::DataType;
 
@@ -3117,18 +3116,6 @@ pub(crate) fn call_return_type(declared: Option<DataType>, body_type: DataType) 
     }
 }
 
-/// The declared return type of `function` in the `host` or `dylib` block named
-/// `block`, when such a block declares such a function. Both spellings of the
-/// call, `app::rows(id)` and `app.rows(id)`, read the signature through here.
-fn dyn_lib_return_type(block: &str, function: &str, state: &State<'_>) -> Option<DataType> {
-    state
-        .dyn_libs
-        .iter()
-        .find(|lib| lib.name == block)
-        .and_then(|lib| lib.fns.iter().find(|sig| sig.name == function))
-        .map(|sig| sig.return_type.clone())
-}
-
 /// The `-> Type` annotation as it reads for the specialisation being compiled,
 /// with the type parameters currently bound.
 ///
@@ -3907,25 +3894,11 @@ impl Expr {
                     .infer_type(v, ctx, state);
                 }
                 let method = namespace.last().unwrap().as_str();
-                // `app.rows(id)` on a `host`/`dylib` block is the namespaced
-                // call written with a dot, so its type is the declared return
-                // type, exactly as for `app::rows(id)`. This has to come before
-                // the receiver is typed, which would report the block's name as
-                // an unknown variable. See `methods::dyn_lib_receiver`.
-                if namespace.len() == 1
-                    && let Some(lib_name) = dyn_lib_receiver(obj, v, state)
-                {
-                    let lib_name = lib_name.clone();
-                    if let Some(return_type) = dyn_lib_return_type(&lib_name, method, state) {
-                        return return_type;
-                    }
-                    error_unknown_function_in_namespace(
-                        method,
-                        slice::from_ref(&lib_name),
-                        *fn_span,
-                        ctx.file_idx,
-                        state,
-                    );
+                // A block's name is a namespace, not a value, so a dot call on
+                // one is refused before the receiver is typed, which would
+                // report the name as an unknown variable.
+                if namespace.len() == 1 {
+                    reject_block_dot_call(obj, method, v, ctx, state);
                 }
                 let obj_type = obj.infer_type(v, ctx, state);
                 // A user-defined impl method resolves by the receiver's static

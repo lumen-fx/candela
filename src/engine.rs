@@ -9,7 +9,7 @@
 //! ```
 //! let mut engine = candela::Engine::new();
 //! engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
-//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id: string) { return app.rows(id); }\nfn main() {}", "main.cdl")?;
+//! let mut program = engine.compile("host \"app\" { int rows(string); }\nfn count(id: string) { return app::rows(id); }\nfn main() {}", "main.cdl")?;
 //! let rows = program.call("count", &["board".into()])?;
 //! assert_eq!(rows, candela::Value::Int(5));
 //! # Ok::<(), candela::Diagnostic>(())

@@ -295,7 +295,8 @@ Maps are not indexed with `[]`. Use the `get` method; see
 
 `.` reads a struct field or calls a method on a value. `::` separates the parts
 of a namespaced name: a module bound with `import ... as`, an enum variant, a
-`host` block's struct, or a function inside any of them.
+`host` or `dylib` block, a `host` block's struct, or a function inside any of
+them.
 
 ```rust
 print(point.x);
@@ -304,9 +305,10 @@ print(name.capitalize());
 let c = Colour::Red;
 ```
 
-A `host` or `dylib` block's name takes either one, so `app.rows(id)` and
-`app::rows(id)` are the same call, and a variable of that name takes the dot
-back for its own methods. See [C libraries](../integration/c-libraries.md).
+A `host` or `dylib` block's name is a namespace, so its functions are called
+as `app::rows(id)`; `app.rows(id)` is a compile error. A variable of that name is
+a value, and a dot on it calls the value's own method. See
+[C libraries](../integration/c-libraries.md).
 
 See [methods](../language/methods.md), [enums](../language/enums.md) and
 [modules](../language/modules.md).

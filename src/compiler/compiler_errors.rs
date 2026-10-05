@@ -1549,6 +1549,47 @@ pub fn error_method_without_receiver(
     )
 }
 
+/// Reports a dot call whose receiver names a `host` or `dylib` block rather
+/// than a value. A block is a namespace, and a namespace is reached with `::`.
+#[cold]
+#[inline(never)]
+pub fn error_block_dot_call(
+    block: &str,
+    function: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Block function called with a dot")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} names a block, not a value, so it has no methods",
+                        red(block)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Reach a block's functions with ::, as in {}",
+                blue(format_args!("{block}::{function}(...)"))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("{block} names a block, not a value: call {block}::{function} instead"),
+        "block_dot_call",
+    )
+}
+
 /// Generic diagnostic for enum-specific compile errors (unknown variant, wrong
 /// payload arity, non-identifier pattern binder, non-exhaustive match).
 #[cold]
