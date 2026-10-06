@@ -450,3 +450,31 @@ fn check(n) {
             (identifier)
             (arguments
               (identifier))))))))
+
+================================================================================
+Let declarations with a type
+================================================================================
+
+fn main() {
+    let xs: int[] = [];
+    let m: {string: Cell} = {};
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (array_type
+          (type_identifier))
+        (array_literal))
+      (let_declaration
+        (identifier)
+        (map_type
+          (type_identifier)
+          (type_identifier))
+        (map_literal)))))

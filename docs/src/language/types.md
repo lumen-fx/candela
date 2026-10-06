@@ -207,7 +207,8 @@ may find nothing (`m.get(k)`, `xs.first()`) answer, and which needs no import.
 
 Type annotations appear on struct fields, enum variant payloads, the signature
 blocks that declare foreign functions, and, where you want them, function
-parameters and return types. The type grammar is the same in all of them.
+parameters, return types and `let` declarations. The type grammar is the same in
+all of them.
 
 - `int`, `float`, `bool`, `string`: the built-in types. `null` is not among
   them; see [null](#null).
@@ -219,7 +220,7 @@ parameters and return types. The type grammar is the same in all of them.
   Leave the arrow off for one that returns nothing.
 - `(T)`: parentheses, which group a type the way they group an expression.
 - `any`: a slot whose type is decided by the value, written on a struct
-  field, a parameter, a return type, or an enum payload.
+  field, a parameter, a return type, a `let`, or an enum payload.
 
 `[]` after a function type belongs to its return type, so `fn(int) -> int[]` is
 a function returning a list of ints. Parenthesise to put the function itself in
@@ -231,11 +232,12 @@ no element type of its own the annotation supplies one: an empty list has no
 element type and an empty map has neither a key nor a value type, so a parameter
 declared `Value[]` decides that the body sees `Value` elements, a parameter
 declared `{string: Value}` decides that it sees `string` keys and `Value`
-values, and a `-> Value[]` or `-> {string: Value}` return type decides what the
-caller gets back from `return []` or `return {}`. An annotation never overrides
-a type the value does have, so passing `[1, 2]` to a `Value[]` parameter is
-still an error. A `let` takes no annotation, so an empty collection in a local
-takes its element types from the first value put into it instead.
+values, a `-> Value[]` or `-> {string: Value}` return type decides what the
+caller gets back from `return []` or `return {}`, and `let xs: Value[] = [];`
+decides what the local holds. An annotation never overrides a type the value
+does have, so passing `[1, 2]` to a `Value[]` parameter is still an error. An
+empty collection in a `let` without an annotation takes its element types from
+the first value put into it instead.
 
 ## Structs
 

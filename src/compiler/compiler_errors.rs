@@ -1532,6 +1532,73 @@ pub fn error_struct_field_invalid_type(
     );
 }
 
+/// A value written into a variable whose `let` declares a type the value does
+/// not have: the declaration's initialiser, or a later assignment.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub fn error_variable_type_mismatch(
+    file_idx: u16,
+    name: &str,
+    declared_span: Span,
+    declared_type: &DataType,
+    value_span: Span,
+    value_type: &DataType,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let declared = types.of(declared_type);
+    let given = types.of(value_type);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let mut report = Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), value_span.into()),
+            )
+            .with_message("Incompatible types")
+            .with_label(
+                Label::new((src.filename.as_str(), declared_span.into()))
+                    .with_message(format_args!(
+                        "{} is declared as {}",
+                        blue(name),
+                        blue(&declared)
+                    ))
+                    .with_color(ariadne::Color::Blue),
+            )
+            .with_label(
+                Label::new((src.filename.as_str(), value_span.into()))
+                    .with_message(format_args!("This expression is of type {}", red(&given)))
+                    .with_color(ariadne::Color::Red),
+            );
+            report = match (declared_type, value_type) {
+                (_, DataType::Unknown) => report.with_help(format_args!(
+                    "The value is dynamic; name its type with {}",
+                    blue(format_args!("as {declared}"))
+                )),
+                (DataType::Int, DataType::Float | DataType::String) => {
+                    report.with_help(format_args!("Try using the {} function", blue("int()")))
+                }
+                (DataType::Float, DataType::Int | DataType::String) => {
+                    report.with_help(format_args!("Try using the {} function", blue("float()")))
+                }
+                (DataType::String, _) => {
+                    report.with_help(format_args!("Try using the {} function", blue("string()")))
+                }
+                _ => report.with_help(
+                    "A variable declared with a type only holds values of that type; drop the annotation to let it change type",
+                ),
+            };
+            report.finish()
+        },
+        sources,
+        file_idx,
+        value_span,
+        &format!("{name} is declared as {declared}, but this expression is of type {given}"),
+        "variable_type_mismatch",
+    );
+}
+
 fn find_closest_str<'a>(name: &'a str, list: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let mut best: Option<(&str, usize)> = None;
     for candidate in list {

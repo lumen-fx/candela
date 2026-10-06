@@ -184,6 +184,7 @@ pub fn parse_call(
 /// `register`.
 pub fn declare_parse_text(v: &mut Vec<Variable>, register: u16) {
     v.push(Variable {
+        declared: None,
         name: SmolStr::new_static(PARSE_TEXT),
         register_id: register,
         cell: false,

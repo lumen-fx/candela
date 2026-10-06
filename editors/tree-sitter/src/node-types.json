@@ -3250,6 +3250,44 @@
           }
         ]
       },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "map_type",
+            "named": true
+          },
+          {
+            "type": "parenthesized_type",
+            "named": true
+          },
+          {
+            "type": "qualified_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          },
+          {
+            "type": "union_type",
+            "named": true
+          }
+        ]
+      },
       "value": {
         "multiple": false,
         "required": true,

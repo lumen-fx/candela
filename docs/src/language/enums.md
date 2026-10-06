@@ -138,9 +138,9 @@ parameter takes the type its call site passes it, so matching a parameter works
 when the caller hands it an enum value. An element read out of an empty array
 literal has no type, and matching one against variants is a compile error rather
 than an arm that never fits. A declaration says what a collection holds where
-the literal does not: a parameter typed `Event[]` or `{string: Event}`, or the
-same as a return type, gives the body `Event` values however empty the list or
-map it is handed. See [the empty list](collections.md#the-empty-list) and [the
+the literal does not: a `let events: Event[] = [];`, or a parameter or return
+type of `Event[]` or `{string: Event}`, gives the code `Event` values however
+empty the list or map is. See [the empty list](collections.md#the-empty-list) and [the
 empty map](collections.md#the-empty-map).
 
 ```rust

@@ -15497,3 +15497,94 @@ pub fn is_and_as_bind_like_comparisons() {
     "#;
     assert_eq!(run_output_std(src), "3\ntrue\ntrue\n");
 }
+
+/// A `let` annotation types the variable: an empty literal takes its element
+/// types from it, and the variable keeps the type through every assignment.
+#[test]
+pub fn let_annotation_types_the_variable() {
+    let src = r#"
+        struct Cell { v: int }
+        fn twice(x: int) -> int => x * 2;
+        fn main() {
+            let xs: int[] = [];
+            xs.push(3);
+            print(xs[0] + 1);
+            let m: {string: Cell} = {};
+            m["a"] = Cell { v: 1 };
+            print(m["a"].v);
+            let n: int = 1;
+            n += 1;
+            print(n);
+            let u: int | string = 1;
+            u = "s";
+            print(u);
+            let ys: any[] = [1, 2];
+            ys.push("s");
+            print(ys.len());
+            let f: fn(int) -> int = twice;
+            print(f(4));
+            f = fn(x) => x + 1;
+            print(f(4));
+            let total: int = 0;
+            let add = fn(x) { total = total + x; };
+            add(3);
+            print(total);
+        }
+    "#;
+    assert_eq!(run_output(src), "4\n1\n2\ns\n3\n8\n5\n3\n");
+}
+
+/// An annotated union is narrowed by `is` like any other union-typed value.
+#[test]
+pub fn let_annotation_union_narrows() {
+    let src = r"
+        fn main() {
+            let v: int | string = 5;
+            if v is int { print(v + 1); }
+            print(v is string);
+        }
+    ";
+    assert_eq!(run_output(src), "6\nfalse\n");
+}
+
+/// A value that does not fit the declared type is a compile error, at the
+/// initialiser, at a later assignment, and inside a closure that writes the
+/// variable. A dynamic value goes in only through `as`.
+#[test]
+pub fn let_annotation_rejects_other_types() {
+    for (src, wanted) in [
+        ("fn main() { let n: int = \"a\"; }", "n is declared as int"),
+        ("fn main() { let n: int = 1; n = 2.0; }", "of type float"),
+        ("fn main() { let xs: int[] = [\"a\"]; }", "of type string[]"),
+        (
+            "fn main() { let t: int = 0; let f = fn(x) { t = \"s\"; }; f(1); }",
+            "t is declared as int",
+        ),
+        (
+            "fn main() { let v = [1] as any; let n: int = v[0]; }",
+            "of type any",
+        ),
+        (
+            "fn main() { let a = [1]; let xs: any[] = a; }",
+            "of type int[]",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "variable_type_mismatch", "{src}");
+        assert!(d.message.contains(wanted), "{src}: {d:?}");
+    }
+}
+
+/// An unannotated `let` still changes type on assignment.
+#[test]
+pub fn unannotated_let_changes_type() {
+    let src = r#"
+        fn main() {
+            let x = 1;
+            x = "one";
+            print(x);
+        }
+    "#;
+    assert_eq!(run_output(src), "one\n");
+}
