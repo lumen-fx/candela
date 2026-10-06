@@ -51,9 +51,9 @@ path in the `[language-server.candela-lsp]` section.
 
 ## What it parses
 
-Every declaration form: `import` with and without an alias, `fn` with typed or
-bare parameters, an optional return annotation, and a block or `=> expr;` body,
-`struct` with a field's
+Every declaration form: `import` with an alias, a list of items, or neither,
+`fn` with typed or bare parameters, an optional return annotation, and a block
+or `=> expr;` body, `struct` with a field's
 `= value` default, `enum` with payload types, `impl` blocks, and the `dylib` and
 `host` signature blocks including the variadic `...` parameter and the structs
 a `host` block declares. Statements: `let`, assignment and its

@@ -1,10 +1,12 @@
 ================================================================================
-Imports (libs/std/tests/test_list.cdl)
+Imports (libs/std/tests/test_assert.cdl)
 ================================================================================
 
 import "std/assert";
 import "pgo_import_test.cdl";
-import "std/list" as list;
+import "std/json" as j;
+import "std/assert" { eq, is_true };
+import "std/set" { Set, };
 
 --------------------------------------------------------------------------------
 
@@ -15,7 +17,16 @@ import "std/list" as list;
     (string_literal))
   (import_declaration
     (string_literal)
-    (identifier)))
+    (identifier))
+  (import_declaration
+    (string_literal)
+    (import_items
+      (identifier)
+      (identifier)))
+  (import_declaration
+    (string_literal)
+    (import_items
+      (identifier))))
 
 ================================================================================
 Function declaration

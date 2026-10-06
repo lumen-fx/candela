@@ -5,6 +5,8 @@
 - `throw` colours as a keyword: it is a statement, `throw "kind";`.
 - `is` and `as` colour as operators: the type test `v is int` and the checked
   downcast `v as int`. The `ifis` snippet writes an `if` on a test.
+- The `import` and `importlib` snippets write a plain import, which binds the
+  module under its name; `importitems` writes `import "std/assert" { eq };`.
 
 ## 0.2.2
 
