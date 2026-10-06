@@ -58,33 +58,34 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
   Hovering a local variable shows nothing: candela does not retain
   per-variable inferred types after compilation.
 
-- **Completion.** Completes keywords, built-in functions, and user-defined
-  function and struct names from the compiled program, including symbols pulled
-  in by `import`. `.` is a registered trigger character, and typing it narrows
-  the list to built-in methods. Struct-field completion is not available.
+- **Completion.** Completes keywords, built-in functions, and the names the
+  buffer can write: its own functions, structs and enums, the items its imports
+  name, and `module::name` for every module an import binds. `.` is a
+  registered trigger character, and typing it narrows the list to built-in
+  methods. Struct-field completion is not available.
 
 - **Document symbols / outline.** `fn` and `struct` declarations from the open
   buffer, as a flat list.
 
 - **Go-to-definition.** Jumps from a call site to the function's declaration,
-  including into an `import`ed file. Struct literals resolve only within the
+  including into an `import`ed file. A call written `geo::area(...)` goes to the
+  `area` of the module bound as `geo`. Struct literals resolve only within the
   open buffer.
 
 ## Known simplifications
 
 These are deliberate, and the source refers here for them.
 
-- Resolution matches by bare name across the compiled program. It does not
-  distinguish two same-named symbols declared in different imported namespaces,
-  and returns every match.
+- A method call and a struct literal match by bare name across the compiled
+  program, and return every match. A free function call resolves through the
+  scope of the file it is written in.
 - A struct carries no source-file index, so anything that needs a struct's
   origin file (go-to-definition, and hover on a declaration) works only for
   structs declared in the open buffer.
 - Jumping into an imported file reads that file from disk synchronously, on the
   request.
-- The outline lists the functions and structs the buffer declares, and
-  completion lists every function the compile produced, imported ones included.
-  Neither lists a method of an `impl` block: the compiler names it after the
+- The outline lists the functions and structs the buffer declares. Neither the
+  outline nor completion lists a method of an `impl` block: the compiler names it after the
   type it attaches to (`Point#twice`), which is not a name to write, show, or
   put a cursor on.
 - Enums are compiled but do not appear in the outline.

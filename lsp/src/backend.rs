@@ -3,7 +3,7 @@
 //! the analysis in `crate::analysis`, which in turn is a thin wrapper around
 //! candela's own `compile()`.
 
-use crate::analysis::{self, ProgramSummary, RefKind};
+use crate::analysis::{self, ProgramSummary, RefKind, ScopeKind};
 use crate::builtins;
 use crate::line_index;
 use candela::Diagnostic as CdlDiagnostic;
@@ -202,7 +202,7 @@ fn hover_markdown(summary: &ProgramSummary, offset: u32) -> Option<String> {
     let r = summary.reference_at(offset)?;
     match r.kind {
         RefKind::Call => {
-            if let Some(f) = summary.functions_named(&r.target_name).next() {
+            if let Some(f) = summary.targets_of(r).first() {
                 return Some(render_function_hover(f));
             }
             builtins::BUILTIN_FUNCTIONS
@@ -355,18 +355,32 @@ impl LanguageServer for Backend {
             for (name, doc) in builtins::BUILTIN_FUNCTIONS {
                 items.push(completion_item(name, CompletionItemKind::FUNCTION, doc));
             }
+            // The names the buffer can write as it stands: its own, the items
+            // its imports named, and `module::name` through each module an
+            // import bound.
             if let Some(summary) = self.current_or_cached_summary(&uri) {
-                for f in summary
-                    .functions
-                    .iter()
-                    .filter(|f| analysis::is_a_written_name(&f.name))
-                {
-                    let doc = format!("fn {}({})", f.name, f.params.join(", "));
-                    items.push(completion_item(&f.name, CompletionItemKind::FUNCTION, &doc));
-                }
-                for s in &summary.structs {
-                    let doc = format!("struct {}", s.name);
-                    items.push(completion_item(&s.name, CompletionItemKind::STRUCT, &doc));
+                for entry in &summary.scope {
+                    let (kind, doc) = match entry.kind {
+                        ScopeKind::Function => {
+                            let params = entry
+                                .function
+                                .and_then(|id| summary.functions.get(id))
+                                .map(|f| f.params.join(", "))
+                                .unwrap_or_default();
+                            (
+                                CompletionItemKind::FUNCTION,
+                                format!("fn {}({params})", entry.label),
+                            )
+                        }
+                        ScopeKind::Struct => (
+                            CompletionItemKind::STRUCT,
+                            format!("struct {}", entry.label),
+                        ),
+                        ScopeKind::Enum => {
+                            (CompletionItemKind::ENUM, format!("enum {}", entry.label))
+                        }
+                    };
+                    items.push(completion_item(&entry.label, kind, &doc));
                 }
             }
         }
@@ -440,12 +454,13 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Bare-name matching only: `namespace::name` qualification in the
-        // call is not resolved against the qualified path, just the final
-        // segment. See the crate README's "known simplifications".
+        // A free call goes to the function its path resolves to in its
+        // file's scope; a method call matches by name. See the crate README's
+        // "known simplifications".
         let locations: Vec<Location> = match r.kind {
             RefKind::Call => summary
-                .functions_named(&r.target_name)
+                .targets_of(r)
+                .into_iter()
                 .filter_map(|f| self.location_for(&summary, f.src_file, f.name_span, &uri))
                 .collect(),
             RefKind::StructLiteral => summary
