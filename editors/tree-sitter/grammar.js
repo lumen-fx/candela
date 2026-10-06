@@ -124,13 +124,23 @@ module.exports = grammar({
         seq(field('combinator', $.identifier), field('arguments', $.attribute_arguments)),
       ),
 
+    // `import "std/json";` binds the module under its last path segment,
+    // `as` names it, and a braced list brings named items into scope instead.
     import_declaration: ($) =>
       seq(
         'import',
         field('path', $.string_literal),
-        optional(seq('as', field('alias', $.identifier))),
+        optional(
+          choice(
+            seq('as', field('alias', $.identifier)),
+            field('items', $.import_items),
+          ),
+        ),
         ';',
       ),
+
+    import_items: ($) =>
+      seq('{', sepBy1(',', field('item', $.identifier)), optional(','), '}'),
 
     function_declaration: ($) =>
       seq(

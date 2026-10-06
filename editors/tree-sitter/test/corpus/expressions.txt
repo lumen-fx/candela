@@ -110,7 +110,7 @@ Calls, method chains, and namespaced calls (libs/std/tests/test_string.cdl, pgo/
 ================================================================================
 
 fn main() {
-    assert::assert_eq(string::substring("hello world", 6, 5), "world");
+    assert::eq(string::substring("hello world", 6, 5), "world");
     print(pgo_dynlib::pgo_add_int(1,1));
     print("-Hello-".trim_chars("-").len());
 }
@@ -166,8 +166,8 @@ Anonymous functions (libs/std/tests/test_list_hof.cdl)
 ================================================================================
 
 fn main() {
-    assert::assert_eq(list::map(xs, double), [2, 4, 6, 8]);
-    assert::assert_eq(list::filter(xs, fn(x) { return x > 2; }), [3, 4]);
+    assert::eq(list::map(xs, double), [2, 4, 6, 8]);
+    assert::eq(list::filter(xs, fn(x) { return x > 2; }), [3, 4]);
 }
 
 --------------------------------------------------------------------------------

@@ -300,7 +300,7 @@ fn main() {
     try {
         value = doubled(21);
     } catch e {
-        assert::assert_msg(false, "plain call raised " + e);
+        assert::msg(false, "plain call raised " + e);
     }
 }
 

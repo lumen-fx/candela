@@ -59,8 +59,9 @@ attribution details.
   host-registered closures. A trailing `...` argument marks a variadic host
   function.
 - Modules: `import "file.cdl";` for a file, `import "std/json";` for a shipped
-  library. A bare import merges the module's symbols into the file's scope;
-  `import "..." as alias;` keeps them behind `alias::`.
+  library. An import binds the module under its name (`json::parse`);
+  `import "..." as alias;` picks the name, and `import "..." { a, b };` brings
+  the named items into the file's scope.
 - Macros: `name!( ... )` hands the raw region between the parentheses to the
   program embedding candela, which returns candela source to parse in its
   place. The region ends at the parenthesis that balances the one that opened

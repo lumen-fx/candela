@@ -133,16 +133,23 @@
   "Import": {
     "prefix": "import",
     "body": [
-      "import \"${1:path.cdl}\"${2: as ${3:alias}};"
+      "import \"${1:./path.cdl}\";"
     ],
-    "description": "Import another Candela file"
+    "description": "Import another Candela file, bound under its name"
   },
   "Import library": {
     "prefix": "importlib",
     "body": [
-      "import \"${1:std/list}\"${2: as ${3:alias}};"
+      "import \"${1:std/json}\";"
     ],
-    "description": "Import a shipped library (extensionless path)"
+    "description": "Import a shipped library (extensionless path), bound under its name"
+  },
+  "Import items": {
+    "prefix": "importitems",
+    "body": [
+      "import \"${1:std/assert}\" { ${2:eq} };"
+    ],
+    "description": "Bring named items of a module into scope"
   },
   "Print": {
     "prefix": "print",
