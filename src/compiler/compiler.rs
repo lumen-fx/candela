@@ -165,6 +165,7 @@ type PendingDylib = (
 pub mod compiler_data;
 mod compiler_errors;
 pub mod imports;
+mod std_index;
 pub mod type_system;
 
 pub mod expr;
@@ -7268,6 +7269,7 @@ pub fn compile_profile(
     // A previous compilation on this thread may have been aborted mid-inference
     // by an error unwind; make sure its bookkeeping doesn't leak into this one.
     type_system::reset_inference_state();
+    std_index::set_lib_dir(resolver.lib_dir().map(Path::to_path_buf));
 
     let main_src = Source {
         filename: SmolStr::from(filename),

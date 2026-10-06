@@ -7,9 +7,9 @@ json.
 import "std/json" as json;
 ```
 
-Both functions wrap a built-in: `json::parse` is `json_parse` and
-`json::stringify` is `json_stringify`. The module is pure candela, so it compiles
-into a `.cdlb` artifact and runs under `candela-vm` with no dynamic library.
+The module is pure candela over the runtime's own json primitives, so it
+compiles into a `.cdlb` artifact and runs under `candela-vm` with no dynamic
+library.
 
 ## parse
 

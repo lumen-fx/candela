@@ -57,7 +57,10 @@ Raised by the type checker once the file parses.
 
 **Unknown names.** A variable, function, method, type, struct, enum variant or
 namespace that does not resolve. These reports suggest the closest name in scope
-when there is one. A namespace a `host` or `dylib` block declares resolves like
+when there is one. A name or a namespace that a standard library module the
+program does not import declares names the import instead, so `sqrt(x)` points
+at `import "std/math" as math;` and `fs::read(p)` at `import "std/fs" as fs;`.
+A namespace a `host` or `dylib` block declares resolves like
 any other, so a call it has no function for is reported against the function,
 naming the namespace it was looked for in. A dot call on a block's name, `app.rows(id)`,
 is `block_dot_call`: a block is reached with `::`.
@@ -211,7 +214,8 @@ kinds above cover the cases where a value is only known at run time.
 
 ### Files
 
-Every filesystem builtin maps the operating system's failure to one kind:
+Every function of the [fs module](../standard-library/fs.md) maps the operating
+system's failure to one kind:
 `fs_not_found`, `fs_permission_denied`, `fs_already_exists`,
 `fs_is_a_directory`, `fs_not_a_directory`, `fs_invalid_filename`,
 `fs_invalid_data`, `fs_file_too_large`, `fs_storage_full`,
@@ -251,13 +255,17 @@ matches, the error is re-raised to the next enclosing `try`, and an error that
 reaches the top of the program is printed and ends it.
 
 ```rust
-try {
-    let text = fs::read("port.txt");
-    print(int(text) + 1);
-} catch "fs_not_found" {
-    print("no config");
-} catch e {
-    print("failed: " + e);
+import "std/fs" as fs;
+
+fn main() {
+    try {
+        let text = fs::read("port.txt");
+        print(int(text) + 1);
+    } catch "fs_not_found" {
+        print("no config");
+    } catch e {
+        print("failed: " + e);
+    }
 }
 ```
 

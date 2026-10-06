@@ -1059,9 +1059,10 @@ fn per_frame_arguments_stay_whole_mid_cycle() {
 }
 
 /// A function that parses a small document on every call and drops it.
-const PARSE_PER_FRAME: &str = "
+const PARSE_PER_FRAME: &str = "import \"std/json\" as json;
+
     fn p() -> int {
-        let v = as_list(json_parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
+        let v = as_list(json::parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
         return as_int(as_list(v[0])[1]) + as_int(as_map(v[1]).get(\"a\"));
     }
     fn main() {}

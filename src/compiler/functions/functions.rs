@@ -22,7 +22,6 @@ use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::instr::Instr;
 use crate::rt::FnValue;
 use builtin_functions::builtin_functions;
-use fs_lib_functions::fs_lib_functions;
 use smol_strc::SmolStr;
 use std::slice;
 use user_functions::handle_indirect_call;
@@ -39,9 +38,6 @@ mod builtin_functions;
 
 #[path = "fs/fs_lib_functions.rs"]
 mod fs_lib_functions;
-
-#[cfg(target_arch = "wasm32")]
-use crate::errors::wasm_error;
 
 /// Compiles each argument expression and returns the register holding each
 /// result, in argument order.
@@ -469,21 +465,6 @@ pub fn handle_functions(
     let namespace = &namespace[0..len];
     if namespace.is_empty() {
         builtin_functions(
-            fn_name,
-            output,
-            v,
-            ctx,
-            state,
-            tgt_id,
-            args,
-            span,
-            args_indexes,
-        )
-    } else if namespace == ["fs"] {
-        #[cfg(target_arch = "wasm32")]
-        wasm_error("WASM does not support the file system library");
-
-        fs_lib_functions(
             fn_name,
             output,
             v,

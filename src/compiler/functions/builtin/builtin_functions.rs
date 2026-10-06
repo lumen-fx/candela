@@ -6,6 +6,8 @@ use super::super::expr::Span;
 use super::super::type_system::DataType;
 use super::super::type_system::format_detailed;
 use super::check_arg_type;
+#[cfg(not(target_arch = "wasm32"))]
+use super::fs_lib_functions::fs_lib_functions;
 use super::user_functions::handle_user_function;
 use crate::compiler::UnwrapId;
 use crate::compiler::compile_fn_value;
@@ -82,7 +84,29 @@ pub fn builtin_functions(
             None,
         );
     }
+    // The native primitives the standard library is written on resolve only
+    // in a standard library module, so a program reaches each through the
+    // module's own spelling (`json::parse`, `fs::read`).
+    let in_std = state.namespaces.is_std(ctx.file_idx);
     match name {
+        "fs_read" | "fs_exists" | "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir"
+            if in_std =>
+        {
+            #[cfg(target_arch = "wasm32")]
+            crate::errors::wasm_error("WASM does not support the file system library");
+            #[cfg(not(target_arch = "wasm32"))]
+            fs_lib_functions(
+                &name[3..],
+                output,
+                v,
+                ctx,
+                state,
+                tgt_id,
+                args,
+                span,
+                args_indexes,
+            )
+        }
         "print" => {
             for arg in args {
                 let id = compile_text_arg(arg, v, ctx, state, output);
@@ -296,10 +320,12 @@ pub fn builtin_functions(
         // Runtime type tests and checked downcasts on an `any` value. `is_*`
         // returns a bool; `as_*` returns the value typed concretely (the type
         // checker assigns the target type) and raises a catchable error when the
-        // runtime type differs. `json_parse`/`json_stringify` back `std/json`.
+        // runtime type differs. `json_stringify` backs `std/json`.
         "is_int" | "is_float" | "is_str" | "is_bool" | "is_list" | "is_map" | "is_null"
         | "as_int" | "as_float" | "as_str" | "as_bool" | "as_list" | "as_map"
-        | "json_stringify" => {
+        | "json_stringify"
+            if in_std || name != "json_stringify" =>
+        {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             let (libfunc, throws) = match name {
                 "is_int" => (LibFunc::IsIntVal, false),
@@ -328,7 +354,7 @@ pub fn builtin_functions(
             }
             Some(output_id)
         }
-        "json_parse" => {
+        "json_parse" if in_std => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             check_arg_type(
                 name,

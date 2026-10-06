@@ -10,6 +10,7 @@ use super::Span;
 use super::State;
 use super::Variable;
 use super::compiler_data::TypeNames;
+use super::std_index;
 use crate::compiler::expr::operator_method;
 use crate::errors::BLUE;
 use crate::errors::GREEN;
@@ -25,6 +26,16 @@ use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::fmt::Write as _;
 use std::path::PathBuf;
+
+/// A built-in function that moved into a standard library module: the module
+/// and the name it has there.
+fn removed_builtin(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "json_parse" => Some(("json", "parse")),
+        "json_stringify" => Some(("json", "stringify")),
+        _ => None,
+    }
+}
 
 #[inline(never)]
 #[cold]
@@ -1409,6 +1420,29 @@ pub fn error_unknown_function(
     sources: &[Source],
 ) -> ! {
     let similar_fn = find_closest_str(fn_name, namespace.fns().map(|f| f.0.as_str()));
+    // A name a module declares, or a removed built-in that module now holds,
+    // is a missing import rather than a typo.
+    let import_help = |paint: fn(&str) -> String| {
+        removed_builtin(fn_name)
+            .map(|(module, name)| {
+                format!(
+                    "{fn_name} is now {} in std/{module}. Import it with {}",
+                    paint(&format!("{module}::{name}")),
+                    paint(&format!("import \"std/{module}\" as {module};")),
+                )
+            })
+            .or_else(|| {
+                std_index::module_declaring(fn_name).map(|module| {
+                    format!(
+                        "{fn_name} is in std/{module}. Import it with {} and call {}",
+                        paint(&format!("import \"std/{module}\" as {module};")),
+                        paint(&format!("{module}::{fn_name}")),
+                    )
+                })
+            })
+    };
+    let plain_help = import_help(|t| t.to_owned());
+    let import_help = import_help(|t| blue(t));
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1426,7 +1460,9 @@ pub fn error_unknown_function(
                     .with_color(ariadne::Color::Red),
             );
 
-            if let Some(similar_fn) = similar_fn {
+            if let Some(help) = &import_help {
+                report = report.with_help(help);
+            } else if let Some(similar_fn) = similar_fn {
                 report = report.with_help(format_args!(
                     "A function with a similar name exists: {}",
                     blue(similar_fn)
@@ -1438,7 +1474,10 @@ pub fn error_unknown_function(
         sources,
         file_idx,
         span,
-        &format!("Cannot find function {fn_name} in this scope"),
+        &plain_help.map_or_else(
+            || format!("Cannot find function {fn_name} in this scope"),
+            |help| format!("Cannot find function {fn_name} in this scope. {help}"),
+        ),
         "unknown_function",
     )
 }
@@ -1865,10 +1904,15 @@ pub fn error_unknown_namespace(
     file_idx: u16,
     sources: &[Source],
 ) -> ! {
+    // A namespace a standard library module would bind is a missing import.
+    let module = match namespace {
+        [name] if std_index::module_exists(name) => Some(name),
+        _ => None,
+    };
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let mut report = Report::build(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1881,13 +1925,26 @@ pub fn error_unknown_namespace(
                     ))
                     .with_color(ariadne::Color::Red),
             );
+            if let Some(module) = module {
+                report = report.with_help(format_args!(
+                    "{module} is the std/{module} module. Import it with {}",
+                    blue(format_args!("import \"std/{module}\" as {module};")),
+                ));
+            }
 
             report.finish()
         },
         sources,
         file_idx,
         span,
-        &format!("{} is not a valid namespace", namespace.join("::")),
+        &module.map_or_else(
+            || format!("{} is not a valid namespace", namespace.join("::")),
+            |module| {
+                format!(
+                    "{module} is not a valid namespace. It is the std/{module} module: import it with import \"std/{module}\" as {module};"
+                )
+            },
+        ),
         "unknown_namespace",
     )
 }

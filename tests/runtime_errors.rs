@@ -719,6 +719,8 @@ fn fs_append_creates_a_missing_file() {
 
     let source = format!(
         r#"
+import "std/fs" as fs;
+
 fn main() {{
     fs::append("{path}", "one\n");
     fs::append("{path}", "two\n");
@@ -761,10 +763,11 @@ fn main() {
 #[test]
 fn deeply_nested_json_raises_rather_than_dying() {
     let source = format!(
-        r#"
+        r#"import "std/json" as json;
+
 fn main() {{
     try {{
-        print(json_parse("{}"));
+        print(json::parse("{}"));
     }} catch "json_parse_error" {{
         print("raised");
     }}
@@ -792,9 +795,10 @@ fn a_parsed_document_survives_later_allocation() {
         .collect();
     let document = format!("[{}]", entries.join(", "));
     let source = format!(
-        r#"
+        r#"import "std/json" as json;
+
 fn main() {{
-    let doc = as_list(json_parse("{document}"));
+    let doc = as_list(json::parse("{document}"));
     let n = 0;
     let text = "";
     while n < 5000 {{

@@ -7,6 +7,17 @@ use crate::compiler::compiler_data::Source;
 use crate::data::Data;
 use crate::instr::Instr;
 
+/// A resolver that reads the standard library from this repository, the way
+/// an installed toolchain reads the one beside it.
+fn std_resolver() -> crate::compiler::imports::ImportResolver {
+    let mut resolver = crate::compiler::imports::ImportResolver::new();
+    resolver.set_lib_dir(std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/libs"
+    )));
+    resolver
+}
+
 /// Runs a compiled program the way the command line does: an error no `try`
 /// catches prints its report and ends the run, which in a test build panics.
 #[allow(clippy::too_many_arguments)] // the VM's own entry point, passed through
@@ -56,7 +67,7 @@ macro_rules! run_and_check_registers {
             String::from($contents),
             filename,
             true,
-            &crate::compiler::imports::ImportResolver::new(),
+            &std_resolver(),
             optimize,
         );
         let instructions = out.instructions;
@@ -91,7 +102,7 @@ macro_rules! run_and_check_registers {
             }
         }), "the program leaves the value in the register it prints (release profile: {optimize})");
         }
-        native_agrees($contents, "test.kl", &crate::compiler::imports::ImportResolver::new());
+        native_agrees($contents, "test.kl", &std_resolver());
     };
 }
 
@@ -103,7 +114,7 @@ macro_rules! run {
                 String::from($contents),
                 filename,
                 true,
-                &crate::compiler::imports::ImportResolver::new(),
+                &std_resolver(),
                 optimize,
             );
             let mut arrays = out.pools;
@@ -129,11 +140,7 @@ macro_rules! run {
                 0,
             );
         }
-        native_agrees(
-            $contents,
-            "test.kl",
-            &crate::compiler::imports::ImportResolver::new(),
-        );
+        native_agrees($contents, "test.kl", &std_resolver());
     };
 }
 
@@ -554,7 +561,7 @@ fn main() {
             String::from(src),
             "copy.cdl",
             false,
-            &crate::compiler::imports::ImportResolver::new(),
+            &std_resolver(),
             optimize,
         )
         .instructions
@@ -653,7 +660,7 @@ fn release_instructions(src: &str) -> Vec<Instr> {
         String::from(src),
         "release.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
         true,
     )
     .instructions
@@ -4975,7 +4982,7 @@ fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
                 String::from(src),
                 filename,
                 false,
-                &crate::compiler::imports::ImportResolver::new(),
+                &std_resolver(),
                 optimize,
             );
         })
@@ -4998,22 +5005,13 @@ fn run_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
         debug, release,
         "a release build stops where a debug build does"
     );
-    native_agrees(
-        src,
-        filename,
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    native_agrees(src, filename, &std_resolver());
     debug
 }
 
 /// [`run_diag`] in one profile.
 fn run_diag_profile(src: &str, filename: &str, optimize: bool) -> Result<(), Diagnostic> {
-    run_diag_profile_with(
-        src,
-        filename,
-        optimize,
-        &crate::compiler::imports::ImportResolver::new(),
-    )
+    run_diag_profile_with(src, filename, optimize, &std_resolver())
 }
 
 /// [`run_diag_profile`] with the imports resolved by `resolver`.
@@ -5068,12 +5066,7 @@ fn compile_report(src: &str, filename: &str) -> String {
     CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let was_capturing = set_capturing(true);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = compile(
-            String::from(src),
-            filename,
-            false,
-            &crate::compiler::imports::ImportResolver::new(),
-        );
+        let _ = compile(String::from(src), filename, false, &std_resolver());
     }));
     set_capturing(was_capturing);
     CAPTURED_OUTPUT.with(|o| o.take())
@@ -5098,11 +5091,7 @@ fn run_output(src: &str) -> String {
         debug, release,
         "a release build prints what a debug build does"
     );
-    native_agrees(
-        src,
-        "out.cdl",
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    native_agrees(src, "out.cdl", &std_resolver());
     debug
 }
 
@@ -5358,18 +5347,20 @@ pub fn index_past_32_bits_is_out_of_bounds() {
 #[test]
 pub fn json_round_trips_a_large_integer() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let v = as_int(json_parse(\"9007199254740993\"));
+            let v = as_int(json::parse(\"9007199254740993\"));
             print(v);
         }
         ",
         9_007_199_254_740_993_i64.into()
     );
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let s = json_stringify(9007199254740993);
+            let s = json::stringify(9007199254740993);
             print(s == \"9007199254740993\");
         }
         ",
@@ -5441,13 +5432,7 @@ pub fn diagnostics_missing_main() {
     let src = "fn foo() { return 1; }";
     compile_diag(src, "diag.kl").expect("a file without main compiles");
     let d = collect_diagnostic(|| {
-        compile(
-            String::from(src),
-            "diag.kl",
-            false,
-            &crate::compiler::imports::ImportResolver::new(),
-        )
-        .require_main();
+        compile(String::from(src), "diag.kl", false, &std_resolver()).require_main();
     })
     .unwrap_err();
     assert_eq!(
@@ -6319,6 +6304,8 @@ pub fn fs_return_types_stay_on_the_fs_path() {
     // call gets the type of the function it names.
     run_and_check_registers!(
         r#"
+        import "std/fs" as fs;
+
         fn read(n: int) -> int { return n; }
 
         fn main() {
@@ -6561,12 +6548,7 @@ pub fn enum_after_an_int_array_dumps_its_registers() {
 /// that fills it runs, so this is what the dump prints for a register before
 /// the program has written it.
 fn dumped_registers(src: &str, filename: &str) -> Vec<String> {
-    let out = compile(
-        String::from(src),
-        filename,
-        false,
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    let out = compile(String::from(src), filename, false, &std_resolver());
     out.registers
         .iter()
         .map(|data| {
@@ -6696,7 +6678,7 @@ pub fn pool_slot_zero_is_named_by_one_register() {
         String::from(OBJECTS_AFTER_OTHER_OBJECTS),
         "slot_zero.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     let objects = out
         .registers
@@ -6803,12 +6785,7 @@ fn main() {
     std::fs::write(&main, src).unwrap();
     let filename = main.to_str().unwrap().to_owned();
     let d = collect_diagnostic(|| {
-        let _ = compile(
-            String::from(src),
-            &filename,
-            false,
-            &crate::compiler::imports::ImportResolver::new(),
-        );
+        let _ = compile(String::from(src), &filename, false, &std_resolver());
     })
     .unwrap_err();
     assert_wellformed(&d, src);
@@ -7625,9 +7602,10 @@ pub fn any_downcast_int_arithmetic() {
 #[test]
 pub fn any_type_tests() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let j = json_parse(\"{\\\"n\\\": 5}\");
+            let j = json::parse(\"{\\\"n\\\": 5}\");
             print(is_map(j));
         }
         ",
@@ -7638,9 +7616,10 @@ pub fn any_type_tests() {
 #[test]
 pub fn any_is_int_true() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let v = json_parse(\"7\");
+            let v = json::parse(\"7\");
             print(is_int(v));
         }
         ",
@@ -7651,9 +7630,10 @@ pub fn any_is_int_true() {
 #[test]
 pub fn any_is_int_false_on_string() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let v = json_parse(\"\\\"x\\\"\");
+            let v = json::parse(\"\\\"x\\\"\");
             print(is_int(v));
         }
         ",
@@ -7666,11 +7646,12 @@ pub fn any_bad_downcast_is_catchable() {
     // A downcast to the wrong type raises a catchable error rather than
     // producing a garbage value.
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
             let r = 0;
             try {
-                let x = as_int(json_parse(\"\\\"str\\\"\"));
+                let x = as_int(json::parse(\"\\\"str\\\"\"));
                 r = 1;
             } catch e {
                 r = 2;
@@ -7685,9 +7666,10 @@ pub fn any_bad_downcast_is_catchable() {
 #[test]
 pub fn any_as_str() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            print(as_str(json_parse(\"\\\"hi\\\"\")));
+            print(as_str(json::parse(\"\\\"hi\\\"\")));
         }
         ",
         crate::data::Data::small_str("hi")
@@ -7697,9 +7679,10 @@ pub fn any_as_str() {
 #[test]
 pub fn any_as_bool() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            print(as_bool(json_parse(\"true\")));
+            print(as_bool(json::parse(\"true\")));
         }
         ",
         true.into()
@@ -7709,9 +7692,10 @@ pub fn any_as_bool() {
 #[test]
 pub fn json_parse_scalar_int() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            print(as_int(json_parse(\"42\")) + 1);
+            print(as_int(json::parse(\"42\")) + 1);
         }
         ",
         43.into()
@@ -7721,9 +7705,10 @@ pub fn json_parse_scalar_int() {
 #[test]
 pub fn json_parse_object_field() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let obj = as_map(json_parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\"));
+            let obj = as_map(json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\"));
             print(as_int(obj.get(\"x\")) + as_int(obj.get(\"y\")));
         }
         ",
@@ -7734,9 +7719,10 @@ pub fn json_parse_object_field() {
 #[test]
 pub fn json_parse_nested_array() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let obj = as_map(json_parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\"));
+            let obj = as_map(json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\"));
             let arr = as_list(obj.get(\"nums\"));
             print(arr.len());
         }
@@ -7752,7 +7738,7 @@ fn pools_after_run(contents: &str, optimize: bool) -> candela_vm::rt::Pools {
         String::from(contents),
         filename,
         true,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
         optimize,
     );
     let mut pools = out.pools;
@@ -7786,11 +7772,12 @@ pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
     // pushed onto the end of their pools without a look at the free slots or
     // the collector, so every parse grew the pools and none ever started a
     // collection to take the slots back.
-    let contents = "
+    let contents = "import \"std/json\" as json;
+
         fn main() {
             let total = 0;
             for i in 0..3000 {
-                let v = as_list(json_parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
+                let v = as_list(json::parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
                 total = total + as_int(as_list(v[0])[1]);
             }
             print(total);
@@ -7811,7 +7798,8 @@ pub fn json_parse_survives_a_collection_mid_parse() {
     // parse ends. Everything the parse built so far has to survive that: every
     // entry matches the values the program built the document from, and the
     // answer stringifies back to the document.
-    let src = "
+    let src = "import \"std/json\" as json;
+
         fn main() {
             let doc = \"[\";
             let ids = [];
@@ -7826,8 +7814,8 @@ pub fn json_parse_survives_a_collection_mid_parse() {
             doc = doc + \"]\";
             let bad = 0;
             for round in 0..3 {
-                let parsed = as_list(json_parse(doc));
-                if json_stringify(parsed) != doc { bad += 1; }
+                let parsed = as_list(json::parse(doc));
+                if json::stringify(parsed) != doc { bad += 1; }
                 if parsed.len() != ids.len() { bad += 1; }
                 for i in 0..ids.len() {
                     let got = as_map(parsed[i]);
@@ -7894,12 +7882,7 @@ pub fn gc_state_persists_across_runs() {
             }
         }
     ";
-    let out = compile(
-        String::from(contents),
-        filename,
-        true,
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    let out = compile(String::from(contents), filename, true, &std_resolver());
     let mut pools = out.pools;
     let mut reg = RegisterFile(out.registers);
     let err_ctx = crate::errors::ErrorCtx {
@@ -7950,12 +7933,7 @@ pub fn idle_collection_stays_within_its_budget() {
             }
         }
     ";
-    let out = compile(
-        String::from(contents),
-        filename,
-        true,
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    let out = compile(String::from(contents), filename, true, &std_resolver());
     let mut pools = out.pools;
     let mut reg = RegisterFile(out.registers);
     let err_ctx = crate::errors::ErrorCtx {
@@ -8062,14 +8040,15 @@ pub fn an_interned_key_never_names_a_freed_string() {
     // pool. A freed slot kept its text, so a key equal to a dead string was
     // given that slot, and the next string allocated there overwrote the key.
     run_and_check_registers!(
-        r#"
+        r#"import "std/json" as json;
+
         fn main() {
             let i = 0;
             while i < 300 {
                 let t = "garbage_string_" + str(i);
                 i += 1;
             }
-            let doc = as_map(json_parse("{\"garbage_string_5\": 1}"));
+            let doc = as_map(json::parse("{\"garbage_string_5\": 1}"));
             let j = 0;
             while j < 300 {
                 let t = "reuse_every_slot_" + str(j);
@@ -8235,12 +8214,13 @@ pub fn a_long_list_permuted_during_marking_keeps_its_strings() {
 #[test]
 pub fn a_json_key_interned_during_marking_keeps_its_text() {
     run_and_check_registers!(
-        r#"
+        r#"import "std/json" as json;
+
         fn main() {
             let bad = 0;
             for round in 0..300 {
                 let dead = "interned key " + str(round);
-                let doc = as_map(json_parse("{\"interned key " + str(round) + "\": [1, 2]}"));
+                let doc = as_map(json::parse("{\"interned key " + str(round) + "\": [1, 2]}"));
                 let junk = "unrelated filler " + str(round);
                 let k = as_str(doc.keys()[0]);
                 if k != "interned key " + str(round) { bad += 1; }
@@ -8264,9 +8244,10 @@ pub fn parsed_array_survives_array_gc() {
         .join(",");
     run_and_check_registers!(
         &format!(
-            r#"
+            r#"import "std/json" as json;
+
             fn libs_len(body) {{
-                let root = as_map(json_parse(body));
+                let root = as_map(json::parse(body));
                 let s = "a,b,c";
                 let i = 0;
                 while i < 50 {{
@@ -8288,9 +8269,10 @@ pub fn parsed_array_survives_array_gc() {
 #[test]
 pub fn json_roundtrip_preserves_int() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let obj = as_map(json_parse(json_stringify(json_parse(\"{\\\"a\\\": 7}\"))));
+            let obj = as_map(json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))));
             print(as_int(obj.get(\"a\")));
         }
         ",
@@ -8301,9 +8283,10 @@ pub fn json_roundtrip_preserves_int() {
 #[test]
 pub fn json_roundtrip_preserves_float() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let v = json_parse(json_stringify(json_parse(\"2.5\")));
+            let v = json::parse(json::stringify(json::parse(\"2.5\")));
             print(as_float(v));
         }
         ",
@@ -8462,9 +8445,10 @@ pub fn map_iteration_over_keys() {
 #[test]
 pub fn map_downcast_takes_mixed_value_types() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let m = as_map(json_parse(\"{\\\"a\\\": 1}\"));
+            let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
             m.insert(\"b\", 2);
             m.insert(\"c\", \"three\");
             print(m.len());
@@ -8477,9 +8461,10 @@ pub fn map_downcast_takes_mixed_value_types() {
 #[test]
 pub fn map_downcast_entries_stay_dynamic() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let m = as_map(json_parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\"));
+            let m = as_map(json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\"));
             print(as_int(m.get(\"a\")) + as_str(m.get(\"b\")).len());
         }
         ",
@@ -8490,9 +8475,10 @@ pub fn map_downcast_entries_stay_dynamic() {
 #[test]
 pub fn map_downcast_takes_mixed_key_types() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let m = as_map(json_parse(\"{\\\"a\\\": 1}\"));
+            let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
             m.insert(\"b\", 2);
             m.insert(7, 3);
             print(m.len());
@@ -8505,9 +8491,10 @@ pub fn map_downcast_takes_mixed_key_types() {
 #[test]
 pub fn list_downcast_takes_mixed_element_types() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let l = as_list(json_parse(\"[1]\"));
+            let l = as_list(json::parse(\"[1]\"));
             l.push(2);
             l.push(\"three\");
             print(l.len());
@@ -8520,9 +8507,10 @@ pub fn list_downcast_takes_mixed_element_types() {
 #[test]
 pub fn list_downcast_elements_stay_dynamic() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            let l = as_list(json_parse(\"[1, \\\"two\\\"]\"));
+            let l = as_list(json::parse(\"[1, \\\"two\\\"]\"));
             print(as_int(l[0]) + as_str(l[1]).len());
         }
         ",
@@ -9009,11 +8997,12 @@ pub fn any_condition_raises_on_a_non_bool() {
     // Nothing pins the type of a parsed json value, so the check happens when
     // the condition runs and raises a catchable `bad_downcast`.
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
             let r = 0;
             try {
-                if json_parse(\"1\") {
+                if json::parse(\"1\") {
                     r = 1;
                 }
             } catch e {
@@ -9029,10 +9018,11 @@ pub fn any_condition_raises_on_a_non_bool() {
 #[test]
 pub fn any_condition_takes_a_bool() {
     run_and_check_registers!(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
             let r = 0;
-            if json_parse(\"true\") {
+            if json::parse(\"true\") {
                 r = 1;
             }
             print(r);
@@ -10390,7 +10380,7 @@ pub fn a_block_leaves_the_function_table_alone() {
         ),
         "block_locals.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     assert!(
         out.functions.iter().any(|f| f.name == "Cell<int>#get"),
@@ -10435,7 +10425,7 @@ pub fn the_saved_register_table_is_one_entry_per_recursive_call_site() {
         ),
         "callsite_registers.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     let mut callsites: Vec<u16> = out
         .instructions
@@ -10873,12 +10863,7 @@ pub fn generic_declared_in_an_imported_module() {
     )
     .unwrap();
     let src = std::fs::read_to_string(&main).unwrap();
-    let out = compile(
-        src,
-        main.to_str().unwrap(),
-        false,
-        &crate::compiler::imports::ImportResolver::new(),
-    );
+    let out = compile(src, main.to_str().unwrap(), false, &std_resolver());
     let mut arrays = out.pools;
     let mut reg = RegisterFile(out.registers);
     run_vm(
@@ -11652,7 +11637,7 @@ pub fn an_uncaptured_local_stays_in_a_plain_register() {
         ),
         "cells.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     let cells = out
         .instructions
@@ -11688,7 +11673,7 @@ pub fn a_closure_that_captures_nothing_allocates_nothing() {
         ),
         "nocapture.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     assert!(
         !out.instructions
@@ -11877,11 +11862,7 @@ pub fn a_list_of_function_type_holds_matching_closures() {
 pub fn a_call_the_compiler_settles_stays_direct() {
     // The list methods come from the standard library in this checkout, not
     // from wherever the test binary happens to sit.
-    let mut resolver = crate::compiler::imports::ImportResolver::new();
-    resolver.set_lib_dir(std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/libs"
-    )));
+    let resolver = std_resolver();
     let out = compile(
         String::from(
             "
@@ -11927,7 +11908,7 @@ pub fn a_call_through_a_value_goes_indirect() {
         ),
         "indirect.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     assert!(
         out.instructions
@@ -12065,7 +12046,7 @@ pub fn a_let_that_names_a_function_calls_through_the_value() {
         ),
         "let_fn_value.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
     );
     assert!(
         out.instructions
@@ -12939,9 +12920,10 @@ pub fn an_int_keyed_map_keeps_insertion_order() {
 #[test]
 pub fn a_json_object_round_trips_with_its_key_order() {
     let printed = run_output(
-        "
+        "import \"std/json\" as json;
+
         fn main() {
-            print(json_stringify(json_parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
+            print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
         }
         ",
     );
@@ -13416,17 +13398,6 @@ pub fn an_operator_method_has_no_dot_spelling() {
     assert_eq!(d.code, "unexpected_token");
 }
 
-/// The standard library in this checkout, for a test whose program imports
-/// from it.
-fn std_resolver() -> crate::compiler::imports::ImportResolver {
-    let mut resolver = crate::compiler::imports::ImportResolver::new();
-    resolver.set_lib_dir(std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/libs"
-    )));
-    resolver
-}
-
 /// [`run_output`] for a program that imports from the standard library.
 fn run_output_std(src: &str) -> String {
     let resolver = std_resolver();
@@ -13630,9 +13601,10 @@ pub fn a_declared_union_types_the_call_as_the_union() {
 pub fn returning_any_from_a_declared_type_is_checked() {
     assert_eq!(
         run_output(
-            "
-            fn g(s: string) -> int { return json_parse(s); }
-            fn m(s: string) -> {string: string} { return json_parse(s); }
+            "import \"std/json\" as json;
+
+            fn g(s: string) -> int { return json::parse(s); }
+            fn m(s: string) -> {string: string} { return json::parse(s); }
 
             fn main() {
                 print(g(\"4\") + 1);
@@ -13657,7 +13629,7 @@ fn checked_with_warnings(
             crate::trampoline::compile_checked_profile(
                 String::from(src),
                 filename,
-                &crate::compiler::imports::ImportResolver::new(),
+                &std_resolver(),
                 optimize,
             )
             .1
@@ -13927,7 +13899,7 @@ pub fn a_reassigned_variable_takes_its_first_value_without_a_move() {
             String::from(src),
             "moves.cdl",
             false,
-            &crate::compiler::imports::ImportResolver::new(),
+            &std_resolver(),
             optimize,
         );
         let moved_on = out.instructions.windows(2).find(
@@ -14028,7 +14000,7 @@ pub fn rotating_values_through_variables_chains_the_moves() {
             String::from(src),
             "chain.cdl",
             false,
-            &crate::compiler::imports::ImportResolver::new(),
+            &std_resolver(),
             optimize,
         );
         assert!(
@@ -14089,7 +14061,7 @@ pub fn adding_to_a_float_field_reads_it_before_the_value() {
             String::from(src),
             "field.cdl",
             false,
-            &crate::compiler::imports::ImportResolver::new(),
+            &std_resolver(),
             optimize,
         );
         let fused = out
@@ -14135,7 +14107,7 @@ pub fn a_loop_over_a_slice_walks_the_list_and_sees_the_slice() {
         String::from(src),
         "walk.cdl",
         false,
-        &crate::compiler::imports::ImportResolver::new(),
+        &std_resolver(),
         true,
     );
     // The slice is built only on the path a bad range takes, which a jump
@@ -15049,4 +15021,59 @@ pub fn a_catch_for_a_kind_nothing_raises_warns() {
     let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
     assert_eq!(codes, ["unraisable_catch_kind"], "{warnings:?}");
     assert_eq!(&src[warnings[0].span.clone()], "\"divison_by_zero\"");
+}
+
+#[test]
+pub fn a_name_in_an_unimported_module_names_the_import() {
+    let src = "fn main() { print(sqrt(2.0)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unknown_function");
+    assert!(
+        d.message.contains("import \"std/math\" as math;") && d.message.contains("math::sqrt"),
+        "{d:?}"
+    );
+
+    let src = "fn main() { print(fs::read(\"x\")); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unknown_namespace");
+    assert!(d.message.contains("import \"std/fs\" as fs;"), "{d:?}");
+}
+
+/// The json built-ins are `std/json`'s `parse` and `stringify`; the old names
+/// are unknown, and the report names the module.
+#[test]
+pub fn the_json_builtins_are_gone() {
+    for name in ["json_parse", "json_stringify"] {
+        let src = format!("fn main() {{ print({name}(\"1\")); }}");
+        let d = compile_diag(&src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, &src);
+        assert_eq!(d.code, "unknown_function");
+        assert!(d.message.contains("import \"std/json\" as json;"), "{d:?}");
+    }
+    let src = r#"
+        import "std/json" as json;
+        fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]"))); }
+    "#;
+    assert_eq!(run_output(src), "[1,{\"a\":true}]\n");
+}
+
+#[test]
+pub fn the_file_system_is_a_module() {
+    let path = std::env::temp_dir().join(format!("candela_std_fs_{}.txt", std::process::id()));
+    let path_text = path.to_string_lossy().replace('\\', "\\\\");
+    let src = format!(
+        r#"
+        import "std/fs" as fs;
+        fn main() {{
+            fs::write("{path_text}", "a");
+            fs::append("{path_text}", "b");
+            print(fs::read("{path_text}"), fs::exists("{path_text}"));
+            fs::delete("{path_text}");
+            print(fs::exists("{path_text}"));
+        }}
+    "#
+    );
+    assert_eq!(run_output(&src), "ab\ntrue\nfalse\n");
 }

@@ -151,8 +151,8 @@ than `end`.
 
 ## Dynamic values
 
-A value typed `any` (a json parse result, an `Option` payload, a host function
-return) carries its type at run time. These functions test and unwrap it.
+A value typed `any` (a `json::parse` result, an `Option` payload, a host
+function return) carries its type at run time. These functions test and unwrap it.
 
 ### is_int, is_float, is_str, is_bool, is_list, is_map, is_null
 
@@ -191,8 +191,10 @@ takes a `push` or an `insert` of any type, in any order, and an entry read back
 out is an `any` that needs its own downcast.
 
 ```rust
+import "std/json" as json;
+
 fn main() {
-    let v = json_parse("{\"n\": 7}");
+    let v = json::parse("{\"n\": 7}");
     let m = as_map(v);
     print(as_int(m.get("n")) + 1);
     m.insert("name", "ada");
@@ -200,29 +202,7 @@ fn main() {
 }
 ```
 
-## json
-
-### json_parse
-
-```rust
-json_parse(text)
-```
-
-Parses a json string into candela values and returns the result typed `any`. An
-object becomes a map keyed by strings, an array becomes a list, and a scalar
-becomes an int, float, string, bool, or null. `text` has to be a string.
-Malformed input raises `json_parse_error`, with a message carrying the reason.
-
-### json_stringify
-
-```rust
-json_stringify(value)
-```
-
-Serialises any value to a json string.
-
-Both are wrapped by the [json module](json.md), which gives them the shorter
-names `json::parse` and `json::stringify`.
+Parsing and serialising json is the [json module](json.md).
 
 ## Errors and process control
 
@@ -267,62 +247,8 @@ and returns 42.
 
 ## File system
 
-The `fs` namespace is built in; it needs no import. Every function takes the path
-as a string and raises a catchable error on failure. The code names the cause:
-`fs_not_found`, `fs_permission_denied`, `fs_is_a_directory`, `fs_storage_full`,
-and the rest.
-
-### fs::read
-
-```rust
-fs::read(path)
-```
-
-Returns the whole file at `path` as a string.
-
-### fs::exists
-
-```rust
-fs::exists(path)
-```
-
-Returns true when something exists at `path`.
-
-### fs::write
-
-```rust
-fs::write(path, contents)
-```
-
-Writes `contents` to `path`, replacing what was there. Creates the file when it
-does not exist. Returns nothing.
-
-### fs::append
-
-```rust
-fs::append(path, contents)
-```
-
-Appends `contents` to the end of the file at `path`. Creates the file when it
-does not exist. Returns nothing.
-
-### fs::delete
-
-```rust
-fs::delete(path)
-```
-
-Deletes the file at `path`. Raises when the path does not exist or names a
-directory. Returns nothing.
-
-### fs::delete_dir
-
-```rust
-fs::delete_dir(path)
-```
-
-Deletes the empty directory at `path`. Raises when the directory is missing or
-still has entries. Returns nothing.
+Files are read and written through the [fs module](fs.md), imported with
+`import "std/fs" as fs;`.
 
 ## String methods
 

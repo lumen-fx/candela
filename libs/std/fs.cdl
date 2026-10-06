@@ -1,0 +1,43 @@
+/// Reading and writing files.
+///
+/// Every function takes the path as a string and raises a catchable error on
+/// failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
+/// `fs_is_a_directory`, `fs_storage_full`, and the rest.
+///
+///     import "std/fs" as fs;
+///     fs::write("notes.txt", "hello");
+///     print(fs::read("notes.txt"));
+///
+/// This module is pure Candela over the runtime's own file primitives, so it
+/// compiles into a `.cdlb` artifact that runs under `candela-vm` with no
+/// dynamic library. A browser has no file system, so it does not import there.
+
+/// The whole file at `path`, as a string.
+fn read(path: string) -> string => fs_read(path);
+
+/// True when something exists at `path`.
+fn exists(path: string) -> bool => fs_exists(path);
+
+/// Writes `contents` to `path`, replacing what was there. Creates the file
+/// when it does not exist.
+fn write(path: string, contents: string) {
+    fs_write(path, contents);
+}
+
+/// Appends `contents` to the end of the file at `path`. Creates the file when
+/// it does not exist.
+fn append(path: string, contents: string) {
+    fs_append(path, contents);
+}
+
+/// Deletes the file at `path`. Raises when the path does not exist or names a
+/// directory.
+fn delete(path: string) {
+    fs_delete(path);
+}
+
+/// Deletes the empty directory at `path`. Raises when the directory is missing
+/// or still has entries.
+fn delete_dir(path: string) {
+    fs_delete_dir(path);
+}
