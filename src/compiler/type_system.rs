@@ -678,6 +678,23 @@ impl Generics {
         }));
     }
 
+    /// The path a receiverless function `name` of generic declaration
+    /// `template` is called by, `Set<T>::new()`, when an `impl` block on it
+    /// declares one.
+    #[must_use]
+    pub fn path_fn_of_template(&self, template: usize, name: &str) -> Option<String> {
+        let decl = &self.templates[template];
+        self.impls
+            .iter()
+            .filter(|block| impl_base_name(&block.type_name) == decl.name.as_str())
+            .flat_map(|block| block.methods.iter())
+            .any(|method| {
+                matches!(method, Expr::FunctionDecl(fn_name, args, ..)
+                    if fn_name == name && args.is_empty())
+            })
+            .then(|| format!("{}<{}>::{name}()", decl.name, decl.params.join(", ")))
+    }
+
     /// Binds `frame` for the body about to be compiled. Every body pushes a
     /// frame, an empty one when it has no type parameters, so the caller's
     /// parameters do not resolve inside it.
@@ -1641,6 +1658,99 @@ pub fn struct_default_target(
     ))
 }
 
+/// The type a path call names in front of its function: the second-to-last
+/// segment of `Point::origin()` or `Set<int>::new()`, behind whatever module
+/// path precedes it. A generic type is instantiated at `type_args`, or at
+/// `any` for each parameter when the call writes none. `None` when the
+/// segment names no struct or enum, or names a plain one while the call
+/// carries type arguments, which then belong to a generic function.
+fn path_call_type(
+    module: &[SmolStr],
+    type_name: &SmolStr,
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<DataType> {
+    let scope = state.scope(ctx.file_idx);
+    if let Some(template) = find_template(module, type_name, scope, state.generics) {
+        let args = if type_args.is_empty() {
+            vec![DataType::Unknown; state.generics.params(template).len()]
+        } else {
+            resolve_type_args(type_args, ctx, state)
+        };
+        return Some(instantiate(
+            module,
+            type_name,
+            &args,
+            span,
+            &mut state.type_ctx(ctx.file_idx),
+        ));
+    }
+    if !type_args.is_empty() {
+        return None;
+    }
+    scope
+        .resolve(module)?
+        .symbols
+        .iter()
+        .rev()
+        .find_map(|(name, kind)| match kind {
+            SymbolKind::Struct(id) if name == type_name => Some(DataType::Struct(*id)),
+            SymbolKind::Enum(id) if name == type_name => Some(DataType::Enum(*id)),
+            _ => None,
+        })
+}
+
+/// The `impl` function a call written by its path names.
+///
+/// `Point::origin()`, `Set<int>::new()` and `shapes::Point::origin()` are such
+/// calls: `path` is a struct or an enum followed by the name of a function its
+/// `impl` block declares, and the answer is that function's id. `None` leaves
+/// the path to the other lookups: a variant of the enum, a module function, a
+/// generic function.
+///
+/// A function declared with no parameters is the only one a path reaches. One
+/// that declares a receiver is a method, and a path call to it is reported
+/// here with the dot call it needs.
+pub fn path_call_target(
+    path: &[SmolStr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<usize> {
+    let [module @ .., type_name, method] = path else {
+        return None;
+    };
+    let ty = path_call_type(module, type_name, type_args, span, ctx, state)?;
+    let registered = match ty {
+        DataType::Struct(id) => state.structs[id as usize].name.clone(),
+        DataType::Enum(id) => {
+            let e = &state.enums[id as usize];
+            if e.variants.iter().any(|variant| variant.name == *method) {
+                return None;
+            }
+            e.name.clone()
+        }
+        _ => return None,
+    };
+    let mangled = mangle_method(&registered, method);
+    let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
+    if !state.fns[fn_id].args.is_empty() {
+        cold_path();
+        crate::compiler::compiler_errors::error_path_call_with_receiver(
+            method,
+            &registered,
+            span,
+            (state.fns[fn_id].name_span, state.fns[fn_id].src_file),
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    Some(fn_id)
+}
+
 fn instantiated_struct_id(
     namespace: &[SmolStr],
     name: &SmolStr,
@@ -2394,7 +2504,19 @@ pub fn collect_direct_fn_calls(
         }
         match expression {
             Expr::FunctionCall(args, namespace, _, _, _) => {
-                calls.push(namespace.last().unwrap().clone());
+                let (name, path) = namespace.split_last().unwrap();
+                // `Type::f()` reaches the function `Type`'s `impl` block
+                // declares, which inside that block is the type the body is
+                // compiled for.
+                if let Some(type_name) = path.last() {
+                    match self_type {
+                        Some(self_type) if impl_base_name(self_type) == type_name.as_str() => {
+                            calls.push(mangle_method(self_type, name));
+                        }
+                        _ => calls.push(mangle_method(type_name, name)),
+                    }
+                }
+                calls.push(name.clone());
                 expr_stack.extend(args.iter());
             }
             Expr::Condition(x, y, _, _)
@@ -3904,6 +4026,20 @@ impl Expr {
                     return DataType::Struct(struct_id);
                 }
                 reject_default_default(namespace, *span, ctx, state);
+                if let Some(fn_id) = path_call_target(namespace, type_args, *span, ctx, state) {
+                    let arg_types: Vec<DataType> =
+                        args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
+                    let fn_name = state.fns[fn_id].name.clone();
+                    return infer_user_fn_return_type(
+                        fn_id,
+                        &arg_types,
+                        &[],
+                        &fn_name,
+                        v,
+                        ctx,
+                        state,
+                    );
+                }
                 // A call written with type arguments names either a variant of a
                 // generic enum (`Slot<int>::Filled(x)`) or a generic function,
                 // which may itself sit behind a module alias

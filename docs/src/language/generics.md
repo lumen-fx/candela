@@ -195,6 +195,33 @@ impl Signal<float> {
 }
 ```
 
+A function in the block that declares no parameters is called by the
+instantiation's path, which is how a generic type gets a constructor:
+
+```rust
+struct Stack<T> {
+    items: T[],
+}
+
+impl Stack<T> {
+    fn new() -> Stack<T> {
+        return Stack<T>{ items: [] };
+    }
+
+    fn push(self, x: T) {
+        self.items.push(x);
+    }
+}
+
+fn main() {
+    let s = Stack<int>::new();
+    s.push(3);
+    print(s.items);
+}
+```
+
+`Stack::new()` with no type arguments makes a `Stack<any>`.
+
 Every instantiated type gets each method once. A generic block and a concrete
 block that both define `get` for `Signal<int>` is the same error as defining a
 function twice. An `impl` on a generic type has to name its type arguments:
@@ -278,7 +305,8 @@ is still moving.
 
 Type arguments have no separate spelling, so `<` after a name is read as a type
 argument list only when the whole list parses as types and closes with `>`
-immediately followed by `(`, `{` or `::`. Everything else stays the comparison
+immediately followed by `(`, `{` or `::`. The `::` is what reads
+`Stack<int>::new()` as a call of the instantiation's `new`. Everything else stays the comparison
 it has always been, including `a < b`, `a < b && c > d` and `a < b > c`.
 
 After a `.` the rule is the same, narrowed to the one form a method call can

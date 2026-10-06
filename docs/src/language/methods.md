@@ -46,10 +46,34 @@ against, and a method can take type parameters of its own
 method was called on, and its type is the type the `impl` block names. Any name
 works, but `self` is the convention and reads best.
 
-A function in an `impl` block that declares no parameters has no receiver, so
-calling it with a dot is a compile error. The one such function you can call is
-a struct's `default`, by its path: `Options::default()`. It replaces the
-struct's built-in default; see [Default values](types.md#default-values).
+A function in an `impl` block that declares no parameters has no receiver. It
+belongs to the type rather than to a value, so it is called by the type's path,
+and calling it with a dot is a compile error. This is how a type gets a
+constructor:
+
+```rust
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn origin() -> Point => Point { x: 0, y: 0 };
+}
+
+fn main() {
+    let p = Point::origin();
+    print(p.x, p.y);
+}
+```
+
+A generic type names its instantiation in front of the function,
+`Set<int>::new()`, and a type from a module bound with `as` keeps the alias in
+front, `shapes::Point::origin()`. A function that does declare a receiver is a
+method, so calling it by its path is a compile error that points at the dot
+call. One receiverless function has a special role: a struct's `default`
+replaces the struct's built-in default and is what `Options::default()` calls;
+see [Default values](types.md#default-values).
 
 Parameters after the first behave exactly like function parameters: name them,
 pass them positionally, and either leave the type to be inferred from the call

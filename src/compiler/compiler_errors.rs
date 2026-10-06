@@ -8,6 +8,7 @@ use super::Namespace;
 use super::Source;
 use super::Span;
 use super::State;
+use super::SymbolKind;
 use super::Variable;
 use super::compiler_data::TypeNames;
 use super::std_index;
@@ -1854,18 +1855,12 @@ pub fn error_method_without_receiver(
                     ))
                     .with_color(ariadne::Color::Red),
             );
-            let report = if method == "default" {
-                report.with_help(format_args!(
+            report
+                .with_help(format_args!(
                     "Call it by its path: {}",
-                    blue(format_args!("{type_name}::default()"))
+                    blue(format_args!("{type_name}::{method}()"))
                 ))
-            } else {
-                report.with_help(format_args!(
-                    "Give it the receiver as its first parameter: {}",
-                    blue(format_args!("fn {method}(self)"))
-                ))
-            };
-            report.finish()
+                .finish()
         },
         sources,
         file_idx,
@@ -1874,6 +1869,60 @@ pub fn error_method_without_receiver(
             "{method} in impl {type_name} takes no receiver, so it cannot be called on a value"
         ),
         "method_without_receiver",
+    )
+}
+
+/// A path call, `Type::method()`, that reaches an `impl` function declaring a
+/// receiver: it is a method, called on a value with a dot.
+#[cold]
+#[inline(never)]
+pub fn error_path_call_with_receiver(
+    method: &str,
+    type_name: &str,
+    span: Span,
+    decl: (Span, u16),
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let decl_src = &sources[decl.1 as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Method called by its path")
+            .with_label(
+                Label::new((decl_src.filename.as_str(), decl.0.into()))
+                    .with_message(format_args!(
+                        "{} takes a receiver as its first parameter",
+                        blue(method)
+                    ))
+                    .with_color(ariadne::Color::Blue),
+            )
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} in impl {} is a method, so it is called on a value",
+                        red(method),
+                        blue(type_name),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Call it with a dot: {}",
+                blue(format_args!("value.{method}(...)"))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "{method} in impl {type_name} is a method, so it is called on a value: value.{method}(...)"
+        ),
+        "path_call_with_receiver",
     )
 }
 
@@ -2301,6 +2350,28 @@ pub fn error_unknown_function_in_namespace(
     if declared.is_none() && library.is_none() {
         error_unknown_namespace(path, span, file_idx, sources);
     }
+    // A function a type in the namespace declares in its `impl` block is
+    // called behind the type's name: `set::Set<T>::new()`, not `set::new()`.
+    let type_fn = declared.and_then(|namespace| {
+        namespace
+            .symbols
+            .iter()
+            .find_map(|(name, kind)| match kind {
+                SymbolKind::Struct(_) | SymbolKind::Enum(_) => {
+                    let mangled = crate::compiler::expr::mangle_method(name, fn_name);
+                    state
+                        .fns
+                        .iter()
+                        .any(|f| f.name == mangled && f.args.is_empty())
+                        .then(|| format!("{name}::{fn_name}()"))
+                }
+                SymbolKind::Template(template) => state
+                    .generics
+                    .path_fn_of_template(*template as usize, fn_name),
+                SymbolKind::Fn(_) => None,
+            })
+    });
+    let type_fn = type_fn.map(|f| format!("{namespace_str}::{f}"));
     let similar_fn = find_closest_str(
         fn_name,
         declared
@@ -2330,7 +2401,12 @@ pub fn error_unknown_function_in_namespace(
                     .with_color(ariadne::Color::Red),
             );
 
-            if let Some(similar_fn) = similar_fn {
+            if let Some(type_fn) = &type_fn {
+                report = report.with_help(format_args!(
+                    "{fn_name} is a function of a type in {namespace_str}; call it as {}",
+                    blue(type_fn)
+                ));
+            } else if let Some(similar_fn) = similar_fn {
                 report = report.with_help(format_args!(
                     "A function with a similar name exists: {}",
                     blue(format_args!("{namespace_str}::{similar_fn}"))
@@ -2342,7 +2418,14 @@ pub fn error_unknown_function_in_namespace(
         sources,
         file_idx,
         span,
-        &format!("Cannot find function {fn_name} in namespace {namespace_str}"),
+        &type_fn.as_ref().map_or_else(
+            || format!("Cannot find function {fn_name} in namespace {namespace_str}"),
+            |type_fn| {
+                format!(
+                    "Cannot find function {fn_name} in namespace {namespace_str}. {fn_name} is a function of a type in {namespace_str}; call it as {type_fn}"
+                )
+            },
+        ),
         "unknown_function_in_namespace",
     )
 }

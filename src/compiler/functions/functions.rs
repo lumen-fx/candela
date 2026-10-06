@@ -5,6 +5,7 @@ use super::expr::Expr;
 use super::expr::Span;
 use super::type_system::DataType;
 use super::type_system::TypeExpr;
+use super::type_system::path_call_target;
 use super::type_system::resolve_generic_call;
 use super::type_system::resolve_generic_variant;
 use super::type_system::struct_default_target;
@@ -250,6 +251,24 @@ pub fn handle_functions(
         ));
     }
     reject_default_default(namespace, span, ctx, state);
+    // `Point::origin()` and `Set<int>::new()`: a function an `impl` block
+    // declares with no receiver, called by its type's path.
+    if let Some(fn_id) = path_call_target(namespace, type_args, span, ctx, state) {
+        return handle_user_function(
+            &namespace.join("::"),
+            fn_id,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            args,
+            span,
+            args_indexes,
+            &[],
+            None,
+        );
+    }
     // A call written with type arguments names either a variant of a generic
     // enum (`Slot<int>::Filled(x)`) or a generic function, which may itself sit
     // behind a module alias (`m::first<int>(xs)`). Both resolve against the
