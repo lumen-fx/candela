@@ -426,6 +426,7 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::IsListVal
         | LibFunc::IsMapVal
         | LibFunc::IsNullVal
+        | LibFunc::IsTypeVal
         | LibFunc::Bool
         | LibFunc::AsBoolVal => DataType::Bool,
         LibFunc::Find | LibFunc::Len | LibFunc::TheAnswer | LibFunc::Int | LibFunc::AsIntVal => {

@@ -416,7 +416,35 @@ pub const fn shift_count_in_range(count: i64) -> bool {
 }
 
 /// Whether `v` has the type [`type_code`] `code` names.
-fn has_type_code(v: Data, code: i64) -> bool {
+fn has_type_code(v: Data, code: Data, obj_pool: &ObjectPool, map_pool: &MapPool) -> bool {
+    // A list entry checks a collection and what it holds.
+    if code.is_array() {
+        let entry = &obj_pool[code.as_array()];
+        let held = |codes: Data, item: &Data| {
+            let codes = &obj_pool[codes.as_array()];
+            codes.is_empty()
+                || codes
+                    .iter()
+                    .any(|code| has_type_code(*item, *code, obj_pool, map_pool))
+        };
+        return match entry[0].as_int() {
+            type_code::LIST => {
+                v.is_array()
+                    && !v.is_function()
+                    && obj_pool[v.as_array()]
+                        .iter()
+                        .all(|item| held(entry[1], item))
+            }
+            type_code::MAP => {
+                v.is_map()
+                    && map_pool[v.as_map()]
+                        .iter()
+                        .all(|(key, value)| held(entry[1], key) && held(entry[2], value))
+            }
+            _ => false,
+        };
+    }
+    let code = code.as_int();
     let id = (code >> type_code::KIND_BITS) as u16;
     match code & ((1 << type_code::KIND_BITS) - 1) {
         type_code::INT => v.is_int(),
@@ -435,10 +463,38 @@ fn has_type_code(v: Data, code: i64) -> bool {
 
 /// The types a list of [`type_code`]s names, as a report writes them.
 #[cold]
-fn type_codes_text(codes: &[Data], structs: &[Struct], enums: &[EnumType]) -> String {
-    let names: Vec<&str> = codes
+fn type_codes_text(
+    codes: &[Data],
+    obj_pool: &ObjectPool,
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> String {
+    let names: Vec<String> = codes
         .iter()
         .map(|code| {
+            // What a position of a collection holds: `any` where nothing is
+            // checked, and a union in parentheses where one has to be.
+            let held = |codes: Data| {
+                let codes = &obj_pool[codes.as_array()];
+                if codes.is_empty() {
+                    "any".to_owned()
+                } else {
+                    type_codes_text(codes, obj_pool, structs, enums)
+                }
+            };
+            if code.is_array() {
+                let entry = &obj_pool[code.as_array()];
+                return if entry[0].as_int() == type_code::MAP {
+                    format!("{{{}: {}}}", held(entry[1]), held(entry[2]))
+                } else {
+                    let elements = held(entry[1]);
+                    if elements.contains('|') {
+                        format!("({elements})[]")
+                    } else {
+                        format!("{elements}[]")
+                    }
+                };
+            }
             let code = code.as_int();
             let id = (code >> type_code::KIND_BITS) as usize;
             match code & ((1 << type_code::KIND_BITS) - 1) {
@@ -454,6 +510,7 @@ fn type_codes_text(codes: &[Data], structs: &[Struct], enums: &[EnumType]) -> St
                 type_code::ENUM => enums.get(id).map_or("enum", |e| e.name.as_str()),
                 _ => "value",
             }
+            .to_owned()
         })
         .collect();
     names.join("|")
@@ -3165,7 +3222,10 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             Instr::CallLibFunc(LibFunc::AsTypeVal, tgt, dest) => {
                 let codes = &obj_pool[regs[args.pop_unchecked()].as_array()];
                 let v = regs[tgt];
-                if codes.iter().any(|code| has_type_code(v, code.as_int())) {
+                if codes
+                    .iter()
+                    .any(|code| has_type_code(v, *code, obj_pool, map_pool))
+                {
                     // A function value whose first slot says nowhere was never
                     // compiled for a call through a value: it reached the `any`
                     // with a bare parameter or a type parameter, and nothing
@@ -3178,9 +3238,17 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     }
                     regs[dest] = v;
                 } else {
-                    let wanted = type_codes_text(codes, structs, enums);
+                    let wanted = type_codes_text(codes, obj_pool, structs, enums);
                     error_with_catch!(ErrType::BadDowncast(&wanted, v.type_name()));
                 }
+            }
+            Instr::CallLibFunc(LibFunc::IsTypeVal, tgt, dest) => {
+                let codes = &obj_pool[regs[args.pop_unchecked()].as_array()];
+                let v = regs[tgt];
+                regs[dest] = codes
+                    .iter()
+                    .any(|code| has_type_code(v, *code, obj_pool, map_pool))
+                    .into();
             }
             Instr::CallLibFunc(LibFunc::StartsWith, source_register, dest_register) => {
                 regs[dest_register] = regs[source_register]

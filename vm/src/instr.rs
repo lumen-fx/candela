@@ -357,13 +357,24 @@ pub enum LibFunc {
     AsListVal = 49,
     AsMapVal = 50,
     /// The checked downcast for a type the ones above do not name: a struct,
-    /// an enum, a function or a union. The argument register holds a list of
-    /// [`type_code`]s, and the value passes when it has any of those types.
+    /// an enum, a function, a union, or a list or map whose contents are
+    /// checked. The argument register holds a list of [`type_code`]s, and the
+    /// value passes when it has any of those types.
     AsTypeVal = 51,
+    /// The type test `is` compiles to for the types [`Self::AsTypeVal`]
+    /// checks: the same list of [`type_code`]s, answered as a bool.
+    IsTypeVal = 52,
 }
 
-/// What a value is checked for by [`LibFunc::AsTypeVal`]: a kind, and for a
-/// struct or an enum the type's id above it.
+/// What a value is checked for by [`LibFunc::AsTypeVal`] and
+/// [`LibFunc::IsTypeVal`]: a kind, and for a struct or an enum the type's id
+/// above it.
+///
+/// An entry of the list is one of these ints, or a list for a collection
+/// whose contents are checked too: `[LIST, elements]` for a list, and
+/// `[MAP, keys, values]` for a map, where each of `elements`, `keys` and
+/// `values` is a list of entries in the same form. An empty list there checks
+/// nothing, which is what `any` in that position means.
 pub mod type_code {
     pub const INT: i64 = 1;
     pub const FLOAT: i64 = 2;

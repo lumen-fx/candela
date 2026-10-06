@@ -92,8 +92,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// Version 13 added the move chain and the add-to-a-float-field instructions,
 /// which renumber the instructions after them the same way. Version 14 added
 /// the machine code sections ([`ProgramImage::native`]) and the function table
-/// that follows the image ([`FunctionTable`]).
-const FORMAT_VERSION: u8 = 14;
+/// that follows the image ([`FunctionTable`]). Version 15 added the type test
+/// `is` compiles to for a struct, an enum, a function, a union or a collection,
+/// and the nested type codes that check what a list or a map holds.
+const FORMAT_VERSION: u8 = 15;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
