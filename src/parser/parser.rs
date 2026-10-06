@@ -153,6 +153,8 @@ enum ParserErr<'a> {
     UnknownAttribute(&'a str),
     /// An attribute with nothing after it to apply to.
     AttributeWithoutItem,
+    /// `throw(...)`, the call spelling `throw` had before it was a statement.
+    ThrowCall,
 }
 
 impl ParserErr<'_> {
@@ -192,6 +194,7 @@ impl ParserErr<'_> {
             ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
             ParserErr::UnknownAttribute(_) => "unknown_attribute",
             ParserErr::AttributeWithoutItem => "attribute_without_item",
+            ParserErr::ThrowCall => "throw_call",
         }
     }
 }
@@ -259,6 +262,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::MatchWildcardAlternative => &format!(
             "{BLUE}{BOLD}_{RESET} stands alone as the last arm of a match, not as one of a pattern's {BOLD}|{RESET} alternatives"
+        ),
+        ParserErr::ThrowCall => &format!(
+            "{BLUE}{BOLD}throw{RESET} is a statement, not a function. Write {BLUE}{BOLD}throw \"kind\";{RESET} with no parentheses"
         ),
         ParserErr::NestedFunctionDeclaration => {
             "Functions declare at the top level of a file, not inside a block. Move this declaration out of the enclosing block"
@@ -676,6 +682,32 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
     expr
 }
 
+/// The kinds `src` names in `catch "kind"` clauses, and its other strings.
+///
+/// Each kind comes with where it is written. A kind no other string literal
+/// spells and no built-in error carries is one nothing in the program can
+/// raise.
+#[must_use]
+pub fn catch_kinds_and_strings(src: &str) -> (Vec<(SmolStr, Span)>, Vec<SmolStr>) {
+    let mut kinds = Vec::new();
+    let mut strings = Vec::new();
+    let mut after_catch = false;
+    for (token, range) in Token::lexer(src).spanned() {
+        match token {
+            Ok(Token::String(s)) if after_catch => {
+                kinds.push((
+                    lexer::parse_string(s),
+                    (range.start as u32, range.end as u32).into(),
+                ));
+            }
+            Ok(Token::String(s)) => strings.push(lexer::parse_string(s)),
+            _ => {}
+        }
+        after_catch = matches!(token, Ok(Token::Catch));
+    }
+    (kinds, strings)
+}
+
 fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
     let mut token = parser.peek_token_opt()?;
     // A statement a `@cfg` turns off is parsed and dropped, and the statement
@@ -803,10 +835,33 @@ fn parse_return(input: &mut Parser<'_>) -> Expr {
     }
 }
 
+/// `throw kind;`: raises an error of kind `kind`, a string. The statement is
+/// kept as a call of `throw`, which is a keyword and so names nothing a
+/// program can declare.
+fn parse_throw(input: &mut Parser<'_>) -> Expr {
+    let (t, throw_span) = input.next_token();
+    debug_assert_eq!(t, Token::Throw);
+    if input.peek_token_opt() == Some(Token::LParen) {
+        cold_path();
+        input.error(throw_span, ParserErr::ThrowCall);
+    }
+    let start = input.peek_token_span().start;
+    let kind = parse_expr(input);
+    let end = input.last_token_end as u32;
+    Expr::FunctionCall(
+        Box::new([kind]),
+        Box::from([SmolStr::new_static("throw")]),
+        throw_span.extend((start, end).into()),
+        Box::from([Span::from((start, end))]),
+        Box::from([]),
+    )
+}
+
 fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
     let line_code = match peek {
         Token::Let => parse_var_declare(input),
         Token::Return => parse_return(input),
+        Token::Throw => parse_throw(input),
         Token::Break => {
             input.next_token();
             Expr::Break
@@ -1795,6 +1850,7 @@ pub fn classify_line(line: &str) -> LineKind {
         | Token::Try
         | Token::Catch
         | Token::Return
+        | Token::Throw
         | Token::Break
         | Token::Continue
         | Token::LBrace => LineKind::Statement,

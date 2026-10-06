@@ -5676,9 +5676,20 @@ pub struct FileNamespaces {
     /// Handed out for a file index no source was parsed for, so a lookup
     /// against one reports an unknown name instead of panicking.
     empty: Namespace,
+    /// The files that are standard library modules.
+    std_files: Vec<u16>,
 }
 
 impl FileNamespaces {
+    /// Records that `file_idx` is a standard library module.
+    pub fn mark_std(&mut self, file_idx: u16) {
+        self.std_files.push(file_idx);
+    }
+    /// Whether `file_idx` is a standard library module.
+    #[must_use]
+    pub fn is_std(&self, file_idx: u16) -> bool {
+        self.std_files.contains(&file_idx)
+    }
     pub fn insert(&mut self, file_idx: u16, namespace: Namespace) {
         self.files.insert(file_idx, namespace);
     }
@@ -5985,6 +5996,7 @@ fn load_auto_prelude(
         resolver,
     );
     file_namespaces.insert(child_src_idx, child_namespace.clone());
+    file_namespaces.mark_std(child_src_idx);
     files.insert(path, child_namespace.clone());
     namespace
         .children
@@ -6754,6 +6766,9 @@ fn parse_toplevel(
                         resolver,
                     );
                     file_namespaces.insert(child_src_idx, child_namespace.clone());
+                    if is_logical && path.starts_with("std/") {
+                        file_namespaces.mark_std(child_src_idx);
+                    }
                     files.insert(file_path.clone(), child_namespace.clone());
                     child_namespace
                 };

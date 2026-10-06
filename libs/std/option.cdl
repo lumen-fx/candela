@@ -39,7 +39,7 @@ impl Option<T> {
         let value = null;
         match self {
             Some(v) => { value = v; }
-            None => { throw("called unwrap on a None option"); }
+            None => { throw "called unwrap on a None option"; }
         }
         return value;
     }

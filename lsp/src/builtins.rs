@@ -11,7 +11,7 @@
 /// Reserved words, from `Token` in `src/parser/lexer.rs`.
 pub const KEYWORDS: &[&str] = &[
     "fn", "let", "struct", "if", "else", "match", "while", "for", "in", "loop", "return", "break",
-    "continue", "try", "catch", "import", "as", "host", "dylib", "true", "false", "null",
+    "continue", "try", "catch", "throw", "import", "as", "host", "dylib", "true", "false", "null",
 ];
 
 /// Free-standing built-in functions, from
@@ -57,10 +57,6 @@ pub const BUILTIN_FUNCTIONS: &[(&str, &str)] = &[
     (
         "exit",
         "exit()\nexit(exit_code: int)\n\nExits the program with the given exit code, or 0 if not provided.",
-    ),
-    (
-        "throw",
-        "throw(error: string)\n\nThrows an error, catchable with a `try`/`catch` block.",
     ),
 ];
 

@@ -395,6 +395,44 @@ impl From<ErrType<'_>> for SmolStr {
     }
 }
 
+/// Every kind a runtime error the language raises itself can carry: what
+/// [`ErrType::kind`] answers for each variant but `Custom`, whose kind is the
+/// one a `throw` names. Keep the two in step.
+pub const BUILTIN_KINDS: &[&str] = &[
+    "fs_already_exists",
+    "fs_deadlock",
+    "fs_file_too_large",
+    "fs_interrupted",
+    "fs_invalid_data",
+    "fs_invalid_filename",
+    "fs_is_a_directory",
+    "fs_not_a_directory",
+    "fs_not_found",
+    "fs_permission_denied",
+    "fs_out_of_memory",
+    "fs_read_only_filesystem",
+    "fs_storage_full",
+    "fs_timed_out",
+    "invalid_int",
+    "invalid_float",
+    "invalid_bool",
+    "index_out_of_bounds",
+    "slice_out_of_bounds",
+    "division_by_zero",
+    "modulo_by_zero",
+    "negative_exponent",
+    "shift_count_out_of_range",
+    "null_byte_in_string",
+    "c_array_return_type_not_supported",
+    "invalid_return_type",
+    "unknown_map_key",
+    "json_parse_error",
+    "bad_downcast",
+    "host_fn_error",
+    "not_a_string",
+    "call_depth_exceeded",
+];
+
 impl ErrType<'_> {
     pub const fn kind(&self) -> &str {
         match self {

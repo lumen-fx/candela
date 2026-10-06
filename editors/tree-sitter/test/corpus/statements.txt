@@ -243,7 +243,7 @@ fn unwrap(o) {
     let value = null;
     match o {
         Some(v) => { value = v; }
-        None => { throw("called unwrap on a None option"); }
+        None => { throw "called unwrap on a None option"; }
         _ => { value = null; }
     }
     return value;
@@ -279,11 +279,8 @@ fn unwrap(o) {
               (match_pattern
                 (identifier))
               (block
-                (expression_statement
-                  (call_expression
-                    (identifier)
-                    (arguments
-                      (string_literal))))))
+                (throw_statement
+                  (string_literal))))
             (match_arm
               (match_pattern
                 (identifier))
@@ -413,6 +410,42 @@ fn main() {
           (identifier)
           (integer_literal))
         (expression_statement
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))
+
+================================================================================
+Throw statement
+================================================================================
+
+fn check(n) {
+    if n > 2 {
+        throw "too_big";
+    }
+    throw "kind: " + str(n);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (expression_statement
+        (if_expression
+          (binary_expression
+            (identifier)
+            (integer_literal))
+          (block
+            (throw_statement
+              (string_literal)))))
+      (throw_statement
+        (binary_expression
+          (string_literal)
           (call_expression
             (identifier)
             (arguments

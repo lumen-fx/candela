@@ -14,8 +14,8 @@ attribution details.
 
 - Syntax highlighting for:
   - Keywords: `if`, `else`, `match`, `while`, `for`, `in`, `loop`, `return`,
-    `break`, `continue`, `try`, `catch`, `let`, `fn`, `struct`, `enum`, `impl`,
-    `import`, `as`, `host`, `dylib`.
+    `break`, `continue`, `try`, `catch`, `throw`, `let`, `fn`, `struct`,
+    `enum`, `impl`, `import`, `as`, `host`, `dylib`.
   - Built-in types: `int`, `float`, `bool`, `string`, plus user-defined structs
     and enums.
   - Function types, `fn(int, int) -> int`, wherever a type goes.
