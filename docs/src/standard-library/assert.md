@@ -3,8 +3,12 @@
 Assertions for writing candela tests.
 
 ```rust
-import "std/assert" as assert;
+import "std/assert";
 ```
+
+The functions are reached through the module's name, `assert::eq(a, b)`. A test
+file that calls a few of them often can name them in the import instead,
+`import "std/assert" { eq, ne };`, and call `eq(a, b)`.
 
 Each assertion raises an error when its check fails, so a test file runs its
 checks in sequence and the first failure stops the run and prints the message.
@@ -14,11 +18,11 @@ ending the run, which is how a harness reports the failing check and carries on.
 See [error handling](../language/error-handling.md).
 
 ```rust
-import "std/assert" as assert;
+import "std/assert";
 
 fn main() {
     try {
-        assert::assert_eq(2, 3);
+        assert::eq(2, 3);
     } catch e {
         print("check failed: " + e);
     }
@@ -28,10 +32,10 @@ fn main() {
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
-## assert
+## that
 
 ```rust
-assert::assert(cond)
+assert::that(cond)
 ```
 
 - `cond`: a bool.
@@ -39,33 +43,33 @@ assert::assert(cond)
 
 Raises `assertion failed` when `cond` is false.
 
-## assert_msg
+## msg
 
 ```rust
-assert::assert_msg(cond, msg)
+assert::msg(cond, message)
 ```
 
 - `cond`: a bool.
-- `msg`: the string to raise.
+- `message`: the string to raise.
 - Returns: nothing.
 
-Raises `msg` when `cond` is false. Use it when the check alone does not say what
+Raises `message` when `cond` is false. Use it when the check alone does not say what
 went wrong.
 
 ```rust
-import "std/assert" as assert;
+import "std/assert";
 
 fn main() {
     let users = ["ada", "grace"];
-    assert::assert_msg(users.len() == 2, "expected two users");
+    assert::msg(users.len() == 2, "expected two users");
     print("ok");
 }
 ```
 
-## assert_true
+## is_true
 
 ```rust
-assert::assert_true(cond)
+assert::is_true(cond)
 ```
 
 - `cond`: a bool.
@@ -73,10 +77,10 @@ assert::assert_true(cond)
 
 Raises `expected true` when `cond` is false.
 
-## assert_false
+## is_false
 
 ```rust
-assert::assert_false(cond)
+assert::is_false(cond)
 ```
 
 - `cond`: a bool.
@@ -84,26 +88,26 @@ assert::assert_false(cond)
 
 Raises `expected false` when `cond` is true.
 
-## assert_eq
+## eq
 
 ```rust
-assert::assert_eq(a, b)
+assert::eq(a, b)
 ```
 
 - `a`, `b`: two values of the same type.
 - Returns: nothing.
 
-Raises `assert_eq failed: <a> != <b>` when the two differ, rendering both sides
+Raises `assert::eq failed: <a> != <b>` when the two differ, rendering both sides
 with `string`. Comparison is `!=`, so it works on any type the operator accepts,
 including lists and maps.
 
-## assert_ne
+## ne
 
 ```rust
-assert::assert_ne(a, b)
+assert::ne(a, b)
 ```
 
 - `a`, `b`: two values of the same type.
 - Returns: nothing.
 
-Raises `assert_ne failed: both sides are <a>` when the two are equal.
+Raises `assert::ne failed: both sides are <a>` when the two are equal.

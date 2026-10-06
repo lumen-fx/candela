@@ -20,7 +20,7 @@ fn main() {
 After:
 
 ```rust
-import "std/fs" as fs;
+import "std/fs";
 
 fn main() {
     fs::write("notes.txt", "hello");

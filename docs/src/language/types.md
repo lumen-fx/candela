@@ -61,7 +61,7 @@ map is checked down to what it holds, so a list of `any` passes `is int[]` only
 when every element is an `int`.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     let v = json::parse("[1, 2, 3]");
@@ -121,7 +121,7 @@ also turns the `{any: any}` a JSON document gives into the `{string: any}` a
 function declares, checking every key.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn port(cfg: {string: any}) -> int {
     if cfg.get("port") is Some(p) && p is int {

@@ -5337,7 +5337,7 @@ pub fn index_past_32_bits_is_out_of_bounds() {
 #[test]
 pub fn json_round_trips_a_large_integer() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let v = json::parse(\"9007199254740993\") as int;
@@ -5347,7 +5347,7 @@ pub fn json_round_trips_a_large_integer() {
         9_007_199_254_740_993_i64.into()
     );
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let s = json::stringify(9007199254740993);
@@ -5461,6 +5461,70 @@ pub fn diagnostics_legacy_namespaced_import() {
         d.message
     );
     assert_eq!(&src[d.span], "std::list");
+}
+
+/// An import with no `as` binds the last segment of its path, so a segment
+/// that is not a name is refused; a list of items and `as` on one import, and
+/// an empty list, are refused too.
+#[test]
+pub fn diagnostics_import_binding_shapes() {
+    for (src, code) in [
+        (
+            "import \"./my-lib.cdl\";\nfn main() { }",
+            "import_name_not_identifier",
+        ),
+        (
+            "import \"std/match\";\nfn main() { }",
+            "import_name_not_identifier",
+        ),
+        (
+            "import \"std/assert\" as a { eq };\nfn main() { }",
+            "import_alias_with_items",
+        ),
+        (
+            "import \"std/assert\" {};\nfn main() { }",
+            "import_items_empty",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
+/// The std functions whose names repeated their module's name are called
+/// without it, and the old name gets help naming the new one.
+#[test]
+pub fn std_functions_lost_their_module_prefix() {
+    let src = r#"
+        import "std/assert";
+        fn main() {
+            assert::that(true);
+            assert::eq(1, 1);
+            assert::ne(1, 2);
+            print("ok");
+        }
+    "#;
+    assert_eq!(run_output_std(src), "ok\n");
+    // std/random binds a C library; a check-only compile opens none, so the
+    // renamed functions are checked without it.
+    let src = r#"
+        import "std/random";
+        fn main() {
+            random::seed(3);
+            let n: int = random::int_range(1, 6) + random::int();
+            let f: float = random::float_range(0.0, 1.0) + random::float();
+        }
+    "#;
+    let _ = crate::check_only(String::from(src), "random.cdl", &std_resolver());
+    let src = "import \"std/assert\";\nfn main() { assert::assert_eq(1, 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "unknown_function_in_namespace");
+    assert!(d.message.contains("assert::eq"), "{d:?}");
+    let src = "fn main() { assert_eq(1, 1); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "unknown_function");
+    assert!(d.message.contains("assert::eq"), "{d:?}");
 }
 
 #[test]
@@ -6294,7 +6358,7 @@ pub fn fs_return_types_stay_on_the_fs_path() {
     // call gets the type of the function it names.
     run_and_check_registers!(
         r#"
-        import "std/fs" as fs;
+        import "std/fs";
 
         fn read(n: int) -> int { return n; }
 
@@ -7592,7 +7656,7 @@ pub fn any_downcast_int_arithmetic() {
 #[test]
 pub fn any_type_tests() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let j = json::parse(\"{\\\"n\\\": 5}\");
@@ -7606,7 +7670,7 @@ pub fn any_type_tests() {
 #[test]
 pub fn any_is_int_true() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let v = json::parse(\"7\");
@@ -7620,7 +7684,7 @@ pub fn any_is_int_true() {
 #[test]
 pub fn any_is_int_false_on_string() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let v = json::parse(\"\\\"x\\\"\");
@@ -7636,7 +7700,7 @@ pub fn any_bad_downcast_is_catchable() {
     // A downcast to the wrong type raises a catchable error rather than
     // producing a garbage value.
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let r = 0;
@@ -7656,7 +7720,7 @@ pub fn any_bad_downcast_is_catchable() {
 #[test]
 pub fn any_as_str() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             print(json::parse(\"\\\"hi\\\"\") as string);
@@ -7669,7 +7733,7 @@ pub fn any_as_str() {
 #[test]
 pub fn any_as_bool() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             print(json::parse(\"true\") as bool);
@@ -7682,7 +7746,7 @@ pub fn any_as_bool() {
 #[test]
 pub fn json_parse_scalar_int() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             print((json::parse(\"42\") as int) + 1);
@@ -7695,7 +7759,7 @@ pub fn json_parse_scalar_int() {
 #[test]
 pub fn json_parse_object_field() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\") as {any: any};
@@ -7709,7 +7773,7 @@ pub fn json_parse_object_field() {
 #[test]
 pub fn json_parse_nested_array() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\") as {any: any};
@@ -7762,7 +7826,7 @@ pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
     // pushed onto the end of their pools without a look at the free slots or
     // the collector, so every parse grew the pools and none ever started a
     // collection to take the slots back.
-    let contents = "import \"std/json\" as json;
+    let contents = "import \"std/json\";
 
         fn main() {
             let total = 0;
@@ -7788,7 +7852,7 @@ pub fn json_parse_survives_a_collection_mid_parse() {
     // parse ends. Everything the parse built so far has to survive that: every
     // entry matches the values the program built the document from, and the
     // answer stringifies back to the document.
-    let src = "import \"std/json\" as json;
+    let src = "import \"std/json\";
 
         fn main() {
             let doc = \"[\";
@@ -8030,7 +8094,7 @@ pub fn an_interned_key_never_names_a_freed_string() {
     // pool. A freed slot kept its text, so a key equal to a dead string was
     // given that slot, and the next string allocated there overwrote the key.
     run_and_check_registers!(
-        r#"import "std/json" as json;
+        r#"import "std/json";
 
         fn main() {
             let i = 0;
@@ -8204,7 +8268,7 @@ pub fn a_long_list_permuted_during_marking_keeps_its_strings() {
 #[test]
 pub fn a_json_key_interned_during_marking_keeps_its_text() {
     run_and_check_registers!(
-        r#"import "std/json" as json;
+        r#"import "std/json";
 
         fn main() {
             let bad = 0;
@@ -8234,7 +8298,7 @@ pub fn parsed_array_survives_array_gc() {
         .join(",");
     run_and_check_registers!(
         &format!(
-            r#"import "std/json" as json;
+            r#"import "std/json";
 
             fn libs_len(body) {{
                 let root = json::parse(body) as {{any: any}};
@@ -8259,7 +8323,7 @@ pub fn parsed_array_survives_array_gc() {
 #[test]
 pub fn json_roundtrip_preserves_int() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))) as {any: any};
@@ -8273,7 +8337,7 @@ pub fn json_roundtrip_preserves_int() {
 #[test]
 pub fn json_roundtrip_preserves_float() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let v = json::parse(json::stringify(json::parse(\"2.5\")));
@@ -8435,7 +8499,7 @@ pub fn map_iteration_over_keys() {
 #[test]
 pub fn map_downcast_takes_mixed_value_types() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
@@ -8451,7 +8515,7 @@ pub fn map_downcast_takes_mixed_value_types() {
 #[test]
 pub fn map_downcast_entries_stay_dynamic() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\") as {any: any};
@@ -8465,7 +8529,7 @@ pub fn map_downcast_entries_stay_dynamic() {
 #[test]
 pub fn map_downcast_takes_mixed_key_types() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
@@ -8481,7 +8545,7 @@ pub fn map_downcast_takes_mixed_key_types() {
 #[test]
 pub fn list_downcast_takes_mixed_element_types() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let l = json::parse(\"[1]\") as any[];
@@ -8497,7 +8561,7 @@ pub fn list_downcast_takes_mixed_element_types() {
 #[test]
 pub fn list_downcast_elements_stay_dynamic() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let l = json::parse(\"[1, \\\"two\\\"]\") as any[];
@@ -8984,7 +9048,7 @@ pub fn any_condition_raises_on_a_non_bool() {
     // Nothing pins the type of a parsed json value, so the check happens when
     // the condition runs and raises a catchable `bad_downcast`.
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let r = 0;
@@ -9005,7 +9069,7 @@ pub fn any_condition_raises_on_a_non_bool() {
 #[test]
 pub fn any_condition_takes_a_bool() {
     run_and_check_registers!(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             let r = 0;
@@ -10846,7 +10910,7 @@ pub fn generic_declared_in_an_imported_module() {
     let main = dir.join("main.cdl");
     std::fs::write(
         &main,
-        "import \"./boxes.cdl\";\nfn main() { print(wrap<int>(41).item() + 1); }\n",
+        "import \"./boxes.cdl\";\nfn main() { print(boxes::wrap<int>(41).item() + 1); }\n",
     )
     .unwrap();
     let src = std::fs::read_to_string(&main).unwrap();
@@ -12907,7 +12971,7 @@ pub fn an_int_keyed_map_keeps_insertion_order() {
 #[test]
 pub fn a_json_object_round_trips_with_its_key_order() {
     let printed = run_output(
-        "import \"std/json\" as json;
+        "import \"std/json\";
 
         fn main() {
             print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
@@ -13556,7 +13620,7 @@ pub fn std_generics_keep_their_call_types() {
         run_output_std(
             "
             import \"std/option\";
-            import \"std/set\";
+            import \"std/set\" { Set };
 
             fn main() {
                 print(Some(5).unwrap() + 1);
@@ -13588,7 +13652,7 @@ pub fn a_declared_union_types_the_call_as_the_union() {
 pub fn returning_any_from_a_declared_type_is_checked() {
     assert_eq!(
         run_output(
-            "import \"std/json\" as json;
+            "import \"std/json\";
 
             fn g(s: string) -> int { return json::parse(s); }
             fn m(s: string) -> {string: string} { return json::parse(s); }
@@ -15031,7 +15095,7 @@ pub fn a_name_in_an_unimported_module_names_the_import() {
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unknown_function");
     assert!(
-        d.message.contains("import \"std/math\" as math;") && d.message.contains("math::sqrt"),
+        d.message.contains("import \"std/math\";") && d.message.contains("math::sqrt"),
         "{d:?}"
     );
 
@@ -15039,7 +15103,7 @@ pub fn a_name_in_an_unimported_module_names_the_import() {
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unknown_namespace");
-    assert!(d.message.contains("import \"std/fs\" as fs;"), "{d:?}");
+    assert!(d.message.contains("import \"std/fs\";"), "{d:?}");
 }
 
 /// The json built-ins are `std/json`'s `parse` and `stringify`; the old names
@@ -15051,10 +15115,10 @@ pub fn the_json_builtins_are_gone() {
         let d = compile_diag(&src, "diag.kl").unwrap_err();
         assert_wellformed(&d, &src);
         assert_eq!(d.code, "unknown_function");
-        assert!(d.message.contains("import \"std/json\" as json;"), "{d:?}");
+        assert!(d.message.contains("import \"std/json\";"), "{d:?}");
     }
     let src = r#"
-        import "std/json" as json;
+        import "std/json";
         fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]"))); }
     "#;
     assert_eq!(run_output(src), "[1,{\"a\":true}]\n");
@@ -15066,7 +15130,7 @@ pub fn the_file_system_is_a_module() {
     let path_text = path.to_string_lossy().replace('\\', "\\\\");
     let src = format!(
         r#"
-        import "std/fs" as fs;
+        import "std/fs";
         fn main() {{
             fs::write("{path_text}", "a");
             fs::append("{path_text}", "b");
@@ -15296,7 +15360,7 @@ pub fn an_imported_method_wins_over_the_prelude_s() {
 #[test]
 pub fn is_tests_a_type() {
     let src = r#"
-        import "std/json" as json;
+        import "std/json";
         struct P { x: int }
         enum Shape { Circle(float), Square(int) }
         fn main() {
@@ -15354,7 +15418,7 @@ pub fn is_narrows_where_it_held() {
 #[test]
 pub fn is_binds_a_variants_payload() {
     let src = r#"
-        import "std/json" as json;
+        import "std/json";
         fn port(cfg: {string: any}) -> int {
             if cfg.get("port") is Some(p) && p is int { return p; }
             return 8080;
@@ -15386,7 +15450,7 @@ pub fn is_binds_a_variants_payload() {
 #[test]
 pub fn as_downcasts_or_raises() {
     let src = r#"
-        import "std/json" as json;
+        import "std/json";
         fn keys(m: {string: any}) -> int { return m.len(); }
         fn main() {
             let v = json::parse("{\"a\": 1, \"b\": 2}");
@@ -15415,12 +15479,12 @@ pub fn type_test_diagnostics() {
             "string(x)",
         ),
         (
-            "import \"std/json\" as json; fn main() { print(json::parse(\"1\") is Option); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Option); }",
             "type_test_needs_arguments",
             "Option<int>",
         ),
         (
-            "import \"std/json\" as json; fn main() { print(json::parse(\"1\") is Some(x)); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Some(x)); }",
             "variant_test_not_enum",
             "is Option<int>",
         ),
@@ -15483,7 +15547,7 @@ pub fn is_null_points_at_equality() {
 #[test]
 pub fn is_and_as_bind_like_comparisons() {
     let src = r#"
-        import "std/json" as json;
+        import "std/json";
         fn main() {
             let v = json::parse("2");
             print(v as int + 1);
@@ -15624,7 +15688,7 @@ pub fn receiverless_impl_functions_are_called_by_path() {
 #[test]
 pub fn a_set_is_made_by_its_path() {
     let src = r#"
-        import "std/set";
+        import "std/set" { Set };
         fn main() {
             let s = Set<int>::new();
             s.add(2);
@@ -15634,7 +15698,7 @@ pub fn a_set_is_made_by_its_path() {
     "#;
     assert_eq!(run_output_std(src), "1\n");
     let src = r#"
-        import "std/set" as set;
+        import "std/set";
         fn main() {
             let s = set::Set<string>::new();
             s.add("a");
@@ -15642,7 +15706,7 @@ pub fn a_set_is_made_by_its_path() {
         }
     "#;
     assert_eq!(run_output_std(src), "[\"a\"]\n");
-    let src = "import \"std/set\" as set; fn main() { let s = set::new<int>(); }";
+    let src = "import \"std/set\"; fn main() { let s = set::new<int>(); }";
     let d = compile_diag(src, "set.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unknown_function_in_namespace");

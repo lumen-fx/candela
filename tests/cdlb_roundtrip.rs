@@ -376,7 +376,7 @@ fn multi_file_program_is_captured_whole() {
     std::fs::write(&util, "fn double(x) { return x * 2; }\n").unwrap();
     std::fs::write(
         &app,
-        "import \"util.cdl\" as util;\n\nfn main() { print(util::double(21)); }\n",
+        "import \"util.cdl\";\n\nfn main() { print(util::double(21)); }\n",
     )
     .unwrap();
 
@@ -556,7 +556,7 @@ fn cli_whole_program_output_matches_source_run() {
     std::fs::write(&util, "fn triple(x) { return x * 3; }\n").unwrap();
     std::fs::write(
         &app,
-        "import \"util.cdl\" as util;\n\nfn main() { print(util::triple(14)); print(\"done\"); }\n",
+        "import \"util.cdl\";\n\nfn main() { print(util::triple(14)); print(\"done\"); }\n",
     )
     .unwrap();
 

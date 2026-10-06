@@ -3,7 +3,7 @@
 Read, write, append to and delete files.
 
 ```rust
-import "std/fs" as fs;
+import "std/fs";
 ```
 
 Every function takes the path as a string and raises a catchable error on
@@ -12,7 +12,7 @@ failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
 [the error catalogue](../reference/errors.md).
 
 ```rust
-import "std/fs" as fs;
+import "std/fs";
 
 fn main() {
     fs::write("notes.txt", "one\n");

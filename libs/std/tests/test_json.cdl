@@ -1,60 +1,60 @@
 /// Checks for the `json` module. Run with `candela run`, or build to a `.cdlb`
 /// and run under `candela-vm`. Prints "json ok" on success; a failed check
 /// aborts the run with a message.
-import "std/json" as json;
-import "std/assert" as assert;
+import "std/json";
+import "std/assert";
 
 fn main() {
     // Scalars.
-    assert::assert_eq(json::parse("42") as int, 42);
-    assert::assert_eq(json::parse("3.5") as float, 3.5);
-    assert::assert_true(json::parse("true") as bool);
-    assert::assert_false(json::parse("false") as bool);
-    assert::assert_true(json::parse("null") == null);
-    assert::assert_eq(json::parse("\"hi\"") as string, "hi");
-    assert::assert_eq(json::parse("-17") as int, -17);
+    assert::eq(json::parse("42") as int, 42);
+    assert::eq(json::parse("3.5") as float, 3.5);
+    assert::is_true(json::parse("true") as bool);
+    assert::is_false(json::parse("false") as bool);
+    assert::is_true(json::parse("null") == null);
+    assert::eq(json::parse("\"hi\"") as string, "hi");
+    assert::eq(json::parse("-17") as int, -17);
 
     // Array.
     let arr = json::parse("[10, 20, 30]") as any[];
-    assert::assert_eq(arr.len(), 3);
-    assert::assert_eq(arr[1] as int, 20);
+    assert::eq(arr.len(), 3);
+    assert::eq(arr[1] as int, 20);
 
     // Object.
     let obj = json::parse("{\"x\": 1, \"y\": 2}") as {any: any};
-    assert::assert_eq(obj.len(), 2);
-    assert::assert_eq(obj["x"] as int, 1);
-    assert::assert_eq(obj["y"] as int, 2);
+    assert::eq(obj.len(), 2);
+    assert::eq(obj["x"] as int, 1);
+    assert::eq(obj["y"] as int, 2);
 
     // Nested object/array.
     let nested = json::parse("{\"name\": \"a\", \"nums\": [1, 2, 3], \"meta\": {\"ok\": true}}") as {any: any};
-    assert::assert_eq(nested["name"] as string, "a");
+    assert::eq(nested["name"] as string, "a");
     let nums = nested["nums"] as any[];
-    assert::assert_eq(nums.len(), 3);
-    assert::assert_eq(nums[2] as int, 3);
+    assert::eq(nums.len(), 3);
+    assert::eq(nums[2] as int, 3);
     let meta = nested["meta"] as {any: any};
-    assert::assert_true(meta["ok"] as bool);
+    assert::is_true(meta["ok"] as bool);
 
     // Escapes.
-    assert::assert_eq(json::parse("\"a\\nb\"") as string, "a\nb");
-    assert::assert_eq(json::parse("\"q\\\"q\"") as string, "q\"q");
+    assert::eq(json::parse("\"a\\nb\"") as string, "a\nb");
+    assert::eq(json::parse("\"q\\\"q\"") as string, "q\"q");
 
     // Round-trip: parse . stringify . parse preserves structure.
     let text = "{\"a\": [1, 2.5, true, null, \"z\"], \"b\": {\"c\": 9}}";
     let once = json::parse(text);
     let again = json::parse(json::stringify(once)) as {any: any};
     let a = again["a"] as any[];
-    assert::assert_eq(a.len(), 5);
-    assert::assert_eq(a[0] as int, 1);
-    assert::assert_eq(a[1] as float, 2.5);
-    assert::assert_true(a[2] as bool);
-    assert::assert_true(a[3] == null);
-    assert::assert_eq(a[4] as string, "z");
+    assert::eq(a.len(), 5);
+    assert::eq(a[0] as int, 1);
+    assert::eq(a[1] as float, 2.5);
+    assert::is_true(a[2] as bool);
+    assert::is_true(a[3] == null);
+    assert::eq(a[4] as string, "z");
     let b = again["b"] as {any: any};
-    assert::assert_eq(b["c"] as int, 9);
+    assert::eq(b["c"] as int, 9);
 
     // Empty collections round-trip.
-    assert::assert_eq((json::parse("[]") as any[]).len(), 0);
-    assert::assert_eq((json::parse("{}") as {any: any}).len(), 0);
+    assert::eq((json::parse("[]") as any[]).len(), 0);
+    assert::eq((json::parse("{}") as {any: any}).len(), 0);
 
     // A malformed document raises a catchable error.
     let caught = false;
@@ -63,7 +63,7 @@ fn main() {
     } catch e {
         caught = true;
     }
-    assert::assert_true(caught);
+    assert::is_true(caught);
 
     print("json ok");
 }

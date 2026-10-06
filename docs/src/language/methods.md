@@ -68,8 +68,8 @@ fn main() {
 ```
 
 A generic type names its instantiation in front of the function,
-`Set<int>::new()`, and a type from a module bound with `as` keeps the alias in
-front, `shapes::Point::origin()`. A function that does declare a receiver is a
+`Set<int>::new()`, and a type reached through a module's name keeps that name
+in front, `shapes::Point::origin()`. A function that does declare a receiver is a
 method, so calling it by its path is a compile error that points at the dot
 call. One receiverless function has a special role: a struct's `default`
 replaces the struct's built-in default and is what `Options::default()` calls;

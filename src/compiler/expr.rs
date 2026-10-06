@@ -29,6 +29,18 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
     format_args!("{type_name}{METHOD_SEP}{method_name}").to_smolstr()
 }
 
+/// What an import adds to the scope of the file that writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportBinding {
+    /// The module under one name, reached with `::`: the last segment of the
+    /// path (`import "std/json";` binds `json`) or the name after `as`.
+    Namespace(SmolStr),
+    /// `import "std/assert" { eq, ne };`: the named items, each with the span
+    /// of its name, merged into the file's own scope. The module itself is
+    /// bound under no name.
+    Items(Box<[(SmolStr, Span)]>),
+}
+
 /// Where a struct literal written with `..` takes the fields it does not
 /// write from.
 #[derive(Debug, Clone, PartialEq)]
@@ -281,16 +293,15 @@ pub enum Expr {
         Box<[Self]>,
     ),
 
-    /// ImportFile(path, alias, is_logical, (start, end))
+    /// ImportFile(path, binding, is_logical, (start, end))
     ///
     /// `is_logical` marks a library import (`import "std/string";`, an
     /// extensionless path): the resolver maps it straight to the shipped
     /// library directory and never looks source-relative. A `.cdl` file import
     /// (`import "./local.cdl";`) has `is_logical` false and resolves
-    /// source-relative first. `alias` is `Some` for `import ... as name;`,
-    /// which binds the module under `name::`; a bare import (`None`) merges
-    /// the module's symbols into the importing file's scope.
-    ImportFile(SmolStr, Option<SmolStr>, bool, Span),
+    /// source-relative first. `binding` says what the import adds to the
+    /// importing file's scope; see [`ImportBinding`].
+    ImportFile(SmolStr, ImportBinding, bool, Span),
 
     Break,
     Continue,

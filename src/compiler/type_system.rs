@@ -248,6 +248,7 @@ impl TypeExpr {
                     error_unknown_namespace(
                         &generic.namespace,
                         generic.span,
+                        ctx.scope(),
                         ctx.file_idx,
                         ctx.sources,
                     );
@@ -398,6 +399,10 @@ pub struct Generics {
     /// name the prelude also declares is the one a bare name reaches, wherever
     /// the two were registered relative to each other.
     prelude_templates: std::ops::Range<usize>,
+    /// The files that are prelude modules, whether the prelude loaded them or
+    /// a program imported one by name first. Their templates are bare names
+    /// everywhere.
+    prelude_files: Vec<u16>,
 }
 
 impl Generics {
@@ -405,6 +410,11 @@ impl Generics {
     #[must_use]
     pub const fn template_count(&self) -> usize {
         self.templates.len()
+    }
+
+    /// Records that file `file_idx` is a prelude module.
+    pub fn mark_prelude_file(&mut self, file_idx: u16) {
+        self.prelude_files.push(file_idx);
     }
 
     /// Records which templates the prelude registered.
@@ -548,8 +558,21 @@ impl Generics {
     /// The generic declaration the last-registered template under `name` is,
     /// which is what an unqualified name falls back to when the scope it was
     /// written in registers no template by that name.
+    ///
+    /// A template a program file declares is reached only through a scope,
+    /// so a module's `Slot<T>` is not a bare name in a file that bound the
+    /// module under a namespace. What is left is the prelude's, however its
+    /// module was loaded, and any registered after it, while a body was being
+    /// compiled.
     fn last_template_named(&self, name: &str) -> Option<usize> {
-        self.last_template_where(|t| t.name == name)
+        let in_prelude = |i: usize| self.prelude_files.contains(&self.templates[i].file_idx);
+        let reachable = |i: usize| {
+            self.templates[i].name == name && (i >= self.prelude_templates.start || in_prelude(i))
+        };
+        (0..self.templates.len())
+            .rev()
+            .find(|&i| reachable(i) && !in_prelude(i))
+            .or_else(|| (0..self.templates.len()).rev().find(|&i| reachable(i)))
     }
 
     /// The declaration an instantiated type came from and the arguments it was
@@ -1580,7 +1603,13 @@ pub fn struct_literal_id(
         .scope(ctx.file_idx)
         .find_struct(path, &name, span, ctx.file_idx, state.sources)
         .unwrap_or_else(|| {
-            error_unknown_struct(&name, span, state.sources, ctx.file_idx);
+            error_unknown_struct(
+                &name,
+                span,
+                state.scope(ctx.file_idx),
+                state.sources,
+                ctx.file_idx,
+            );
         }) as u16
 }
 
@@ -1767,7 +1796,13 @@ fn instantiated_struct_id(
         &mut state.type_ctx(ctx.file_idx),
     ) {
         DataType::Struct(id) => id,
-        _ => error_unknown_struct(name, span, state.sources, ctx.file_idx),
+        _ => error_unknown_struct(
+            name,
+            span,
+            state.scope(ctx.file_idx),
+            state.sources,
+            ctx.file_idx,
+        ),
     }
 }
 

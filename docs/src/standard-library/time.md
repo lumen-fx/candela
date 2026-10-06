@@ -8,7 +8,7 @@ It has been modified by the candela authors. See the NOTICE file.
 The current unix time, and formatting a timestamp.
 
 ```rust
-import "std/time" as time;
+import "std/time";
 ```
 
 The module binds a small dynamic library that wraps the platform time functions,
@@ -42,7 +42,7 @@ day and month names, `%%` for a literal percent sign. The formatted result has t
 fit in 127 bytes; a pattern that produces more than that does not render.
 
 ```rust
-import "std/time" as time;
+import "std/time";
 
 fn main() {
     print(time::format(0, "%Y-%m-%d"));

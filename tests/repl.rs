@@ -299,7 +299,7 @@ fn a_line_that_fails_at_run_time_runs_once() {
     let dir = scratch("runs_once");
     let counter = dir.join("counter");
     let (out, err) = session(&format!(
-        "import \"std/fs\" as fs;\n\
+        "import \"std/fs\";\n\
          fn bump() {{ fs::append(\"{}\", \"x\"); return [1, 2][9]; }}\n\
          bump()\n\
          print(\"after\");\n",

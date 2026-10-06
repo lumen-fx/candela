@@ -66,9 +66,10 @@ Run `candela` with no arguments for a REPL.
   to another function.
 - **Collections.** List and map literals, a set built on maps, and JSON parsing
   and serialisation in the standard library.
-- **One import form.** `import "std/json" as json;` for a namespace, or
-  `import "std/assert";` to bring the module's symbols into scope. The methods
-  of the built-in types, `Option` and `Result` need no import at all.
+- **One import form.** `import "std/json";` binds the module's name, so you
+  call `json::parse(s)`; `import "std/assert" { eq };` brings named items into
+  scope. The methods of the built-in types, `Option` and `Result` need no
+  import at all.
 - **Code per target.** `@cfg(web)` compiles a declaration or a statement only
   where the host turns the flag on, so one program can carry a browser and a
   desktop version of the same function.

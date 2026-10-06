@@ -2,7 +2,7 @@
 /// `.cdlb` and run under `candela-vm`. Prints "option ok" on success; a failed
 /// check aborts the run with a message.
 import "std/option";
-import "std/assert" as assert;
+import "std/assert";
 
 // The payload keeps the type that went in, so a mapper reads it back at that
 // type.
@@ -34,39 +34,39 @@ fn main() {
     let s = Some(5);
     let n = None;
 
-    assert::assert_true(s.is_some());
-    assert::assert_false(n.is_some());
-    assert::assert_true(n.is_none());
-    assert::assert_false(s.is_none());
+    assert::is_true(s.is_some());
+    assert::is_false(n.is_some());
+    assert::is_true(n.is_none());
+    assert::is_false(s.is_none());
 
-    assert::assert_eq(s.unwrap(), 5);
-    assert::assert_eq(n.unwrap_or(99), 99);
-    assert::assert_eq(s.unwrap_or(99), 5);
+    assert::eq(s.unwrap(), 5);
+    assert::eq(n.unwrap_or(99), 99);
+    assert::eq(s.unwrap_or(99), 5);
 
     // map over the payload.
     let m = s.map(describe);
-    assert::assert_eq(m.unwrap(), "5");
+    assert::eq(m.unwrap(), "5");
     let mn = n.map(describe);
-    assert::assert_true(mn.is_none());
+    assert::is_true(mn.is_none());
 
     // and_then chains a step that may come back empty; map would nest.
-    assert::assert_eq(Some(8).and_then(half).unwrap(), 4);
-    assert::assert_true(s.and_then(half).is_none());
-    assert::assert_true(n.and_then(half).is_none());
+    assert::eq(Some(8).and_then(half).unwrap(), 4);
+    assert::is_true(s.and_then(half).is_none());
+    assert::is_true(n.and_then(half).is_none());
 
     // or falls back, filter drops a payload the test rejects.
-    assert::assert_eq(s.or(Some(99)).unwrap(), 5);
-    assert::assert_eq(n.or(Some(99)).unwrap(), 99);
-    assert::assert_eq(Some(4).filter(is_even).unwrap(), 4);
-    assert::assert_true(s.filter(is_even).is_none());
-    assert::assert_true(n.filter(is_even).is_none());
+    assert::eq(s.or(Some(99)).unwrap(), 5);
+    assert::eq(n.or(Some(99)).unwrap(), 99);
+    assert::eq(Some(4).filter(is_even).unwrap(), 4);
+    assert::is_true(s.filter(is_even).is_none());
+    assert::is_true(n.filter(is_even).is_none());
 
     // A struct payload comes back out as the struct, not as `any`.
     match first([Point { x: 7 }]) {
-        Some(p) => { assert::assert_eq(p.x, 7); }
-        None => { assert::assert_true(false); }
+        Some(p) => { assert::eq(p.x, 7); }
+        None => { assert::is_true(false); }
     }
-    assert::assert_true(first([]).is_none());
+    assert::is_true(first([]).is_none());
 
     print("option ok");
 }

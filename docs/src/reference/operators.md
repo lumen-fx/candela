@@ -380,7 +380,7 @@ See [control flow](../language/control-flow.md).
   alternatives, as in `1 | 2 => ...`. Everywhere else an expression is read it
   is bitwise or; parenthesise to use bitwise or inside a pattern, `(a | b)`.
 - `as` after an import's path names the module's alias, as in
-  `import "std/json" as json;`.
+  `import "std/json";`.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
 - `->` gives the return type in a `dylib` or `host` signature. `=>` means

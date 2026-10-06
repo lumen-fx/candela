@@ -8,7 +8,7 @@ It has been modified by the candela authors. See the NOTICE file.
 Trigonometry, logarithms, roots, rounding, and the constants.
 
 ```rust
-import "std/math" as math;
+import "std/math";
 ```
 
 Every function here takes and returns floats, apart from the three that take or
@@ -104,7 +104,7 @@ Each constant is a function call, so it costs a call and returns a float.
 | `math::tau()` | The ratio of a circle's circumference to its radius, two pi |
 
 ```rust
-import "std/math" as math;
+import "std/math";
 
 fn main() {
     print(math::sqrt(2.0));

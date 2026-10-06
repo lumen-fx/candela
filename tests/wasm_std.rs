@@ -22,7 +22,7 @@ fn run(code: &str) -> String {
 #[wasm_bindgen_test]
 fn math_imports_and_computes() {
     let out = run(r#"
-import "std/math" as math;
+import "std/math";
 fn main() {
     print(math::sqrt(16.0));
     print(math::sin(0.0));
@@ -41,7 +41,7 @@ fn main() {
 #[wasm_bindgen_test]
 fn math_answers_what_a_desktop_answers() {
     let out = run(r#"
-import "std/math" as math;
+import "std/math";
 fn main() {
     print(math::logb(8.0));
     print(math::ilogb(0.0));
@@ -67,7 +67,7 @@ fn main() {
 #[wasm_bindgen_test]
 fn time_reads_the_browser_clock() {
     let out = run(r#"
-import "std/time" as time;
+import "std/time";
 fn main() {
     print(time::now());
     print(time::format(0, "%Y"));
@@ -87,12 +87,12 @@ fn main() {
 #[wasm_bindgen_test]
 fn random_is_seedable_and_in_range() {
     let program = r#"
-import "std/random" as random;
+import "std/random";
 fn main() {
     random::seed(42);
-    print(random::random_int_range(1, 6));
-    print(random::random_int_range(1, 6));
-    let x = random::random();
+    print(random::int_range(1, 6));
+    print(random::int_range(1, 6));
+    let x = random::float();
     print(x >= 0.0 && x < 1.0);
 }
 "#;
@@ -111,14 +111,14 @@ fn main() {
 #[wasm_bindgen_test]
 fn a_seeded_run_draws_what_a_desktop_draws() {
     let out = run(r#"
-import "std/random" as random;
+import "std/random";
 fn main() {
     random::seed(42);
-    print(random::random_int_range(1, 100));
-    print(random::random_int_range(1, 100));
-    print(random::random_int());
-    print(random::random());
-    print(random::random_range(5.0, 10.0));
+    print(random::int_range(1, 100));
+    print(random::int_range(1, 100));
+    print(random::int());
+    print(random::float());
+    print(random::float_range(5.0, 10.0));
 }
 "#);
     assert_eq!(
@@ -136,9 +136,9 @@ fn main() {
 #[wasm_bindgen_test]
 fn an_unseeded_generator_draws() {
     let out = run(r#"
-import "std/random" as random;
+import "std/random";
 fn main() {
-    let x = random::random();
+    let x = random::float();
     print(x >= 0.0 && x < 1.0);
 }
 "#);
@@ -149,7 +149,7 @@ fn main() {
 #[wasm_bindgen_test]
 fn hash_answers_what_a_desktop_answers() {
     let out = run(r#"
-import "std/hash" as hash;
+import "std/hash";
 fn main() {
     print(hash::md5("OfflinePlayer:Notch"));
     print(hash::sha1("abc"));
@@ -173,7 +173,7 @@ fn an_artifact_that_imports_math_loads_and_runs() {
     let bytes = build_bytecode(
         String::from(
             r#"
-import "std/math" as math;
+import "std/math";
 fn root(x: float) -> float { return math::sqrt(x); }
 fn main() {}
 "#,

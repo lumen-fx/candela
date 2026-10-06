@@ -7,11 +7,11 @@ dylib "../std_src/random/random" {
 }
 
 fn seed(s) { random::candela_seed(s); }
-fn random_int() { return random::candela_random_int(); }
-fn random_int_range(min, max) {
+fn int() { return random::candela_random_int(); }
+fn int_range(min, max) {
     return random::candela_random_int_range(min, max);
 }
-fn random() { return random::candela_random(); }
-fn random_range(min, max) {
+fn float() { return random::candela_random(); }
+fn float_range(min, max) {
     return random::candela_random_float_range(min, max);
 }

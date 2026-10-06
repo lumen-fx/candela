@@ -28,12 +28,24 @@ use smol_strc::ToSmolStr;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// A built-in function that moved into a standard library module: the module
-/// and the name it has there.
+/// A function that moved into a standard library module or was renamed in
+/// one: the module and the name it has there. The std ones lost the module
+/// name they started with once an import bound the module under it
+/// (`assert_eq` became `assert::eq`).
 fn removed_builtin(name: &str) -> Option<(&'static str, &'static str)> {
     match name {
         "json_parse" => Some(("json", "parse")),
         "json_stringify" => Some(("json", "stringify")),
+        "assert" => Some(("assert", "that")),
+        "assert_msg" => Some(("assert", "msg")),
+        "assert_true" => Some(("assert", "is_true")),
+        "assert_false" => Some(("assert", "is_false")),
+        "assert_eq" => Some(("assert", "eq")),
+        "assert_ne" => Some(("assert", "ne")),
+        "random_int" => Some(("random", "int")),
+        "random_int_range" => Some(("random", "int_range")),
+        "random" => Some(("random", "float")),
+        "random_range" => Some(("random", "float_range")),
         _ => None,
     }
 }
@@ -934,13 +946,15 @@ pub fn error_missing_return(
 pub fn error_unknown_struct(
     struct_name: &SmolStr,
     struct_span: Span,
+    scope: &Namespace,
     sources: &[Source],
     file_idx: u16,
 ) -> ! {
+    let help = bound_type_help(scope, struct_name, |t| blue(t));
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            let report = Report::build(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), struct_span.into()),
             )
@@ -949,7 +963,11 @@ pub fn error_unknown_struct(
                 Label::new((src.filename.as_str(), struct_span.into()))
                     .with_message(format_args!("Unknown struct {}", red(struct_name)))
                     .with_color(ariadne::Color::Red),
-            )
+            );
+            match &help {
+                Some(help) => report.with_help(help),
+                None => report,
+            }
             .finish()
         },
         sources,
@@ -1755,19 +1773,46 @@ pub fn error_unknown_function(
         if let Some(replacement) = replaced_builtin(fn_name) {
             return Some(format!("{fn_name} is replaced by {}", paint(replacement)));
         }
+        // A name a module this file bound under a namespace declares is
+        // reached through that name, or named in the import.
+        if let Some((alias, module)) = namespace
+            .children
+            .iter()
+            .find(|(_, ns)| !ns.import_path.is_empty() && ns.find_function(&[], fn_name).is_some())
+        {
+            return Some(format!(
+                "{fn_name} is in the module bound as {alias}. Call {}, or name it in the import: {}",
+                paint(&format!("{alias}::{fn_name}")),
+                paint(&format!(
+                    "import \"{}\" {{ {fn_name} }};",
+                    module.import_path
+                )),
+            ));
+        }
         removed_builtin(fn_name)
             .map(|(module, name)| {
-                format!(
-                    "{fn_name} is now {} in std/{module}. Import it with {}",
-                    paint(&format!("{module}::{name}")),
-                    paint(&format!("import \"std/{module}\" as {module};")),
-                )
+                // The module may already be bound, under its name or another.
+                let bound = namespace
+                    .children
+                    .iter()
+                    .find(|(_, ns)| ns.import_path.strip_prefix("std/") == Some(module));
+                match bound {
+                    Some((alias, _)) => format!(
+                        "{fn_name} is now {} in std/{module}",
+                        paint(&format!("{alias}::{name}")),
+                    ),
+                    None => format!(
+                        "{fn_name} is now {} in std/{module}. Import it with {}",
+                        paint(&format!("{module}::{name}")),
+                        paint(&format!("import \"std/{module}\";")),
+                    ),
+                }
             })
             .or_else(|| {
                 std_index::module_declaring(fn_name).map(|module| {
                     format!(
                         "{fn_name} is in std/{module}. Import it with {} and call {}",
-                        paint(&format!("import \"std/{module}\" as {module};")),
+                        paint(&format!("import \"std/{module}\";")),
                         paint(&format!("{module}::{fn_name}")),
                     )
                 })
@@ -2315,14 +2360,69 @@ pub fn error_pattern_enum_mismatch(
     )
 }
 
+/// The help for a type written bare that a module this file bound under a
+/// namespace declares: write it behind the module's name, or name it in the
+/// import.
+fn bound_type_help(scope: &Namespace, name: &str, paint: fn(&str) -> String) -> Option<String> {
+    let (alias, module) = scope.children.iter().find(|(_, ns)| {
+        !ns.import_path.is_empty()
+            && ns.symbols.iter().any(|(n, kind)| {
+                n == name
+                    && matches!(
+                        kind,
+                        SymbolKind::Struct(_) | SymbolKind::Enum(_) | SymbolKind::Template(_)
+                    )
+            })
+    })?;
+    Some(format!(
+        "{name} is in the module bound as {alias}. Write {}, or name it in the import: {}",
+        paint(&format!("{alias}::{name}")),
+        paint(&format!("import \"{}\" {{ {name} }};", module.import_path)),
+    ))
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespace(
     namespace: &[SmolStr],
     span: Span,
+    scope: &Namespace,
     file_idx: u16,
     sources: &[Source],
 ) -> ! {
+    // A type a module bound under a namespace declares, written bare in front
+    // of `::` (`Set<int>::new()` after `import "std/set";`), is reached
+    // through the module's name.
+    if let [name] = namespace
+        && let Some(help) = bound_type_help(scope, name, |t| blue(t))
+    {
+        let plain = format!(
+            "{name} is not a valid namespace. {}",
+            bound_type_help(scope, name, str::to_owned).unwrap_or_default()
+        );
+        throw_compiler_error(
+            &|| {
+                let src = &sources[file_idx as usize];
+                Report::build(
+                    ariadne::ReportKind::Error,
+                    (src.filename.as_str(), span.into()),
+                )
+                .with_message("Unknown namespace")
+                .with_label(
+                    Label::new((src.filename.as_str(), span.into()))
+                        .with_message(format_args!("{} is not a valid namespace", red(name)))
+                        .with_color(ariadne::Color::Red),
+                )
+                .with_help(&help)
+                .finish()
+            },
+            sources,
+            file_idx,
+            span,
+            &plain,
+            "unknown_namespace",
+        );
+    }
     // A namespace a standard library module would bind is a missing import.
     let module = match namespace {
         [name] if std_index::module_exists(name) => Some(name),
@@ -2347,7 +2447,7 @@ pub fn error_unknown_namespace(
             if let Some(module) = module {
                 report = report.with_help(format_args!(
                     "{module} is the std/{module} module. Import it with {}",
-                    blue(format_args!("import \"std/{module}\" as {module};")),
+                    blue(format_args!("import \"std/{module}\";")),
                 ));
             }
 
@@ -2360,7 +2460,7 @@ pub fn error_unknown_namespace(
             || format!("{} is not a valid namespace", namespace.join("::")),
             |module| {
                 format!(
-                    "{module} is not a valid namespace. It is the std/{module} module: import it with import \"std/{module}\" as {module};"
+                    "{module} is not a valid namespace. It is the std/{module} module: import it with import \"std/{module}\";"
                 )
             },
         ),
@@ -2390,7 +2490,7 @@ pub fn error_unknown_function_in_namespace(
         _ => None,
     };
     if declared.is_none() && library.is_none() {
-        error_unknown_namespace(path, span, file_idx, sources);
+        error_unknown_namespace(path, span, state.scope(file_idx), file_idx, sources);
     }
     // A function a type in the namespace declares in its `impl` block is
     // called behind the type's name: `set::Set<T>::new()`, not `set::new()`.
@@ -2413,7 +2513,17 @@ pub fn error_unknown_function_in_namespace(
                 SymbolKind::Fn(_) => None,
             })
     });
-    let type_fn = type_fn.map(|f| format!("{namespace_str}::{f}"));
+    // A std function the module renamed when its name took over the prefix
+    // (`assert::assert_eq` is `assert::eq`) is named outright.
+    let type_fn = type_fn
+        .map(|f| format!("{namespace_str}::{f}"))
+        .or_else(|| {
+            removed_builtin(fn_name)
+                .filter(|(module, _)| {
+                    declared.is_some_and(|ns| ns.import_path.strip_prefix("std/") == Some(*module))
+                })
+                .map(|(_, name)| format!("{namespace_str}::{name}"))
+        });
     let similar_fn = find_closest_str(
         fn_name,
         declared
@@ -2444,10 +2554,7 @@ pub fn error_unknown_function_in_namespace(
             );
 
             if let Some(type_fn) = &type_fn {
-                report = report.with_help(format_args!(
-                    "{fn_name} is a function of a type in {namespace_str}; call it as {}",
-                    blue(type_fn)
-                ));
+                report = report.with_help(format_args!("Call it as {}", blue(type_fn)));
             } else if let Some(similar_fn) = similar_fn {
                 report = report.with_help(format_args!(
                     "A function with a similar name exists: {}",
@@ -2464,7 +2571,7 @@ pub fn error_unknown_function_in_namespace(
             || format!("Cannot find function {fn_name} in namespace {namespace_str}"),
             |type_fn| {
                 format!(
-                    "Cannot find function {fn_name} in namespace {namespace_str}. {fn_name} is a function of a type in {namespace_str}; call it as {type_fn}"
+                    "Cannot find function {fn_name} in namespace {namespace_str}. Call it as {type_fn}"
                 )
             },
         ),
@@ -3023,8 +3130,9 @@ pub fn error_import_symbol_collision(
                     .with_color(ariadne::Color::Red),
             )
             .with_note(format_args!(
-                "A bare import merges the module's symbols into this file's scope. Write {} to keep the module behind a namespace instead",
-                green(format_args!("import \"{module}\" as name;")),
+                "Naming an item in an import brings it into this file's scope. Leave {} out of the list and reach it through the module instead: {}",
+                blue(symbol),
+                green(format_args!("import \"{module}\";")),
             ))
             .finish()
         },
@@ -3035,6 +3143,105 @@ pub fn error_import_symbol_collision(
             "Import symbol collision: importing \"{module}\" brings in {symbol}, which is already {existing_origin}"
         ),
         "import_symbol_collision",
+    );
+}
+
+/// Two imports that bind one name to two different modules.
+#[inline(never)]
+#[cold]
+pub fn error_import_name_collision(
+    name: &str,
+    existing_module: &str,
+    module: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let existing = if existing_module.is_empty() {
+        String::from("a host block")
+    } else {
+        format!("\"{existing_module}\"")
+    };
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Import name collision")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "Importing \"{}\" binds {}, which already names {}",
+                        blue(module),
+                        blue(name),
+                        existing,
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Bind one of them under another name with {}",
+                green(format_args!("import \"{module}\" as other;")),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "Import name collision: importing \"{module}\" binds {name}, which already names {existing}"
+        ),
+        "import_name_collision",
+    );
+}
+
+/// An item named in an import's `{ ... }` list that the module does not
+/// declare.
+#[inline(never)]
+#[cold]
+pub fn error_import_item_not_exported(
+    item: &str,
+    module: &str,
+    exported: &[SmolStr],
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let list = exported
+        .iter()
+        .map(SmolStr::as_str)
+        .collect::<Vec<&str>>()
+        .join(", ");
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let report = Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Unknown import item")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "\"{}\" declares no {}",
+                        blue(module),
+                        red(item),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            );
+            if exported.is_empty() {
+                report.with_help(format_args!("\"{module}\" declares nothing to import"))
+            } else {
+                report.with_help(format_args!("\"{module}\" declares {}", blue(&list)))
+            }
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Unknown import item: \"{module}\" declares no {item}"),
+        "import_item_not_exported",
     );
 }
 

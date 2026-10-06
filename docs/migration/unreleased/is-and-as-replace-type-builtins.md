@@ -44,7 +44,7 @@ fn main() {
 After:
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     let doc = json::parse("{\"n\": 7}") as {string: any};

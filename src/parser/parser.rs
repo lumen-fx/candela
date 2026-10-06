@@ -8,7 +8,7 @@ use crate::cfg;
 use crate::cfg::Cfg;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
-use crate::compiler::expr::{Expr, LetAnnotation, Span, var_assign};
+use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
@@ -134,6 +134,13 @@ enum ParserErr<'a> {
     /// joined with `/` so the error suggests the exact replacement.
     LegacyNamespacedImport(String),
     ImportPathBadExtension,
+    /// An import with no `as` whose path ends in a segment that cannot be
+    /// written as a name, such as `my-lib`. Carries the segment.
+    ImportNameNotIdentifier(String),
+    /// `as name` and a `{ ... }` list on one import.
+    ImportAliasWithItems,
+    /// `{}` with no item in it.
+    ImportItemsEmpty,
     /// `name!(` whose region the file ends before closing.
     UnterminatedMacroRegion(&'a str),
     /// `name!(...)` with no expander registered for `name`.
@@ -185,6 +192,9 @@ impl ParserErr<'_> {
             ParserErr::NestedFunctionDeclaration => "nested_function_declaration",
             ParserErr::LegacyNamespacedImport(_) => "legacy_namespaced_import",
             ParserErr::ImportPathBadExtension => "import_path_bad_extension",
+            ParserErr::ImportNameNotIdentifier(_) => "import_name_not_identifier",
+            ParserErr::ImportAliasWithItems => "import_alias_with_items",
+            ParserErr::ImportItemsEmpty => "import_items_empty",
             ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
             ParserErr::UnknownMacro(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
@@ -274,6 +284,15 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::ImportPathBadExtension => &format!(
             "An import path either ends in {BLUE}{BOLD}.cdl{RESET} (a file import) or has no extension (a library import from the shipped library directory)"
+        ),
+        ParserErr::ImportNameNotIdentifier(segment) => &format!(
+            "An import binds the module under the last segment of its path, and {RED}{BOLD}{segment}{RESET} is not a name. Give it one with {BLUE}{BOLD}as{RESET}: {BLUE}{BOLD}import \"...\" as name;{RESET}"
+        ),
+        ParserErr::ImportAliasWithItems => &format!(
+            "An import either binds the module under a name ({BLUE}{BOLD}as name{RESET}) or names the items it brings in ({BLUE}{BOLD}{{ a, b }}{RESET}), not both. Write two imports of the same path"
+        ),
+        ParserErr::ImportItemsEmpty => &format!(
+            "Name at least one item between the braces, or drop them to bind the module: {BLUE}{BOLD}import \"std/json\";{RESET}"
         ),
         ParserErr::UnterminatedMacroRegion(name) => &format!(
             "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
@@ -1083,8 +1102,7 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
             ),
         );
     };
-    let peek_token = parser.peek_token_opt();
-    if peek_token == Some(Token::As) {
+    let mut binding = if parser.peek_token_opt() == Some(Token::As) {
         parser.next_token();
         let (next_token, span) = parser.next_token();
         let alias = if let Token::Identifier(id) = next_token {
@@ -1101,18 +1119,98 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
             );
         };
         end = span.end;
-        parser.next_token_expect(
-            Token::SemiColon,
-            "Import statements must end with a semicolon",
-        );
-        Expr::ImportFile(path, Some(alias), is_logical, (start, end).into())
+        Some(ImportBinding::Namespace(alias))
     } else {
-        parser.next_token_expect(
-            Token::SemiColon,
-            "Import statements must end with a semicolon",
-        );
-        Expr::ImportFile(path, None, is_logical, (start, end).into())
+        None
+    };
+    if parser.peek_token_opt() == Some(Token::LBrace) {
+        let brace = parser.peek_token_span();
+        if binding.is_some() {
+            cold_path();
+            parser.error(brace, ParserErr::ImportAliasWithItems);
+        }
+        parser.next_token();
+        let mut items: Vec<(SmolStr, Span)> = Vec::new();
+        loop {
+            let (token, span) = parser.next_token();
+            match token {
+                Token::RBrace => {
+                    end = span.end;
+                    break;
+                }
+                Token::Identifier(name) => {
+                    items.push((SmolStr::new(name), span));
+                    match parser.next_token() {
+                        (Token::Comma, _) => {}
+                        (Token::RBrace, span) => {
+                            end = span.end;
+                            break;
+                        }
+                        (other, span) => {
+                            cold_path();
+                            parser.error(
+                                span,
+                                ParserErr::UnexpectedToken(
+                                    Token::RBrace,
+                                    other,
+                                    "Items in an import are names separated by commas: import \"std/assert\" { eq, ne };",
+                                ),
+                            );
+                        }
+                    }
+                }
+                other => {
+                    cold_path();
+                    parser.error(
+                        span,
+                        ParserErr::UnexpectedToken(
+                            Token::Identifier(""),
+                            other,
+                            "Items in an import are names separated by commas: import \"std/assert\" { eq, ne };",
+                        ),
+                    );
+                }
+            }
+        }
+        if items.is_empty() {
+            cold_path();
+            parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
+        }
+        binding = Some(ImportBinding::Items(items.into_boxed_slice()));
     }
+    // With neither, the module is bound under the last segment of its path:
+    // `std/json` binds `json`, `./geometry.cdl` binds `geometry`.
+    let binding = binding.unwrap_or_else(|| {
+        let segment = module_name(&path);
+        if !is_identifier(segment) {
+            cold_path();
+            parser.error(
+                (start, end).into(),
+                ParserErr::ImportNameNotIdentifier(segment.to_owned()),
+            );
+        }
+        ImportBinding::Namespace(SmolStr::new(segment))
+    });
+    parser.next_token_expect(
+        Token::SemiColon,
+        "Import statements must end with a semicolon",
+    );
+    Expr::ImportFile(path, binding, is_logical, (start, end).into())
+}
+
+/// The name an import binds its module under when it says no other: the last
+/// segment of the path, without the `.cdl` the file name ends in.
+#[must_use]
+pub fn module_name(path: &str) -> &str {
+    let last = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    last.strip_suffix(".cdl").unwrap_or(last)
+}
+
+/// Whether `text` is one name a program can write: a single identifier token,
+/// so neither a keyword nor something with a `-` in it.
+fn is_identifier(text: &str) -> bool {
+    let mut lexer = Token::lexer(text);
+    matches!(lexer.next(), Some(Ok(Token::Identifier(_)))) && lexer.next().is_none()
 }
 
 fn parse_type(parser: &mut Parser<'_>) -> TypeExpr {

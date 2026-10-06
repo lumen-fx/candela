@@ -13,9 +13,9 @@
 /// `candela-vm` with no source tree.
 ///
 /// `ok` hands the success side back as an `Option`, so the module imports
-/// `std/option`. A program that imports both gets one `Option`.
+/// `Option` from `std/option`. A program that imports both gets one `Option`.
 
-import "std/option";
+import "std/option" { Option };
 
 enum Result<T, E> {
     Ok(T),

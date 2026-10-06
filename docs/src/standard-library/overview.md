@@ -38,7 +38,7 @@ through `CANDELA_LIB_PATH` or beside its own binary. See
 
 The WebAssembly build has no file system and loads no dynamic library. It
 carries `hash`, `math`, `random` and `time` inside itself and runs their native
-half on its own functions, so `import "std/math" as math;` works there as it
+half on its own functions, so `import "std/math";` works there as it
 does on a desktop, with the same functions. A `.cdlb` built on a desktop that
 imports them runs in the browser as well. The prelude is there too. The other
 modules do not import in a browser.
@@ -50,18 +50,17 @@ A library import is a quoted path with no file extension. The resolver appends
 the importing file, so it works from any working directory:
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     print(json::stringify(json::parse("[1, 2]")));
 }
 ```
 
-A module of free functions binds a namespace under `as` (`import "std/json" as
-json;` then `json::parse(text)`), or merges into the file's own scope under a
-bare import. Two bare imports that export the same free-function name are a
-compile error; use `as` to keep them apart. The import form is covered in full
-in [modules](../language/modules.md).
+An import binds the module under its name (`import "std/json";` then
+`json::parse(text)`), and a list of items brings those into the file's own
+scope (`import "std/json" { parse };` then `parse(text)`). The import form is
+covered in full in [modules](../language/modules.md).
 
 A call to a name a module you have not imported declares, such as `sqrt(x)` or
 `fs::read(path)`, is a compile error whose help names the import it needs.
@@ -91,8 +90,9 @@ fn main() {
 }
 ```
 
-The modules behind it are `list`, `string`, `map`, `option` and `result`. Importing one of them by name still works and reaches the same
-module. A method nothing calls is never compiled, so the prelude adds nothing to
+The modules behind it are `list`, `string`, `map`, `option` and `result`.
+Importing one of them still works, reaches the same module, and binds its name
+like any import; its names stay reachable with no prefix. A method nothing calls is never compiled, so the prelude adds nothing to
 a program that does not use it. A program that declares its own enum with a
 `Some` variant, or its own `Option`, gets its own when it names it.
 

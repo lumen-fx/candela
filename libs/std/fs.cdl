@@ -4,7 +4,7 @@
 /// failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
 /// `fs_is_a_directory`, `fs_storage_full`, and the rest.
 ///
-///     import "std/fs" as fs;
+///     import "std/fs";
 ///     fs::write("notes.txt", "hello");
 ///     print(fs::read("notes.txt"));
 ///
