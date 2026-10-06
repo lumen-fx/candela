@@ -152,8 +152,8 @@ toolchain and compile into your program like any other module. The
 [Standard library](../standard-library/overview.md) section lists what each one
 provides.
 
-The collection, conversion, and enum modules (`list`, `string`, `map`,
-`convert`, `option`, `result`) are the prelude: every program has them with no
+The collection and enum modules (`list`, `string`, `map`, `option`, `result`)
+are the prelude: every program has them with no
 import, so `xs.map(f)`, `s.capitalize()` and `Some(1)` work in a file with no
 imports at all. Their helpers are methods in `impl` blocks that resolve on the
 receiver's type. Importing one of them by name still works and reaches the same

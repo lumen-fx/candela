@@ -176,7 +176,7 @@ pub(crate) fn store_call_args(
 ///
 /// An `any` (Unknown) expected type is a wildcard: it says the position holds a
 /// dynamic value, so every argument fits. That is what a downcast collection
-/// (`as_map`, `as_list`) hands its entries, and what an `any` annotation means
+/// (`as {any: any}`, `as any[]`) hands its entries, and what an `any` annotation means
 /// on a parameter or an enum payload.
 pub fn check_arg_type(
     fn_name: &str,

@@ -10,10 +10,17 @@
 
 ; Keywords
 
-[
-  "import"
-  "as"
-] @keyword.import
+"import" @keyword.import
+
+(import_declaration
+  "as" @keyword.import)
+
+; `v is int` and `v as int`: the type test and the checked downcast.
+(type_test_expression
+  "is" @keyword.operator)
+
+(cast_expression
+  "as" @keyword.operator)
 
 "fn" @keyword.function
 
@@ -123,7 +130,7 @@
 ((call_expression
   function: (identifier) @function.builtin)
   (#any-of? @function.builtin
-    "print" "type" "float" "int" "str" "bool" "input" "range" "the_answer"
+    "print" "type" "float" "int" "string" "bool" "input" "range" "the_answer"
     "argv" "exit"))
 
 ; Macros

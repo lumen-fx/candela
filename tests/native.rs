@@ -208,9 +208,9 @@ fn an_error_thrown_in_a_call_back_into_the_interpreter_is_caught_outside() {
     let (printed, result) = agrees(
         r#"
         fn boom(n: int) -> int {
-            if n > 2 { throw "n" + str(n); }
+            if n > 2 { throw "n" + string(n); }
             if n == 0 { return 0; }
-            let label = "n" + str(n);
+            let label = "n" + string(n);
             return boom(n - 1) + label.len() - 1;
         }
         fn walk(n: int) -> int {

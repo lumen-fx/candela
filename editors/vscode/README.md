@@ -15,7 +15,7 @@ attribution details.
 - Syntax highlighting for:
   - Keywords: `if`, `else`, `match`, `while`, `for`, `in`, `loop`, `return`,
     `break`, `continue`, `try`, `catch`, `throw`, `let`, `fn`, `struct`,
-    `enum`, `impl`, `import`, `as`, `host`, `dylib`.
+    `enum`, `impl`, `import`, `as`, `is`, `host`, `dylib`.
   - Built-in types: `int`, `float`, `bool`, `string`, plus user-defined structs
     and enums.
   - Function types, `fn(int, int) -> int`, wherever a type goes.
@@ -38,9 +38,9 @@ attribution details.
     written inside one is not read as candela strings and operators.
 - Language configuration: line comments (`//`), bracket matching, auto-closing
   and surrounding pairs, and `{}` indentation rules.
-- Snippets, by prefix: `main`, `fn`, `struct`, `let`, `if`, `ifelse`, `for`,
-  `forin`, `while`, `loop`, `match`, `host`, `dylib`, `import`, `importlib`,
-  and `print`.
+- Snippets, by prefix: `main`, `fn`, `struct`, `let`, `if`, `ifelse`, `ifis`,
+  `for`, `forin`, `while`, `loop`, `match`, `host`, `dylib`, `import`,
+  `importlib`, and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
   diagnostics, hover, completion, document symbols (outline), and
   go-to-definition. See `../../lsp/README.md` for the exact scope of each.

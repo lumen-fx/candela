@@ -42,6 +42,18 @@ pub fn is_default_call(expr: &Expr) -> bool {
     )
 }
 
+/// What the right side of `is` names.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsTarget {
+    /// A type: `int`, `Point`, `int[]`, `{string: any}`, a union. A bare name
+    /// that names no type but a variant without a payload (`None`) is a
+    /// variant test.
+    Type(TypeExpr),
+    /// A variant written the way a `match` arm writes it, `Some(x)`: an
+    /// [`Expr::FunctionCall`] whose arguments name the payload binders.
+    Variant(Expr),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Float(f64),
@@ -202,6 +214,20 @@ pub enum Expr {
     /// `operand?`: the value inside a `Some` or an `Ok`, or an early return of
     /// the `None` or the `Err` from the function it is written in.
     Propagate(Box<Self>, Span),
+    /// Is(operand, target, operand_span, target_span)
+    ///
+    /// `operand is T` tests the operand's type and `operand is Some(x)` its
+    /// variant; either is a `bool`. Where the test is known to hold (the body
+    /// of an `if` or `while` it is the condition of, and the right of an `&&`
+    /// after it) a variable operand has the type tested for, and a variant
+    /// test's binders hold the payload.
+    Is(Box<Self>, Box<IsTarget>, Span, Span),
+    /// Cast(operand, type, operand_span, type_span)
+    ///
+    /// `operand as T`: the operand, typed `T`, checked while the program runs
+    /// where its static type does not already settle it. A value of another
+    /// type raises `bad_downcast`.
+    Cast(Box<Self>, Box<TypeExpr>, Span, Span),
     /// ArrayGetSlice(array, range_start, range_end, span)
     ///
     /// `range_end` is `None` for an open-ended slice, `a[i..]`, which runs to
@@ -317,6 +343,8 @@ impl Expr {
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
                 | Self::Propagate(_, _)
+                | Self::Is(..)
+                | Self::Cast(..)
                 | Self::ArrayGetSlice(..)
                 | Self::Mul(..)
                 | Self::Div(..)
@@ -667,8 +695,22 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::InlineCondition(condition, body, ..)
         | Expr::ElseIfBlock(condition, body, ..)
         | Expr::WhileBlock(condition, body, ..) => {
+            // What an `is` in the condition binds is in scope for the
+            // condition and the body, and goes out of scope with them.
+            let bound_len = bound.len();
             scan_free_names(condition, depth, bound, out);
             scan_block_free_names(body, depth, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::Is(operand, target, _, _) => {
+            scan_free_names(operand, depth, bound, out);
+            if let IsTarget::Variant(Expr::FunctionCall(binders, _, _, _, _)) = &**target {
+                for binder in binders {
+                    if let Expr::Var(name, _) = binder {
+                        bound.push(name.clone());
+                    }
+                }
+            }
         }
         Expr::ElseBlock(body) | Expr::EvalBlock(body) | Expr::LoopBlock(body) => {
             scan_block_free_names(body, depth, bound, out);
@@ -702,6 +744,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::GetStructField(obj, _, _, _)
         | Expr::Propagate(obj, _)
+        | Expr::Cast(obj, _, _, _)
         | Expr::BoolNeg(obj, _, _)
         | Expr::Neg(obj, _, _)
         | Expr::BitNot(obj, _, _) => {

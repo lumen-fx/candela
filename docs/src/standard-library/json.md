@@ -43,20 +43,21 @@ The mapping from json to candela is:
 An object becomes a map that holds its keys in document order, which is the
 order `stringify` writes them back out in.
 
-The result is typed `any`, so read a field back with a downcast (`as_int`,
-`as_str`, `as_map`, `as_list`) or test it first with `is_int`, `is_map`, and the
-rest. Those are [built-in functions](builtins.md). A document mixes types within
-one object or array, and the downcast keeps that: the map `as_map` returns holds
-`any` keys and values, so `m[k] = v` stores a string beside an int.
+The result is typed `any`, so read a field back with a downcast, `v as int`, or
+test it first with `v is int`; see
+[types](../language/types.md#testing-a-type-with-is). A document mixes types
+within one object or array, and the downcast keeps that: `as {string: any}`
+gives a map with string keys and `any` values, so `m[k] = v` stores a string
+beside an int.
 
 ```rust
 import "std/json" as json;
 
 fn main() {
     let doc = json::parse("{\"name\": \"ada\", \"scores\": [1, 2, 3]}");
-    let obj = as_map(doc);
-    print(as_str(obj["name"]));
-    print(as_list(obj["scores"]).len());
+    let obj = doc as {string: any};
+    print(obj["name"] as string);
+    print((obj["scores"] as int[]).len());
 }
 ```
 

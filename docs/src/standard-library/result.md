@@ -36,8 +36,8 @@ struct Config {
 }
 
 fn load(text: string) -> Result<Config, string> {
-    if text.is_int() {
-        return Ok(Config { port: int(text) });
+    if text.parse<int>() is Some(port) {
+        return Ok(Config { port: port });
     }
     return Err("not a port: " + text);
 }
@@ -65,8 +65,8 @@ type:
 
 ```rust
 fn port(text: string) -> Result<int, string> {
-    if text.is_int() {
-        return Ok(int(text));
+    if text.parse<int>() is Some(n) {
+        return Ok(n);
     }
     return Err("not a port: " + text);
 }
@@ -178,8 +178,8 @@ r.ok()
 
 ```rust
 fn parse_port(text) {
-    if text.is_int() {
-        return Ok(int(text));
+    if text.parse<int>() is Some(n) {
+        return Ok(n);
     }
     return Err("not a number: " + text);
 }

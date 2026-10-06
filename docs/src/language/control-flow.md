@@ -25,6 +25,11 @@ condition typed `any` is checked when it runs and raises `bad_downcast` on
 anything but a bool; see [errors](../reference/errors.md). The same holds for
 `else if`, for `while`, and for the expression form below.
 
+A condition that tests a value with `is` gives its body more than a bool: a
+tested variable has the type it was tested for, and a variant test such as
+`opt is Some(x)` binds the payload. See
+[testing a type](types.md#testing-a-type-with-is).
+
 ### if as an expression
 
 An `if` written where a value is expected produces a value. Each branch is a

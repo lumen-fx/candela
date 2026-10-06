@@ -26,6 +26,8 @@ impl std::fmt::Display for Token<'_> {
             Token::At => write!(f, "'@'"),
             Token::Question => write!(f, "'?'"),
             Token::Throw => write!(f, "'throw'"),
+            Token::Is => write!(f, "'is'"),
+            Token::As => write!(f, "'as'"),
             other => write!(f, "{other:?}"),
         }
     }
@@ -143,8 +145,13 @@ pub enum Token<'a> {
     Host,
     #[token("import")]
     Import,
+    /// `as`: a module alias in an import, and a checked downcast in an
+    /// expression (`v as int`).
     #[token("as")]
     As,
+    /// `is`: a type test (`v is int`) or a variant test (`v is Some(x)`).
+    #[token("is")]
+    Is,
     #[token("fn")]
     Function,
     #[token("if")]

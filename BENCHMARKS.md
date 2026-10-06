@@ -255,7 +255,7 @@ fn main() {
         } else if i % 5 == 0 {
             last = "Buzz";
         } else {
-            last = str(i);
+            last = string(i);
         }
     }
     print(last);
@@ -320,8 +320,8 @@ fn main() {
         let f = t.find("World");
         let sw = t.starts_with("Hello");
         let ew = t.ends_with("!");
-        let isf = "3.14".is_float();
-        let isi = "42".is_int();
+        let isf = "3.14".parse<float>();
+        let isi = "42".parse<int>();
         let parts = l.split(", ");
         let joined = parts.join("-");
         let r = joined.replace("-", " ");
@@ -336,7 +336,7 @@ fn main() {
         let fab = (-3.14).abs();
         let to_f = float(42);
         let to_i = int(3.14);
-        let to_s = str(42);
+        let to_s = string(42);
         let to_b = bool("true");
         let rng = range(10);
         let arr = [3, 1, 4, 1, 5];

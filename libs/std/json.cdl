@@ -3,9 +3,8 @@
 /// `parse` turns a json string into candela values: an object becomes a map
 /// keyed by strings, an array becomes a list, and a scalar becomes an int,
 /// float, string, bool, or null. The result is typed `any`, so read a field
-/// back with a downcast (`as_int`, `as_str`, `as_map`, `as_list`, ...) or a
-/// type test (`is_int`, `is_map`, ...). A malformed string raises a catchable
-/// error.
+/// back with a downcast (`v as int`, `v as {string: any}`) or a type test
+/// (`v is int`). A malformed string raises a catchable error.
 ///
 /// `stringify` serializes any candela value back to a json string.
 ///

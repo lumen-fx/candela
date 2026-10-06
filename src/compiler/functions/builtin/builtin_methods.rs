@@ -40,8 +40,7 @@ pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
             "trim_sequence_left",
             "trim_sequence_right",
             "find",
-            "is_float",
-            "is_int",
+            "parse",
             "repeat",
             "reverse",
             "split",
@@ -319,18 +318,6 @@ pub fn builtin_methods(
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::Find, id, output_id));
             state.add_to_src(ctx, output, fn_span);
-            Some(output_id)
-        }
-        "is_float" => {
-            check!(DataType::String, &[DataType::String], name, 0);
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::IsFloat, id, output_id));
-            Some(output_id)
-        }
-        "is_int" => {
-            check!(DataType::String, &[DataType::String], name, 0);
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::IsInt, id, output_id));
             Some(output_id)
         }
         "trim_left" => {

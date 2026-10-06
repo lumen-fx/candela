@@ -649,8 +649,8 @@ enum Shape {
 }
 
 fn line(a: int, b: int) -> Shape { return Shape::Line(a, b); }
-fn echo(x: any) -> string { return str(x); }
-fn first(xs: any[]) -> string { return str(xs[0]); }
+fn echo(x: any) -> string { return string(x); }
+fn first(xs: any[]) -> string { return string(xs[0]); }
 
 fn main() {}
 ";
@@ -811,19 +811,19 @@ fn main() {}
 #[test]
 fn builtin_names_are_shadowed_by_their_host_declarations() {
     let mut engine = Engine::new();
-    engine.register_host_fn("dev", "str", |n: i64| n * 2);
+    engine.register_host_fn("dev", "string", |n: i64| n * 2);
     engine.register_host_fn("dev", "exists", |n: i64| n + 1);
     engine.register_host_fn("dev", "range", |n: i64| format!("<{n}>"));
     engine.register_host_fn("dev", "argv", |n: f64| n / 2.0);
 
     let src = r#"
 host "dev" {
-    int str(int);
+    int string(int);
     int exists(int);
     string range(int);
     float argv(float);
 }
-fn doubled(n) { return dev::str(n) + 1; }
+fn doubled(n) { return dev::string(n) + 1; }
 fn bumped(n) { return dev::exists(n) + 1; }
 fn tagged(n) { return dev::range(n) + "!"; }
 fn halved(n) { return dev::argv(n) + 0.5; }
@@ -2029,7 +2029,7 @@ fn row(label: string, key: string, cell: int) -> Row {
 fn grow(n: int) -> int {
     let rows = [];
     for i in 0..n {
-        rows.push(row("a row label long enough to pool " + str(i), "an attribute value " + str(i), i));
+        rows.push(row("a row label long enough to pool " + string(i), "an attribute value " + string(i), i));
     }
     return n;
 }
@@ -2038,14 +2038,14 @@ fn frame(names: string[], extra: {string: int}, n: int) -> int {
     let rows = [];
     for i in 0..n {
         let name = names[i % names.len()];
-        let r = row(name + " row label long enough to pool " + str(i), "an attribute value " + str(i), i);
+        let r = row(name + " row label long enough to pool " + string(i), "an attribute value " + string(i), i);
         r.cells.push(extra["bonus"]);
         rows.push(r);
     }
     for i in 1..n {
         rows[i].cells.push(rows[i - 1].cells[0]);
         rows[i - 1].attrs["next"] = rows[i].label;
-        rows[i - 1].attrs["key"] = "a replaced attribute value " + str(i);
+        rows[i - 1].attrs["key"] = "a replaced attribute value " + string(i);
     }
     rows.reverse();
     let dropped = rows[0];
@@ -2314,7 +2314,7 @@ fn a_function_called_every_frame_keeps_answering() {
 /// still takes its type from every call, an empty list included.
 #[test]
 fn a_call_with_new_argument_types_compiles_its_own_entry() {
-    let src = "fn show(x) { return str(x); }\nfn main() {}";
+    let src = "fn show(x) { return string(x); }\nfn main() {}";
     let mut program = Engine::new().compile(src, "show.cdl").expect("compiles");
     let calls = [
         (Value::Int(1), "1"),
@@ -2343,8 +2343,8 @@ fn a_call_with_new_argument_types_compiles_its_own_entry() {
 const PARSE_PER_FRAME: &str = "import \"std/json\" as json;
 
 fn p() -> int {
-    let v = as_list(json::parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
-    return as_int(as_list(v[0])[1]) + as_int(as_map(v[1])[\"a\"]);
+    let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+    return ((v[0] as any[])[1] as int) + ((v[1] as {any: any})[\"a\"] as int);
 }
 fn main() {}
 ";

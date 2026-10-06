@@ -31,7 +31,7 @@ arguments of any type and returns nothing. A list prints as `[1,2,3]`, a map as
 `{a:1,b:2}`, a struct as `Name {field:value}`, and an enum value as its variant
 name with any payload in brackets. A float keeps its decimal point wherever it
 appears, so `print(3.0)` writes `3.0` and `print([3.0])` writes `[3.0]`, the
-same text `str` gives. `null`, the value of a call that returns nothing, prints as
+same text `string` gives. `null`, the value of a call that returns nothing, prints as
 `null`. An infinity prints as `inf` and a not-a-number as `NaN`.
 A function prints as `<fn>`, wherever it is held.
 
@@ -53,6 +53,11 @@ prompt is empty.
 
 ## Conversion
 
+A conversion is the name of the type it converts to, called as a function.
+Text that may not hold a value of the type is read with
+[`s.parse<T>()`](#string-methods) instead, which answers `None` rather than
+raising.
+
 ### int
 
 ```rust
@@ -72,10 +77,10 @@ float(value)
 Converts a string or an int to a float. A string that does not parse as a
 floating-point number raises `invalid_float`.
 
-### str
+### string
 
 ```rust
-str(value)
+string(value)
 ```
 
 Renders any value as a string. Ints and floats use their shortest exact decimal
@@ -135,7 +140,8 @@ fn(any, any) -> any
 
 The answer is the type the compiler inferred, not the tag the value carries when
 the program runs, so a value the compiler could not pin reads `any` whatever it
-turns out to hold. The `is_*` predicates below answer at run time.
+turns out to hold. `value is T` answers at run time; see
+[dynamic values](#dynamic-values).
 
 ## Sequences
 
@@ -153,53 +159,28 @@ than `end`.
 ## Dynamic values
 
 A value typed `any` (a `json::parse` result, an `Option` payload, a host
-function return) carries its type at run time. These functions test and unwrap it.
+function return) carries its type at run time. `value is T` tests it, and
+`value as T` hands it on typed as `T` or raises `bad_downcast`; both are
+operators of the language rather than functions, described in
+[types](../language/types.md#testing-a-type-with-is).
 
-### is_int, is_float, is_str, is_bool, is_list, is_map, is_null
-
-```rust
-is_int(value)
-is_float(value)
-is_str(value)
-is_bool(value)
-is_list(value)
-is_map(value)
-is_null(value)
-```
-
-Each returns a bool: true when the value's run-time type is the one named. They
-never raise.
-
-### as_int, as_float, as_str, as_bool, as_list, as_map
-
-```rust
-as_int(value)
-as_float(value)
-as_str(value)
-as_bool(value)
-as_list(value)
-as_map(value)
-```
-
-Checked downcasts. Each returns the value typed concretely, so the result takes
-part in ordinary typed expressions. A value whose run-time type differs raises
-`bad_downcast`, with a message naming both the requested and the found type.
-There is no `as_null`; use `is_null`.
-
-`as_list` gives a list of `any`, and `as_map` a map with `any` keys and values,
-because the entries of a dynamic collection are dynamic too. Such a collection
-takes a `push` or an `m[k] = v` of any type, in any order, and an entry read
-back out is an `any` that needs its own downcast.
+`as {any: any}` gives a map with `any` keys and values, and `as any[]` a list of
+`any`, because the entries of a dynamic collection are dynamic too. Such a
+collection takes a `push` or an `m[k] = v` of any type, in any order, and an
+entry read back out is an `any` that needs its own downcast. `as {string: any}`
+checks every key on the way, and gives the map a function declaring string
+keys accepts.
 
 ```rust
 import "std/json" as json;
 
 fn main() {
-    let v = json::parse("{\"n\": 7}");
-    let m = as_map(v);
-    print(as_int(m["n"]) + 1);
+    let m = json::parse("{\"n\": 7}") as {string: any};
+    print(m["n"] as int + 1);
     m["name"] = "ada";
-    print(as_str(m["name"]));
+    if m["name"] is string {
+        print("a name");
+    }
 }
 ```
 
@@ -272,8 +253,7 @@ Called on a string receiver.
 | `s.trim_sequence(chars)` | string | `s` with any of the characters in `chars` stripped from both ends |
 | `s.trim_sequence_left(chars)` | string | The same, from the start only |
 | `s.trim_sequence_right(chars)` | string | The same, from the end only |
-| `s.is_int()` | bool | True when `s` parses as an integer |
-| `s.is_float()` | bool | True when `s` parses as a float but not as an integer |
+| `s.parse<T>()` | `Option<T>` | `Some` with the `int`, `float` or `bool` the text holds, or `None`; `"4"` reads as a float as well as an int |
 | `s.repeat(n)` | string | `s` joined to itself `n` times |
 | `s.reverse()` | string | A new string with the characters in reverse order |
 
@@ -350,7 +330,7 @@ for entry.
 An empty map literal `{}` takes its key and value types from the first
 `m[k] = v`, the way an empty list takes its element type from the first `push`. Only a
 literal written empty works that way. A map whose entries are typed `any`, which
-is what `as_map` hands back, keeps taking entries of any type.
+is what `as {any: any}` hands back, keeps taking entries of any type.
 
 ## Number methods
 

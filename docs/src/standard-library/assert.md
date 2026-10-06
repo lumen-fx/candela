@@ -94,7 +94,7 @@ assert::assert_eq(a, b)
 - Returns: nothing.
 
 Raises `assert_eq failed: <a> != <b>` when the two differ, rendering both sides
-with `str`. Comparison is `!=`, so it works on any type the operator accepts,
+with `string`. Comparison is `!=`, so it works on any type the operator accepts,
 including lists and maps.
 
 ## assert_ne

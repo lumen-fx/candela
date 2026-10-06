@@ -219,7 +219,7 @@ These come with the language and need no import.
 - Strings: `len`, `uppercase`, `lowercase`, `trim`, `trim_left`, `trim_right`,
   `trim_sequence`, `trim_sequence_left`, `trim_sequence_right`, `starts_with`,
   `ends_with`, `contains`, `find`, `replace`, `split`, `repeat`, `reverse`,
-  `is_int`, `is_float`.
+  `parse`.
 - Lists: `len`, `push`, `remove`, `contains`, `find`, `sort`, `reverse`,
   `repeat`, `join`, `partition`.
 - Maps: `len`, `remove`, `contains`, `keys`, `values`. An entry is read and
@@ -239,9 +239,8 @@ Lists carry a second set of methods from the standard library's `list` module,
 available without an import: `map`, `filter`, `reduce`, `each`, `any`, `all`,
 `find`, `sort_by`, `first`, `last`, `is_empty`, `sum`, `product`, `min`, `max`,
 `index_of`, `count`, `unique`, `chunk`, `take`, and `drop`. See
-[Collections](collections.md). The standard library's `string`, `map` and
-`convert` modules add methods to strings, maps and numbers the same way, also
-with no import: they are all part of the
+[Collections](collections.md). The standard library's `string` and `map`
+modules add methods to strings and maps the same way, also with no import: they are all part of the
 [prelude](../standard-library/overview.md#the-prelude).
 
 The `Option` and `Result` types from the standard library are enums with `impl`

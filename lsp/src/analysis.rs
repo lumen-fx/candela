@@ -34,7 +34,7 @@
 use candela::check_only;
 use candela::compiler::compiler_data::{Function, Struct};
 use candela::compiler::expr::METHOD_SEP;
-use candela::compiler::expr::{Expr, Span};
+use candela::compiler::expr::{Expr, IsTarget, Span};
 use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::ANON_FN_PREFIX;
 use candela::macros::MacroEnv;
@@ -458,8 +458,16 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
         Expr::BoolNeg(a, _, _)
         | Expr::Neg(a, _, _)
         | Expr::BitNot(a, _, _)
-        | Expr::Propagate(a, _) => {
+        | Expr::Propagate(a, _)
+        | Expr::Cast(a, _, _, _) => {
             visit_expr(a, src_file, out);
+        }
+        // A variant pattern is visited the way a `match` arm's is.
+        Expr::Is(a, target, _, _) => {
+            visit_expr(a, src_file, out);
+            if let IsTarget::Variant(pattern) = &**target {
+                visit_expr(pattern, src_file, out);
+            }
         }
         // An indirect call names no function, so it records no reference of
         // its own; the callee and the arguments still hold names to resolve.

@@ -19,7 +19,7 @@ None of them raises. An argument outside a function's domain gives the platform'
 floating-point answer, so `math::sqrt(-1.0)` is not-a-number rather than an
 error. Infinities and not-a-number behave like any other float, and print as
 `inf`, `-inf` and `NaN`. Unlike the usual floating-point rule, not-a-number
-compares equal to itself, so test for it with `str(x) == "NaN"` rather than
+compares equal to itself, so test for it with `string(x) == "NaN"` rather than
 `x != x`.
 
 The module binds a small dynamic library that wraps the platform maths library,

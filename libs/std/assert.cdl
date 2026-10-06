@@ -39,13 +39,13 @@ fn assert_false(cond) {
 /// Raises a message showing both sides when `a` and `b` differ.
 fn assert_eq(a, b) {
     if a != b {
-        throw "assert_eq failed: " + str(a) + " != " + str(b);
+        throw "assert_eq failed: " + string(a) + " != " + string(b);
     }
 }
 
 /// Raises a message showing the value when `a` and `b` are equal.
 fn assert_ne(a, b) {
     if a == b {
-        throw "assert_ne failed: both sides are " + str(a);
+        throw "assert_ne failed: both sides are " + string(a);
     }
 }

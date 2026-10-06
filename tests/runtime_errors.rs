@@ -179,13 +179,13 @@ fn countdown(n) {
         return;
     }
     countdown(n - 1);
-    print("up " + str(n));
+    print("up " + string(n));
 }
 
 fn main() {
     let tally = 11;
     countdown(3);
-    print("tally " + str(tally));
+    print("tally " + string(tally));
 }
 "#,
     );
@@ -202,7 +202,7 @@ fn mutual_void_recursion_unwinds_in_order() {
         r#"
 fn ping(n) {
     if n > 0 {
-        let mine = "ping " + str(n);
+        let mine = "ping " + string(n);
         pong(n - 1);
         print(mine);
     }
@@ -210,7 +210,7 @@ fn ping(n) {
 
 fn pong(n) {
     if n > 0 {
-        let mine = "pong " + str(n);
+        let mine = "pong " + string(n);
         ping(n - 1);
         print(mine);
     }
@@ -271,9 +271,9 @@ fn dig(n) {
     try {
         dig(n - 1);
     } catch e {
-        print("caught at " + str(mine));
+        print("caught at " + string(mine));
     }
-    print("after " + str(mine));
+    print("after " + string(mine));
 }
 
 fn main() {
@@ -303,12 +303,12 @@ fn sum(n) {
     } catch e {
         got = 1;
     }
-    print("level " + str(mine) + " got " + str(got));
+    print("level " + string(mine) + " got " + string(got));
     return mine + got;
 }
 
 fn main() {
-    print("total " + str(sum(3)));
+    print("total " + string(sum(3)));
 }
 "#,
     );
@@ -340,12 +340,12 @@ fn dig(n) {
         try {
             dig(n - 1);
         } catch e {
-            print("caught at " + str(mine));
+            print("caught at " + string(mine));
         }
     } else {
         dig(n - 1);
     }
-    print("after " + str(mine));
+    print("after " + string(mine));
 }
 
 fn main() {
@@ -372,11 +372,11 @@ fn dig(n) {
         dig(n - 1);
     } catch e {
         if n < 3 {
-            throw "rethrown at " + str(mine);
+            throw "rethrown at " + string(mine);
         }
-        print("caught " + e + " at " + str(mine));
+        print("caught " + e + " at " + string(mine));
     }
-    print("after " + str(mine));
+    print("after " + string(mine));
 }
 
 fn main() {
@@ -404,13 +404,13 @@ fn dig(n) {
         try {
             dig(n - 1);
         } catch inner {
-            print("inner at " + str(mine));
+            print("inner at " + string(mine));
             throw "again";
         }
     } catch outer {
-        print("outer at " + str(mine));
+        print("outer at " + string(mine));
     }
-    print("after " + str(mine));
+    print("after " + string(mine));
 }
 
 fn main() {
@@ -514,7 +514,7 @@ fn a_whole_float_keeps_its_decimal_point_wherever_it_prints() {
         r#"
 fn main() {
     print(2.0);
-    print(str(2.0));
+    print(string(2.0));
     print([2.0]);
     print({"a": 2.0});
     print(-0.0);
@@ -798,20 +798,20 @@ fn a_parsed_document_survives_later_allocation() {
         r#"import "std/json" as json;
 
 fn main() {{
-    let doc = as_list(json::parse("{document}"));
+    let doc = json::parse("{document}") as any[];
     let n = 0;
     let text = "";
     while n < 5000 {{
         let a_map = {{"key-number-here": n}};
         let a_list = [n, n + 1, n + 2];
-        text = "a-string-built-at-run-time-" + str(n);
+        text = "a-string-built-at-run-time-" + string(n);
         n = n + 1;
     }}
     print(doc.len());
-    let last = as_map(doc[199]);
-    print(as_int(last["id"]));
-    print(as_str(last["name"]));
-    print(as_str(as_list(last["tags"])[1]));
+    let last = doc[199] as {{any: any}};
+    print(last["id"] as int);
+    print(last["name"] as string);
+    print((last["tags"] as any[])[1] as string);
 }}
 "#
     );
@@ -909,7 +909,7 @@ fn count_while(limit) {
         if i == 2 {
             return;
         }
-        print("while " + str(i));
+        print("while " + string(i));
         i += 1;
     }
     print("after the while");
@@ -920,7 +920,7 @@ fn count_for(limit) {
         if i == 2 {
             return;
         }
-        print("for " + str(i));
+        print("for " + string(i));
     }
     print("after the for");
 }
@@ -1002,7 +1002,7 @@ fn main() {
         if i == 2 {
             return 7;
         }
-        print("while " + str(i));
+        print("while " + string(i));
         i += 1;
     }
     print("after the while");

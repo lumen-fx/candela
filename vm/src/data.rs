@@ -696,7 +696,7 @@ impl Data {
 /// float reads as a float rather than as an int. An infinity and a
 /// not-a-number have no such form and print as themselves.
 ///
-/// Every float goes through here on its way to text: `str`, `print`, and a
+/// Every float goes through here on its way to text: `string`, `print`, and a
 /// float inside a printed array, map, struct or enum.
 #[must_use]
 pub fn format_float(value: f64) -> SmolStr {
@@ -770,7 +770,7 @@ mod format_tests {
     }
 
     /// A struct names its fields wherever it becomes text, nested in a list as
-    /// much as on its own, so `str` and a printed collection read the way
+    /// much as on its own, so `string` and a printed collection read the way
     /// `print` does.
     #[test]
     fn a_struct_formats_with_its_field_names() {

@@ -6,10 +6,12 @@ use super::lexer::Token;
 use super::term::parse_term;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
+use crate::compiler::expr::IsTarget;
 use crate::compiler::expr::Span;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
 use crate::parser::parse_args;
+use crate::parser::parse_type;
 use crate::parser::parse_type_args;
 use crate::parser::type_args_ahead;
 use crate::vm::shift_count_in_range;
@@ -31,6 +33,38 @@ pub fn parse_expr_with_precedence(
     lhs = parse_postfix_op(input, lhs, (lhs_start, end).into());
     let mut lhs_end = input.last_token_end as u32;
     while let Some(peek) = input.peek_token_opt() {
+        // `is` and `as` bind at the level of the comparisons and take a type
+        // (or, after `is`, a variant pattern) on their right rather than an
+        // expression, so `v as int + 1` is `(v as int) + 1` and
+        // `a + b as int` is `(a + b) as int`.
+        if matches!(peek, Token::Is | Token::As) && COMPARISON_PRECEDENCE > min_precedence {
+            input.next_token();
+            let rhs_start = input.peek_token_span().start;
+            let operand_span: Span = (lhs_start, lhs_end).into();
+            if input.peek_token_opt() == Some(Token::Null) {
+                cold_path();
+                let span = input.peek_token_span();
+                input.error(
+                    span,
+                    ParserErr::UnexpectedTokenStr(
+                        "a type",
+                        Token::Null,
+                        "null is a value, not a type: compare with `== null`.",
+                    ),
+                );
+            }
+            lhs = if peek == Token::Is {
+                let target = parse_is_target(input);
+                let target_span = (rhs_start, input.last_token_end as u32).into();
+                Expr::Is(Box::new(lhs), Box::new(target), operand_span, target_span)
+            } else {
+                let target = parse_type(input);
+                let target_span = (rhs_start, input.last_token_end as u32).into();
+                Expr::Cast(Box::new(lhs), Box::new(target), operand_span, target_span)
+            };
+            lhs_end = input.last_token_end as u32;
+            continue;
+        }
         let Some((op, op_precedence)) = check_op(peek, min_precedence) else {
             break;
         };
@@ -216,7 +250,9 @@ const fn check_op(op: Token, min_precedence: u8) -> Option<(Token, u8)> {
         Token::OpOr => (1, false),
         Token::OpAnd => (2, false),
         Token::OpEq | Token::OpNEq => (3, false),
-        Token::OpInf | Token::OpInfEq | Token::OpSup | Token::OpSupEq => (4, false),
+        Token::OpInf | Token::OpInfEq | Token::OpSup | Token::OpSupEq => {
+            (COMPARISON_PRECEDENCE, false)
+        }
         Token::Pipe => (PIPE_PRECEDENCE, false),
         Token::OpBitXor => (6, false),
         Token::OpBitAnd => (7, false),
@@ -410,6 +446,45 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
 /// The binding strength of `|`. A match pattern is read above it, so the `|`
 /// between two alternatives is never taken for bitwise or.
 pub const PIPE_PRECEDENCE: u8 = 5;
+
+/// The precedence of `<`, `<=`, `>`, `>=`, and of `is` and `as`, which bind at
+/// the same level.
+const COMPARISON_PRECEDENCE: u8 = 4;
+
+/// The right side of `is`: a variant pattern written the way a `match` arm
+/// writes one (`Some(x)`, `Shape::Circle(r)`), or a type. A name with a
+/// parenthesised list after it can only be a variant, since no type is
+/// written that way; anything else is read as a type, and a bare name that
+/// turns out to be a variant with no payload (`None`) is resolved as one by
+/// the compiler.
+fn parse_is_target(parser: &mut Parser<'_>) -> IsTarget {
+    if variant_pattern_ahead(parser) {
+        IsTarget::Variant(parse_term(parser, false))
+    } else {
+        IsTarget::Type(parse_type(parser))
+    }
+}
+
+/// Whether the tokens ahead are `Name(`, or `A::B(` with any number of path
+/// segments.
+fn variant_pattern_ahead(parser: &Parser<'_>) -> bool {
+    let mut tokens = parser.input.clone().map(|(t, _)| t.ok());
+    let mut next = || tokens.next().flatten();
+    if !matches!(next(), Some(Token::Identifier(_))) {
+        return false;
+    }
+    loop {
+        match next() {
+            Some(Token::LParen) => return true,
+            Some(Token::DoubleColon) => {
+                if !matches!(next(), Some(Token::Identifier(_))) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
 
 #[inline(always)]
 pub fn parse_expr(parser: &mut Parser<'_>) -> Expr {

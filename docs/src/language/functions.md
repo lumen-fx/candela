@@ -58,11 +58,11 @@ whose parameters are all annotated is compiled at those types whether or not
 anything calls it, so an error in it is reported at compile time. `any` is one
 of those types, and it carries no operations of its own: a body that adds,
 indexes or compares an `any` parameter has to name the type it wants, either by
-annotating the parameter concretely or by converting inside the body.
+annotating the parameter concretely or by downcasting it with `as` inside the body.
 
 ```candela
 fn plus_one(x: any) -> int {
-    return as_int(x) + 1;
+    return x as int + 1;
 }
 ```
 
@@ -78,9 +78,9 @@ down the file. Two functions cannot share a name: there is no overloading, and a
 repeated name is a compile error.
 
 A declaration may take the name of a [built-in](../standard-library/builtins.md),
-and the declaration wins. `fn str(n: int) -> int` makes `str` the program's own
-function wherever the file calls it, with its own argument and return types, and
-the built-in conversion is out of reach there. An imported name counts as
+and the declaration wins. `fn range(n: int) -> int` makes `range` the program's
+own function wherever the file calls it, with its own argument and return types,
+and the built-in is out of reach there. An imported name counts as
 declared, so a module that exports `read` is the `read` its importers call. The
 built-in methods are the exception: one of their names in an `impl` block never
 resolves, as [methods](methods.md) describes.
@@ -142,7 +142,7 @@ fn row() -> {any: any} {
 }
 
 fn main() {
-    let rows = [as_map(json::parse("{\"id\": 1}"))];
+    let rows = [json::parse("{\"id\": 1}") as {any: any}];
     rows.push(row());
     print(rows.len());
 }
@@ -155,8 +155,8 @@ declaration names no type until the call does.
 A body that returns an `any` value from a function declared with a type other
 than `any` checks the value on the way out: a scalar, a list, a map, a struct,
 an enum, a function, or a union, which takes any of its members. A value of
-another type raises `bad_downcast`, which a `catch` can take, the same way
-`as_int` and the other downcasts do.
+another type raises `bad_downcast`, which a `catch` can take, the same way a
+downcast with [`as`](types.md#downcasting-with-as) does.
 
 A function stored in an `any` comes back out as a function type only when it
 annotates every parameter: those annotations are the types it is compiled at,

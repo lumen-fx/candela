@@ -1494,7 +1494,7 @@ pub fn int_to_str_conversion() {
     run_and_check_registers!(
         r"
         fn main() {
-            let x = str(42);
+            let x = string(42);
             print(x.len());
         }
         ",
@@ -3461,50 +3461,43 @@ pub fn string_lowercase() {
 }
 
 #[test]
-pub fn string_is_float() {
-    run_and_check_registers!(
-        r#"
-        fn main() {
-            print("3.14".is_float());
-        }
-        "#,
-        true.into()
+pub fn string_parse_reads_a_float() {
+    assert_eq!(
+        run_output(r#"fn main() { print("3.14".parse<float>(), "42".parse<float>()); }"#),
+        "Some(3.14)\nSome(42.0)\n"
     );
 }
 
 #[test]
-pub fn string_is_float_false() {
-    run_and_check_registers!(
-        r#"
-        fn main() {
-            print("42".is_float());
-        }
-        "#,
-        false.into()
+pub fn string_parse_reads_an_int() {
+    assert_eq!(
+        run_output(
+            r#"fn main() { print("42".parse<int>(), "4.2".parse<int>(), "x".parse<int>()); }"#
+        ),
+        "Some(42)\nNone\nNone\n"
     );
 }
 
 #[test]
-pub fn string_is_int_true() {
-    run_and_check_registers!(
-        r#"
-        fn main() {
-            print("42".is_int());
-        }
-        "#,
-        true.into()
+pub fn string_parse_reads_a_bool() {
+    assert_eq!(
+        run_output(
+            r#"fn main() { print("true".parse<bool>(), "false".parse<bool>(), "yes".parse<bool>()); }"#
+        ),
+        "Some(true)\nSome(false)\nNone\n"
     );
 }
 
 #[test]
-pub fn string_is_int_false() {
-    run_and_check_registers!(
-        r#"
-        fn main() {
-            print("hello".is_int());
-        }
-        "#,
-        false.into()
+pub fn string_parse_evaluates_its_receiver_once() {
+    assert_eq!(
+        run_output(
+            r#"
+            fn text() -> string { print("read"); return "7"; }
+            fn main() { print(text().parse<int>()); }
+            "#
+        ),
+        "read\nSome(7)\n"
     );
 }
 
@@ -5294,7 +5287,7 @@ pub fn conversions_past_32_bits() {
     run_and_check_registers!(
         "
         fn main() {
-            let s = str(9223372036854775807);
+            let s = string(9223372036854775807);
             print(s == \"9223372036854775807\");
         }
         ",
@@ -5344,7 +5337,7 @@ pub fn json_round_trips_a_large_integer() {
         "import \"std/json\" as json;
 
         fn main() {
-            let v = as_int(json::parse(\"9007199254740993\"));
+            let v = json::parse(\"9007199254740993\") as int;
             print(v);
         }
         ",
@@ -6028,7 +6021,7 @@ struct S { x: int }
 impl S { fn make() -> S { return S { x: 7 }; } }
 fn main() {
     let s = S { x: 1 }.make();
-    print(str(s.x));
+    print(string(s.x));
 }
 ",
             "S",
@@ -6268,10 +6261,10 @@ pub fn user_fn_named_str_shadows_the_builtin() {
     // is arithmetic rather than a string conversion.
     run_and_check_registers!(
         "
-        fn str(n: int) -> int { return n * 2; }
+        fn string(n: int) -> int { return n * 2; }
 
         fn main() {
-            print(1 + str(3));
+            print(1 + string(3));
         }
         ",
         7.into()
@@ -6285,7 +6278,7 @@ pub fn builtins_still_infer_when_nothing_shadows_them() {
     run_and_check_registers!(
         r#"
         fn main() {
-            print(type(str(3)) + type(int("4")) + type(bool("true")) == "stringintbool");
+            print(type(string(3)) + type(int("4")) + type(bool("true")) == "stringintbool");
         }
         "#,
         true.into()
@@ -7585,7 +7578,7 @@ pub fn any_downcast_int_arithmetic() {
         fn main() {
             let b = Box1::Val(21);
             let n = 0;
-            match b { Val(v) => { n = as_int(v) * 2; } }
+            match b { Val(v) => { n = (v as int) * 2; } }
             print(n);
         }
         ",
@@ -7600,7 +7593,7 @@ pub fn any_type_tests() {
 
         fn main() {
             let j = json::parse(\"{\\\"n\\\": 5}\");
-            print(is_map(j));
+            print(j is {any: any});
         }
         ",
         true.into()
@@ -7614,7 +7607,7 @@ pub fn any_is_int_true() {
 
         fn main() {
             let v = json::parse(\"7\");
-            print(is_int(v));
+            print(v is int);
         }
         ",
         true.into()
@@ -7628,7 +7621,7 @@ pub fn any_is_int_false_on_string() {
 
         fn main() {
             let v = json::parse(\"\\\"x\\\"\");
-            print(is_int(v));
+            print(v is int);
         }
         ",
         false.into()
@@ -7645,7 +7638,7 @@ pub fn any_bad_downcast_is_catchable() {
         fn main() {
             let r = 0;
             try {
-                let x = as_int(json::parse(\"\\\"str\\\"\"));
+                let x = json::parse(\"\\\"str\\\"\") as int;
                 r = 1;
             } catch e {
                 r = 2;
@@ -7663,7 +7656,7 @@ pub fn any_as_str() {
         "import \"std/json\" as json;
 
         fn main() {
-            print(as_str(json::parse(\"\\\"hi\\\"\")));
+            print(json::parse(\"\\\"hi\\\"\") as string);
         }
         ",
         crate::data::Data::small_str("hi")
@@ -7676,7 +7669,7 @@ pub fn any_as_bool() {
         "import \"std/json\" as json;
 
         fn main() {
-            print(as_bool(json::parse(\"true\")));
+            print(json::parse(\"true\") as bool);
         }
         ",
         true.into()
@@ -7689,7 +7682,7 @@ pub fn json_parse_scalar_int() {
         "import \"std/json\" as json;
 
         fn main() {
-            print(as_int(json::parse(\"42\")) + 1);
+            print((json::parse(\"42\") as int) + 1);
         }
         ",
         43.into()
@@ -7702,8 +7695,8 @@ pub fn json_parse_object_field() {
         "import \"std/json\" as json;
 
         fn main() {
-            let obj = as_map(json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\"));
-            print(as_int(obj[\"x\"]) + as_int(obj[\"y\"]));
+            let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\") as {any: any};
+            print((obj[\"x\"] as int) + (obj[\"y\"] as int));
         }
         ",
         30.into()
@@ -7716,8 +7709,8 @@ pub fn json_parse_nested_array() {
         "import \"std/json\" as json;
 
         fn main() {
-            let obj = as_map(json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\"));
-            let arr = as_list(obj[\"nums\"]);
+            let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\") as {any: any};
+            let arr = obj[\"nums\"] as any[];
             print(arr.len());
         }
         ",
@@ -7771,8 +7764,8 @@ pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
         fn main() {
             let total = 0;
             for i in 0..3000 {
-                let v = as_list(json::parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
-                total = total + as_int(as_list(v[0])[1]);
+                let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+                total = total + ((v[0] as any[])[1] as int);
             }
             print(total);
         }
@@ -7800,24 +7793,24 @@ pub fn json_parse_survives_a_collection_mid_parse() {
             let names = [];
             for i in 0..2000 {
                 if i > 0 { doc = doc + \",\"; }
-                let name = \"an entry named after number \" + str(i);
-                doc = doc + \"{\\\"id\\\":\" + str(i) + \",\\\"name\\\":\\\"\" + name + \"\\\",\\\"tags\\\":[\" + str(i) + \",\\\"\" + name + \" again\\\"]}\";
+                let name = \"an entry named after number \" + string(i);
+                doc = doc + \"{\\\"id\\\":\" + string(i) + \",\\\"name\\\":\\\"\" + name + \"\\\",\\\"tags\\\":[\" + string(i) + \",\\\"\" + name + \" again\\\"]}\";
                 ids.push(i);
                 names.push(name);
             }
             doc = doc + \"]\";
             let bad = 0;
             for round in 0..3 {
-                let parsed = as_list(json::parse(doc));
+                let parsed = json::parse(doc) as any[];
                 if json::stringify(parsed) != doc { bad += 1; }
                 if parsed.len() != ids.len() { bad += 1; }
                 for i in 0..ids.len() {
-                    let got = as_map(parsed[i]);
-                    if as_int(got[\"id\"]) != ids[i] { bad += 1; }
-                    if as_str(got[\"name\"]) != names[i] { bad += 1; }
-                    let tags = as_list(got[\"tags\"]);
-                    if as_int(tags[0]) != ids[i] { bad += 1; }
-                    if as_str(tags[1]) != names[i] + \" again\" { bad += 1; }
+                    let got = parsed[i] as {any: any};
+                    if (got[\"id\"] as int) != ids[i] { bad += 1; }
+                    if (got[\"name\"] as string) != names[i] { bad += 1; }
+                    let tags = got[\"tags\"] as any[];
+                    if (tags[0] as int) != ids[i] { bad += 1; }
+                    if (tags[1] as string) != names[i] + \" again\" { bad += 1; }
                 }
             }
             print(bad);
@@ -7842,14 +7835,14 @@ pub fn split_survives_a_collection_mid_split() {
                 let text = \"\";
                 for i in 0..3000 {
                     if i > 0 { text = text + \";\"; }
-                    text = text + \"part number \" + str(i);
+                    text = text + \"part number \" + string(i);
                 }
                 let bad = 0;
                 for round in 0..3 {
                     let parts = text.split(\";\");
                     if parts.len() != 3000 { bad += 1; }
                     for i in 0..parts.len() {
-                        if parts[i] != \"part number \" + str(i) { bad += 1; }
+                        if parts[i] != \"part number \" + string(i) { bad += 1; }
                     }
                 }
                 print(bad);
@@ -7922,7 +7915,7 @@ pub fn idle_collection_stays_within_its_budget() {
         fn main() {
             let keep = [];
             for i in 0..7600 {
-                keep.push(Row { label: \"a row label long enough to pool \" + str(i), cells: [i] });
+                keep.push(Row { label: \"a row label long enough to pool \" + string(i), cells: [i] });
                 let garbage = [i, i];
             }
         }
@@ -7987,14 +7980,14 @@ pub fn strings_past_slot_65536_survive_a_collection() {
         fn main() {
             let keep = [];
             for i in 0..70000 {
-                keep.push("longstring" + str(i));
+                keep.push("longstring" + string(i));
             }
             for j in 0..200000 {
-                let t = "temporary" + str(j);
+                let t = "temporary" + string(j);
             }
             let bad = 0;
             for i in 0..70000 {
-                if keep[i] != "longstring" + str(i) { bad += 1; }
+                if keep[i] != "longstring" + string(i) { bad += 1; }
             }
             print(bad);
         }
@@ -8039,17 +8032,17 @@ pub fn an_interned_key_never_names_a_freed_string() {
         fn main() {
             let i = 0;
             while i < 300 {
-                let t = "garbage_string_" + str(i);
+                let t = "garbage_string_" + string(i);
                 i += 1;
             }
-            let doc = as_map(json::parse("{\"garbage_string_5\": 1}"));
+            let doc = json::parse("{\"garbage_string_5\": 1}") as {any: any};
             let j = 0;
             while j < 300 {
-                let t = "reuse_every_slot_" + str(j);
+                let t = "reuse_every_slot_" + string(j);
                 j += 1;
             }
-            let k = as_str(doc.keys()[0]);
-            print(k == "garbage_string_" + str(5));
+            let k = doc.keys()[0] as string;
+            print(k == "garbage_string_" + string(5));
         }
         "#,
         crate::data::TRUE
@@ -8180,7 +8173,7 @@ pub fn a_long_list_permuted_during_marking_keeps_its_strings() {
         fn main() {
             let words = ["entry number 0"];
             for i in 1..300 {
-                words.push("entry number " + str(i));
+                words.push("entry number " + string(i));
             }
             for round in 0..400 {
                 if round % 3 == 0 {
@@ -8192,7 +8185,7 @@ pub fn a_long_list_permuted_during_marking_keeps_its_strings() {
                     words.remove(round % 300);
                     words.push(gone);
                 }
-                let junk = "temporary string " + str(round);
+                let junk = "temporary string " + string(round);
             }
             let bad = 0;
             for w in words {
@@ -8213,11 +8206,11 @@ pub fn a_json_key_interned_during_marking_keeps_its_text() {
         fn main() {
             let bad = 0;
             for round in 0..300 {
-                let dead = "interned key " + str(round);
-                let doc = as_map(json::parse("{\"interned key " + str(round) + "\": [1, 2]}"));
-                let junk = "unrelated filler " + str(round);
-                let k = as_str(doc.keys()[0]);
-                if k != "interned key " + str(round) { bad += 1; }
+                let dead = "interned key " + string(round);
+                let doc = json::parse("{\"interned key " + string(round) + "\": [1, 2]}") as {any: any};
+                let junk = "unrelated filler " + string(round);
+                let k = doc.keys()[0] as string;
+                if k != "interned key " + string(round) { bad += 1; }
             }
             print(bad);
         }
@@ -8241,14 +8234,14 @@ pub fn parsed_array_survives_array_gc() {
             r#"import "std/json" as json;
 
             fn libs_len(body) {{
-                let root = as_map(json::parse(body));
+                let root = json::parse(body) as {{any: any}};
                 let s = "a,b,c";
                 let i = 0;
                 while i < 50 {{
                     let parts = s.split(",");
                     i = i + 1;
                 }}
-                return as_list(root["libraries"]).len();
+                return (root["libraries"] as any[]).len();
             }}
 
             fn main() {{
@@ -8266,8 +8259,8 @@ pub fn json_roundtrip_preserves_int() {
         "import \"std/json\" as json;
 
         fn main() {
-            let obj = as_map(json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))));
-            print(as_int(obj[\"a\"]));
+            let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))) as {any: any};
+            print(obj[\"a\"] as int);
         }
         ",
         7.into()
@@ -8281,7 +8274,7 @@ pub fn json_roundtrip_preserves_float() {
 
         fn main() {
             let v = json::parse(json::stringify(json::parse(\"2.5\")));
-            print(as_float(v));
+            print(v as float);
         }
         ",
         crate::data::Data::float(2.5)
@@ -8442,7 +8435,7 @@ pub fn map_downcast_takes_mixed_value_types() {
         "import \"std/json\" as json;
 
         fn main() {
-            let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
+            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
             m[\"b\"] = 2;
             m[\"c\"] = \"three\";
             print(m.len());
@@ -8458,8 +8451,8 @@ pub fn map_downcast_entries_stay_dynamic() {
         "import \"std/json\" as json;
 
         fn main() {
-            let m = as_map(json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\"));
-            print(as_int(m[\"a\"]) + as_str(m[\"b\"]).len());
+            let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\") as {any: any};
+            print((m[\"a\"] as int) + (m[\"b\"] as string).len());
         }
         ",
         4.into()
@@ -8472,7 +8465,7 @@ pub fn map_downcast_takes_mixed_key_types() {
         "import \"std/json\" as json;
 
         fn main() {
-            let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
+            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
             m[\"b\"] = 2;
             m[7] = 3;
             print(m.len());
@@ -8488,7 +8481,7 @@ pub fn list_downcast_takes_mixed_element_types() {
         "import \"std/json\" as json;
 
         fn main() {
-            let l = as_list(json::parse(\"[1]\"));
+            let l = json::parse(\"[1]\") as any[];
             l.push(2);
             l.push(\"three\");
             print(l.len());
@@ -8504,8 +8497,8 @@ pub fn list_downcast_elements_stay_dynamic() {
         "import \"std/json\" as json;
 
         fn main() {
-            let l = as_list(json::parse(\"[1, \\\"two\\\"]\"));
-            print(as_int(l[0]) + as_str(l[1]).len());
+            let l = json::parse(\"[1, \\\"two\\\"]\") as any[];
+            print((l[0] as int) + (l[1] as string).len());
         }
         ",
         4.into()
@@ -10731,8 +10724,8 @@ pub fn the_two_sides_of_a_result_merge_into_one_type() {
         "
         enum Res<T, E> { Ok(T), Err(E) }
         fn parse(text: string) {
-            if text.is_int() {
-                return Ok(int(text));
+            if text.parse<int>() is Some(n) {
+                return Ok(n);
             }
             return Err(\"not a number\");
         }
@@ -12254,7 +12247,7 @@ pub fn push_keeps_its_receiver_while_the_argument_compiles() {
         fn main() {
             let s = S { items: [1, 2, 3], n: 3 };
             s.items.push(s.n);
-            print(str(s.items) == \"[1,2,3,3]\");
+            print(string(s.items) == \"[1,2,3,3]\");
         }
         ",
         crate::data::TRUE
@@ -12271,7 +12264,7 @@ pub fn insert_keeps_its_receiver_while_its_arguments_compile() {
         fn main() {
             let s = S { m: {\"a\": 1}, text: \"a\", n: 3 };
             s.m[s.text] = s.n;
-            print(str(s.m) == \"{\\\"a\\\":3}\");
+            print(string(s.m) == \"{\\\"a\\\":3}\");
         }
         ",
         crate::data::TRUE
@@ -12365,7 +12358,7 @@ pub fn remove_keeps_its_receiver_while_a_call_argument_compiles() {
         fn main() {
             let s = S { items: [1, 2, 3], n: 3 };
             s.items.remove(s.items.len() - 1);
-            print(str(s.items) == \"[1,2]\");
+            print(string(s.items) == \"[1,2]\");
         }
         ",
         crate::data::TRUE
@@ -12381,7 +12374,7 @@ pub fn a_map_remove_keeps_its_receiver_while_the_key_compiles() {
         fn main() {
             let s = S { m: {\"a\": 1, \"b\": 2}, text: \"a\" };
             s.m.remove(s.text);
-            print(str(s.m) == \"{\\\"b\\\":2}\");
+            print(string(s.m) == \"{\\\"b\\\":2}\");
         }
         ",
         crate::data::TRUE
@@ -12414,7 +12407,7 @@ pub fn an_indexed_receiver_keeps_its_register() {
         fn main() {
             let xs = [[1], [2]];
             xs[0].push(xs[1][0]);
-            print(str(xs) == \"[[1,2],[2]]\");
+            print(string(xs) == \"[[1,2],[2]]\");
         }
         ",
         crate::data::TRUE
@@ -12538,7 +12531,7 @@ pub fn an_any_field_takes_a_value_of_any_type() {
 
         fn main() {
             let w = Wrap { v: 5 };
-            print(as_int(w.v) + 1);
+            print((w.v as int) + 1);
         }
         ",
         6.into()
@@ -12554,7 +12547,7 @@ pub fn an_any_field_takes_a_new_value_of_another_type() {
         fn main() {
             let w = Wrap { v: 5 };
             w.v = \"later\";
-            print(as_str(w.v).uppercase() == \"LATER\");
+            print((w.v as string).uppercase() == \"LATER\");
         }
         ",
         crate::data::TRUE
@@ -12570,7 +12563,7 @@ pub fn an_any_field_of_a_generic_struct_takes_any_value() {
         fn main() {
             let b = Box<int> { item: 3, tag: \"three\" };
             b.tag = 9;
-            print(b.item + as_int(b.tag));
+            print(b.item + (b.tag as int));
         }
         ",
         12.into()
@@ -12751,7 +12744,7 @@ pub fn type_spells_the_dynamic_slot_any() {
     run_and_check_registers!(
         "
         fn main() {
-            let xs = as_list([1, 2]);
+            let xs = [1, 2] as any[];
             print(type(xs[0]) + type(xs) == \"anyany[]\");
         }
         ",
@@ -13469,7 +13462,7 @@ pub fn a_declared_map_of_any_shares_a_list_with_dynamic_rows() {
 
             fn main() {
                 let rows = [];
-                rows.push(as_map({\"x\": \"y\"}));
+                rows.push({\"x\": \"y\"} as {any: any});
                 rows.push(row());
                 print(rows.len());
             }
@@ -14356,8 +14349,8 @@ struct Opts {
 }
 
 fn show(o: Opts) {
-    print(o.cwd + \" \" + str(o.retries) + \" \" + str(o.verbose) + \" \" + str(o.ratio) + \" \"
-        + str(o.env.len()) + \" \" + str(o.inner.n) + \" \" + str(o.inner.tags.len()) + \" \" + str(o.note));
+    print(o.cwd + \" \" + string(o.retries) + \" \" + string(o.verbose) + \" \" + string(o.ratio) + \" \"
+        + string(o.env.len()) + \" \" + string(o.inner.n) + \" \" + string(o.inner.tags.len()) + \" \" + string(o.note));
 }
 ";
 
@@ -14453,9 +14446,9 @@ fn build(cwd: string) -> Opts {
 }
 fn main() {
     for i in 0..3 {
-        let o = build(str(i));
+        let o = build(string(i));
         o.tags.push(\"u\");
-        print(o.cwd + \" \" + str(o.tags.len()) + \" \" + str(Opts::default().tags.len()));
+        print(o.cwd + \" \" + string(o.tags.len()) + \" \" + string(Opts::default().tags.len()));
     }
 }
 ";
@@ -14471,9 +14464,9 @@ struct Cell<T> { value: T, label: string = \"cell\", }
 fn main() {
     let a = Cell<int> { value: 4, label: \"a\" };
     let b = Cell { value: 5, ..a };
-    print(b.label + \" \" + str(b.value));
+    print(b.label + \" \" + string(b.value));
     let c = Cell<int>::default();
-    print(c.label + \" \" + str(c.value));
+    print(c.label + \" \" + string(c.value));
 }
 ";
     assert_eq!(run_output(src), "a 5\ncell 0\n");
@@ -14502,13 +14495,13 @@ fn make() -> S { return Default::default(); }
 fn main() {
     print(S::default().x);
     let a = S { y: 9, ..Default::default() };
-    print(str(a.x) + \" \" + str(a.y));
+    print(string(a.x) + \" \" + string(a.y));
     print(take(Default::default()));
     print(make().x);
     let t = T::default();
-    print(str(t.s.x) + \" \" + str(t.s.y) + \" \" + str(t.n));
+    print(string(t.s.x) + \" \" + string(t.s.y) + \" \" + string(t.n));
     let u = T { n: 1, ..Default::default() };
-    print(str(u.s.x) + \" \" + str(u.n));
+    print(string(u.s.x) + \" \" + string(u.n));
 }
 ";
     assert_eq!(run_output(src), "7\n7 9\n7\n7\n7 3 0\n7 1\n");
@@ -14531,7 +14524,7 @@ impl S {
 }
 fn main() {
     let s = S::default();
-    print(str(s.x) + \" \" + str(s.y));
+    print(string(s.x) + \" \" + string(s.y));
 }
 ";
     assert_eq!(run_output(src), "6 6\n");
@@ -14547,7 +14540,7 @@ impl Cell<T> { fn default() { return Cell<T> { n: 3, ..Default::default() }; } }
 struct Holder { c: Cell<int> }
 fn main() {
     let a = Cell<string>::default();
-    print(str(a.n) + \" [\" + a.value + \"]\");
+    print(string(a.n) + \" [\" + a.value + \"]\");
     print(Holder::default().c.n);
 }
 ";
@@ -14977,7 +14970,7 @@ pub fn the_prelude_needs_no_import() {
     let src = r#"
         fn main() {
             print(Some(3).unwrap_or(1), Ok(2).is_ok(), "abc".capitalize());
-            print({"a": 1}.is_empty(), "42".to_int() + 1, [1, 2, 3].sum());
+            print({"a": 1}.is_empty(), int("42") + 1, [1, 2, 3].sum());
         }
     "#;
     assert_eq!(run_output(src), "3\ntrue\nAbc\nfalse\n43\n6\n");
@@ -15300,4 +15293,207 @@ pub fn an_imported_method_wins_over_the_prelude_s() {
     let _ = std::fs::remove_dir_all(&dir);
     result.unwrap();
     assert_eq!(CAPTURED_OUTPUT.with(|o| o.take()), "mine\n");
+}
+
+/// `is` tests a value's type and answers a bool, for scalars, structs, enums,
+/// unions and collections, whose contents it checks.
+#[test]
+pub fn is_tests_a_type() {
+    let src = r#"
+        import "std/json" as json;
+        struct P { x: int }
+        enum Shape { Circle(float), Square(int) }
+        fn main() {
+            let v = json::parse("{\"a\": 1, \"b\": [1, 2]}");
+            print(v is int, v is {string: any}, v is {string: int}, v is {any: any});
+            let xs = json::parse("[1, 2, 3]");
+            print(xs is int[], xs is string[], xs is (int|string)[], xs is any[]);
+            let ps = [P { x: 1 }];
+            print(ps is P[], 3 is int, 3 is int|string, 3 is any);
+            let s = Shape::Circle(1.0);
+            print(s is Shape, s is Circle(r), s is Shape::Square(_));
+        }
+    "#;
+    assert_eq!(
+        run_output_std(src),
+        "false\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\n"
+    );
+}
+
+/// Inside the body an `is` guards, the variable it tested has the type it was
+/// tested for, in an `if`, an `else if`, a `while`, an `if` used as a value,
+/// and on the right of an `&&`. A function compiled for one of a union's
+/// members answers the test for the others with `false`.
+#[test]
+pub fn is_narrows_where_it_held() {
+    let src = r#"
+        fn describe(v) -> string {
+            if v is int {
+                return "int " + string(v + 1);
+            } else if v is string {
+                return "string " + v.uppercase();
+            } else if v is any[] {
+                return "list of " + string(v.len());
+            }
+            return "other";
+        }
+        fn pick(x: int|string) -> int {
+            return if x is int { x * 2 } else if x is string { x.len() } else { 0 };
+        }
+        fn main() {
+            print(describe(1), describe("a"), describe([1, 2]), describe(true));
+            print(pick(4), pick("abc"));
+            let n = 3;
+            print(n is int && n + 1 == 4);
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "int 2\nstring A\nlist of 2\nother\n8\n3\ntrue\n"
+    );
+}
+
+/// A variant test binds the payload where it held: in the body, on the right
+/// of an `&&` chain, in a `while` loop and in a closure the body writes.
+#[test]
+pub fn is_binds_a_variants_payload() {
+    let src = r#"
+        import "std/json" as json;
+        fn port(cfg: {string: any}) -> int {
+            if cfg.get("port") is Some(p) && p is int { return p; }
+            return 8080;
+        }
+        fn main() {
+            print(port(json::parse("{\"port\": 80}") as {string: any}));
+            print(port(json::parse("{\"port\": \"x\"}") as {string: any}));
+            let o = Some(5);
+            print(o is Some(n) && n > 3 && n < 10);
+            print(o is None);
+            let xs = [Some(1), Some(3)];
+            let i = 0;
+            while i < xs.len() && xs[i] is Some(x) {
+                print(x);
+                i += 1;
+            }
+            if o is Some(n) {
+                let later = fn() => n + 1;
+                print(later());
+            }
+        }
+    "#;
+    assert_eq!(run_output_std(src), "80\n8080\ntrue\nfalse\n1\n3\n6\n");
+}
+
+/// `as` hands the value on typed as the target where it is one, and raises
+/// `bad_downcast` where it is not. A list or a map is checked down to what it
+/// holds.
+#[test]
+pub fn as_downcasts_or_raises() {
+    let src = r#"
+        import "std/json" as json;
+        fn keys(m: {string: any}) -> int { return m.len(); }
+        fn main() {
+            let v = json::parse("{\"a\": 1, \"b\": 2}");
+            print(keys(v as {string: any}));
+            print(json::parse("[1, 2]") as int[]);
+            print(json::parse("7") as int + 1);
+            try {
+                print(json::parse("[1, \"x\"]") as int[]);
+            } catch "bad_downcast" {
+                print("caught");
+            }
+            print([1] as any[]);
+        }
+    "#;
+    assert_eq!(run_output_std(src), "2\n[1,2]\n8\ncaught\n[1]\n");
+}
+
+/// What the static type rules out is a compile error for `as`, and the
+/// removed spellings name the ones that replaced them.
+#[test]
+pub fn type_test_diagnostics() {
+    for (src, code, wanted) in [
+        (
+            "fn main() { print(3 as string); }",
+            "impossible_downcast",
+            "string(x)",
+        ),
+        (
+            "import \"std/json\" as json; fn main() { print(json::parse(\"1\") is Option); }",
+            "type_test_needs_arguments",
+            "Option<int>",
+        ),
+        (
+            "import \"std/json\" as json; fn main() { print(json::parse(\"1\") is Some(x)); }",
+            "variant_test_not_enum",
+            "is Option<int>",
+        ),
+        (
+            "fn main() { print(str(1)); }",
+            "unknown_function",
+            "string(x)",
+        ),
+        (
+            "fn main() { print(is_int(1)); }",
+            "unknown_function",
+            "v is int",
+        ),
+        (
+            "fn main() { print(as_map(1)); }",
+            "unknown_function",
+            "v as {any: any}",
+        ),
+        (
+            "fn main() { print(is_null(1)); }",
+            "unknown_function",
+            "v == null",
+        ),
+        (
+            "fn main() { print(\"1\".is_int()); }",
+            "no_such_method",
+            "s.parse<int>()",
+        ),
+        (
+            "fn main() { print(\"1\".to_int()); }",
+            "no_such_method",
+            "int(x)",
+        ),
+        (
+            "fn main() { print(1.to_string()); }",
+            "no_such_method",
+            "string(x)",
+        ),
+        (
+            "fn main() { print(\"1\".parse<string>()); }",
+            "parse_type",
+            "s.parse<int>()",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}");
+        assert!(d.message.contains(wanted), "{src}: {d:?}");
+    }
+}
+
+/// `null` is a value, not a type, so `is null` points at `== null`.
+#[test]
+pub fn is_null_points_at_equality() {
+    let d = compile_diag("fn main() { print(1 is null); }", "diag.kl").unwrap_err();
+    assert!(d.message.contains("== null"), "{d:?}");
+}
+
+/// `is` and `as` bind at the level of the comparisons, below arithmetic.
+#[test]
+pub fn is_and_as_bind_like_comparisons() {
+    let src = r#"
+        import "std/json" as json;
+        fn main() {
+            let v = json::parse("2");
+            print(v as int + 1);
+            print(1 + 1 is int);
+            print(v is int && v as int > 1);
+        }
+    "#;
+    assert_eq!(run_output_std(src), "3\ntrue\ntrue\n");
 }

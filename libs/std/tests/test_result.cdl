@@ -7,19 +7,19 @@ import "std/assert" as assert;
 struct Config { port: int }
 
 fn load(text: string) -> Result<Config, string> {
-    if text.is_int() {
-        return Ok(Config { port: int(text) });
+    if text.parse<int>() is Some(port) {
+        return Ok(Config { port: port });
     }
     return Err("not a port: " + text);
 }
 
-fn twice(x) { return as_int(x) * 2; }
+fn twice(x) { return (x as int) * 2; }
 
-fn shout(e) { return as_str(e) + "!"; }
+fn shout(e) { return (e as string) + "!"; }
 
 // A step that may fail on its own, for and_then to chain.
 fn halve(x) {
-    let n = as_int(x);
+    let n = x as int;
     if n % 2 == 0 {
         return Ok(n / 2);
     }

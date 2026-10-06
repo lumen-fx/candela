@@ -1,8 +1,8 @@
 ================================================================================
-Imports (libs/std/tests/test_convert.cdl, libs/std/tests/test_list.cdl)
+Imports (libs/std/tests/test_list.cdl)
 ================================================================================
 
-import "std/convert";
+import "std/assert";
 import "pgo_import_test.cdl";
 import "std/list" as list;
 
@@ -18,11 +18,11 @@ import "std/list" as list;
     (identifier)))
 
 ================================================================================
-Function declaration (libs/std/convert.cdl)
+Function declaration
 ================================================================================
 
-/// Parses a string or truncates a float to an `int`.
-fn to_int(x) {
+/// Truncates a float to an `int`.
+fn whole(x) {
     return int(x);
 }
 

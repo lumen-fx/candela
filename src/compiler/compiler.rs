@@ -182,6 +182,7 @@ mod fold;
 pub(crate) mod function_table;
 mod registers;
 mod scalar;
+pub(crate) mod type_test;
 
 pub trait UnwrapId {
     fn unwrap_id(self) -> u16;
@@ -334,11 +335,17 @@ fn compile_short_circuit_condition(
     output: &mut Vec<Instr>,
     bool_or_mode: bool,
 ) -> (Vec<usize>, Vec<usize>) {
+    // What an `is` proves holds only where the code it guards runs. Under an
+    // `||` that is nowhere past its own operand, so the names it brought into
+    // scope leave with it; under a chain of `&&` it is the rest of the chain
+    // and the body, and the caller takes them out of scope after the body.
+    let v_len = v.len();
     match expr {
         Expr::BoolOr(left, right, left_span, right_span) => {
             // left side of || always uses true jump mode
             let (mut true_jumps, left_false) =
                 compile_short_circuit_condition(left, *left_span, v, ctx, state, output, true);
+            v.truncate(v_len);
             // A false left operand does not settle `||`, so it continues into
             // the right operand rather than out of the whole expression.
             let right_start = output.len();
@@ -355,6 +362,7 @@ fn compile_short_circuit_condition(
                 bool_or_mode,
             );
             true_jumps.extend(right_true);
+            v.truncate(v_len);
             (true_jumps, right_false)
         }
         Expr::BoolAnd(left, right, left_span, right_span) => {
@@ -379,6 +387,7 @@ fn compile_short_circuit_condition(
                 for j in left_false {
                     set_jmp_size(&mut output[j], (fallthrough - j) as u16);
                 }
+                v.truncate(v_len);
                 (right_true, Vec::new())
             } else {
                 // normal && -> if either side is false, jump past the body
@@ -403,6 +412,27 @@ fn compile_short_circuit_condition(
                 false_jumps.extend(right_false);
                 (right_true, false_jumps)
             }
+        }
+        // An `is` whose false jump leaves the code it guards: what it proves
+        // holds past the jump, so a variant's payload is read there.
+        Expr::Is(operand, target, operand_span, target_span) if !bool_or_mode => {
+            let (cond_id, facts) = type_test::compile_is(
+                operand,
+                target,
+                *operand_span,
+                *target_span,
+                None,
+                true,
+                v,
+                ctx,
+                state,
+                output,
+            );
+            add_cmp_false(cond_id, &mut 0, output, false);
+            state.free_reg(cond_id, v);
+            let false_jump = output.len() - 1;
+            facts.apply(v, state, output);
+            (Vec::new(), vec![false_jump])
         }
         expr => {
             let cond_id = compile_condition_operand(expr, condition_span, v, ctx, state, output);
@@ -1498,7 +1528,7 @@ const fn pattern_span(pattern: &Expr, fallback: Span) -> Span {
 
 /// The names one resolved alternative binds, each with the type of the payload
 /// it binds, in name order.
-fn alternative_bindings(
+pub(crate) fn alternative_bindings(
     enum_id: u16,
     (variant_idx, binders): &(u16, Vec<SmolStr>),
     state: &State<'_>,
@@ -2888,8 +2918,16 @@ fn compile_short_circuit_value(
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
+    keep_facts: bool,
 ) -> u16 {
-    let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
+    let and = symbol == "&&";
+    let v_len = v.len();
+    let t_l = l.infer_type(v, ctx, state);
+    if and {
+        type_test::declare_condition_facts(l, v, ctx, state);
+    }
+    let t_r = r.infer_type(v, ctx, state);
+    v.truncate(v_len);
     if t_l != DataType::Bool || t_r != DataType::Bool {
         cold_path();
         compiler_errors::error_op(
@@ -2905,9 +2943,54 @@ fn compile_short_circuit_value(
     }
 
     let id = state.alloc_reg_tgt(tgt_id);
-    let left_id = l
-        .compile(v, ctx, state, output, Some(id), false, true)
-        .unwrap_id();
+    // The right of an `&&` runs only where the left held, so what an `is` on
+    // the left proved is in scope for it, and its payload is read once the
+    // jump has let it through.
+    let (left_id, facts) = match l {
+        Expr::Is(operand, target, operand_span, target_span) if and => {
+            let outer = std::mem::replace(
+                &mut state.captured_binders,
+                type_test::captured_binders(l, std::slice::from_ref(r)),
+            );
+            let compiled = type_test::compile_is(
+                operand,
+                target,
+                *operand_span,
+                *target_span,
+                Some(id),
+                true,
+                v,
+                ctx,
+                state,
+                output,
+            );
+            state.captured_binders = outer;
+            (compiled.0, Some(compiled.1))
+        }
+        // A chain of `&&` keeps what its operands proved for the operand
+        // after it.
+        Expr::BoolAnd(ll, lr, span_ll, span_lr) if and => (
+            compile_short_circuit_value(
+                ll,
+                lr,
+                *span_ll,
+                *span_lr,
+                "&&",
+                Some(id),
+                v,
+                ctx,
+                state,
+                output,
+                true,
+            ),
+            None,
+        ),
+        _ => (
+            l.compile(v, ctx, state, output, Some(id), false, true)
+                .unwrap_id(),
+            None,
+        ),
+    };
     if left_id != id {
         output.push(Instr::Mov(left_id, id));
     }
@@ -2915,15 +2998,21 @@ fn compile_short_circuit_value(
     let skip_idx = output.len();
     // `&&` is settled by a false left operand, `||` by a true one. Either way
     // the left operand's value is already in the result register.
-    output.push(if symbol == "&&" {
+    output.push(if and {
         Instr::IsFalseJmp(id, 0)
     } else {
         Instr::IsTrueJmp(id, 0)
     });
+    if let Some(facts) = facts {
+        facts.apply(v, state, output);
+    }
 
     let right_id = r
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
+    if !keep_facts {
+        v.truncate(v_len);
+    }
     state.free_reg(right_id, v);
     output.push(Instr::Mov(right_id, id));
     let skip_size = (output.len() - skip_idx) as u16;
@@ -3335,15 +3424,22 @@ fn compile_inline_condition(
         .unwrap_or(code.len());
 
     let condition_blocks_count = code.len() - main_code_limit;
-    let mut cmp_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
+    // One entry per branch with a condition: the jumps it takes when false.
+    let mut false_jumps: Vec<Vec<usize>> = Vec::with_capacity(condition_blocks_count + 1);
     let mut jmp_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
     let mut condition_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
 
-    // parse the main condition
-    let condition_id =
-        compile_condition_operand(main_condition, condition_span, v, ctx, state, output);
-    add_cmp_false(condition_id, &mut 0, output, false);
-    cmp_markers.push(output.len() - 1);
+    // parse the main condition; the branch sees what it proved
+    let v_len = v.len();
+    false_jumps.push(compile_guard(
+        main_condition,
+        condition_span,
+        &code[..main_code_limit],
+        v,
+        ctx,
+        state,
+        output,
+    ));
 
     compile_inline_condition_branch(
         &code[..main_code_limit],
@@ -3354,6 +3450,7 @@ fn compile_inline_condition(
         return_id,
         as_fn_value,
     );
+    v.truncate(v_len);
     if main_code_limit != code.len() {
         output.push(Instr::Jmp(0));
         jmp_markers.push(output.len() - 1);
@@ -3363,12 +3460,17 @@ fn compile_inline_condition(
     for elem in &code[main_code_limit..] {
         if let Expr::ElseIfBlock(condition, code, condition_span) = elem {
             condition_markers.push(output.len());
-            let condition_id =
-                compile_condition_operand(condition, *condition_span, v, ctx, state, output);
-            add_cmp_false(condition_id, &mut 0, output, false);
-            state.free_reg(condition_id, v);
-            cmp_markers.push(output.len() - 1);
+            false_jumps.push(compile_guard(
+                condition,
+                *condition_span,
+                code,
+                v,
+                ctx,
+                state,
+                output,
+            ));
             compile_inline_condition_branch(code, v, ctx, state, output, return_id, as_fn_value);
+            v.truncate(v_len);
             output.push(Instr::Jmp(0));
             jmp_markers.push(output.len() - 1);
         } else if let Expr::ElseBlock(code) = elem {
@@ -3385,34 +3487,14 @@ fn compile_inline_condition(
         let diff = output.len() - y;
         output[y] = Instr::Jmp(diff as u16);
     }
-    for (i, y) in cmp_markers.iter().enumerate() {
-        let diff = if i >= condition_markers.len() {
-            output.len() - 1 - y
-        } else {
-            condition_markers[i] - y
-        };
-        if let Some(
-            Instr::IsFalseJmp(_, jump_size)
-            | Instr::SupEqFloatJmp(_, _, jump_size)
-            | Instr::SupEqIntJmp(_, _, jump_size)
-            | Instr::SupFloatJmp(_, _, jump_size)
-            | Instr::SupIntJmp(_, _, jump_size)
-            | Instr::InfEqFloatJmp(_, _, jump_size)
-            | Instr::InfEqIntJmp(_, _, jump_size)
-            | Instr::InfFloatJmp(_, _, jump_size)
-            | Instr::InfIntJmp(_, _, jump_size)
-            | Instr::NotEqJmp(_, _, jump_size)
-            | Instr::ObjNotEqJmp(_, _, jump_size)
-            | Instr::StrNotEqJmp(_, _, jump_size)
-            | Instr::EqJmp(_, _, jump_size)
-            | Instr::ObjEqJmp(_, _, jump_size)
-            | Instr::StrEqJmp(_, _, jump_size),
-        ) = output.get_mut(*y)
-        {
-            *jump_size = diff as u16;
+    // A false condition goes on to the next branch, which is always there:
+    // the `else` closes the chain.
+    for (i, jumps) in false_jumps.iter().enumerate() {
+        let target = condition_markers[i];
+        for &y in jumps {
+            set_jmp_size(&mut output[y], (target - y) as u16);
         }
     }
-    state.free_reg(condition_id, v);
     return_id
 }
 
@@ -3659,6 +3741,33 @@ fn calls_nothing(expr: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State
     }
 }
 
+/// Compiles the condition of an `if`, an `else if` or a `while`, leaving what
+/// it proved in scope for `body`, the code it guards: the variables an `is`
+/// narrowed and the names a variant test bound. Answers the jumps taken when
+/// the condition is false, for the caller to aim past the body; the caller
+/// also takes the condition's names out of scope once the body is compiled.
+#[allow(clippy::too_many_arguments)]
+fn compile_guard(
+    condition: &Expr,
+    condition_span: Span,
+    body: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Vec<usize> {
+    let captured = type_test::captured_binders(condition, body);
+    let outer = std::mem::replace(&mut state.captured_binders, captured);
+    let (true_jump_idxs, false_jump_idxs) =
+        compile_short_circuit_condition(condition, condition_span, v, ctx, state, output, false);
+    state.captured_binders = outer;
+    let body_start = output.len();
+    for j in true_jump_idxs {
+        set_jmp_size(&mut output[j], (body_start - j) as u16);
+    }
+    false_jump_idxs
+}
+
 fn compile_condition(
     main_condition: &Expr,
     code: &[Expr],
@@ -3681,23 +3790,19 @@ fn compile_condition(
     let mut jmp_instr_idx: Vec<usize> = Vec::with_capacity(condition_blocks_count);
     let mut condition_markers: Vec<usize> = Vec::with_capacity(condition_blocks_count);
 
-    // Compile the main condition
-    let (true_jump_idxs, false_jump_idxs) = compile_short_circuit_condition(
+    // Compile the main condition, then the body with what the condition
+    // proved in scope.
+    let v_len = v.len();
+    let false_jump_idxs = compile_guard(
         main_condition,
         condition_span,
+        &code[0..main_code_limit],
         v,
         ctx,
         state,
         output,
-        false,
     );
     conditional_false_jmp_idxs.push(false_jump_idxs);
-
-    // Modify true jump instructions to point to body_start
-    let body_start = output.len();
-    for j in true_jump_idxs {
-        set_jmp_size(&mut output[j], (body_start - j) as u16);
-    }
 
     // parse the main code block
     let cond_code = compile_expr(
@@ -3707,6 +3812,7 @@ fn compile_condition(
         state,
     );
     output.extend(cond_code);
+    v.truncate(v_len);
     if main_code_limit != code.len() {
         output.push(Instr::Jmp(0));
         jmp_instr_idx.push(output.len() - 1);
@@ -3715,13 +3821,12 @@ fn compile_condition(
     for elem in &code[main_code_limit..] {
         if let Expr::ElseIfBlock(condition, code, condition_span) = elem {
             condition_markers.push(output.len());
-            let condition_id =
-                compile_condition_operand(condition, *condition_span, v, ctx, state, output);
-            state.free_reg(condition_id, v);
-            add_cmp_false(condition_id, &mut 0, output, false);
-            conditional_false_jmp_idxs.push(vec![output.len() - 1]);
+            let false_jump_idxs =
+                compile_guard(condition, *condition_span, code, v, ctx, state, output);
+            conditional_false_jmp_idxs.push(false_jump_idxs);
             let cond_code = compile_expr(code, v, ctx.advance_offset(output.len() as u16), state);
             output.extend(cond_code);
+            v.truncate(v_len);
             output.push(Instr::Jmp(0));
             jmp_instr_idx.push(output.len() - 1);
         } else if let Expr::ElseBlock(code) = elem {
@@ -3759,13 +3864,8 @@ fn compile_while_loop(
 ) {
     let output_len_before = output.len();
 
-    let (true_jump_idxs, false_jump_idxs) =
-        compile_short_circuit_condition(condition, condition_span, v, ctx, state, output, false);
-
-    let body_start = output.len();
-    for j in true_jump_idxs {
-        set_jmp_size(&mut output[j], (body_start - j) as u16);
-    }
+    let v_len = v.len();
+    let false_jump_idxs = compile_guard(condition, condition_span, code, v, ctx, state, output);
 
     // parse the code block, clone the vars to avoid overriding anything
     let loop_id = ctx.block_id + 1;
@@ -3776,6 +3876,7 @@ fn compile_while_loop(
         ctx.no_single_run().advance_offset(output.len() as u16),
         state,
     );
+    v.truncate(v_len);
 
     let exit = output.len() + cond_code.len() + 1;
     for j in false_jump_idxs {
@@ -5167,6 +5268,38 @@ impl Expr {
                     operand, *span, tgt_id, v, ctx, state, output,
                 ))
             }
+            Self::Is(operand, target, operand_span, target_span) => {
+                debug_assert!(uses_id);
+                Some(
+                    type_test::compile_is(
+                        operand,
+                        target,
+                        *operand_span,
+                        *target_span,
+                        tgt_id,
+                        false,
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    )
+                    .0,
+                )
+            }
+            Self::Cast(operand, target, operand_span, target_span) => {
+                debug_assert!(uses_id);
+                Some(type_test::compile_cast(
+                    operand,
+                    target,
+                    *operand_span,
+                    *target_span,
+                    tgt_id,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
+            }
             // array[index]
             Self::ArrayGetIndex(array, index, span) => {
                 debug_assert!(uses_id);
@@ -5423,13 +5556,13 @@ impl Expr {
             Self::BoolAnd(l, r, span1, span2) => {
                 debug_assert!(uses_id);
                 Some(compile_short_circuit_value(
-                    l, r, *span1, *span2, "&&", tgt_id, v, ctx, state, output,
+                    l, r, *span1, *span2, "&&", tgt_id, v, ctx, state, output, false,
                 ))
             }
             Self::BoolOr(l, r, span1, span2) => {
                 debug_assert!(uses_id);
                 Some(compile_short_circuit_value(
-                    l, r, *span1, *span2, "||", tgt_id, v, ctx, state, output,
+                    l, r, *span1, *span2, "||", tgt_id, v, ctx, state, output, false,
                 ))
             }
             Self::Neg(l, span1, span2) => {
@@ -6119,13 +6252,12 @@ fn loaded_file_key(path: PathBuf) -> PathBuf {
 /// `Option`, a variant called `Some` or a method of the same name finds its own
 /// first. A method nothing calls is never compiled, so a program pays for the
 /// ones it uses.
-pub const PRELUDE_MODULES: [&str; 6] = [
+pub const PRELUDE_MODULES: [&str; 5] = [
     "std/option.cdl",
     "std/result.cdl",
     "std/list.cdl",
     "std/string.cdl",
     "std/map.cdl",
-    "std/convert.cdl",
 ];
 
 /// The source of a standard library module the compiler carries, by the path
@@ -6142,7 +6274,6 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/list.cdl" => Some(include_str!("../../libs/std/list.cdl")),
         "std/string.cdl" => Some(include_str!("../../libs/std/string.cdl")),
         "std/map.cdl" => Some(include_str!("../../libs/std/map.cdl")),
-        "std/convert.cdl" => Some(include_str!("../../libs/std/convert.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
         #[cfg(target_arch = "wasm32")]
@@ -7707,6 +7838,7 @@ pub fn compile_profile(
         indirect_registers: &mut indirect_registers,
         propagations: Vec::new(),
         fn_returns: Vec::new(),
+        captured_binders: Vec::new(),
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are

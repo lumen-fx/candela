@@ -679,6 +679,7 @@ impl Program {
             indirect_registers: &mut self.indirect_registers,
             propagations: Vec::new(),
             fn_returns: Vec::new(),
+            captured_binders: Vec::new(),
         }
     }
 

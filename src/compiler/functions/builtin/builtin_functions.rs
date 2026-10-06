@@ -168,7 +168,7 @@ pub fn builtin_functions(
             state.add_to_src(ctx, output, span);
             Some(output_id)
         }
-        "str" => {
+        "string" => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
             let id = compile_text_arg(&args[0], v, ctx, state, output);
             state.free_reg(id, v);
@@ -266,6 +266,21 @@ pub fn builtin_functions(
             output.push(Instr::CallLibFunc(LibFunc::Range, source_reg_id, output_id));
             Some(output_id)
         }
+        // The text tests `s.parse<T>()` lowers to; see `methods::parse_call`.
+        "[int text]" | "[float text]" => {
+            let id = args[0]
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id();
+            state.free_reg(id, v);
+            let output_id = state.alloc_reg_tgt(tgt_id);
+            let test = if name == "[int text]" {
+                LibFunc::IsInt
+            } else {
+                LibFunc::IsFloat
+            };
+            output.push(Instr::CallLibFunc(test, id, output_id));
+            Some(output_id)
+        }
         "the_answer" => {
             check_args(args, 0, name, span, state.sources, ctx.file_idx);
             let output_id = state.alloc_reg_tgt(tgt_id);
@@ -317,41 +332,15 @@ pub fn builtin_functions(
             output.push(Instr::Halt(halt_code));
             None
         }
-        // Runtime type tests and checked downcasts on an `any` value. `is_*`
-        // returns a bool; `as_*` returns the value typed concretely (the type
-        // checker assigns the target type) and raises a catchable error when the
-        // runtime type differs. `json_stringify` backs `std/json`.
-        "is_int" | "is_float" | "is_str" | "is_bool" | "is_list" | "is_map" | "is_null"
-        | "as_int" | "as_float" | "as_str" | "as_bool" | "as_list" | "as_map"
-        | "json_stringify"
-            if in_std || name != "json_stringify" =>
-        {
+        // `json_stringify` backs `std/json`.
+        "json_stringify" if in_std => {
             check_args(args, 1, name, span, state.sources, ctx.file_idx);
-            let (libfunc, throws) = match name {
-                "is_int" => (LibFunc::IsIntVal, false),
-                "is_float" => (LibFunc::IsFloatVal, false),
-                "is_str" => (LibFunc::IsStrVal, false),
-                "is_bool" => (LibFunc::IsBoolVal, false),
-                "is_list" => (LibFunc::IsListVal, false),
-                "is_map" => (LibFunc::IsMapVal, false),
-                "is_null" => (LibFunc::IsNullVal, false),
-                "as_int" => (LibFunc::AsIntVal, true),
-                "as_float" => (LibFunc::AsFloatVal, true),
-                "as_str" => (LibFunc::AsStrVal, true),
-                "as_bool" => (LibFunc::AsBoolVal, true),
-                "as_list" => (LibFunc::AsListVal, true),
-                "as_map" => (LibFunc::AsMapVal, true),
-                _ => (LibFunc::JsonStringify, false),
-            };
             let id = args[0]
                 .compile(v, ctx, state, output, None, false, true)
                 .unwrap_id();
             state.free_reg(id, v);
             let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(libfunc, id, output_id));
-            if throws {
-                state.add_to_src(ctx, output, span);
-            }
+            output.push(Instr::CallLibFunc(LibFunc::JsonStringify, id, output_id));
             Some(output_id)
         }
         "json_parse" if in_std => {

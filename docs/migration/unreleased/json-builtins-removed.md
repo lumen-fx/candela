@@ -11,7 +11,7 @@ Before:
 
 ```rust
 fn main() {
-    let doc = as_map(json_parse("{\"n\": 7}"));
+    let doc = json_parse("{\"n\": 7}");
     print(json_stringify(doc));
 }
 ```
@@ -22,7 +22,7 @@ After:
 import "std/json" as json;
 
 fn main() {
-    let doc = as_map(json::parse("{\"n\": 7}"));
+    let doc = json::parse("{\"n\": 7}");
     print(json::stringify(doc));
 }
 ```
