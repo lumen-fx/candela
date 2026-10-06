@@ -53,6 +53,7 @@ use compiler_data::State;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
+use expr::LetAnnotation;
 use expr::METHOD_SEP;
 use expr::Span;
 use expr::UNARY_MINUS_METHOD;
@@ -96,6 +97,7 @@ use type_system::check_operator_method;
 use type_system::check_struct_default_fn;
 use type_system::collect_direct_fn_calls;
 use type_system::infer_user_fn_return_type;
+use type_system::let_type_fits;
 use type_system::literal_struct_id;
 use type_system::param_type_matches;
 use type_system::pin_inserted_entry;
@@ -1594,6 +1596,7 @@ pub(crate) fn declare_arm_bindings(
     let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
     for (name, var_type) in alternative_bindings(enum_id, &alternatives[0], state) {
         v.push(Variable {
+            declared: None,
             name,
             register_id: 0,
             cell: false,
@@ -1647,6 +1650,7 @@ fn compile_enum_match(
     // reclaimed and its register is not reused across arm bodies.
     let v_base = v.len();
     v.push(Variable {
+        declared: None,
         name: SmolStr::new_static("[MATCH SCRUT]"),
         register_id: scrut_reg,
         cell: false,
@@ -1724,6 +1728,7 @@ fn compile_enum_match(
         let v_arm = v.len();
         for (name, read_reg, _, var_type, captured) in slots {
             v.push(Variable {
+                declared: None,
                 name,
                 register_id: read_reg,
                 cell: captured,
@@ -1912,7 +1917,7 @@ fn compile_match(
         let obj_var = SmolStr::new_static("[MATCH TEMP]");
         let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
         let desugared = Expr::EvalBlock(Box::from([
-            Expr::VarDeclare(obj_var, Box::new(scrutinee.clone())),
+            Expr::VarDeclare(obj_var, Box::new(scrutinee.clone()), None),
             Expr::Condition(Box::new(test), code, span, span),
         ]));
         desugared.compile(v, ctx, state, output, None, false, false);
@@ -1964,6 +1969,7 @@ fn compile_match_value(
     let obj_var = SmolStr::new_static("[MATCH TEMP]");
     let v_base = v.len();
     v.push(Variable {
+        declared: None,
         name: obj_var.clone(),
         register_id: scrut_reg,
         cell: false,
@@ -2283,6 +2289,7 @@ fn compile_propagate(
     // The operand stays rooted while either path reads it.
     let v_base = v.len();
     v.push(Variable {
+        declared: None,
         name: SmolStr::new_static("[PROPAGATE]"),
         register_id: operand_reg,
         cell: false,
@@ -4134,11 +4141,11 @@ fn changes_only_pushed_lists(
             changes_only_pushed_lists(l, receivers, declared)
                 && changes_only_pushed_lists(r, receivers, declared)
         }
-        Expr::VarDeclare(name, value) => {
+        Expr::VarDeclare(name, value, _) => {
             declared.push(name.clone());
             changes_only_pushed_lists(value, receivers, declared)
         }
-        Expr::VarAssign(_, value, _) => changes_only_pushed_lists(value, receivers, declared),
+        Expr::VarAssign(_, value, _, _) => changes_only_pushed_lists(value, receivers, declared),
         Expr::ReturnVal(value) => value
             .as_ref()
             .as_ref()
@@ -4206,6 +4213,7 @@ fn compile_walk(
 
     if real_var {
         v.push(Variable {
+            declared: None,
             name: var_name.clone(),
             register_id: if captured {
                 element_cell_id
@@ -4356,6 +4364,7 @@ fn compile_int_for_loop(
 
     let v_len = v.len();
     v.push(Variable {
+        declared: None,
         name: var_name.clone(),
         register_id: if captured { elem_cell_id } else { elem_id },
         cell: captured,
@@ -4454,6 +4463,7 @@ fn compile_try_catch_block(
     let captured = code_captures_variable(err_var, catch_code);
     let err_cell_id = if captured { state.alloc_reg() } else { 0 };
     v.push(Variable {
+        declared: None,
         name: err_var.clone(),
         register_id: if captured { err_cell_id } else { err_reg_id },
         cell: captured,
@@ -4503,15 +4513,87 @@ fn capture_cell(
     cell_id
 }
 
+/// Checks a value written into a variable its `let` declared as `declared`,
+/// the initialiser or a later assignment, and reports one that does not fit.
+///
+/// A function written into a `fn(...)` declaration is checked against the
+/// signature and stands for it from then on, the way a struct field declared
+/// with one takes it.
+#[allow(clippy::too_many_arguments)]
+fn check_declared_value(
+    name: &str,
+    declared: &DataType,
+    declared_span: Span,
+    value: &Expr,
+    value_span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    let value_type = value.infer_type(v, ctx, state);
+    let fn_value = declared_holds_fn_signature(declared);
+    if fn_value {
+        check_declared_fn(value, declared, value_span, output, v, ctx, state);
+    }
+    if fn_value
+        && matches!(declared, DataType::FnValue(_))
+        && matches!(value_type, DataType::Fn(_) | DataType::FnValue(_))
+    {
+        return;
+    }
+    let fresh = matches!(value, Expr::Array(..) | Expr::Map(..));
+    if !let_type_fits(declared, &value_type, fresh, state.generics) {
+        compiler_errors::error_variable_type_mismatch(
+            ctx.file_idx,
+            name,
+            declared_span,
+            declared,
+            value_span,
+            &value_type,
+            state.sources,
+            state.type_names(),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn compile_var_declaration(
     name: &SmolStr,
     value: &Expr,
+    annotation: Option<&LetAnnotation>,
     remaining_code: &[Expr],
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
+    if let Some(annotation) = annotation {
+        let declared = annotation.ty.to_datatype(&mut state.type_ctx(ctx.file_idx));
+        check_declared_value(
+            name,
+            &declared,
+            annotation.span,
+            value,
+            annotation.value_span,
+            v,
+            ctx,
+            state,
+            output,
+        );
+        bind_variable(
+            name,
+            value,
+            declared.clone(),
+            Some(declared),
+            remaining_code,
+            v,
+            ctx,
+            state,
+            output,
+        );
+        return;
+    }
     let var_type = value.infer_type(v, ctx, state);
     // A variable a later assignment writes a function into holds a function
     // value: the name no longer says which function, so a call through it
@@ -4532,6 +4614,33 @@ fn compile_var_declaration(
     } else {
         var_type
     };
+    bind_variable(
+        name,
+        value,
+        var_type,
+        None,
+        remaining_code,
+        v,
+        ctx,
+        state,
+        output,
+    );
+}
+
+/// Compiles the value a `let` starts its variable with and brings the variable
+/// into scope, typed `var_type`.
+#[allow(clippy::too_many_arguments)]
+fn bind_variable(
+    name: &SmolStr,
+    value: &Expr,
+    var_type: DataType,
+    declared: Option<DataType>,
+    remaining_code: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
     let as_fn_value = matches!(var_type, DataType::FnValue(_));
     // A variable a closure reads lives in a cell instead of a register, so the
     // scope that declared it and the closures that took it share one slot. The
@@ -4596,6 +4705,7 @@ fn compile_var_declaration(
             .push((name.clone(), fn_symbol));
     }
     v.push(Variable {
+        declared,
         name: name.clone(),
         register_id: var_id,
         cell: captured,
@@ -4667,19 +4777,30 @@ fn write_scratch_into(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_var_assignment(
     name: &SmolStr,
     value: &Expr,
     span: Span,
+    value_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
-    let var_type = value.infer_type(v, ctx, state);
     let var_pos = v.iter().rposition(|x| x.name == *name).unwrap_or_else(|| {
         compiler_errors::error_unknown_variable(name, span, v, ctx.file_idx, state.sources);
     });
+    // A variable its `let` declared a type for keeps that type: the value has
+    // to fit it, and reads after the assignment see the declared type.
+    let var_type = if let Some(declared) = v[var_pos].declared.clone() {
+        check_declared_value(
+            name, &declared, span, value, value_span, v, ctx, state, output,
+        );
+        declared
+    } else {
+        value.infer_type(v, ctx, state)
+    };
     let id = v[var_pos].register_id;
 
     let var_type = match (&v[var_pos].var_type, &var_type) {
@@ -5666,7 +5787,7 @@ impl Expr {
                     let env_id = state.alloc_reg_tgt(tgt_id);
                     output.push(Instr::EmptyFnValue(env_id));
                     output.push(Instr::Push(env_id, entry_id));
-                    for (name, _) in &captures {
+                    for (name, _, _) in &captures {
                         let cell_id = capture_cell(name, *span, v, ctx, state, output);
                         output.push(Instr::Push(env_id, cell_id));
                     }
@@ -5749,14 +5870,23 @@ impl Expr {
                 compile_try_catch_block(e, err_var, catch_code, v, ctx, state, output);
                 None
             }
-            Self::VarDeclare(name, value) => {
+            Self::VarDeclare(name, value, annotation) => {
                 debug_assert!(!uses_id);
-                compile_var_declaration(name, value, remaining_code, v, ctx, state, output);
+                compile_var_declaration(
+                    name,
+                    value,
+                    annotation.as_deref(),
+                    remaining_code,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
                 None
             }
-            Self::VarAssign(name, value, span) => {
+            Self::VarAssign(name, value, span, value_span) => {
                 debug_assert!(!uses_id);
-                compile_var_assignment(name, value, *span, v, ctx, state, output);
+                compile_var_assignment(name, value, *span, *value_span, v, ctx, state, output);
                 None
             }
             Self::StructDeclare(name, fields, span, type_params, defaults) => {

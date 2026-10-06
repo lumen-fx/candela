@@ -109,7 +109,9 @@ See [methods](../language/methods.md).
 or iterating a type that supports neither, a field access on something that is
 not a struct, and the condition of an `if`, an `else if`, a `while` or an `if`
 expression whose type is not `bool`. See
-[control flow](../language/control-flow.md).
+[control flow](../language/control-flow.md). A value of another type written
+into a variable declared with a type, `let n: int = "a";` or a later `n = 2.0;`,
+is `variable_type_mismatch`; see [variables](../language/variables.md#declaring-a-type).
 
 **Collection literal errors.** Arrays and maps are homogeneous, so an element or
 value of a different type is rejected, as is a duplicate map key or a map key

@@ -61,10 +61,12 @@ pub fn settle(have: &DataType, want: &DataType, generics: &Generics) -> Settled 
     }
     match (have, want) {
         (DataType::Unknown, _) => Settled::AtRunTime,
-        _ if have == want => Settled::Always,
+        // A union compares equal to each of its members, so it is taken apart
+        // before the equality test, which would pass it for any one of them.
         (DataType::Union(members), _) => {
             all_of(members.iter().map(|member| settle(member, want, generics)))
         }
+        _ if have == want => Settled::Always,
         (_, DataType::Union(members)) => {
             let each: Vec<Settled> = members
                 .iter()
@@ -586,6 +588,7 @@ pub fn compile_is(
                     value
                 };
                 facts.vars.push(Variable {
+                    declared: None,
                     name: binder.clone(),
                     register_id,
                     cell: captured,
@@ -612,6 +615,7 @@ fn push_narrowed(
         && let Some(var) = v.iter().rfind(|var| &var.name == name)
     {
         facts.vars.push(Variable {
+            declared: var.declared.clone(),
             name: name.clone(),
             register_id: var.register_id,
             cell: var.cell,
@@ -674,7 +678,17 @@ pub fn declare_condition_facts(
             for (name, var_type) in
                 is_fact_types(operand, target, *operand_span, *target_span, v, ctx, state)
             {
+                // The operand narrowed keeps what its `let` declared; a
+                // variant's binders are new variables.
+                let declared = match &**operand {
+                    Expr::Var(operand_name, _) if *operand_name == name => v
+                        .iter()
+                        .rfind(|var| var.name == name)
+                        .and_then(|var| var.declared.clone()),
+                    _ => None,
+                };
                 v.push(Variable {
+                    declared,
                     name,
                     register_id: 0,
                     cell: false,

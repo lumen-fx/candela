@@ -2178,6 +2178,32 @@ pub fn return_type_fits(declared: &DataType, body: &DataType, generics: &Generic
     }
 }
 
+/// Whether a value of type `value` may be written into a variable whose `let`
+/// declares `declared`.
+///
+/// A declared variable is read at its declared type without a run-time test,
+/// so a dynamic value goes in only through a downcast (`as int`), the rule a
+/// struct field follows, and a union goes in only when every member fits.
+/// `fresh` marks a list or map literal, which nothing else holds yet: it may
+/// be widened into a declaration that names `any` inside it, the way a return
+/// may, since no other holder sees what is put into it afterwards.
+#[must_use]
+pub fn let_type_fits(
+    declared: &DataType,
+    value: &DataType,
+    fresh: bool,
+    generics: &Generics,
+) -> bool {
+    match value {
+        DataType::Unknown => matches!(declared, DataType::Unknown),
+        DataType::Union(members) => members
+            .iter()
+            .all(|member| let_type_fits(declared, member, fresh, generics)),
+        _ if fresh => return_type_fits(declared, value, generics),
+        _ => param_type_matches(declared, value, generics),
+    }
+}
+
 /// Whether one half of a returned map's type fits the declared half. A half
 /// either side leaves open fits, the way map equality treats it.
 fn slot_fits(declared: Option<&DataType>, body: Option<&DataType>, generics: &Generics) -> bool {
@@ -2412,8 +2438,8 @@ pub fn collect_direct_fn_calls(
                     expr_stack.push(z);
                 }
             }
-            Expr::VarDeclare(_, x)
-            | Expr::VarAssign(_, x, _)
+            Expr::VarDeclare(_, x, _)
+            | Expr::VarAssign(_, x, _, _)
             | Expr::Propagate(x, _)
             | Expr::Is(x, _, _, _)
             | Expr::Cast(x, _, _, _)
@@ -2851,19 +2877,31 @@ fn track_return_flow(
                     };
                 }
             }
-            Expr::VarDeclare(name, expr) => {
-                let var_type = expr.infer_type(v, ctx, state);
+            Expr::VarDeclare(name, expr, annotation) => {
+                let declared = annotation
+                    .as_ref()
+                    .map(|a| a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)));
+                let var_type = match &declared {
+                    Some(declared) => declared.clone(),
+                    None => expr.infer_type(v, ctx, state),
+                };
                 v.push(Variable {
+                    declared,
                     name: name.clone(),
                     register_id: 0,
                     cell: false,
                     var_type,
                 });
             }
-            Expr::VarAssign(name, expr, _) => {
-                let var_type = expr.infer_type(v, ctx, state);
-                if let Some(var) = v.iter_mut().rfind(|var| &var.name == name) {
-                    var.var_type = var_type;
+            Expr::VarAssign(name, expr, _, _) => {
+                if v.iter()
+                    .rfind(|var| &var.name == name)
+                    .is_some_and(|var| var.declared.is_none())
+                {
+                    let var_type = expr.infer_type(v, ctx, state);
+                    if let Some(var) = v.iter_mut().rfind(|var| &var.name == name) {
+                        var.var_type = var_type;
+                    }
                 }
             }
             // A `while true` is a `loop` under another spelling and is left
@@ -2884,6 +2922,7 @@ fn track_return_flow(
             Expr::IntForLoop(var_name, _, _, code, _, _) => {
                 let v_len = v.len();
                 v.push(Variable {
+                    declared: None,
                     name: var_name.clone(),
                     register_id: 0,
                     cell: false,
@@ -2917,6 +2956,7 @@ fn track_return_flow(
                 let v_len = v.len();
                 if var_name.as_str() != "_" {
                     v.push(Variable {
+                        declared: None,
                         name: var_name.clone(),
                         register_id: 0,
                         cell: false,
@@ -3015,6 +3055,7 @@ fn track_return_flow(
                 extend_return_types!(&mut return_types, try_flow.types, ctx, state);
                 let v_len = v.len();
                 v.push(Variable {
+                    declared: None,
                     name: err_var.clone(),
                     register_id: 0,
                     cell: false,
@@ -3095,9 +3136,13 @@ fn block_breaks(code: &[Expr]) -> bool {
 /// a capture of the same name. A closure body reads what the closure captured,
 /// so those names are in scope both while its return type is worked out and
 /// while its body compiles.
-pub fn push_capture_scope(v: &mut Vec<Variable>, captures: &[(SmolStr, DataType)]) {
-    for (name, capture_type) in captures {
+pub fn push_capture_scope(
+    v: &mut Vec<Variable>,
+    captures: &[(SmolStr, DataType, Option<DataType>)],
+) {
+    for (name, capture_type, declared) in captures {
         v.push(Variable {
+            declared: declared.clone(),
             name: name.clone(),
             register_id: 0,
             cell: true,
@@ -3176,6 +3221,7 @@ pub fn infer_user_fn_return_type(
     for (i, infered_type) in infered_arg_types.iter().cloned().enumerate() {
         // 0 => placeholder id, it's never used
         v.push(Variable {
+            declared: None,
             name: fn_args[i].0.clone(),
             register_id: 0,
             cell: false,
@@ -4386,14 +4432,15 @@ impl Expr {
                 // another function entirely. A free name that resolves to no
                 // variable here names a declared function, which the body
                 // reaches the same way any other code does.
-                let captures: Box<[(SmolStr, DataType)]> = closure_free_names(args, code)
-                    .into_iter()
-                    .filter_map(|name| {
-                        v.iter()
-                            .rfind(|var| var.name == name)
-                            .map(|var| (name, var.var_type.clone()))
-                    })
-                    .collect();
+                let captures: Box<[(SmolStr, DataType, Option<DataType>)]> =
+                    closure_free_names(args, code)
+                        .into_iter()
+                        .filter_map(|name| {
+                            v.iter()
+                                .rfind(|var| var.name == name)
+                                .map(|var| (name, var.var_type.clone(), var.declared.clone()))
+                        })
+                        .collect();
                 let id = state.fns.len() as u16;
                 state.fns.push(Function {
                     name: fn_name,

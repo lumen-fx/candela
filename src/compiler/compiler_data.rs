@@ -132,8 +132,9 @@ pub struct Function {
     /// in, with the type each had there, in the order the environment records
     /// them. Empty for a declared function and for a closure that reads only
     /// its own parameters, which is what keeps that closure lowering the way
-    /// it did before capture existed.
-    pub captures: Box<[(SmolStr, DataType)]>,
+    /// it did before capture existed. The third member is the type the
+    /// variable's `let` declared, which a write inside the body is held to.
+    pub captures: Box<[(SmolStr, DataType, Option<DataType>)]>,
     /// The register holding where this function's body starts, for a function
     /// that becomes a value. It is the first slot of every value built for the
     /// function, and an indirect call jumps to what it holds. `None` for a
@@ -719,4 +720,8 @@ pub struct Variable {
     /// through [`Instr::StoreCell`], and the closure that took it writes the
     /// slot this scope reads.
     pub cell: bool,
+    /// The type a `let` annotation declared, `None` for a variable written
+    /// without one. A declared variable keeps this type: every value written
+    /// into it has to fit, and its reads are typed by it.
+    pub declared: Option<DataType>,
 }

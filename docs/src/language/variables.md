@@ -17,10 +17,32 @@ fn main() {
 }
 ```
 
-`let` takes no type annotation; the value decides the type. Write `let n = 0;`,
-not `let n: int = 0;`. Function parameters are the other way round and may carry
-one, because a parameter has no initialising value to take a type from; see
-[Functions](functions.md). See [Types](types.md) for the types a value can have.
+The value decides the type, so most declarations need no annotation. See
+[Types](types.md) for the types a value can have.
+
+## Declaring a type
+
+Write `: Type` after the name to declare what the variable holds. The value has
+to be of that type, and so does every value assigned to the variable later; a
+value of another type is a compile error.
+
+```rust
+fn main() {
+    let count: int = 0;
+    let names: string[] = [];
+    let ages: {string: int} = {};
+    names.push("Ada");
+    ages["Ada"] = 36;
+    count += 1;
+    print(count, names, ages);
+}
+```
+
+An annotation is how an empty `[]` or `{}` says what it will hold: `names` is a
+`string[]` from its first line, before anything is pushed. A union lets the
+variable hold either type (`let id: int | string = 7;`), and `any` lets it hold
+anything. A dynamic value, such as what `json::parse` returns, goes into a
+declared variable through a downcast: `let n: int = v as int;`.
 
 ## Variables live inside functions
 
@@ -58,8 +80,10 @@ fn main() {
 }
 ```
 
-An assignment can change a variable's type. The name keeps whatever type the
-most recent value gave it, and later code is checked against that type.
+An assignment can change the type of a variable declared without an
+annotation. The name keeps whatever type the most recent value gave it, and
+later code is checked against that type. A variable declared with one keeps its
+type.
 
 ```rust
 fn main() {

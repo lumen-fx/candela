@@ -346,6 +346,7 @@ fn compile_entry_point(
         arg_registers.push(register_id);
         let var_name = SmolStr::from(format!("__export_arg{idx}"));
         seed_vars.push(Variable {
+            declared: None,
             name: var_name.clone(),
             register_id,
             cell: false,

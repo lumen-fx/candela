@@ -54,6 +54,16 @@ pub enum IsTarget {
     Variant(Expr),
 }
 
+/// The type a `let` declares for its variable: `let xs: int[] = [];`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetAnnotation {
+    pub ty: TypeExpr,
+    /// Where the type was written.
+    pub span: Span,
+    /// Where the value the variable starts with was written.
+    pub value_span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Float(f64),
@@ -134,10 +144,13 @@ pub enum Expr {
     GetStructField(Box<Self>, SmolStr, Span, Span),
     /// SetStructField(struct_expr, field, new_expr, struct_span, field_span, value_span)
     SetStructField(Box<Self>, SmolStr, Box<Self>, Span, Span, Span),
-    /// VarDeclare(name, value),
-    VarDeclare(SmolStr, Box<Self>),
-    /// VarDeclare(name, value, start, end)
-    VarAssign(SmolStr, Box<Self>, Span),
+    /// VarDeclare(name, value, annotation)
+    ///
+    /// `annotation` is the type a `let x: T = value;` declares, `None` for a
+    /// `let` written without one.
+    VarDeclare(SmolStr, Box<Self>, Option<Box<LetAnnotation>>),
+    /// VarAssign(name, value, name_span, value_span)
+    VarAssign(SmolStr, Box<Self>, Span, Span),
     /// Condition(condition, code (contains else_if_blocks and potentially
     /// else_block), span, condition_span)
     ///
@@ -529,7 +542,7 @@ pub fn self_operator_method(expr: &Expr) -> Option<&'static str> {
 #[must_use]
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
     code.iter().any(|expr| match expr {
-        Expr::VarAssign(n, _, _) => n == var_name,
+        Expr::VarAssign(n, _, _, _) => n == var_name,
         Expr::Condition(_, body, _, _)
         | Expr::WhileBlock(_, body, _)
         | Expr::EvalBlock(body)
@@ -559,7 +572,7 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
 #[must_use]
 pub fn var_assign(target: Expr, value: Expr, expr_span: Span, value_span: Span) -> Expr {
     if let Expr::Var(n, s) = target {
-        Expr::VarAssign(n, Box::from(value), s)
+        Expr::VarAssign(n, Box::from(value), s, value_span)
     } else if let Expr::ArrayGetIndex(base, idx, _) = target {
         Expr::ArrayModify(base, idx, Box::from(value), expr_span, value_span)
     } else if let Expr::GetStructField(obj, field, obj_span, field_span) = target {
@@ -614,11 +627,11 @@ fn scan_block_free_names(
 fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut Vec<SmolStr>) {
     match expr {
         Expr::Var(name, _) => use_free_name(name, depth, bound, out),
-        Expr::VarAssign(name, value, _) => {
+        Expr::VarAssign(name, value, _, _) => {
             scan_free_names(value, depth, bound, out);
             use_free_name(name, depth, bound, out);
         }
-        Expr::VarDeclare(name, value) => {
+        Expr::VarDeclare(name, value, _) => {
             scan_free_names(value, depth, bound, out);
             bound.push(name.clone());
         }

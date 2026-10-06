@@ -333,8 +333,8 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             visit_expr(obj, src_file, out);
             visit_expr(val, src_file, out);
         }
-        Expr::VarDeclare(_, val) => visit_expr(val, src_file, out),
-        Expr::VarAssign(_, val, _) => visit_expr(val, src_file, out),
+        Expr::VarDeclare(_, val, _) => visit_expr(val, src_file, out),
+        Expr::VarAssign(_, val, _, _) => visit_expr(val, src_file, out),
         Expr::Condition(cond, body, _, _)
         | Expr::InlineCondition(cond, body, _, _)
         | Expr::ElseIfBlock(cond, body, _) => {

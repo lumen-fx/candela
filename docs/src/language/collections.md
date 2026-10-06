@@ -21,23 +21,12 @@ Mixing types in one list is a compile error: `[1, "a"]` does not compile.
 
 ### The empty list
 
-`[]` names no element type. A local that starts empty takes its element type
-from the first `push`.
-
-```rust
-fn main() {
-    let xs = [];
-    xs.push(1);
-    xs.push(2);
-    print(xs, xs.len());
-}
-```
-
-Where a declaration says what the elements are, that declaration decides them.
-A parameter annotated `T[]` compiles the function body with elements of `T`
-however the call site writes the list, and a `-> T[]` return annotation hands
-the caller elements of `T`. So a function that reads its elements still works
-when it is called with nothing in the list:
+`[]` names no element type, so the declaration that holds it says what it will
+hold: `let xs: int[] = [];` for a local, `cells: Cell[]` for a parameter,
+`-> Cell[]` for what a function returns. A list that names an element type is
+still checked against the declaration, so `width([1, 2])` below does not
+compile. A local declared without an annotation takes its element type from the
+first `push` instead.
 
 ```rust
 enum Cell { Num(int), Text(string) }
@@ -54,15 +43,12 @@ fn width(cells: Cell[]) -> int {
 }
 
 fn main() {
-    print(width([]), width([Cell::Text("ab"), Cell::Num(1)]));
+    let row: Cell[] = [];
+    print(width(row));
+    row.push(Cell::Text("ab"));
+    print(width(row));
 }
 ```
-
-A list that does name an element type is still checked against the annotation,
-so `width([1, 2])` does not compile. A `let` takes no annotation, so a local
-that starts empty and is never pushed to keeps elements of no type. Handing such
-a local to a parameter that declares its elements pins it as well, so what the
-function pushes into it reads back at that type.
 
 ### Indexing and slicing
 
@@ -190,12 +176,12 @@ Repeating a key in a literal is a compile error.
 
 ### The empty map
 
-`{}` names neither a key type nor a value type, the same way `[]` names no
-element type. Where a declaration says what the map holds, that declaration
-decides it: a parameter annotated `{K: V}` compiles the function body with keys
-of `K` and values of `V` however the call site writes the map, and a
-`-> {K: V}` return annotation hands the caller the same. So a function that
-matches on what a key holds still works when it is called with an empty map:
+`{}` names neither a key type nor a value type, so the declaration that holds it
+says what it will hold: `let cells: {string: Cell} = {};` for a local,
+`cells: {string: Cell}` for a parameter, `-> {string: Cell}` for a return type.
+A map that names its types is still checked against the declaration. A local
+declared without an annotation takes its key and value types from the first
+entry written into it instead.
 
 ```rust
 enum Cell { Num(int), Text(string) }
@@ -212,16 +198,12 @@ fn width(cells: {string: Cell}) -> int {
 }
 
 fn main() {
-    print(width({}), width({"a": Cell::Text("ab")}));
+    let sheet: {string: Cell} = {};
+    print(width(sheet));
+    sheet["a"] = Cell::Text("ab");
+    print(width(sheet));
 }
 ```
-
-A map that does name its types is still checked against the annotation, so
-`width({"a": 1})` does not compile. A `let` takes no annotation, so a local that
-starts empty takes its key and value types from the first entry written into
-it, and one nothing is written into keeps keys and values of no type. Handing
-such a local to a parameter that declares what the map holds pins it as well, so
-what the function writes reads back at that type.
 
 ### Reading and writing
 

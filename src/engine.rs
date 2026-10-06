@@ -584,6 +584,7 @@ impl Program {
         for (i, (&register_id, var_type)) in arg_registers.iter().zip(types).enumerate() {
             let name = SmolStr::from(format!("__host_arg{i}"));
             seed_vars.push(Variable {
+                declared: None,
                 name: name.clone(),
                 register_id,
                 cell: false,

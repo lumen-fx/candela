@@ -580,6 +580,7 @@ fn compile_function(
                 (state.registers.len() - 1) as u16
             };
             Variable {
+                declared: None,
                 name: x.clone(),
                 register_id,
                 cell: false,
@@ -625,12 +626,13 @@ fn compile_function(
     let mut capture_regs: Vec<u16> = Vec::with_capacity(captures.len());
     if let Some(env_loc) = env_loc {
         let mut with_captures = Vec::with_capacity(captures.len() + v_temp.len());
-        for (i, (name, capture_type)) in captures.iter().enumerate() {
+        for (i, (name, capture_type, declared)) in captures.iter().enumerate() {
             let idx_id = state.const_int_register(i as i64 + 1);
             let cell_id = state.alloc_reg();
             output.push(Instr::GetIndexArray(env_loc, idx_id, cell_id));
             capture_regs.push(cell_id);
             with_captures.push(Variable {
+                declared: declared.clone(),
                 name: name.clone(),
                 register_id: cell_id,
                 cell: true,
@@ -658,6 +660,7 @@ fn compile_function(
                     .symbols
                     .push((fn_args[i].clone(), SymbolKind::Fn(*fn_id)));
                 v.push(Variable {
+                    declared: None,
                     name: fn_args[i].clone(),
                     register_id: 0,
                     cell: false,
@@ -666,6 +669,7 @@ fn compile_function(
             } else {
                 // 0 => placeholder id, it's never used
                 v.push(Variable {
+                    declared: None,
                     name: fn_args[i].clone(),
                     register_id: 0,
                     cell: false,

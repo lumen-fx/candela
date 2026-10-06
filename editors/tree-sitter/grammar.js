@@ -389,7 +389,14 @@ module.exports = grammar({
       choice(seq($._expression, ';'), prec(1, $.if_expression), prec(1, $.match_expression)),
 
     let_declaration: ($) =>
-      seq('let', field('name', $.identifier), '=', field('value', $._expression), ';'),
+      seq(
+        'let',
+        field('name', $.identifier),
+        optional(seq(':', field('type', $._type))),
+        '=',
+        field('value', $._expression),
+        ';',
+      ),
 
     assignment_statement: ($) =>
       seq(

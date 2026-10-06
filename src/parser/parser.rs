@@ -8,7 +8,7 @@ use crate::cfg;
 use crate::cfg::Cfg;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
-use crate::compiler::expr::{Expr, Span, var_assign};
+use crate::compiler::expr::{Expr, LetAnnotation, Span, var_assign};
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
@@ -769,12 +769,33 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
             ),
         );
     };
+    // `let name: Type = value;` declares the variable's type.
+    let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
+        parser.next_token();
+        let start = parser.peek_token_span().start;
+        let ty = parse_type(parser);
+        Some((ty, Span::from((start, parser.last_token_end as u32))))
+    } else {
+        None
+    };
     parser.next_token_expect(
         Token::Equals,
         "Variable declarations need a '=' to separate the name from the value.",
     );
+    let value_start = parser.peek_token_span().start;
     let var_value = parse_expr(parser);
-    Expr::VarDeclare(var_name, Box::new(var_value))
+    let value_span = Span::from((value_start, parser.last_token_end as u32));
+    Expr::VarDeclare(
+        var_name,
+        Box::new(var_value),
+        annotation.map(|(ty, span)| {
+            Box::new(LetAnnotation {
+                ty,
+                span,
+                value_span,
+            })
+        }),
+    )
 }
 
 fn parse_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32) -> Expr {
