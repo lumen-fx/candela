@@ -52,7 +52,6 @@ nav = [
      "standard-library/overview.md",
      "standard-library/builtins.md",
      "standard-library/assert.md",
-     "standard-library/convert.md",
      "standard-library/fs.md",
      "standard-library/hash.md",
      "standard-library/json.md",

@@ -15,7 +15,7 @@ fn main() {
     m["c"] = 3;
     m["a"] += 10;
     for k in m {
-        print(k + "=" + str(m[k]));
+        print(k + "=" + string(m[k]));
     }
 }
 ```

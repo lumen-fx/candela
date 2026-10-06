@@ -61,11 +61,6 @@ fn list_methods() {
 }
 
 #[test]
-fn convert_module() {
-    assert!(run_std_test("test_convert").contains("convert ok"));
-}
-
-#[test]
 fn assert_module() {
     assert!(run_std_test("test_assert").contains("assert ok"));
 }
@@ -321,9 +316,9 @@ fn json_map_set_inline_into_cdlb() {
 import "std/json" as json;
 import "std/set" as set;
 fn main() {
-    let obj = as_map(json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}"));
-    print(as_int(obj["n"]));
-    print(as_list(obj["xs"]).len());
+    let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}") as {any: any};
+    print(obj["n"] as int);
+    print((obj["xs"] as any[]).len());
     print(json::stringify(json::parse("[1,2,3]")));
     let s = set::new<int>();
     s.add(1);

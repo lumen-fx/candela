@@ -3,6 +3,8 @@
 ## 0.2.3
 
 - `throw` colours as a keyword: it is a statement, `throw "kind";`.
+- `is` and `as` colour as operators: the type test `v is int` and the checked
+  downcast `v as int`. The `ifis` snippet writes an `if` on a test.
 
 ## 0.2.2
 

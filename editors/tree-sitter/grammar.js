@@ -302,10 +302,17 @@ module.exports = grammar({
 
     // `Cell<int>`, and nested as deep as it goes: a type argument is an
     // ordinary type, so `Cell<Cell<int>>` and `Cell<int>[]` both spell out.
+    //
+    // After `is` and `as` a type meets the expression grammar, where `<` is
+    // also a comparison; the compiler reads a type there, so a `<` after a
+    // type name opens its argument list.
     generic_type: ($) =>
-      seq(
-        field('name', choice($._type_identifier, $.qualified_type)),
-        field('type_arguments', $.type_arguments),
+      prec(
+        1,
+        seq(
+          field('name', choice($._type_identifier, $.qualified_type)),
+          field('type_arguments', $.type_arguments),
+        ),
       ),
 
     // The names a declaration binds: `struct Cell<T>`, `fn first<T>`. Each is
@@ -498,6 +505,8 @@ module.exports = grammar({
         $.propagate_expression,
         $.unary_expression,
         $.binary_expression,
+        $.type_test_expression,
+        $.cast_expression,
         $.parenthesized_expression,
         $.closure_expression,
         $.if_expression,
@@ -552,6 +561,34 @@ module.exports = grammar({
         ),
       );
     },
+
+    // `v is int` tests a value's type and `v is Some(x)` its variant; `v as
+    // int` is the checked downcast. Both bind at the level of the comparisons
+    // and take a type on their right, so `v as int + 1` adds to the downcast.
+    // A name with an argument list after `is` can only be a variant pattern.
+    type_test_expression: ($) =>
+      prec.left(
+        PREC.comparison,
+        seq(
+          field('value', $._expression),
+          'is',
+          field('type', choice($._type, $.variant_pattern)),
+        ),
+      ),
+
+    // The variant after `is`, with the names its payload binds: `Some(x)`,
+    // `Shape::Circle(r)`.
+    variant_pattern: ($) =>
+      seq(
+        field('variant', choice($._type_identifier, $.qualified_type)),
+        field('arguments', $.arguments),
+      ),
+
+    cast_expression: ($) =>
+      prec.left(
+        PREC.comparison,
+        seq(field('value', $._expression), 'as', field('type', $._type)),
+      ),
 
     // A call names a function directly: candela has no call on an arbitrary
     // expression. A namespaced name is either an imported module's function

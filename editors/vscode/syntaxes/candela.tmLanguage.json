@@ -165,8 +165,12 @@
           "match": "\\b(if|else|match|while|for|in|loop|return|break|continue|try|catch|throw)\\b"
         },
         {
+          "name": "keyword.operator.type.candela",
+          "match": "\\b(is|as)\\b"
+        },
+        {
           "name": "keyword.control.import.candela",
-          "match": "\\b(import|as|host|dylib)\\b"
+          "match": "\\b(import|host|dylib)\\b"
         },
         {
           "name": "storage.type.candela",

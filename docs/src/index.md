@@ -50,7 +50,7 @@ fn main() {
     for shape in shapes {
         total += shape.area();
     }
-    print("total area: " + str(total));
+    print("total area: " + string(total));
 }
 ```
 

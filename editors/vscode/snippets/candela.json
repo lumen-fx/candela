@@ -53,6 +53,15 @@
     ],
     "description": "If block"
   },
+  "If is": {
+    "prefix": "ifis",
+    "body": [
+      "if ${1:value} is ${2:Some(${3:x})} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If block on a type or variant test"
+  },
   "For range loop": {
     "prefix": "for",
     "body": [

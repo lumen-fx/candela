@@ -39,11 +39,11 @@ fn main() {
     let a = Event::Click(3, 4);
     let b = Key("escape");
     let c = Event::Quit;
-    print(type(a), str(c));
+    print(type(a), string(c));
 }
 ```
 
-`type` on an enum value gives the enum's name; `str` gives the variant's name.
+`type` on an enum value gives the enum's name; `string` gives the variant's name.
 
 A variant with no payload, written bare, names no type arguments of a
 [generic](generics.md) enum, and is accepted wherever an instantiation that
@@ -111,6 +111,27 @@ fn main() {
 A `match` used as a value on an enum that lists every variant needs no `_`
 arm, as above. See [match as an
 expression](control-flow.md#match-as-an-expression).
+
+To test for one variant without a `match`, write the arm's pattern after `is`.
+The test is a `bool`, and its names hold the payload in the body of the `if` or
+`while` it is the condition of, and to the right of an `&&` after it. See
+[testing a type](types.md#testing-a-type-with-is).
+
+```rust
+enum Event {
+    Click(int, int),
+    Key(string),
+    Quit,
+}
+
+fn main() {
+    let e = Event::Click(3, 4);
+    if e is Click(x, y) && x > 0 {
+        print(x + y);
+    }
+    print(e is Quit);
+}
+```
 
 candela matches variant arms only when it knows which enum the value is. A
 parameter takes the type its call site passes it, so matching a parameter works

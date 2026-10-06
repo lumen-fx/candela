@@ -37,6 +37,41 @@ fn removed_builtin(name: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// A built-in function that a spelling of the language replaced: the
+/// replacement, written the way a program writes it.
+fn replaced_builtin(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "is_int" => "v is int",
+        "is_float" => "v is float",
+        "is_str" => "v is string",
+        "is_bool" => "v is bool",
+        "is_list" => "v is any[]",
+        "is_map" => "v is {any: any}",
+        "is_null" => "v == null",
+        "as_int" => "v as int",
+        "as_float" => "v as float",
+        "as_str" => "v as string",
+        "as_bool" => "v as bool",
+        "as_list" => "v as any[]",
+        "as_map" => "v as {any: any}",
+        "str" => "string(x)",
+        _ => return None,
+    })
+}
+
+/// A method that a spelling of the language replaced: the replacement.
+fn replaced_method(receiver: Option<&str>, method: &str) -> Option<&'static str> {
+    Some(match (receiver, method) {
+        (Some("string"), "is_int") => "s.parse<int>(), which returns an Option<int>",
+        (Some("string"), "is_float") => "s.parse<float>(), which returns an Option<float>",
+        (_, "to_int") => "int(x)",
+        (_, "to_float") => "float(x)",
+        (_, "to_bool") => "bool(x)",
+        (_, "to_string") => "string(x)",
+        _ => return None,
+    })
+}
+
 /// A method call on a string, list, map or number that names no method of its
 /// type. The help names the spelling that replaced a removed method, or the
 /// module whose `impl` block declares it.
@@ -58,6 +93,9 @@ pub fn error_unknown_builtin_method(
             "A lookup with a fallback is {}",
             paint("m.get(key).unwrap_or(fallback)")
         )),
+        _ if let Some(replacement) = replaced_method(receiver, method) => {
+            Some(format!("{method} is replaced by {}", paint(replacement)))
+        }
         (Some(receiver), _) => std_index::module_with_method(receiver, method).map(|module| {
             format!(
                 "{method} is a {receiver} method in std/{module}. Import it with {}",
@@ -1478,7 +1516,8 @@ pub fn error_struct_field_invalid_type(
                 report =
                     report.with_help(format_args!("Try using the {} function", blue("bool()")));
             } else if struct_field_type == &DataType::String {
-                report = report.with_help(format_args!("Try using the {} function", blue("str()")));
+                report =
+                    report.with_help(format_args!("Try using the {} function", blue("string()")));
             }
 
             report.finish()
@@ -1593,6 +1632,9 @@ pub fn error_unknown_function(
     // A name a module declares, or a removed built-in that module now holds,
     // is a missing import rather than a typo.
     let import_help = |paint: fn(&str) -> String| {
+        if let Some(replacement) = replaced_builtin(fn_name) {
+            return Some(format!("{fn_name} is replaced by {}", paint(replacement)));
+        }
         removed_builtin(fn_name)
             .map(|(module, name)| {
                 format!(
@@ -1962,6 +2004,45 @@ pub fn error_operator_method(
         file_idx,
         span,
         message,
+        code,
+    )
+}
+
+/// A mistake in an `is` or an `as`, reported at the whole expression with an
+/// optional help line. `code` is what a `catch` and an editor read.
+#[cold]
+#[inline(never)]
+pub fn error_type_test(
+    title: &'static str,
+    message: &str,
+    help: Option<&str>,
+    code: &'static str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let mut report = Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message(title)
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(message)
+                    .with_color(ariadne::Color::Red),
+            );
+            if let Some(help) = help {
+                report = report.with_help(help);
+            }
+            report.finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &help.map_or_else(|| message.to_owned(), |help| format!("{message}. {help}")),
         code,
     )
 }

@@ -11,7 +11,8 @@
 /// Reserved words, from `Token` in `src/parser/lexer.rs`.
 pub const KEYWORDS: &[&str] = &[
     "fn", "let", "struct", "if", "else", "match", "while", "for", "in", "loop", "return", "break",
-    "continue", "try", "catch", "throw", "import", "as", "host", "dylib", "true", "false", "null",
+    "continue", "try", "catch", "throw", "import", "as", "is", "host", "dylib", "true", "false",
+    "null",
 ];
 
 /// Free-standing built-in functions, from
@@ -31,8 +32,8 @@ pub const BUILTIN_FUNCTIONS: &[(&str, &str)] = &[
         "int(string | float) -> int\n\nReturns the string or float interpreted as an int. Crashes at runtime if the string cannot be converted.",
     ),
     (
-        "str",
-        "str(T) -> string\n\nReturns the given object as a string.",
+        "string",
+        "string(T) -> string\n\nReturns the given value as a string.",
     ),
     (
         "bool",
@@ -165,11 +166,7 @@ pub const BUILTIN_METHODS: &[(&str, &str)] = &[
         "<T[]>.sort()\n\nSorts an array in place. Supports ints, floats, and strings.",
     ),
     (
-        "is_float",
-        "<string>.is_float() -> bool\n\nReturns whether the string represents a float.",
-    ),
-    (
-        "is_int",
-        "<string>.is_int() -> bool\n\nReturns whether the string represents an int.",
+        "parse",
+        "<string>.parse<T>() -> Option<T>\n\nReads an int, a float or a bool out of the string, or `None` where it holds none.",
     ),
 ];

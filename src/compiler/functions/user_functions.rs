@@ -467,7 +467,7 @@ pub fn handle_user_function(
 
 /// The checked downcast a `return` of an `any` value goes through in a function
 /// declared to return `declared`. A scalar, a list or a map has the one
-/// `as_int`, `as_string` and the rest call. A struct, an enum, a function or a
+/// `v as int`, `v as string` and the rest compile to. A struct, an enum, a function or a
 /// union is checked against a list of type codes, kept in a constant register.
 /// A declaration that takes any value (`any` itself, or a union with `any` in
 /// it) needs no check.

@@ -295,7 +295,7 @@ fn aliased_module_sees_its_own_enum() {
             (
                 "prog.cdl",
                 "import \"shapes.cdl\" as shapes;\n\
-                 fn main() { print(str(shapes::unit())); print(str(shapes::nothing())); }\n",
+                 fn main() { print(string(shapes::unit())); print(string(shapes::nothing())); }\n",
             ),
         ],
     );
@@ -326,13 +326,13 @@ fn aliased_enum_variant_is_reached_through_its_enum() {
                  fn name(s: shapes::Shape) -> string {\n\
                      let out = \"?\";\n\
                      match s {\n\
-                         shapes::Shape::Circle(r) => { out = str(r); }\n\
+                         shapes::Shape::Circle(r) => { out = string(r); }\n\
                          shapes::Shape::Empty => { out = \"empty\"; }\n\
                      }\n\
                      return out;\n\
                  }\n\
                  fn main() {\n\
-                     print(str(shapes::Shape::Circle(1)));\n\
+                     print(string(shapes::Shape::Circle(1)));\n\
                      print(name(shapes::Shape::Circle(7)));\n\
                      print(name(shapes::Shape::Empty));\n\
                  }\n",

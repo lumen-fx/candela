@@ -6,20 +6,20 @@ import "std/assert" as assert;
 
 // The payload keeps the type that went in, so a mapper reads it back at that
 // type.
-fn describe(x) { return str(x); }
+fn describe(x) { return string(x); }
 
 // A step that may come back empty, and a test on the payload. Both read the
 // payload back through a downcast, which is how an `any` payload takes part in
 // arithmetic.
 fn half(x) {
-    let n = as_int(x);
+    let n = x as int;
     if n % 2 == 0 {
         return Some(n / 2);
     }
     return None;
 }
 
-fn is_even(x) { return as_int(x) % 2 == 0; }
+fn is_even(x) { return (x as int) % 2 == 0; }
 
 struct Point { x: int }
 

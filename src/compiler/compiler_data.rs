@@ -256,7 +256,7 @@ pub struct Ctx {
 /// How a `return` checks an `any` value against the declared return type.
 #[derive(Clone, Copy)]
 pub enum ReturnCheck {
-    /// The downcast `as_int`, `as_string` and the rest call, for a scalar, a
+    /// The downcast `v as int`, `v as string` and the rest compile to, for a scalar, a
     /// list or a map.
     Builtin(LibFunc),
     /// `AsTypeVal` against these type codes, for a struct, an enum, a
@@ -375,6 +375,10 @@ pub struct State<'a> {
     /// diagnostic uses and the type the body returns, which is what a `?`
     /// in it has to hand back.
     pub fn_returns: Vec<(SmolStr, DataType)>,
+    /// The names an `is` being compiled binds that a closure in their scope
+    /// captures, so each is bound in a cell. Set by whatever compiles the
+    /// condition, which is what knows the scope.
+    pub captured_binders: Vec<SmolStr>,
 }
 
 /// A checkpoint of the tables a compile attempt grows as it goes, taken by

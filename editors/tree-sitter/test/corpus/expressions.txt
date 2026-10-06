@@ -1146,3 +1146,105 @@ fn total(m) {
                         (string_literal)))))
                 (identifier)
                 (arguments)))))))))
+
+================================================================================
+Type tests and downcasts (docs/src/language/types.md)
+================================================================================
+
+fn port(cfg: {string: any}) -> int {
+    if cfg.get("port") is Some(p) && p is int {
+        return p;
+    }
+    let m = json::parse(text) as {string: any};
+    let n = v as int + 1;
+    let w = a + b as int;
+    let ok = s is Shape::Circle(r) || xs is (int|string)[] || o is Option<int>;
+    return 8080;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (map_type
+          (type_identifier)
+          (type_identifier))))
+    (return_type
+      (type_identifier))
+    (block
+      (expression_statement
+        (if_expression
+          (binary_expression
+            (type_test_expression
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (arguments
+                  (string_literal)))
+              (variant_pattern
+                (type_identifier)
+                (arguments
+                  (identifier))))
+            (type_test_expression
+              (identifier)
+              (type_identifier)))
+          (block
+            (return_statement
+              (identifier)))))
+      (let_declaration
+        (identifier)
+        (cast_expression
+          (call_expression
+            (qualified_identifier
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)))
+          (map_type
+            (type_identifier)
+            (type_identifier))))
+      (let_declaration
+        (identifier)
+        (binary_expression
+          (cast_expression
+            (identifier)
+            (type_identifier))
+          (integer_literal)))
+      (let_declaration
+        (identifier)
+        (cast_expression
+          (binary_expression
+            (identifier)
+            (identifier))
+          (type_identifier)))
+      (let_declaration
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (type_test_expression
+              (identifier)
+              (variant_pattern
+                (qualified_type
+                  (type_identifier)
+                  (type_identifier))
+                (arguments
+                  (identifier))))
+            (type_test_expression
+              (identifier)
+              (array_type
+                (parenthesized_type
+                  (union_type
+                    (type_identifier)
+                    (type_identifier))))))
+          (type_test_expression
+            (identifier)
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (type_identifier))))))
+      (return_statement
+        (integer_literal)))))

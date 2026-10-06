@@ -161,7 +161,7 @@ o.filter(pred)
   otherwise. `pred` is not called on a `None`.
 
 ```rust
-fn describe(x) { return "value " + str(x); }
+fn describe(x) { return "value " + string(x); }
 
 fn main() {
     let s = Some(5);

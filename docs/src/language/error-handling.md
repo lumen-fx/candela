@@ -176,8 +176,8 @@ in, at once, so the caller gets the failure:
 
 ```rust
 fn parse(text: string) -> Result<int, string> {
-    if text.is_int() {
-        return Ok(int(text));
+    if text.parse<int>() is Some(n) {
+        return Ok(n);
     }
     return Err("not a number: " + text);
 }

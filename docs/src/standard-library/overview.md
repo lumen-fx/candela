@@ -9,8 +9,8 @@ prelude: every program has them with no import. The rest you import by path.
 The library ships as candela source. The toolchain installs a `libs` directory
 beside the `candela` executable:
 
-- `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `convert.cdl`,
-  `fs.cdl`, `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`,
+- `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `fs.cdl`,
+  `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`,
   `option.cdl`, `random.cdl`, `result.cdl`, `set.cdl`, `string.cdl`,
   `time.cdl`.
 - `libs/std_src/` holds the C sources and the compiled dynamic libraries for the
@@ -77,7 +77,7 @@ What a program reaches for on every other line needs no import:
 
 - Every method on a string, a list, a map, an int, a float and a bool, whether
   the language builds it in (`s.uppercase()`, `xs.push(x)`) or a module
-  defines it (`s.capitalize()`, `xs.map(f)`, `m.get(k)`, `"42".to_int()`).
+  defines it (`s.capitalize()`, `xs.map(f)`, `m.get(k)`, `"42".parse<int>()`).
 - `Option` and `Result`, with `Some`, `None`, `Ok`, `Err` and their methods.
 - The free built-ins: `print`, `input`, `exit`, `argv`, `type` and the
   conversions. They are listed in [built-in functions](builtins.md).
@@ -91,8 +91,7 @@ fn main() {
 }
 ```
 
-The modules behind it are `list`, `string`, `map`, `convert`, `option` and
-`result`. Importing one of them by name still works and reaches the same
+The modules behind it are `list`, `string`, `map`, `option` and `result`. Importing one of them by name still works and reaches the same
 module. A method nothing calls is never compiled, so the prelude adds nothing to
 a program that does not use it. A program that declares its own enum with a
 `Some` variant, or its own `Option`, gets its own when it names it.
@@ -106,7 +105,6 @@ Everything else is imported: `assert`, `fs`, `hash`, `json`, `math`,
 | --- | --- |
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
-| [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` methods over the built-in conversions |
 | [fs](fs.md) | Read, write, append to and delete files |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string, as hex |
 | [json](json.md) | Parse a json string into candela values, and serialise back |

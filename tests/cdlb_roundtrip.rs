@@ -479,7 +479,7 @@ fn main() {
     print(9223372036854775807);
     print(2147483647 + 1);
     print(mul(4294967296, 2));
-    print(str(-9000000000));
+    print(string(-9000000000));
 }
 ";
 
@@ -878,13 +878,13 @@ fn double(x: int) -> int { return x * 2; }
 
 fn main() {
     print(fn(x) { return x; });
-    print(str(fn(x) { return x; }));
+    print(string(fn(x) { return x; }));
     let n = 1;
     let bump = fn(x) { return x + n; };
     print(bump);
     let f = double;
     print(f);
-    print(str(f));
+    print(string(f));
     print([double, bump]);
     print({\"k\": double});
     print(Button { on_press: double });
@@ -917,15 +917,15 @@ enum Shape { Boxed(P), Empty }
 fn main() {
     let p = P { x: 1, name: \"n\" };
     print(p);
-    print(str(p));
+    print(string(p));
     print([p]);
-    print(str([p]));
+    print(string([p]));
     print({\"k\": p});
-    print(str({\"k\": p}));
+    print(string({\"k\": p}));
     print(Shape::Boxed(p));
-    print(str(Shape::Boxed(p)));
+    print(string(Shape::Boxed(p)));
     print(Cell { value: 3 });
-    print(str(Cell { value: 3 }));
+    print(string(Cell { value: 3 }));
 }
 ";
 

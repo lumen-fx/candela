@@ -52,34 +52,127 @@ or an enum by its declared name, a dynamic value as `any`, and a function as
 `fn(A) -> R`. It is the type the compiler inferred, so a value it could not pin
 reads `any` however the program later fills it.
 
-The predicates `is_int`, `is_float`, `is_str`, `is_bool`, `is_list`, `is_map`,
-and `is_null` answer the same question as a `bool`.
+### Testing a type with `is`
+
+`value is T` answers whether the value is a `T`, as a `bool`. `T` is any type
+an annotation can name: `int`, a struct, an enum, `int[]`, `{string: any}`, a
+union, or a generic type with its arguments, such as `Option<int>`. A list or a
+map is checked down to what it holds, so a list of `any` passes `is int[]` only
+when every element is an `int`.
+
+```rust
+import "std/json" as json;
+
+fn main() {
+    let v = json::parse("[1, 2, 3]");
+    print(v is int[], v is string[], v is any[]);
+}
+```
+
+Where the static type already answers the test, it costs nothing to run. A
+test for a type the value can never have answers `false`: a function compiles
+once for each type its callers pass, and the test is how one body serves them
+all. `null` is a value rather than a type, so test for it with `value == null`.
+
+Inside the body of an `if` or a `while` whose condition is `v is T`, the
+variable `v` has the type `T`, and so does every use of it to the right of an
+`&&` after the test. An `else if` with a test of its own does the same for its
+branch. An `else` branch is not narrowed; write `else if v is U` to name the
+other type.
+
+```rust
+fn describe(v) -> string {
+    if v is int {
+        return "the number " + string(v + 1);
+    } else if v is string {
+        return "the word " + v.uppercase();
+    }
+    return "something else";
+}
+
+fn main() {
+    print(describe(41), describe("hi"), describe(true));
+}
+```
+
+On an enum, `is` tests the variant with the pattern a `match` arm would write,
+and the names in the pattern hold the payload in the same places a narrowed
+variable has its type.
 
 ```rust
 fn main() {
-    print(is_int(1), is_str("a"), is_null(null));
+    let found = {"port": 80}.get("port");
+    if found is Some(p) && p > 0 {
+        print("port " + string(p));
+    }
+    print(found is None);
 }
 ```
+
+`is` binds as tightly as `<` and `>`: looser than arithmetic, tighter than
+`==` and `&&`. See [operators](../reference/operators.md).
+
+### Downcasting with `as`
+
+`value as T` hands the value on typed as `T`, checking it while the program
+runs. A value of another type raises `bad_downcast`, which a `catch` can take;
+see [Error handling](error-handling.md). `T` is any type `is` accepts, so `as`
+also turns the `{any: any}` a JSON document gives into the `{string: any}` a
+function declares, checking every key.
+
+```rust
+import "std/json" as json;
+
+fn port(cfg: {string: any}) -> int {
+    if cfg.get("port") is Some(p) && p is int {
+        return p;
+    }
+    return 8080;
+}
+
+fn main() {
+    let cfg = json::parse("{\"port\": 80}") as {string: any};
+    print(port(cfg));
+}
+```
+
+Where the static type already is a `T`, `as` does nothing. Where it can never
+be one, such as `3 as string`, the downcast is a compile error: that is a
+conversion, `string(3)`.
 
 ## No implicit conversion
 
 Candela never converts a value behind your back. Mixing an `int` and a `float`
 in the same arithmetic, or adding a number to a string, is a compile error.
-Convert first with `int`, `float`, `str`, or `bool`.
+Convert first by calling the type you want: `int`, `float`, `string`, or
+`bool`.
 
 ```rust
 fn main() {
     let count = 3;
     let rate = 1.5;
     print(float(count) * rate);
-    print("count: " + str(count));
+    print("count: " + string(count));
 }
 ```
 
 `int` accepts a `string` or a `float`, `float` accepts a `string` or an `int`,
-`str` accepts any value, and `bool` accepts the strings `"true"` and `"false"`.
-A conversion that cannot succeed raises at runtime; see
+`string` accepts any value, and `bool` accepts the strings `"true"` and
+`"false"`. A conversion that cannot succeed raises at runtime; see
 [Error handling](error-handling.md).
+
+Text that may not hold a number is read with `s.parse<T>()`, which answers an
+`Option`: `Some` with the value, or `None` where the text is not one. `T` is
+`int`, `float` or `bool`.
+
+```rust
+fn main() {
+    print("42".parse<int>(), "4.5".parse<float>(), "nope".parse<int>());
+    if "7".parse<int>() is Some(n) {
+        print(n + 1);
+    }
+}
+```
 
 ## Truthiness
 
@@ -100,7 +193,7 @@ fn main() {
 
 `null` is the value of an expression that has nothing to return, such as a
 function that returns without a value. It is its own type: no other type accepts
-it, so a variable is never implicitly empty. Test for it with `is_null`.
+it, so a variable is never implicitly empty. Test for it with `value == null`.
 
 `null` is a value you write in code, never a type you write in an annotation:
 `x: null`, `-> null` and `int|null` are all rejected. A function that returns
@@ -194,7 +287,7 @@ fn main() {
 ```
 
 A field declared `any` takes a value of any type, and reading it gives an `any`
-back; name the type again with `as_int`, `as_str` or another downcast.
+back; name the type again with `as`, or test it with `is`.
 
 ```rust
 struct Slot {
@@ -203,7 +296,7 @@ struct Slot {
 
 fn main() {
     let s = Slot { v: 5 };
-    print(as_int(s.v) + 1);
+    print(s.v as int + 1);
 }
 ```
 

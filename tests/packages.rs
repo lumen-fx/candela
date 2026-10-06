@@ -369,7 +369,7 @@ fn check_compiles_without_running_and_passes_offline_through() {
     .unwrap();
     std::fs::write(
         project.join("src").join("main.cdl"),
-        "import \"shapes\" as shapes;\n\nfn main() {\n    print(\"ran \" + str(shapes::area(2, 5)));\n}\n",
+        "import \"shapes\" as shapes;\n\nfn main() {\n    print(\"ran \" + string(shapes::area(2, 5)));\n}\n",
     )
     .unwrap();
 

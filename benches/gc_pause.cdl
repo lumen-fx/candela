@@ -15,8 +15,8 @@ struct Node {
 }
 
 fn item(i: int, frame: int) -> Node {
-    let attrs = {"class": "row-item-" + str(i % 17), "data-key": "key-" + str(i) + "-" + str(frame)};
-    let text = "label for item " + str(i) + " in frame " + str(frame);
+    let attrs = {"class": "row-item-" + string(i % 17), "data-key": "key-" + string(i) + "-" + string(frame)};
+    let text = "label for item " + string(i) + " in frame " + string(frame);
     let bump = frame + i;
     return Node {
         tag: "list-item",
@@ -34,7 +34,7 @@ fn section(s: int, frame: int, count: int) -> Node {
     }
     return Node {
         tag: "section",
-        attrs: {"id": "section-" + str(s) + "-frame-" + str(frame)},
+        attrs: {"id": "section-" + string(s) + "-frame-" + string(frame)},
         children: kids,
         text: "",
         on_click: fn(x) { return x; },
@@ -63,13 +63,13 @@ fn retained(frames: int) -> int {
         let k = f % 100;
         root.children[k] = section(k, f, 200);
         let row = root.children[(f * 7) % 100].children[f % 200];
-        row.attrs["data-key"] = "edited-key-" + str(f);
-        row.text = "edited label " + str(f);
+        row.attrs["data-key"] = "edited-key-" + string(f);
+        row.text = "edited label " + string(f);
         let by = f % 5 + 1;
         let owner = root.children[(f * 13) % 100];
         owner.children[(f * 3) % 200] = Node {
             tag: "list-item",
-            attrs: {"class": "replaced", "data-frame": "replaced-in-frame-" + str(f)},
+            attrs: {"class": "replaced", "data-frame": "replaced-in-frame-" + string(f)},
             children: [],
             text: "replaced item",
             on_click: fn(x) { return x * by; },
@@ -85,7 +85,7 @@ fn retained(frames: int) -> int {
 fn frame(f: int) -> int {
     let s = section(f % 100, f, 200);
     let row = s.children[f % 200];
-    row.attrs["data-key"] = "edited-key-" + str(f);
+    row.attrs["data-key"] = "edited-key-" + string(f);
     return s.children.len() + row.on_click(f);
 }
 

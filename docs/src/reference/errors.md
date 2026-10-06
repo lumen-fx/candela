@@ -31,7 +31,7 @@ Raised while the file is read, before any type is known.
 
 | Class | Triggered by |
 | --- | --- |
-| Unexpected token | A token that cannot appear where it does, including a missing type name, a bad function or variable name, and a struct field name that is not an identifier |
+| Unexpected token | A token that cannot appear where it does, including a missing type name, a bad function or variable name, a struct field name that is not an identifier, and `null` after `is` or `as`, where the report points at `== null` |
 | Unexpected end of file | The file ends inside a construct |
 | Unknown token | Characters that do not lex, such as a stray symbol |
 | Number literal | An `int` or a `float` literal whose value is past what the type holds, or an exponent marker with no digits after it, as in `1e` |
@@ -136,6 +136,19 @@ its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
 on a value that is not an enum, is `match_without_wildcard`. See
 [control flow](../language/control-flow.md#match-as-an-expression).
 
+**Type test and downcast errors.** A downcast the operand's static type rules
+out, such as `3 as string`, is `impossible_downcast`; the help names the
+conversion. A generic type named after `is` or `as` without its type arguments
+is `type_test_needs_arguments`, a variant test on a value that is not an enum
+is `variant_test_not_enum`, and `s.parse<T>()` with a `T` other than `int`,
+`float` or `bool` is `parse_type`. A removed spelling is reported with the one
+that replaced it: `is_int(v)` and the other `is_*` functions with `v is int`,
+`is_null(v)` with `v == null`, `as_int(v)` and the other `as_*` functions with
+`v as int`, `str(x)` with `string(x)`, the `to_int`, `to_float`, `to_bool` and
+`to_string` methods with `int(x)`, `float(x)`, `bool(x)` and `string(x)`, and
+`s.is_int()` and `s.is_float()` with `s.parse<int>()` and `s.parse<float>()`.
+See [types](../language/types.md#testing-a-type-with-is).
+
 **Declaration errors.** Defining a function name twice. The report shows both
 definitions. Two `impl` blocks that define one method for the same instantiated
 generic type are reported the same way.
@@ -214,7 +227,7 @@ kinds above cover the cases where a value is only known at run time.
 | `invalid_int` | `int()` on a string that is not an integer |
 | `invalid_float` | `float()` on a string that is not a number |
 | `invalid_bool` | `bool()` on a string that is neither `true` nor `false` |
-| `bad_downcast` | `as_int()`, `as_float()`, `as_str()`, `as_bool()`, `as_list()` or `as_map()` on an `any` value holding a different type, a condition typed `any` holding anything but a bool, a `return` of an `any` value holding a type the function does not declare, and a `return` of an `any` value as a function type when the function it holds leaves a parameter unannotated |
+| `bad_downcast` | `v as T` on a value that is not a `T`, including a list or a map holding an element, a key or a value of another type, a condition typed `any` holding anything but a bool, a `return` of an `any` value holding a type the function does not declare, and a `return` of an `any` value as a function type when the function it holds leaves a parameter unannotated |
 | `not_a_string` | Joining a value onto a string, or comparing it with `<`, `<=`, `>` or `>=`, when the value is not a string. A variadic host function is the way this happens: it is not signature-checked, so its closure can return a type its `host` block does not declare |
 | `json_parse_error` | `json::parse` on text that is not valid JSON; the message names the reason. Objects and arrays nest to a fixed depth, and text past it is rejected the same way |
 

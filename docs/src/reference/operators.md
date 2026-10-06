@@ -18,7 +18,7 @@ except `^`.
 | 1 | `\|\|` | left |
 | 2 | `&&` | left |
 | 3 | `==` `!=` | left |
-| 4 | `<` `<=` `>` `>=` | left |
+| 4 | `<` `<=` `>` `>=` `is` `as` | left |
 | 5 | `\|` | left |
 | 6 | `^^` | left |
 | 7 | `&` | left |
@@ -28,6 +28,11 @@ except `^`.
 | 11 | `^` | right |
 
 `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
+
+`is` and `as` take a type on their right rather than an expression, at the
+level of the comparisons: `a + b as int` is `(a + b) as int`, `v as int + 1` is
+`(v as int) + 1`, and `v is int && v > 0` tests before it compares. See [type
+tests and downcasts](#type-tests-and-downcasts).
 
 The order is Rust's. The bitwise operators bind tighter than a comparison, so
 `flags & mask == mask` asks whether `flags & mask` equals `mask`, and the shifts
@@ -96,7 +101,7 @@ runs, and a negative value only known at run time raises the catchable
 Integer arithmetic wraps on overflow.
 
 An `any` value cannot be used as an arithmetic operand. Narrow it first with
-`as_int()` or `as_float()`.
+`v as int` or `v as float`, or test it with `is`.
 
 ## Bitwise
 
@@ -115,7 +120,7 @@ way `&&` and `||` take theirs.
 
 No other operand type is accepted, and the types are never mixed: `1.5 & 1` is
 the same compile error `1.5 * 1` is, and an `any` value has to be narrowed with
-`as_int()` first.
+`v as int` first.
 
 ```rust
 let read = 4;
@@ -198,6 +203,26 @@ if count > 0 && !done {
 evaluated when the left one already settles the answer. That holds in a
 condition, in a `let`, in an argument, and in a returned expression alike, so a
 right operand with a side effect runs only when it is reached.
+
+## Type tests and downcasts
+
+`v is T` produces a `bool`: whether `v` holds a `T`. `v is Some(x)` tests an
+enum value's variant with the pattern a `match` arm writes. `v as T` produces
+`v` typed `T`, and raises the catchable `bad_downcast` when it holds another
+type. `T` is any type an annotation can name, read up to the end of the type, so
+`v is int | string` tests for the union.
+
+```rust
+if v is int && v > 0 {
+    print(v + 1);
+}
+let cfg = json::parse(text) as {string: any};
+```
+
+Where the test held, a tested variable has the type `T` and a variant's names
+hold its payload: in the body of the `if` or `while` it is the condition of,
+and to the right of an `&&` after it. See
+[types](../language/types.md#testing-a-type-with-is).
 
 ## User types
 
@@ -351,9 +376,11 @@ See [control flow](../language/control-flow.md).
 ## Symbols that are not operators
 
 - `|` is not an operator where a type is read: it separates the members of a
-  union type, as in `int | string`. In a `match` pattern it separates
+  union type, as in `int | string`, including the type after `is` and `as`. In a `match` pattern it separates
   alternatives, as in `1 | 2 => ...`. Everywhere else an expression is read it
   is bitwise or; parenthesise to use bitwise or inside a pattern, `(a | b)`.
+- `as` after an import's path names the module's alias, as in
+  `import "std/json" as json;`.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
 - `->` gives the return type in a `dylib` or `host` signature. `=>` means

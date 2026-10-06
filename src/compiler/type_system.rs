@@ -1973,22 +1973,12 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
     }
     Some(match name {
         "print" | "exit" | "throw" => DataType::Null,
-        "type" | "str" | "input" | "as_str" => DataType::String,
-        "float" | "as_float" => DataType::Float,
-        "int" | "the_answer" | "as_int" => DataType::Int,
-        "bool" | "as_bool" | "is_int" | "is_float" | "is_str" | "is_bool" | "is_list"
-        | "is_map" | "is_null" => DataType::Bool,
+        "type" | "string" | "input" => DataType::String,
+        "float" => DataType::Float,
+        "int" | "the_answer" => DataType::Int,
+        "bool" | "[int text]" | "[float text]" => DataType::Bool,
         "range" => DataType::Array(Some(Box::from(DataType::Int))),
         "argv" => DataType::Array(Some(Box::from(DataType::String))),
-        // A downcast to a collection yields an element/entry type of `any`
-        // (Unknown). That is a known type, not a gap: the entries stay dynamic
-        // instead of taking their type from the first `push` or `m[k] = v`
-        // the way an empty literal does.
-        "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
-        "as_map" => DataType::Map(Box::from((
-            Some(DataType::Unknown),
-            Some(DataType::Unknown),
-        ))),
         _ => return None,
     })
 }
@@ -2116,7 +2106,7 @@ fn format_signature(params: &[DataType], returned: &DataType, state: &State<'_>)
 /// into a typed field. A field is read back at the type it declares and used
 /// without a run-time test, so a `string` stored in an `int` field would be
 /// reported from inside the arithmetic that later read it, or not at all. It
-/// is reported at the line that wrote it instead; name the type with `as_int`
+/// is reported at the line that wrote it instead; name the type with `as int`
 /// or another downcast to store one.
 #[inline(always)]
 #[must_use]
@@ -2293,7 +2283,7 @@ pub(crate) fn pin_pushed_element(obj: &Expr, element: &DataType, v: &mut [Variab
 ///
 /// The test is on missing key and value types, not on `== Map((None, None))`:
 /// a map of `any` compares equal to it and keeps taking entries of any type,
-/// which is what a downcast (`as_map`) hands back.
+/// which is what a downcast (`as {any: any}`) hands back.
 pub(crate) fn pin_inserted_entry(obj: &Expr, key: &DataType, value: &DataType, v: &mut [Variable]) {
     let Expr::Var(var_name, _) = obj else {
         return;
@@ -2307,7 +2297,7 @@ pub(crate) fn pin_inserted_entry(obj: &Expr, key: &DataType, value: &DataType, v
 
 /// Whether a type is what an empty literal leaves behind: an array with no
 /// element type, or a map with neither a key nor a value type. A downcast
-/// (`as_map`) hands back entries of `any`, which names a type and is left
+/// (`as {any: any}`) hands back entries of `any`, which names a type and is left
 /// alone.
 #[must_use]
 fn is_empty_literal_type(ty: &DataType) -> bool {
@@ -2425,6 +2415,8 @@ pub fn collect_direct_fn_calls(
             Expr::VarDeclare(_, x)
             | Expr::VarAssign(_, x, _)
             | Expr::Propagate(x, _)
+            | Expr::Is(x, _, _, _)
+            | Expr::Cast(x, _, _, _)
             | Expr::Neg(x, _, _)
             | Expr::BitNot(x, _, _)
             | Expr::BoolNeg(x, _, _) => expr_stack.push(x),
@@ -2766,6 +2758,7 @@ fn track_scoped_returns(
 }
 
 fn track_condition_returns(
+    condition: &Expr,
     code: &[Expr],
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -2778,15 +2771,21 @@ fn track_condition_returns(
         .position(|expr| matches!(expr, Expr::ElseIfBlock(_, _, _) | Expr::ElseBlock(_)))
         .unwrap_or(code.len());
 
+    // Each branch is walked with what its condition proved in scope.
+    let v_len = v.len();
+    crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
     let first_flow = track_scoped_returns(&code[..first_branch_end], v, ctx, state, fn_name);
+    v.truncate(v_len);
     let mut all_branches_return = first_flow.always_returns;
     let mut has_else = false;
     extend_return_types!(&mut return_types, first_flow.types, ctx, state);
 
     for expr in &code[first_branch_end..] {
         match expr {
-            Expr::ElseIfBlock(_, branch_code, _) => {
+            Expr::ElseIfBlock(condition, branch_code, _) => {
+                crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
                 let flow = track_scoped_returns(branch_code, v, ctx, state, fn_name);
+                v.truncate(v_len);
                 all_branches_return &= flow.always_returns;
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
             }
@@ -2817,8 +2816,9 @@ fn track_return_flow(
     let mut threw = false;
     for expr in content {
         match expr {
-            Expr::Condition(_, code, _, _) | Expr::InlineCondition(_, code, _, _) => {
-                let flow = track_condition_returns(code, v, ctx, state, fn_name);
+            Expr::Condition(condition, code, _, _)
+            | Expr::InlineCondition(condition, code, _, _) => {
+                let flow = track_condition_returns(condition, code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
                 if flow.always_returns {
                     return FnReturnFlow {
@@ -2869,7 +2869,10 @@ fn track_return_flow(
             // A `while true` is a `loop` under another spelling and is left
             // the same way.
             Expr::WhileBlock(condition, code, _) => {
+                let v_len = v.len();
+                crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
                 let flow = track_scoped_returns(code, v, ctx, state, fn_name);
+                v.truncate(v_len);
                 extend_return_types!(&mut return_types, flow.types, ctx, state);
                 if matches!(**condition, Expr::Bool(true)) && !block_breaks(code) {
                     return FnReturnFlow {
@@ -3651,8 +3654,35 @@ impl Expr {
                     ),
                 }
             }
+            // `is` answers a bool; resolving its right side reports a test the
+            // operand's type rules out, or a name that is neither a type nor
+            // a variant.
+            Self::Is(operand, target, operand_span, target_span) => {
+                let have = operand.infer_type(v, ctx, state);
+                crate::compiler::type_test::resolve_test(
+                    &have,
+                    target,
+                    *operand_span,
+                    *target_span,
+                    ctx,
+                    state,
+                );
+                DataType::Bool
+            }
+            Self::Cast(_, target, _, target_span) => {
+                crate::compiler::type_test::resolve_type(target, *target_span, ctx, state)
+            }
             Self::BoolAnd(x, y, span_l, span_r) | Self::BoolOr(x, y, span_l, span_r) => {
-                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                // The right of an `&&` runs only where the left held, so it
+                // sees what an `is` on the left proved.
+                let x_type = x.infer_type(v, ctx, state);
+                let v_len = v.len();
+                if matches!(self, Self::BoolAnd(..)) {
+                    crate::compiler::type_test::declare_condition_facts(x, v, ctx, state);
+                }
+                let y_type = y.infer_type(v, ctx, state);
+                v.truncate(v_len);
+                match (x_type, y_type) {
                     (DataType::Unknown | DataType::Bool, DataType::Bool)
                     | (DataType::Bool, DataType::Unknown) => DataType::Bool,
                     (l, r) => {
@@ -4127,6 +4157,15 @@ impl Expr {
                         state.sources,
                     );
                 }
+                if method == "parse" && obj_type == DataType::String {
+                    let parsed =
+                        crate::compiler::methods::parse_call(args, type_args, *fn_span, ctx, state);
+                    let v_len = v.len();
+                    crate::compiler::methods::declare_parse_text(v, 0);
+                    let parsed_type = parsed.infer_type(v, ctx, state);
+                    v.truncate(v_len);
+                    return parsed_type;
+                }
                 // A builtin-typed receiver resolving to an `impl` method
                 // (`impl list { fn sum(self) ... }` -> `list#sum`) infers its
                 // return type from that method, specialized for the receiver
@@ -4186,9 +4225,7 @@ impl Expr {
                     | "trim_sequence_left"
                     | "trim_sequence_right"
                     | "join" => DataType::String,
-                    "starts_with" | "ends_with" | "contains" | "is_float" | "is_int" => {
-                        DataType::Bool
-                    }
+                    "starts_with" | "ends_with" | "contains" => DataType::Bool,
                     "len" | "find" => DataType::Int,
                     "repeat" => receiver_type!(
                         |t| match t {
@@ -4274,11 +4311,21 @@ impl Expr {
                 }
                 branch_value_type(types, ctx, state)
             }
-            Self::InlineCondition(_, code, _, _) => {
+            Self::InlineCondition(condition, code, _, _) => {
+                // Each branch is typed with what its condition proved.
                 let mut types: Vec<DataType> = Vec::with_capacity(code.len());
+                let v_len = v.len();
+                crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
                 types.push(code[0].infer_type(v, ctx, state));
+                v.truncate(v_len);
                 for t in &code[0..] {
-                    if let Self::ElseIfBlock(_, code, _) | Self::ElseBlock(code) = t {
+                    if let Self::ElseIfBlock(condition, code, _) = t {
+                        crate::compiler::type_test::declare_condition_facts(
+                            condition, v, ctx, state,
+                        );
+                        types.push(code[0].infer_type(v, ctx, state));
+                        v.truncate(v_len);
+                    } else if let Self::ElseBlock(code) = t {
                         types.push(code[0].infer_type(v, ctx, state));
                     }
                 }

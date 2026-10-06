@@ -86,6 +86,111 @@ pub fn impl_method_on_builtin(
     state.fns.iter().position(|f| f.name == mangled)
 }
 
+/// The variable `s.parse<T>()` holds its receiver in while it is parsed. No
+/// program can write the name, so it shadows nothing.
+const PARSE_TEXT: &str = "[parse text]";
+
+/// What `s.parse<T>()` is: an `if` over the text in [`PARSE_TEXT`] that
+/// answers `Some` with the value, or `None` where the text is not one. `T` is
+/// `int`, `float` or `bool`; anything else is reported against the call.
+///
+/// The text tests are the native primitives `[int text]` and `[float text]`,
+/// which only this lowering names.
+pub fn parse_call(
+    args: &[Expr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Expr {
+    if !args.is_empty() {
+        crate::compiler::compiler_errors::check_args(
+            args,
+            0,
+            "parse",
+            span,
+            state.sources,
+            ctx.file_idx,
+        );
+    }
+    let target = match type_args {
+        [t] => Some(t.to_datatype(&mut state.type_ctx(ctx.file_idx))),
+        _ => None,
+    };
+    let text = || Expr::Var(SmolStr::new_static(PARSE_TEXT), span);
+    let call = |name: &'static str, args: Vec<Expr>| {
+        Expr::FunctionCall(
+            args.into_boxed_slice(),
+            Box::from([SmolStr::new_static(name)]),
+            span,
+            Box::from([span]),
+            Box::from([]),
+        )
+    };
+    let some = |value: Expr| call("Some", vec![value]);
+    let none = || Expr::Var(SmolStr::new_static("None"), span);
+    let branch = |condition: Expr, value: Expr, rest: Expr| {
+        Expr::InlineCondition(
+            Box::new(condition),
+            Box::from([value, Expr::ElseBlock(Box::from([rest]))]),
+            span,
+            span,
+        )
+    };
+    match target {
+        Some(DataType::Int) => branch(
+            call("[int text]", vec![text()]),
+            some(call("int", vec![text()])),
+            none(),
+        ),
+        Some(DataType::Float) => branch(
+            Expr::BoolOr(
+                Box::new(call("[int text]", vec![text()])),
+                Box::new(call("[float text]", vec![text()])),
+                span,
+                span,
+            ),
+            some(call("float", vec![text()])),
+            none(),
+        ),
+        Some(DataType::Bool) => {
+            let equals = |word: &'static str| {
+                Expr::Eq(
+                    Box::new(text()),
+                    Box::new(Expr::String(SmolStr::new_static(word))),
+                    span,
+                    span,
+                )
+            };
+            branch(
+                equals("true"),
+                some(Expr::Bool(true)),
+                branch(equals("false"), some(Expr::Bool(false)), none()),
+            )
+        }
+        _ => crate::compiler::compiler_errors::error_type_test(
+            "Unsupported parse type",
+            "parse reads an int, a float or a bool out of a string",
+            Some("Name the type to read: s.parse<int>(), s.parse<float>() or s.parse<bool>()"),
+            "parse_type",
+            span,
+            ctx.file_idx,
+            state.sources,
+        ),
+    }
+}
+
+/// Declares the variable [`parse_call`] reads the text from, held in
+/// `register`.
+pub fn declare_parse_text(v: &mut Vec<Variable>, register: u16) {
+    v.push(Variable {
+        name: SmolStr::new_static(PARSE_TEXT),
+        register_id: register,
+        cell: false,
+        var_type: DataType::String,
+    });
+}
+
 /// Refuses a dot call that reaches `impl` function `fn_id` when the function
 /// declares no parameters: nothing would receive the value in front of the
 /// dot. Inference and compilation both reach a dot call, and whichever gets
@@ -308,6 +413,22 @@ pub fn handle_method_calls(
             );
         }
         error_no_such_method(name, &enum_name, fn_span, ctx.file_idx, state.sources);
+    }
+
+    // `s.parse<T>()` reads a value out of the text, or answers `None`.
+    if name == "parse" && namespace.len() == 1 && obj_type == DataType::String {
+        let parsed = parse_call(args, type_args, fn_span, ctx, state);
+        let text = obj
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id();
+        let v_len = v.len();
+        declare_parse_text(v, text);
+        let id = parsed
+            .compile(v, ctx, state, output, tgt_id, false, true)
+            .unwrap_id();
+        v.truncate(v_len);
+        state.free_reg(text, v);
+        return Some(id);
     }
 
     // A builtin-typed receiver (string/list/map/number) picks up methods from
