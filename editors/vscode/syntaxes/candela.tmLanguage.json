@@ -162,7 +162,7 @@
       "patterns": [
         {
           "name": "keyword.control.candela",
-          "match": "\\b(if|else|match|while|for|in|loop|return|break|continue|try|catch)\\b"
+          "match": "\\b(if|else|match|while|for|in|loop|return|break|continue|try|catch|throw)\\b"
         },
         {
           "name": "keyword.control.import.candela",

@@ -39,6 +39,7 @@
 [
   "try"
   "catch"
+  "throw"
 ] @keyword.exception
 
 [
@@ -123,7 +124,7 @@
   function: (identifier) @function.builtin)
   (#any-of? @function.builtin
     "print" "type" "float" "int" "str" "bool" "input" "range" "the_answer"
-    "argv" "exit" "throw"))
+    "argv" "exit"))
 
 ; Macros
 

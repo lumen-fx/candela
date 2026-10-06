@@ -364,6 +364,7 @@ module.exports = grammar({
         $.assignment_statement,
         $.expression_statement,
         $.return_statement,
+        $.throw_statement,
         $.break_statement,
         $.continue_statement,
         $.while_statement,
@@ -395,6 +396,9 @@ module.exports = grammar({
       ),
 
     return_statement: ($) => seq('return', optional(field('value', $._expression)), ';'),
+
+    // `throw "kind";` raises an error of that kind.
+    throw_statement: ($) => seq('throw', field('value', $._expression), ';'),
 
     break_statement: (_) => seq('break', ';'),
 

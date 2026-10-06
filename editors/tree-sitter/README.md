@@ -58,7 +58,7 @@ bare parameters, an optional return annotation, and a block or `=> expr;` body,
 `host` signature blocks including the variadic `...` parameter and the structs
 a `host` block declares. Statements: `let`, assignment and its
 compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
-range, `loop`, `try`/`catch`, and bare blocks. `match` stands alone or gives a
+range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks. `match` stands alone or gives a
 value, its arms take a block or an expression, and `|` separates a pattern's
 alternatives. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates

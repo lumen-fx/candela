@@ -70,7 +70,7 @@ directory a library path falls back to.
 ## Built-ins and modules
 
 Built-in functions and methods are part of the language. `print`, `str`,
-`json_parse`, `throw`, `arr.push(x)`, and `s.uppercase()` need no import and are
+`json_parse`, `arr.push(x)`, and `s.uppercase()` need no import and are
 available under `candela-vm` with nothing installed. They are listed in
 [built-in functions](builtins.md).
 
@@ -120,7 +120,7 @@ cause. Each page below states what its functions raise.
 
 A raised error carries a short code as well as a message. The code is what a
 `catch` binds and what `catch "code"` filters on; the message is what an uncaught
-error prints. A `throw` is its own code, so `throw("no such user")` is caught as
+error prints. A `throw` is its own code, so `throw "no such user";` is caught as
 `no such user`. A `try` catches what a library function raises just as it
 catches a `throw` written in the block. See
 [error handling](../language/error-handling.md) for the mechanism and

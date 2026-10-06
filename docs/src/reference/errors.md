@@ -42,6 +42,7 @@ Raised while the file is read, before any type is known.
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
+| `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
@@ -160,6 +161,7 @@ server shows them in the editor. Each carries a code like an error does.
 | --- | --- |
 | `unannotated_host_parameter` | A function in the file being built that nothing in the program calls leaves a parameter bare, and the file declares `main`. A file with no `main` is a library, whose importers call its functions, so it gets no such warning. A host calling it by name passes that parameter as `any`, so its body is checked that way. The warning points at the function's name; annotate the parameter with the type the host passes |
 | `no_host_entry_point` | The body of such a function does not compile with its bare parameters typed `any`. The message carries the error the body raised and the span points at it. A packaged `.cdlb` has no entry point for the function, so a host call to it fails as an unknown function |
+| `unraisable_catch_kind` | A `catch "kind"` in the program's own files names a kind that no built-in error carries and no string literal anywhere in the program, a `throw` or otherwise, spells. Such a clause never runs, which is what a misspelt kind looks like. The check reads literals only: a kind built at run time and caught by a name the program never writes as a literal is warned about |
 
 ## Runtime errors
 
@@ -236,7 +238,7 @@ instead of a value. Catch it like any other kind, or let it end the run. See
 
 ### Your own
 
-`throw("message")` raises an error whose kind is the string you pass, so
+`throw "message";` raises an error whose kind is the string you pass, so
 `catch "message"` matches it. Choose short, stable identifiers for anything you
 intend to catch.
 

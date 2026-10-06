@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- `throw` colours as a keyword: it is a statement, `throw "kind";`.
+
 ## 0.2.2
 
 - The `fn` that opens a function type, `fn(int, int) -> int`, or an anonymous

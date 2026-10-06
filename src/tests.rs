@@ -380,7 +380,7 @@ pub fn a_catch_reads_what_the_code_after_the_call_would_have_overwritten() {
         run_output(
             "
             fn dig(n, catching) {
-                if n <= 0 { throw(\"bottom\"); }
+                if n <= 0 { throw \"bottom\"; }
                 let mine = n * 10;
                 if catching {
                     try {
@@ -467,7 +467,7 @@ pub fn a_written_literal_register_is_not_a_constant() {
         run_output(
             "
             fn sum(n) {
-                if n <= 0 { throw(\"bottom\"); }
+                if n <= 0 { throw \"bottom\"; }
                 let got = 0;
                 try {
                     got = sum(n - 1);
@@ -848,7 +848,7 @@ fn main() {
         try {
             let e = c;
             e.x = 9.0;
-            throw(\"stop\");
+            throw \"stop\";
         } catch err {
             print(c.x);
         }
@@ -896,7 +896,7 @@ fn caught(n: int) -> int {
     try {
         x = 2;
         if n > 0 {
-            throw(\"e\");
+            throw \"e\";
         }
         x = 3;
     } catch e {
@@ -1009,7 +1009,7 @@ pub fn a_catch_restores_the_registers_of_the_call_it_ended() {
         "
         fn dig(n) {
             if n <= 0 {
-                throw(\"bottom\");
+                throw \"bottom\";
             }
             let mine = n * 10;
             try {
@@ -4261,7 +4261,7 @@ pub fn throw_is_catchable() {
         fn main() {
             let result = 0;
             try {
-                throw(\"boom\");
+                throw \"boom\";
                 result = 1;
             } catch \"boom\" {
                 result = 2;
@@ -9417,7 +9417,7 @@ pub fn and_short_circuits_in_a_let() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return true;
         }
         fn main() {
@@ -9434,7 +9434,7 @@ pub fn or_short_circuits_in_a_let() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return false;
         }
         fn main() {
@@ -9451,7 +9451,7 @@ pub fn and_short_circuits_in_a_call_argument() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return true;
         }
         fn id(b) { return b; }
@@ -9468,7 +9468,7 @@ pub fn or_short_circuits_in_a_return_value() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return false;
         }
         fn check(b) {
@@ -9501,7 +9501,7 @@ pub fn and_still_short_circuits_as_a_condition() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return true;
         }
         fn main() {
@@ -9517,7 +9517,7 @@ pub fn or_of_and_still_short_circuits_as_a_condition() {
     run_and_check_registers!(
         "
         fn boom() {
-            throw(\"reached\");
+            throw \"reached\";
             return true;
         }
         fn main() {
@@ -12155,23 +12155,23 @@ pub fn a_try_whose_catch_returns_meets_the_declared_type() {
         "
         fn a(n: int) -> int { try { return n; } catch e { return -1; } }
         fn c(n: int) -> int {
-            try { if n == 0 { throw(\"z\"); } return n; }
+            try { if n == 0 { throw \"z\"; } return n; }
             catch \"z\" { return 0; }
             catch e { return -1; }
         }
         fn d(n: int) -> int {
-            try { if n == 0 { throw(\"z\"); } return n; }
+            try { if n == 0 { throw \"z\"; } return n; }
             catch \"z\" { return 0; }
         }
         fn e(n: int) -> int {
             match n {
                 0 => { return 1; }
-                _ => { throw(\"x\"); }
+                _ => { throw \"x\"; }
             }
         }
         fn g(n: int) -> int {
             if n == 0 { return 1; }
-            throw(\"x\");
+            throw \"x\";
         }
         fn h(n: int) -> int {
             let i = 0;
@@ -15013,4 +15013,40 @@ pub fn print_null_prints_null() {
         }
     ";
     assert_eq!(run_output(src), "null\nnull\n");
+}
+
+#[test]
+pub fn throw_is_a_statement() {
+    let src = r#"
+        fn check(n: int) -> int {
+            if n > 2 { throw "too_big"; }
+            return n;
+        }
+        fn main() {
+            try { print(check(5)); } catch "too_big" { print("caught"); }
+            print(check(1));
+        }
+    "#;
+    assert_eq!(run_output(src), "caught\n1\n");
+
+    let src = "fn main() { throw(\"x\"); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "throw_call");
+    assert!(d.message.contains("throw \"kind\";"), "{d:?}");
+}
+
+#[test]
+pub fn a_catch_for_a_kind_nothing_raises_warns() {
+    let src = r#"
+        fn div(a: int, b: int) -> int { return a / b; }
+        fn main() {
+            try { print(div(1, 0)); } catch "divison_by_zero" { print("x"); } catch "division_by_zero" { print("y"); }
+            try { throw "mine"; } catch "mine" { print("m"); }
+        }
+    "#;
+    let (_, warnings) = checked_with_warnings(src, "w.cdl");
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["unraisable_catch_kind"], "{warnings:?}");
+    assert_eq!(&src[warnings[0].span.clone()], "\"divison_by_zero\"");
 }

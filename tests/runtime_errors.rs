@@ -231,7 +231,7 @@ fn a_throw_below_the_block_reaches_the_catch() {
         r#"
 fn refuse(amount) {
     if amount > 10 {
-        throw("too_much");
+        throw "too_much";
     }
     return amount;
 }
@@ -265,7 +265,7 @@ fn a_catch_hands_the_resuming_call_its_registers_back() {
         r#"
 fn dig(n) {
     if n <= 0 {
-        throw("bottom");
+        throw "bottom";
     }
     let mine = n * 10;
     try {
@@ -294,7 +294,7 @@ fn a_catch_in_a_recursion_that_returns_a_value_unwinds_the_same() {
         r#"
 fn sum(n) {
     if n <= 0 {
-        throw("bottom");
+        throw "bottom";
     }
     let mine = n * 10;
     let got = 0;
@@ -333,7 +333,7 @@ fn a_throw_across_several_calls_leaves_one_level_to_restore() {
         r#"
 fn dig(n) {
     if n <= 0 {
-        throw("bottom");
+        throw "bottom";
     }
     let mine = n * 10;
     if n == 3 {
@@ -365,14 +365,14 @@ fn a_throw_from_inside_a_catch_unwinds_the_frames_above_it() {
         r#"
 fn dig(n) {
     if n <= 0 {
-        throw("bottom");
+        throw "bottom";
     }
     let mine = n * 10;
     try {
         dig(n - 1);
     } catch e {
         if n < 3 {
-            throw("rethrown at " + str(mine));
+            throw "rethrown at " + str(mine);
         }
         print("caught " + e + " at " + str(mine));
     }
@@ -397,7 +397,7 @@ fn nested_catches_in_one_frame_restore_once() {
         r#"
 fn dig(n) {
     if n <= 0 {
-        throw("bottom");
+        throw "bottom";
     }
     let mine = n * 10;
     try {
@@ -405,7 +405,7 @@ fn dig(n) {
             dig(n - 1);
         } catch inner {
             print("inner at " + str(mine));
-            throw("again");
+            throw "again";
         }
     } catch outer {
         print("outer at " + str(mine));

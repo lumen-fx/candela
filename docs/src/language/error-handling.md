@@ -34,7 +34,10 @@ the expression that raised it.
 
 Wrap the risky work in `try` and handle the failure in `catch`. A `catch` with a
 quoted kind handles that kind only; a `catch` naming a variable handles anything
-and binds the kind to that name. A `try` needs at least one `catch`.
+and binds the kind to that name. A `try` needs at least one `catch`. A quoted
+kind that no built-in error carries and nothing in the program throws is
+reported as a warning, since a misspelt kind never matches; see
+[the error catalogue](../reference/errors.md#warnings).
 
 ```rust
 fn main() {
@@ -78,7 +81,7 @@ modules written in candela.
 ```rust
 fn withdraw(balance, amount) {
     if amount > balance {
-        throw("insufficient_funds");
+        throw "insufficient_funds";
     }
     return balance - amount;
 }
@@ -117,8 +120,8 @@ fn main() {
 
 ## Raising your own
 
-`throw` raises an error with the kind you give it, so your own failures catch
-exactly like the built-in ones.
+`throw "kind";` raises an error with the kind you give it, so your own failures
+catch exactly like the built-in ones. The kind is any string expression.
 
 ```rust
 fn main() {
@@ -126,7 +129,7 @@ fn main() {
     let amount = 50;
     try {
         if amount > balance {
-            throw("insufficient_funds");
+            throw "insufficient_funds";
         }
         print(balance - amount);
     } catch "insufficient_funds" {

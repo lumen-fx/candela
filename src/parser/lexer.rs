@@ -24,6 +24,7 @@ impl std::fmt::Display for Token<'_> {
             Token::RBracket => write!(f, "']'"),
             Token::FatArrow => write!(f, "'=>'"),
             Token::At => write!(f, "'@'"),
+            Token::Throw => write!(f, "'throw'"),
             other => write!(f, "{other:?}"),
         }
     }
@@ -206,6 +207,9 @@ pub enum Token<'a> {
     /// `@`: opens an attribute, as in `@cfg(web)`.
     #[token("@")]
     At,
+    /// `throw`: raises an error, as in `throw "kind";`.
+    #[token("throw")]
+    Throw,
     #[token("=>")]
     /// =>
     FatArrow,

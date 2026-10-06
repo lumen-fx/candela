@@ -14,7 +14,7 @@ fn outer(x) {
 
 fn refuse(amount) {
     if amount > 10 {
-        throw("too_much");
+        throw "too_much";
     }
     return amount;
 }
@@ -25,7 +25,7 @@ fn spend(amount) {
 
 fn countdown(n) {
     if n == 0 {
-        throw("from_the_bottom");
+        throw "from_the_bottom";
     }
     return countdown(n - 1);
 }

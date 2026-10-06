@@ -226,14 +226,8 @@ names `json::parse` and `json::stringify`.
 
 ## Errors and process control
 
-### throw
-
-```rust
-throw(message)
-```
-
-Raises a catchable error carrying `message`, which has to be a string. Nothing
-after the `throw` in the enclosing block runs.
+`throw "kind";` raises an error. It is a statement of the language rather than
+a function; see [error handling](../language/error-handling.md).
 
 ### exit
 

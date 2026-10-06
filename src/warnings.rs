@@ -83,3 +83,44 @@ pub fn emit_warning(sources: &[Source], title: &str, warning: Diagnostic) {
         &mut captured_output::stderr(),
     );
 }
+
+/// Warns about each `catch "kind"` in the program's own files whose kind
+/// nothing can raise: it is not a kind a built-in error carries, and no string
+/// literal anywhere in the program, a `throw` or otherwise, spells it. Such a
+/// clause never runs, which is what a typo in a kind looks like.
+///
+/// The check reads literals only. A kind built at run time is not followed, so
+/// a program that raises one and catches it by a name it never writes as a
+/// literal is warned about.
+pub fn warn_unraisable_catch_kinds(sources: &[Source], std_files: &[bool]) {
+    let scanned: Vec<_> = sources
+        .iter()
+        .map(|source| crate::parser::catch_kinds_and_strings(&source.contents))
+        .collect();
+    for (file, (kinds, _)) in scanned.iter().enumerate() {
+        if std_files.get(file).copied().unwrap_or(false) {
+            continue;
+        }
+        for (kind, span) in kinds {
+            let raisable = candela_vm::errors::BUILTIN_KINDS.contains(&kind.as_str())
+                || scanned
+                    .iter()
+                    .any(|(_, strings)| strings.iter().any(|s| s == kind));
+            if raisable {
+                continue;
+            }
+            emit_warning(
+                sources,
+                "Catch for a kind nothing raises",
+                Diagnostic {
+                    filename: sources[file].filename.to_string(),
+                    span: (span.start as usize)..(span.end as usize),
+                    message: format!(
+                        "No built-in error has the kind {kind:?} and nothing in the program throws it, so this catch never runs. Check the spelling"
+                    ),
+                    code: String::from("unraisable_catch_kind"),
+                },
+            );
+        }
+    }
+}

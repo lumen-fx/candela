@@ -32,6 +32,7 @@ use crate::compiler::type_system::ANON_FN_PREFIX;
 use crate::compiler::use_immediates;
 use crate::instr::Instr;
 use crate::warnings::emit_warning;
+use crate::warnings::warn_unraisable_catch_kinds;
 use candela_vm::Diagnostic;
 use candela_vm::artifact::ExportImage;
 use candela_vm::collect_diagnostic;
@@ -118,6 +119,10 @@ pub fn compile_checked_profile(
 ) -> (CompileOutput, Vec<ExportImage>) {
     let mut out = compile_profile(source, filename, false, resolver, optimize);
     let exports = compile_entry_points(&mut out);
+    let std_files: Vec<bool> = (0..out.sources.len())
+        .map(|file| out.namespaces.is_std(file as u16))
+        .collect();
+    warn_unraisable_catch_kinds(&out.sources, &std_files);
     (out, exports)
 }
 
