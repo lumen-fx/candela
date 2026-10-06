@@ -222,7 +222,8 @@ These come with the language and need no import.
   `is_int`, `is_float`.
 - Lists: `len`, `push`, `remove`, `contains`, `find`, `sort`, `reverse`,
   `repeat`, `join`, `partition`.
-- Maps: `len`, `get`, `insert`, `remove`, `contains`, `keys`, `values`.
+- Maps: `len`, `remove`, `contains`, `keys`, `values`. An entry is read and
+  written with brackets, `m[k]` and `m[k] = v`.
 - Integers: `abs`.
 - Floats: `abs`, `sqrt`, `round`, `floor`.
 
@@ -238,9 +239,11 @@ Lists carry a second set of methods from the standard library's `list` module,
 available without an import: `map`, `filter`, `reduce`, `each`, `any`, `all`,
 `find`, `sort_by`, `first`, `last`, `is_empty`, `sum`, `product`, `min`, `max`,
 `index_of`, `count`, `unique`, `chunk`, `take`, and `drop`. See
-[Collections](collections.md). The standard library's `string` and `map`
-modules add methods to strings and maps the same way, behind an import.
+[Collections](collections.md). The standard library's `string`, `map` and
+`convert` modules add methods to strings, maps and numbers the same way, also
+with no import: they are all part of the
+[prelude](../standard-library/overview.md#the-prelude).
 
 The `Option` and `Result` types from the standard library are enums with `impl`
-blocks, so their helpers are called as methods once the module is imported; see
-[Error handling](error-handling.md).
+blocks in the prelude, so their helpers are called as methods with no import;
+see [Error handling](error-handling.md).

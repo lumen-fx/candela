@@ -33,11 +33,12 @@ The order is Rust's. The bitwise operators bind tighter than a comparison, so
 `flags & mask == mask` asks whether `flags & mask` equals `mask`, and the shifts
 bind looser than `+`, so `1 << n + 1` shifts by `n + 1`.
 
-Four forms bind tighter than every binary operator: a function call `f(x)`, an
-index or slice `a[i]`, a field access `p.x`, and a method call `p.len()`. They
-attach to the term they follow, so `a.b[0] ^ 2` raises `a.b[0]` to the power of
-two, and they chain: `adder(1)(2)` calls what `adder(1)` returned, and
-`fs[0](x)` calls the element it indexed.
+Five forms bind tighter than every binary operator: a function call `f(x)`, an
+index or slice `a[i]`, a field access `p.x`, a method call `p.len()`, and `x?`.
+They attach to the term they follow, so `a.b[0] ^ 2` raises `a.b[0]` to the
+power of two, and they chain: `adder(1)(2)` calls what `adder(1)` returned,
+`fs[0](x)` calls the element it indexed, and `m.get(k)?.len()` reads the length
+of the value a lookup found.
 
 The prefix operators `-`, `!` and `~` bind tighter than `^` and looser than the
 postfix forms. `-a ^ 2` is `(-a) ^ 2` and `!ok == done` is `(!ok) == done`. Use
@@ -232,11 +233,12 @@ apply the matching operator instead.
 
 ## Assignment
 
-`=` assigns to a variable, an array element, or a struct field:
+`=` assigns to a variable, an array element, a map entry, or a struct field:
 
 ```rust
 count = 4;
 row[0] = 9;
+ages["ada"] = 36;
 point.x = 3;
 ```
 
@@ -245,12 +247,13 @@ be chained.
 
 The compound forms `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `^^=`, `<<=`
 and `>>=` apply the matching binary operator to the current value and assign the
-result. `x += 1` is `x = x + 1`, with the same type rules, and all three
-assignable targets are allowed:
+result. `x += 1` is `x = x + 1`, with the same type rules, and every
+assignable target is allowed:
 
 ```rust
 total += price;
 counts[i] += 1;
+tally["a"] += 1;
 point.x *= 2;
 flags |= read;
 ```
@@ -288,8 +291,27 @@ ending in an accented vowel takes the whole word, and `word[3]` reads the
 accented vowel. A character is a Unicode scalar value, whatever it takes to
 store.
 
-Maps are not indexed with `[]`. Use the `get` method; see
+`m[k]` reads the value a map holds under the key `k`, which has to be of the
+map's key type, and raises `unknown_map_key` when the map holds no such key.
+`m[k] = v` writes the entry, adding it or replacing its value. `m.get(k)` is the
+lookup that answers `None` instead of raising; see
 [collections](../language/collections.md).
+
+## Propagation
+
+`x?` takes an `Option` or a `Result`. On a `Some` or an `Ok` it is the value
+inside; on a `None` or an `Err` it returns that value from the enclosing
+function at once. The function has to return the same enum, with the same
+error type for a `Result`, so `?` works only inside one:
+
+```rust
+fn first_word_length(words: string[]) -> Option<int> {
+    let w = words.first()?;
+    return Some(w.len());
+}
+```
+
+See [error handling](../language/error-handling.md#passing-a-failure-on).
 
 ## Access and calls
 

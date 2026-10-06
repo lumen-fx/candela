@@ -648,11 +648,14 @@ let engine = candela::Engine::new()
     .with_import_root("shapes", cache.join("shapes/1.2.3"));
 ```
 
-`with_lib_dir` names the directory holding `std/`, so `import "std/string";`
-reads `libs/std/string.cdl`. It is what an application that ships the standard
+`with_lib_dir` names the directory holding `std/`, so `import "std/json";`
+reads `libs/std/json.cdl`. It is what an application that ships the standard
 library inside its own installation uses instead of setting
 `CANDELA_LIB_PATH`. Without it, the default applies: `CANDELA_LIB_PATH` when
-set, and `libs/` beside the running executable otherwise.
+set, and `libs/` beside the running executable otherwise. The
+[prelude](../standard-library/overview.md#the-prelude) needs neither: the
+compiler carries it, so a script has `Option`, `Result` and the methods of the
+built-in types with no library directory at all.
 
 `with_import_root` makes a directory the root of a package. The package is
 entered through the file its `candela.toml` names as `entry`, `src/main.cdl`

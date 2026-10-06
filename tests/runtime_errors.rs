@@ -809,9 +809,9 @@ fn main() {{
     }}
     print(doc.len());
     let last = as_map(doc[199]);
-    print(as_int(last.get("id")));
-    print(as_str(last.get("name")));
-    print(as_str(as_list(last.get("tags"))[1]));
+    print(as_int(last["id"]));
+    print(as_str(last["name"]));
+    print(as_str(as_list(last["tags"])[1]));
 }}
 "#
     );

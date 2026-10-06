@@ -2,14 +2,11 @@
 
 Type conversions under names that read as verbs, as methods on the value. Each
 method wraps the built-in conversion of the same effect; see
-[built-in functions](builtins.md) for `int`, `float`, `str`, and `bool`.
+[built-in functions](builtins.md) for `int`, `float`, `str`, and `bool`. The
+module is part of the [prelude](overview.md#the-prelude), so the methods need no
+import.
 
-```rust
-import "std/convert";
-```
-
-The import brings the methods in; each conversion is defined on the receiver
-types it makes sense for. The module is pure candela, so it compiles into a
+Each conversion is defined on the receiver types it makes sense for. The module is pure candela, so it compiles into a
 `.cdlb` artifact and runs under `candela-vm` with no dynamic library.
 
 ## to_int
@@ -65,8 +62,6 @@ Parses `"true"` and `"false"`. Any other string raises `The string could not be
 parsed into a boolean`.
 
 ```rust
-import "std/convert";
-
 fn main() {
     print("42".to_int() + 1);
     print(3.9.to_int());

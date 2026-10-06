@@ -1,10 +1,7 @@
 # result
 
-`Result` is either a success or a failure that carries a reason.
-
-```rust
-import "std/result";
-```
+`Result` is either a success or a failure that carries a reason. It is part of
+the [prelude](overview.md#the-prelude), so it needs no import.
 
 ## The type
 
@@ -17,12 +14,9 @@ enum Result<T, E> {
 }
 ```
 
-Importing the module brings the variants into scope, so you construct and match
-them directly:
+You construct and match the variants directly:
 
 ```rust
-import "std/result";
-
 fn main() {
     let r = Ok(5);
     match r {
@@ -37,8 +31,6 @@ Neither constructor needs a type argument: `Ok(v)` decides the success type and
 with each side typed, and the value bound in an arm keeps the type that went in.
 
 ```rust
-import "std/result";
-
 struct Config {
     port: int,
 }
@@ -67,13 +59,36 @@ A `Result` is a value you pass around and inspect. It is separate from the
 language's raised errors, which unwind to a `try`/`catch`; see
 [error handling](../language/error-handling.md).
 
+`x?` reads the value out of an `Ok` and hands an `Err` back to the caller of the
+function it is written in, which has to return a `Result` with the same error
+type:
+
+```rust
+fn port(text: string) -> Result<int, string> {
+    if text.is_int() {
+        return Ok(int(text));
+    }
+    return Err("not a port: " + text);
+}
+
+fn next_port(text: string) -> Result<int, string> {
+    let p = port(text)?;
+    return Ok(p + 1);
+}
+
+fn main() {
+    print(next_port("8080"));
+    print(next_port("http"));
+}
+```
+
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
 ## Methods
 
 The helpers are methods on the result value, defined in an `impl Result<T, E>`
-block; importing the module brings them in.
+block.
 
 ### is_ok
 
@@ -159,13 +174,9 @@ r.ok()
 ```
 
 - Returns: `Some(v)` for an `Ok(v)`, and `None` for an `Err`, which drops the
-  error. The module imports [option](option.md) for this, so a program that
-  imports `std/result` has `Some` and `None` in scope as well, and importing
-  both modules is fine.
+  error. See [option](option.md).
 
 ```rust
-import "std/result";
-
 fn parse_port(text) {
     if text.is_int() {
         return Ok(int(text));

@@ -495,6 +495,7 @@ module.exports = grammar({
         $.field_expression,
         $.index_expression,
         $.slice_expression,
+        $.propagate_expression,
         $.unary_expression,
         $.binary_expression,
         $.parenthesized_expression,
@@ -613,6 +614,10 @@ module.exports = grammar({
 
     field_expression: ($) =>
       prec(PREC.postfix, seq(field('object', $._expression), '.', field('field', $.identifier))),
+
+    // `x?`: the value in a `Some` or an `Ok`, or an early return of the `None`
+    // or the `Err`.
+    propagate_expression: ($) => prec(PREC.postfix, seq(field('operand', $._expression), '?')),
 
     index_expression: ($) =>
       prec(PREC.postfix, seq(field('object', $._expression), '[', field('index', $._expression), ']')),

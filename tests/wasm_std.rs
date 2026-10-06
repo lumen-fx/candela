@@ -197,3 +197,16 @@ fn js_sys_now() -> f64 {
     }
     now()
 }
+
+/// The prelude needs no library directory, so the browser build has it.
+#[wasm_bindgen_test]
+fn the_prelude_is_carried() {
+    let out = run(r#"
+fn main() {
+    let m = {"a": 1};
+    print(m.get("a").unwrap_or(0) + [3, 4].max().unwrap_or(0));
+    print("ab".capitalize());
+}
+"#);
+    assert_eq!(out.lines().collect::<Vec<_>>(), ["5", "Ab"]);
+}

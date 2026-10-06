@@ -2,7 +2,8 @@
 
 These functions and methods are part of the language. They need no import, and
 they are available in a `.cdlb` artifact running under `candela-vm` with no
-library directory installed.
+library directory installed. With the methods the standard library adds to the
+same types, they make up the [prelude](overview.md#the-prelude).
 
 A function your program declares or imports takes precedence over a built-in
 function of the same name; see
@@ -187,8 +188,8 @@ There is no `as_null`; use `is_null`.
 
 `as_list` gives a list of `any`, and `as_map` a map with `any` keys and values,
 because the entries of a dynamic collection are dynamic too. Such a collection
-takes a `push` or an `insert` of any type, in any order, and an entry read back
-out is an `any` that needs its own downcast.
+takes a `push` or an `m[k] = v` of any type, in any order, and an entry read
+back out is an `any` that needs its own downcast.
 
 ```rust
 import "std/json" as json;
@@ -196,9 +197,9 @@ import "std/json" as json;
 fn main() {
     let v = json::parse("{\"n\": 7}");
     let m = as_map(v);
-    print(as_int(m.get("n")) + 1);
-    m.insert("name", "ada");
-    print(as_str(m.get("name")));
+    print(as_int(m["n"]) + 1);
+    m["name"] = "ada";
+    print(as_str(m["name"]));
 }
 ```
 
@@ -309,20 +310,24 @@ by their bytes, the order `<` gives them; see
 `arr.find(x)` is the index search. The same spelling with a function argument,
 `arr.find(predicate)`, is the [list module](list.md) helper that returns the
 matching element. The other higher-order methods (`map`, `filter`, `reduce`,
-`each`, `any`, `all`, `sort_by`) and the reductions (`first`, `last`, `sum`,
-`min`, `max`, and the rest) also come from that module through the automatic
-prelude.
+`each`, `any`, `all`, `sort_by`), the reductions (`sum`, `product`) and the
+lookups (`first`, `last`, `min`, `max`, which answer an `Option`) come from that
+module, which is part of the prelude.
 
 ## Map methods
 
-Called on a map receiver. `insert` and `remove` change the map in place and
-return nothing.
+Brackets read and write an entry. `m[k]` is the value stored under `k`, and
+raises `unknown_map_key` when the key is absent. `m[k] = v` stores `v` under
+`k`, adding the entry or replacing its value, and `m[k] += 1` and the other
+compound assignments read and write the entry in one statement.
+
+The methods below are called on a map receiver. `remove` changes the map in
+place and returns nothing. `m.get(k)`, the lookup that answers an `Option`, is
+in the [map module](map.md).
 
 | Method | Returns | Behaviour |
 | --- | --- | --- |
 | `m.len()` | int | The number of entries |
-| `m.get(k)` | value | The value stored under `k`; raises `unknown_map_key` when the key is absent |
-| `m.insert(k, v)` | nothing | Stores `v` under `k`, replacing any existing value |
 | `m.remove(k)` | nothing | Drops the entry under `k`; a key the map does not hold changes nothing |
 | `m.contains(k)` | bool | True when `k` is a key in `m` |
 | `m.keys()` | list | The keys |
@@ -332,18 +337,18 @@ A map keeps its entries in the order they went in, so `keys`, `values`,
 `for k in m`, printing, and json all walk it first-inserted first. Three rules
 settle every case:
 
-- Inserting a key the map does not hold puts it at the end.
-- Inserting a key the map already holds replaces the value and leaves the entry
+- Writing a key the map does not hold puts it at the end.
+- Writing a key the map already holds replaces the value and leaves the entry
   where it is.
-- Removing a key and inserting it again puts it at the end; the entries after
-  the removed one keep their order.
+- Removing a key and writing it again puts it at the end; the entries after the
+  removed one keep their order.
 
 Two maps holding the same entries are equal whatever order they were built in.
 `keys` and `values` walk the map the same way, so their results line up entry
 for entry.
 
-An empty map literal `{}` takes its key and value types from the first `insert`,
-the way an empty list takes its element type from the first `push`. Only a
+An empty map literal `{}` takes its key and value types from the first
+`m[k] = v`, the way an empty list takes its element type from the first `push`. Only a
 literal written empty works that way. A map whose entries are typed `any`, which
 is what `as_map` hands back, keeps taking entries of any type.
 

@@ -4,14 +4,20 @@
 import "std/assert" as assert;
 
 fn main() {
-    assert::assert_eq([10, 20, 30].first(), 10);
-    assert::assert_eq([10, 20, 30].last(), 30);
+    assert::assert_eq([10, 20, 30].first(), Some(10));
+    assert::assert_eq([10, 20, 30].last(), Some(30));
+    let none = [1];
+    none.remove(0);
+    assert::assert_true(none.first().is_none());
+    assert::assert_true(none.last().is_none());
+    assert::assert_true(none.min().is_none());
+    assert::assert_true(none.max().is_none());
     assert::assert_true([].is_empty());
     assert::assert_eq([1, 2, 3, 4].sum(), 10);
     assert::assert_eq([1.5, 2.5].sum(), 4.0);
     assert::assert_eq([1, 2, 3, 4].product(), 24);
-    assert::assert_eq([3, 1, 2].min(), 1);
-    assert::assert_eq([3, 1, 2].max(), 3);
+    assert::assert_eq([3, 1, 2].min(), Some(1));
+    assert::assert_eq([3, 1, 2].max().unwrap_or(0), 3);
     assert::assert_eq([5, 6, 7].index_of(6), 1);
     assert::assert_eq([1, 1, 2, 1].count(1), 3);
     print("list ok");

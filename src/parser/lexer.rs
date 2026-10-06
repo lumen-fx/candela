@@ -24,6 +24,7 @@ impl std::fmt::Display for Token<'_> {
             Token::RBracket => write!(f, "']'"),
             Token::FatArrow => write!(f, "'=>'"),
             Token::At => write!(f, "'@'"),
+            Token::Question => write!(f, "'?'"),
             Token::Throw => write!(f, "'throw'"),
             other => write!(f, "{other:?}"),
         }
@@ -207,6 +208,10 @@ pub enum Token<'a> {
     /// `@`: opens an attribute, as in `@cfg(web)`.
     #[token("@")]
     At,
+    /// `?`: after an `Option` or a `Result`, hands a `None` or an `Err` back
+    /// to the caller and reads the value out of a `Some` or an `Ok`.
+    #[token("?")]
+    Question,
     /// `throw`: raises an error, as in `throw "kind";`.
     #[token("throw")]
     Throw,

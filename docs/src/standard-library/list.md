@@ -2,15 +2,16 @@
 
 Reductions, slicing, and higher-order methods on arrays.
 
-The module loads automatically, so every method here works on any array with no
-import line: `[1, 2, 3].sum()`, `xs.map(f)`. The methods are defined in an
+The module is part of the [prelude](overview.md#the-prelude), so every method
+here works on any array with no import line: `[1, 2, 3].sum()`, `xs.map(f)`. The methods are defined in an
 `impl list` block; see [methods](../language/methods.md) for how `impl` blocks
 on the built-in types resolve.
 
 The helpers are polymorphic through compile-time monomorphisation: one definition
-specialises to whatever element type the call site uses. The reductions `sum`,
-`product`, `min`, and `max` read their seed from the first element, so they need
-a non-empty list.
+specialises to whatever element type the call site uses. A lookup that may find
+nothing (`first`, `last`, `min`, `max`) answers an [Option](option.md): `Some`
+of the element, or `None` for an empty list. The reductions `sum` and `product`
+read their seed from the first element, so they need a non-empty list.
 
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library. It builds on the built-in array methods
@@ -25,8 +26,7 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 arr.first()
 ```
 
-- Returns: the element at index 0.
-- Raises: `index_out_of_bounds` on an empty list.
+- Returns: `Some` of the element at index 0, or `None` for an empty list.
 
 ### last
 
@@ -34,8 +34,8 @@ arr.first()
 arr.last()
 ```
 
-- Returns: the element at index `arr.len() - 1`.
-- Raises: `index_out_of_bounds` on an empty list.
+- Returns: `Some` of the element at index `arr.len() - 1`, or `None` for an
+  empty list.
 
 ### is_empty
 
@@ -93,8 +93,8 @@ arr.product()
 arr.min()
 ```
 
-- Returns: the smallest element, compared with `<`.
-- Raises: `index_out_of_bounds` on an empty list.
+- Returns: `Some` of the smallest element, compared with `<`, or `None` for an
+  empty list.
 
 The element type has to be one `<` orders: `int`, `float`, or `string`. A list
 of strings answers with the first one in byte order, the same order `sort`
@@ -106,8 +106,8 @@ uses; see [operators](../reference/operators.md).
 arr.max()
 ```
 
-- Returns: the largest element, compared with `>`.
-- Raises: `index_out_of_bounds` on an empty list.
+- Returns: `Some` of the largest element, compared with `>`, or `None` for an
+  empty list.
 
 The element type has to be one `>` orders, as for `min`.
 

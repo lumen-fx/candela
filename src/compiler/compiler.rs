@@ -98,6 +98,7 @@ use type_system::collect_direct_fn_calls;
 use type_system::infer_user_fn_return_type;
 use type_system::literal_struct_id;
 use type_system::param_type_matches;
+use type_system::pin_inserted_entry;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
 use type_system::struct_field_type_matches;
@@ -2203,6 +2204,158 @@ fn compile_struct_field_access(
     }
 }
 
+/// `operand?`: the value inside a `Some` or an `Ok`, or a return of the `None`
+/// or the `Err` from the function being compiled. The function has to return
+/// the same declaration the operand is an instantiation of, so the value it
+/// hands back is one its caller reads; the operand's success side does not
+/// have to match, since a `None` or an `Err` carries none of it.
+fn compile_propagate(
+    operand: &Expr,
+    span: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    let operand_type = operand.infer_type(v, ctx, state);
+    let Some((_, failure_idx)) = type_system::propagation_sides(&operand_type, state) else {
+        compiler_errors::error_propagate_operand(
+            &operand_type,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    };
+    let function = state.fn_returns.last().cloned();
+    let fits = ctx.in_function
+        && function
+            .as_ref()
+            .is_some_and(|(_, returns)| propagation_fits(&operand_type, returns, state));
+    if !fits {
+        compiler_errors::error_propagate_return(
+            function
+                .as_ref()
+                .filter(|_| ctx.in_function)
+                .map(|(name, returns)| (name.as_str(), returns)),
+            &operand_type,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+
+    let operand_reg = operand
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    // The operand stays rooted while either path reads it.
+    let v_base = v.len();
+    v.push(Variable {
+        name: SmolStr::new_static("[PROPAGATE]"),
+        register_id: operand_reg,
+        cell: false,
+        var_type: operand_type,
+    });
+    let tag_reg = state.alloc_reg();
+    output.push(Instr::GetFieldStruct(operand_reg, 0, tag_reg));
+    let failure_reg = state.alloc_reg();
+    output.push(Instr::SetInt(failure_reg, i32::from(failure_idx)));
+    let to_success = output.len();
+    output.push(Instr::NotEqJmp(tag_reg, failure_reg, 0));
+    state.free_reg(failure_reg, v);
+    state.free_reg(tag_reg, v);
+
+    compile_return(
+        Some(&Expr::Var(SmolStr::new_static("[PROPAGATE]"), span)),
+        v,
+        ctx,
+        state,
+        output,
+    );
+
+    let success = output.len();
+    set_jmp_size(&mut output[to_success], (success - to_success) as u16);
+    let dest = state.alloc_reg_tgt(tgt_id);
+    output.push(Instr::GetFieldStruct(operand_reg, 1, dest));
+    v.truncate(v_base);
+    state.free_reg(operand_reg, v);
+    dest
+}
+
+/// Whether a function returning `returns` can hand back the `None` or the
+/// `Err` of an `operand`: both are instantiations of one declaration, and for
+/// a `Result` the error sides line up.
+fn propagation_fits(operand: &DataType, returns: &DataType, state: &State<'_>) -> bool {
+    let (Some((template, operand_args)), Some((returns_template, returns_args))) = (
+        state.generics.instantiation_of(operand),
+        state.generics.instantiation_of(returns),
+    ) else {
+        return false;
+    };
+    template == returns_template
+        && operand_args
+            .iter()
+            .zip(returns_args)
+            .skip(1)
+            .all(|(a, b)| param_type_matches(b, a, state.generics))
+}
+
+/// Checks the key of `m[k]` against the key type map `map_type` holds, when it
+/// names one.
+fn check_map_key(
+    map_type: &DataType,
+    key: &Expr,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    let DataType::Map(entry) = map_type else {
+        return;
+    };
+    let Some(expected) = &entry.0 else {
+        return;
+    };
+    let found = key.infer_type(v, ctx, state);
+    if !param_type_matches(expected, &found, state.generics) {
+        error_invalid_index_type(
+            &found,
+            span,
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+}
+
+/// `m[k]`: the value stored under `k`, raising `unknown_map_key` when the map
+/// holds no such key.
+fn compile_map_indexing(
+    map: &Expr,
+    map_type: &DataType,
+    key: &Expr,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    check_map_key(map_type, key, span, v, ctx, state);
+    let map_id = map
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let key_id = key
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(key_id, v);
+    let dest_reg_id = state.alloc_reg();
+    output.push(Instr::MapGet(map_id, key_id, dest_reg_id));
+    state.add_to_src(ctx, output, span);
+    dest_reg_id
+}
+
 fn compile_array_indexing(
     array: &Expr,
     index: &Expr,
@@ -2213,6 +2366,9 @@ fn compile_array_indexing(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let inferred = array.infer_type(v, ctx, state);
+    if matches!(inferred, DataType::Map(_)) {
+        return compile_map_indexing(array, &inferred, index, span, v, ctx, state, output);
+    }
     if !inferred.is_indexable() {
         error_type_not_indexable(
             &inferred,
@@ -3272,6 +3428,21 @@ fn compile_array_index_assignment(
     output: &mut Vec<Instr>,
 ) {
     let array_type = array.infer_type(v, ctx, state);
+    if matches!(array_type, DataType::Map(_)) {
+        compile_map_entry_assignment(
+            array,
+            &array_type,
+            index,
+            value,
+            index_span,
+            elem_span,
+            v,
+            ctx,
+            state,
+            output,
+        );
+        return;
+    }
     if !array_type.is_indexable() {
         error_type_not_indexable(
             &array_type,
@@ -3325,6 +3496,61 @@ fn compile_array_index_assignment(
     output.push(to_push);
     state.add_to_src(ctx, output, index_span);
     state.free_reg(id, v);
+}
+
+/// `m[k] = v`: stores `v` under `k`, adding the entry or replacing the value
+/// already there. An empty map literal takes its key and value types from the
+/// first entry written, the way an empty list takes its element type from the
+/// first `push`.
+fn compile_map_entry_assignment(
+    map: &Expr,
+    map_type: &DataType,
+    key: &Expr,
+    value: &Expr,
+    key_span: Span,
+    value_span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    check_map_key(map_type, key, key_span, v, ctx, state);
+    let value_type = value.infer_type(v, ctx, state);
+    if let DataType::Map(entry) = map_type
+        && let Some(expected) = &entry.1
+        && !param_type_matches(expected, &value_type, state.generics)
+    {
+        error_invalid_type(
+            expected,
+            &value_type,
+            value_span,
+            None,
+            Some(format_args!(
+                "The map holds {} values",
+                state.type_names().of(expected)
+            )),
+            ctx.file_idx,
+            state.sources,
+            state.type_names(),
+        );
+    }
+    if matches!(map_type, DataType::Map(m) if m.0.is_none() && m.1.is_none()) {
+        let key_type = key.infer_type(v, ctx, state);
+        pin_inserted_entry(map, &key_type, &value_type, v);
+    }
+    let map_id = map
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let key_id = key
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let value_id = value
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    state.free_reg(key_id, v);
+    state.free_reg(value_id, v);
+    output.push(Instr::MapInsertReg(map_id, key_id, value_id));
+    state.free_reg(map_id, v);
 }
 
 fn compile_struct_field_assignment(
@@ -4935,6 +5161,12 @@ impl Expr {
                     output,
                 ))
             }
+            Self::Propagate(operand, span) => {
+                debug_assert!(uses_id);
+                Some(compile_propagate(
+                    operand, *span, tgt_id, v, ctx, state, output,
+                ))
+            }
             // array[index]
             Self::ArrayGetIndex(array, index, span) => {
                 debug_assert!(uses_id);
@@ -5677,7 +5909,8 @@ pub struct FileNamespaces {
     /// Handed out for a file index no source was parsed for, so a lookup
     /// against one reports an unknown name instead of panicking.
     empty: Namespace,
-    /// The files that are standard library modules.
+    /// The files that are standard library modules, which are the only ones
+    /// whose bodies reach the native primitives the library is written on.
     std_files: Vec<u16>,
 }
 
@@ -5878,19 +6111,90 @@ fn loaded_file_key(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
-/// The source of a standard library module the browser build carries, by the
-/// path a library import resolves to (`std/math.cdl`). These are the modules
-/// whose native half the runtime provides itself; see
+/// The standard library modules every program has without an import.
+///
+/// They hold the methods of the builtin types and the `Option` and `Result`
+/// enums, each named by the path a library import resolves (`std/list.cdl`).
+/// They load after the program's own files, so a program that declares its own
+/// `Option`, a variant called `Some` or a method of the same name finds its own
+/// first. A method nothing calls is never compiled, so a program pays for the
+/// ones it uses.
+pub const PRELUDE_MODULES: [&str; 6] = [
+    "std/option.cdl",
+    "std/result.cdl",
+    "std/list.cdl",
+    "std/string.cdl",
+    "std/map.cdl",
+    "std/convert.cdl",
+];
+
+/// The source of a standard library module the compiler carries, by the path
+/// a library import resolves to (`std/list.cdl`).
+///
+/// Every build carries the prelude, so a program compiles the same with or
+/// without a library directory beside the toolchain. The browser build also
+/// carries the modules whose native half the runtime provides itself; see
 /// [`candela_vm::intrinsics`].
-#[cfg(target_arch = "wasm32")]
 fn embedded_std_module(path: &str) -> Option<&'static str> {
     match path {
+        "std/option.cdl" => Some(include_str!("../../libs/std/option.cdl")),
+        "std/result.cdl" => Some(include_str!("../../libs/std/result.cdl")),
+        "std/list.cdl" => Some(include_str!("../../libs/std/list.cdl")),
+        "std/string.cdl" => Some(include_str!("../../libs/std/string.cdl")),
+        "std/map.cdl" => Some(include_str!("../../libs/std/map.cdl")),
+        "std/convert.cdl" => Some(include_str!("../../libs/std/convert.cdl")),
+        #[cfg(target_arch = "wasm32")]
         "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
+        #[cfg(target_arch = "wasm32")]
         "std/time.cdl" => Some(include_str!("../../libs/std/time.cdl")),
+        #[cfg(target_arch = "wasm32")]
         "std/random.cdl" => Some(include_str!("../../libs/std/random.cdl")),
+        #[cfg(target_arch = "wasm32")]
         "std/hash.cdl" => Some(include_str!("../../libs/std/hash.cdl")),
         _ => None,
     }
+}
+
+/// Where a library import reads from, and its text when the compiler carries
+/// it rather than reading it from disk.
+///
+/// A module the compiler carries is always read from the compiler, keyed by its
+/// library path, so the prelude and an explicit `import "std/option";` reach
+/// one module, and the prelude a program gets is the one the compiler was
+/// built with whatever library directory sits beside it. Anything else reads
+/// from the library directory. `None` when neither has it.
+fn library_module(
+    path: &str,
+    resolver: &ImportResolver,
+) -> Option<(PathBuf, Option<&'static str>)> {
+    if let Some(text) = embedded_std_module(path) {
+        return Some((PathBuf::from(path), Some(text)));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    return resolver
+        .library_path(path)
+        .map(|on_disk| (loaded_file_key(on_disk), None));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = resolver;
+        None
+    }
+}
+
+/// The name a module the compiler carries is reported under: the file of that
+/// name in the library directory when there is one, so a report and an
+/// editor's go-to-definition point at a file that exists, and its library path
+/// otherwise.
+fn carried_module_filename(path: &str, resolver: &ImportResolver) -> SmolStr {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(on_disk) = resolver.library_path(path).filter(|p| p.is_file())
+        && let Some(name) = loaded_file_key(on_disk).to_str()
+    {
+        return SmolStr::from(name);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = resolver;
+    SmolStr::from(path)
 }
 
 /// The places an import was looked for, for the error that says it was found in
@@ -5909,18 +6213,18 @@ fn tried_paths(chosen: &Path, library: Option<&Path>) -> Vec<PathBuf> {
     tried
 }
 
-/// Loads the `std/list` module implicitly so its `impl list` methods
-/// (`arr.map(f)`, `arr.sum()`, ...) work with no explicit import. Resolution
-/// goes through the same resolver every other library import uses; a missing
-/// library directory is not an error, the prelude is absent.
-#[cfg(not(target_arch = "wasm32"))]
-fn load_auto_prelude(
+/// Loads the [`PRELUDE_MODULES`], so their methods and enums need no import.
+///
+/// Each module is the compiler's own copy, registered under the key an import
+/// of it resolves to, so a program that also imports one by name reaches the
+/// same module. The modules declare impl blocks and generic enums, which every file
+/// reaches by name, so nothing is merged into any file's scope.
+fn load_prelude(
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
     enums: &mut Vec<EnumType>,
     dynamic_libs: &mut Vec<Dynamiclib>,
     sources: &mut Vec<Source>,
-    namespace: &mut Namespace,
     files: &mut FxHashMap<PathBuf, Namespace>,
     file_namespaces: &mut FileNamespaces,
     pending_structs: &mut Vec<(u16, u16, Box<[(SmolStr, TypeExpr, Span)]>)>,
@@ -5937,71 +6241,51 @@ fn load_auto_prelude(
     generics: &mut Generics,
     resolver: &ImportResolver,
 ) {
-    const PRELUDE_REL: &str = "std/list.cdl";
-    const PRELUDE_CHILD: &str = "list";
+    for rel in PRELUDE_MODULES {
+        let (Some((path, _)), Some(text)) =
+            (library_module(rel, resolver), embedded_std_module(rel))
+        else {
+            continue;
+        };
+        if files.contains_key(&path) {
+            continue;
+        }
+        let child_src_idx = sources.len() as u16;
+        sources.push(Source {
+            filename: carried_module_filename(rel, resolver),
+            contents: String::from(text),
+        });
+        let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+        generics.add_impls(parsed.impls, child_src_idx);
 
-    if namespace
-        .children
-        .iter()
-        .any(|(name, _)| name.as_str() == PRELUDE_CHILD)
-    {
-        return;
+        let mut child_namespace = Namespace {
+            symbols: Vec::new(),
+            children: Vec::new(),
+        };
+        parse_toplevel(
+            parsed.code,
+            &path,
+            child_src_idx,
+            fns,
+            structs,
+            enums,
+            dynamic_libs,
+            sources,
+            &mut child_namespace,
+            files,
+            file_namespaces,
+            pending_structs,
+            pending_enums,
+            pending_fns,
+            pending_dylibs,
+            pending_host,
+            generics,
+            resolver,
+        );
+        file_namespaces.insert(child_src_idx, child_namespace.clone());
+        file_namespaces.mark_std(child_src_idx);
+        files.insert(path, child_namespace);
     }
-
-    let Some(path) = resolver.library_path(PRELUDE_REL).map(loaded_file_key) else {
-        return;
-    };
-
-    if let Some(cached) = files.get(&path) {
-        namespace
-            .children
-            .push((PRELUDE_CHILD.into(), cached.clone()));
-        return;
-    }
-
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return;
-    };
-
-    let child_src_idx = sources.len() as u16;
-    let file_name: SmolStr = path.to_str().unwrap_or(PRELUDE_REL).into();
-    sources.push(Source {
-        filename: file_name,
-        contents,
-    });
-    let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
-    generics.add_impls(parsed.impls, child_src_idx);
-
-    let mut child_namespace = Namespace {
-        symbols: Vec::new(),
-        children: Vec::new(),
-    };
-    parse_toplevel(
-        parsed.code,
-        &path,
-        child_src_idx,
-        fns,
-        structs,
-        enums,
-        dynamic_libs,
-        sources,
-        &mut child_namespace,
-        files,
-        file_namespaces,
-        pending_structs,
-        pending_enums,
-        pending_fns,
-        pending_dylibs,
-        pending_host,
-        generics,
-        resolver,
-    );
-    file_namespaces.insert(child_src_idx, child_namespace.clone());
-    file_namespaces.mark_std(child_src_idx);
-    files.insert(path, child_namespace.clone());
-    namespace
-        .children
-        .push((PRELUDE_CHILD.into(), child_namespace));
 }
 
 /// Opens the library a bare logical import (`dylib "z"`) names. `filename` is
@@ -6534,32 +6818,6 @@ fn parse_toplevel(
 
     files.insert(file_path.to_path_buf(), namespace.clone());
 
-    // Auto-prelude: make the std::list array methods (map/filter/reduce and
-    // friends) callable as methods on arrays without an explicit import. This is
-    // best-effort: if the shipped library directory is not present (for
-    // example an embedding host with no `libs/` tree), the prelude is skipped and
-    // array methods resolve as they did before.
-    #[cfg(not(target_arch = "wasm32"))]
-    if src_file_idx == 0 {
-        load_auto_prelude(
-            fns,
-            structs,
-            enums,
-            dynamic_libs,
-            sources,
-            namespace,
-            files,
-            file_namespaces,
-            pending_structs,
-            pending_enums,
-            pending_fns,
-            pending_dylibs,
-            pending_host,
-            generics,
-            resolver,
-        );
-    }
-
     // Names merged into this file's scope by bare imports, with the module
     // each came from; consulted to report both sources on a collision.
     let mut merged_symbol_origins: Vec<(SmolStr, SmolStr)> = Vec::new();
@@ -6676,14 +6934,18 @@ fn parse_toplevel(
                 });
             }
             Expr::ImportFile(path, alias, is_logical, span) => {
-                // In a browser the module is one the runtime carries, keyed by
-                // its library path; the first pass let no other through.
-                #[cfg(target_arch = "wasm32")]
-                let file_path = PathBuf::from(path.as_str());
                 // Where the import reads from, and, for the error when it reads
-                // from nowhere, every place that was tried.
+                // from nowhere, every place that was tried. A module the
+                // compiler carries comes with its text.
+                let library = library_module(path.as_str(), resolver);
                 #[cfg(not(target_arch = "wasm32"))]
-                let library_path = resolver.library_path(path.as_str()).map(loaded_file_key);
+                let library_path = library.as_ref().map(|(path, _)| path.clone());
+                // In a browser the module is one the runtime carries; the first
+                // pass let no other through.
+                #[cfg(target_arch = "wasm32")]
+                let file_path = library
+                    .as_ref()
+                    .map_or_else(|| PathBuf::from(path.as_str()), |(path, _)| path.clone());
                 #[cfg(not(target_arch = "wasm32"))]
                 let file_path = if is_logical {
                     // A library import (`import "std/string";`, extensionless)
@@ -6715,19 +6977,29 @@ fn parse_toplevel(
                 let child_namespace = if let Some(cached) = files.get(&file_path) {
                     cached.clone()
                 } else {
-                    #[cfg(target_arch = "wasm32")]
-                    let file_contents =
-                        String::from(embedded_std_module(path.as_str()).unwrap_or_default());
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let file_contents = std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
-                        error_cannot_read_file(
-                            span,
-                            src_file_idx,
-                            sources,
-                            &tried_paths(&file_path, library_path.as_deref()),
-                        );
-                    });
-                    let file_name: SmolStr = file_path.to_str().unwrap_or(path.as_str()).into();
+                    let carried = library
+                        .as_ref()
+                        .filter(|(path, _)| *path == file_path)
+                        .and_then(|(_, text)| *text);
+                    let file_contents = match carried {
+                        Some(text) => String::from(text),
+                        #[cfg(target_arch = "wasm32")]
+                        None => String::new(),
+                        #[cfg(not(target_arch = "wasm32"))]
+                        None => std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
+                            error_cannot_read_file(
+                                span,
+                                src_file_idx,
+                                sources,
+                                &tried_paths(&file_path, library_path.as_deref()),
+                            );
+                        }),
+                    };
+                    let file_name: SmolStr = if carried.is_some() {
+                        carried_module_filename(path.as_str(), resolver)
+                    } else {
+                        file_path.to_str().unwrap_or(path.as_str()).into()
+                    };
 
                     let child_src_idx = sources.len() as u16;
 
@@ -6830,6 +7102,31 @@ fn parse_toplevel(
             }
             _ => unsafe { unreachable_unchecked() },
         }
+    }
+
+    // The program's own declarations, and the modules it imports, are
+    // registered first, so a program or a package that declares a method or a
+    // variant the prelude also declares keeps its own; see
+    // `Generics::prelude_templates`.
+    if src_file_idx == 0 {
+        let first_template = generics.template_count();
+        load_prelude(
+            fns,
+            structs,
+            enums,
+            dynamic_libs,
+            sources,
+            files,
+            file_namespaces,
+            pending_structs,
+            pending_enums,
+            pending_fns,
+            pending_dylibs,
+            pending_host,
+            generics,
+            resolver,
+        );
+        generics.set_prelude_templates(first_template..generics.template_count());
     }
 }
 
@@ -7408,6 +7705,8 @@ pub fn compile_profile(
         namespaces: &mut file_namespaces,
         generics: &mut generics,
         indirect_registers: &mut indirect_registers,
+        propagations: Vec::new(),
+        fn_returns: Vec::new(),
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are

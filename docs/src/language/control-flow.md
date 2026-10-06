@@ -84,7 +84,7 @@ fn main() {
 
     let counts = {"x": 1, "y": 2};
     for key in counts {
-        print(key, counts.get(key));
+        print(key, counts[key]);
     }
 }
 ```

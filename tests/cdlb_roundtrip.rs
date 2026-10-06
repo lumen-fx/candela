@@ -801,10 +801,10 @@ const MAP_ORDER_PROGRAM: &str = "
 fn main() {
     let m = {\"b\": 1, \"a\": 2, \"c\": 3};
     print(m);
-    m.insert(\"d\", 4);
-    m.insert(\"b\", 20);
+    m[\"d\"] = 4;
+    m[\"b\"] = 20;
     m.remove(\"a\");
-    m.insert(\"a\", 9);
+    m[\"a\"] = 9;
     print(m.keys());
     print(m.values());
 }
@@ -1024,18 +1024,18 @@ fn main() {
     }
     let joined = [\"abcdefghij\", \"abcdefghij\", \"abcdefghij\"].join(\"\");
     let m = {\"abcdefghijabcdefghijabcdefghij\": 1};
-    print(m.contains(r), m.contains(joined), m.get(r));
+    print(m.contains(r), m.contains(joined), m[r]);
     let n = {};
-    n.insert(lit, 1);
-    n.insert(joined, 2);
-    n.insert(r, 3);
-    print(n.len(), n.get(lit));
+    n[lit] = 1;
+    n[joined] = 2;
+    n[r] = 3;
+    print(n.len(), n[lit]);
     n.remove(joined);
     print(n.len());
     let xs = [lit];
     print(xs.contains(r), xs.find(joined));
     let built = {};
-    built.insert(r, 1);
+    built[r] = 1;
     print({\"abcdefghijabcdefghijabcdefghij\": 1} == built);
 }
 ";

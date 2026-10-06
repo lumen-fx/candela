@@ -55,9 +55,9 @@ fn main() {
         print(arr.partition(4));
         print(argv());
         let map = {"test": 32, "othertest": 42};
-        print(map.get("test"));
-        map.insert("test", 42);
-        map.insert("test2", 42);
+        print(map["test"]);
+        map["test"] = 42;
+        map["test2"] = 42;
         count += length;
     }
     print(count);

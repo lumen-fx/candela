@@ -63,7 +63,7 @@ fn retained(frames: int) -> int {
         let k = f % 100;
         root.children[k] = section(k, f, 200);
         let row = root.children[(f * 7) % 100].children[f % 200];
-        row.attrs.insert("data-key", "edited-key-" + str(f));
+        row.attrs["data-key"] = "edited-key-" + str(f);
         row.text = "edited label " + str(f);
         let by = f % 5 + 1;
         let owner = root.children[(f * 13) % 100];
@@ -85,7 +85,7 @@ fn retained(frames: int) -> int {
 fn frame(f: int) -> int {
     let s = section(f % 100, f, 200);
     let row = s.children[f % 200];
-    row.attrs.insert("data-key", "edited-key-" + str(f));
+    row.attrs["data-key"] = "edited-key-" + str(f);
     return s.children.len() + row.on_click(f);
 }
 

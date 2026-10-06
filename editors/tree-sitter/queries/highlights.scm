@@ -213,6 +213,7 @@
   "->"
   "=>"
   "|"
+  "?"
 ] @operator
 
 ; `<` and `>` are the comparison operators here and the brackets of a type

@@ -3,8 +3,8 @@
 //!
 //! Only an error reads this, so it reads the library directory then rather than
 //! keeping a table that would drift from the modules. A module lists its
-//! functions and types at the start of a line, which is all the scan relies
-//! on.
+//! functions, types and `impl` blocks at the start of a line, which is all the
+//! scan relies on.
 
 use smol_strc::SmolStr;
 use std::cell::RefCell;
@@ -85,6 +85,25 @@ pub fn module_declaring(name: &str) -> Option<SmolStr> {
 #[must_use]
 pub fn module_exists(name: &str) -> bool {
     std_modules().iter().any(|(module, _)| module == name)
+}
+
+/// The standard library module with an `impl type_name` block declaring a
+/// method called `method`.
+#[must_use]
+pub fn module_with_method(type_name: &str, method: &str) -> Option<SmolStr> {
+    std_modules().into_iter().find_map(|(module, text)| {
+        let mut in_block = false;
+        for line in text.lines() {
+            if !line.starts_with(' ') && !line.is_empty() {
+                in_block = declared_name(line, "impl") == Some(type_name);
+                continue;
+            }
+            if in_block && declared_name(line.trim_start(), "fn") == Some(method) {
+                return Some(module);
+            }
+        }
+        None
+    })
 }
 
 #[cfg(test)]

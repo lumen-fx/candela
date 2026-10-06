@@ -322,8 +322,8 @@ import "std/json" as json;
 import "std/set" as set;
 fn main() {
     let obj = as_map(json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}"));
-    print(as_int(obj.get("n")));
-    print(as_list(obj.get("xs")).len());
+    print(as_int(obj["n"]));
+    print(as_list(obj["xs"]).len());
     print(json::stringify(json::parse("[1,2,3]")));
     let s = set::new<int>();
     s.add(1);

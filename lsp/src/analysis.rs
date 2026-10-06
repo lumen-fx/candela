@@ -455,7 +455,10 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             visit_expr(a, src_file, out);
             visit_expr(b, src_file, out);
         }
-        Expr::BoolNeg(a, _, _) | Expr::Neg(a, _, _) | Expr::BitNot(a, _, _) => {
+        Expr::BoolNeg(a, _, _)
+        | Expr::Neg(a, _, _)
+        | Expr::BitNot(a, _, _)
+        | Expr::Propagate(a, _) => {
             visit_expr(a, src_file, out);
         }
         // An indirect call names no function, so it records no reference of

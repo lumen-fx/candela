@@ -397,9 +397,43 @@ pub struct Generics {
     /// Kept here because this table travels with every compile against a
     /// program, and an instantiation of a generic struct adds to it.
     struct_defaults: FxHashMap<u16, StructDefaults>,
+    /// The templates the prelude registered. A program's own declaration of a
+    /// name the prelude also declares is the one a bare name reaches, wherever
+    /// the two were registered relative to each other.
+    prelude_templates: std::ops::Range<usize>,
 }
 
 impl Generics {
+    /// How many generic declarations are registered.
+    #[must_use]
+    pub const fn template_count(&self) -> usize {
+        self.templates.len()
+    }
+
+    /// Records which templates the prelude registered.
+    pub const fn set_prelude_templates(&mut self, range: std::ops::Range<usize>) {
+        self.prelude_templates = range;
+    }
+
+    /// The last-registered template `matches` accepts, a program's own before
+    /// the prelude's.
+    fn last_template_where(&self, matches: impl Fn(&TypeTemplate) -> bool) -> Option<usize> {
+        let prelude = &self.prelude_templates;
+        self.templates
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, t)| !prelude.contains(i) && matches(t))
+            .or_else(|| {
+                self.templates
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(i, t)| prelude.contains(i) && matches(t))
+            })
+            .map(|(i, _)| i)
+    }
+
     /// The type this name is currently bound to, if it names a type parameter
     /// of the body being compiled. A parameter nothing named is `any`.
     #[must_use]
@@ -456,10 +490,8 @@ impl Generics {
     /// declaration registered last when two modules declare the name.
     #[must_use]
     pub fn params_of(&self, name: &str) -> Option<&[SmolStr]> {
-        self.templates
-            .iter()
-            .rfind(|t| t.name == name)
-            .map(|t| &*t.params)
+        self.last_template_where(|t| t.name == name)
+            .map(|i| &*self.templates[i].params)
     }
 
     /// Records the values the fields of struct `id` were declared with,
@@ -520,7 +552,7 @@ impl Generics {
     /// which is what an unqualified name falls back to when the scope it was
     /// written in registers no template by that name.
     fn last_template_named(&self, name: &str) -> Option<usize> {
-        self.templates.iter().rposition(|t| t.name == name)
+        self.last_template_where(|t| t.name == name)
     }
 
     /// The declaration an instantiated type came from and the arguments it was
@@ -545,10 +577,18 @@ impl Generics {
     /// [`find_template`] does for a type name.
     #[must_use]
     pub fn enum_template_with_variant(&self, variant: &str) -> Option<usize> {
-        self.templates.iter().rposition(|t| match &t.body {
+        self.last_template_where(|t| match &t.body {
             TemplateBody::Enum(variants) => variants.iter().any(|(name, _, _)| name == variant),
             TemplateBody::Struct(_) => false,
         })
+    }
+
+    /// Whether the only generic enums declaring a variant called `variant` are
+    /// the prelude's.
+    #[must_use]
+    pub fn only_the_prelude_declares(&self, variant: &str) -> bool {
+        self.enum_template_with_variant(variant)
+            .is_some_and(|template| self.prelude_templates.contains(&template))
     }
 
     /// The payload a variant of a generic enum declares, unresolved.
@@ -573,6 +613,12 @@ impl Generics {
     #[must_use]
     fn template_name(&self, template: usize) -> &SmolStr {
         &self.templates[template].name
+    }
+
+    /// The file a generic declaration was written in.
+    #[must_use]
+    fn template_file(&self, template: usize) -> u16 {
+        self.templates[template].file_idx
     }
 
     /// Records a generic `struct` declaration and returns the index the
@@ -1680,6 +1726,21 @@ pub fn variant_constructor_at(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<(u16, u16)> {
+    // A program's own enum declaring a bare variant the prelude also declares
+    // (`Some`) is the one the name reaches.
+    if let [variant] = path
+        && state.generics.only_the_prelude_declares(variant)
+        && let Some(own) = state.enums.iter().find_map(|e| {
+            let idx = e.variants.iter().position(|vt| vt.name == *variant)?;
+            state
+                .generics
+                .instantiation_of(&DataType::Enum(e.id))
+                .is_none()
+                .then_some((e.id, idx as u16))
+        })
+    {
+        return Some(own);
+    }
     resolve_variant_constructor(path, arg_types, span, ctx, state)
         .or_else(|| resolve_enum_variant(path, ctx.file_idx, state))
 }
@@ -1921,8 +1982,8 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
         "argv" => DataType::Array(Some(Box::from(DataType::String))),
         // A downcast to a collection yields an element/entry type of `any`
         // (Unknown). That is a known type, not a gap: the entries stay dynamic
-        // instead of taking their type from the first `push`/`insert` the way an
-        // empty literal does.
+        // instead of taking their type from the first `push` or `m[k] = v`
+        // the way an empty literal does.
         "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
         "as_map" => DataType::Map(Box::from((
             Some(DataType::Unknown),
@@ -2228,7 +2289,7 @@ pub(crate) fn pin_pushed_element(obj: &Expr, element: &DataType, v: &mut [Variab
 }
 
 /// Pins a binding that still holds an empty map literal to what the first
-/// `insert` puts in it, so later `get`s and iteration see concrete types.
+/// `m[k] = v` puts in it, so later reads and iteration see concrete types.
 ///
 /// The test is on missing key and value types, not on `== Map((None, None))`:
 /// a map of `any` compares equal to it and keeps taking entries of any type,
@@ -2363,6 +2424,7 @@ pub fn collect_direct_fn_calls(
             }
             Expr::VarDeclare(_, x)
             | Expr::VarAssign(_, x, _)
+            | Expr::Propagate(x, _)
             | Expr::Neg(x, _, _)
             | Expr::BitNot(x, _, _)
             | Expr::BoolNeg(x, _, _) => expr_stack.push(x),
@@ -2559,6 +2621,54 @@ fn add_return_type(
     return_types.push(return_type);
 }
 
+/// What a `?` reads out of an enum shaped like `Option` or `Result`.
+///
+/// `Option` is `Some(T)` and `None`, `Result` is `Ok(T)` and `Err(E)`. Answers
+/// the type `?` reads out of the success variant and the index of the failure
+/// variant, which is the one it hands back to the caller; `None` for any other
+/// type.
+#[must_use]
+pub fn propagation_sides(t: &DataType, state: &State<'_>) -> Option<(DataType, u16)> {
+    let DataType::Enum(enum_id) = t else {
+        return None;
+    };
+    let variants = &state.enums[*enum_id as usize].variants;
+    let [first, second] = &**variants else {
+        return None;
+    };
+    let (success, failure, failure_idx) = match (first.name.as_str(), second.name.as_str()) {
+        ("Some", "None") | ("Ok", "Err") => (first, second, 1),
+        ("None", "Some") | ("Err", "Ok") => (second, first, 0),
+        _ => return None,
+    };
+    let failure_arity = usize::from(failure.name == "Err");
+    if success.payload.len() != 1 || failure.payload.len() != failure_arity {
+        return None;
+    }
+    Some((success.payload[0].clone(), failure_idx))
+}
+
+/// The type a `?` on a value of type `operand` hands back to the caller: the
+/// same declaration with the success side left open, `Option<any>` for an
+/// `Option` and `Result<any, E>` for a `Result<T, E>`. The value it returns is
+/// the operand's `None` or `Err`, which holds no `T`.
+fn propagated_failure_type(operand: &DataType, state: &mut State<'_>) -> Option<DataType> {
+    let (template, args) = state.generics.instantiation_of(operand)?;
+    let mut args: Vec<DataType> = args.to_vec();
+    // `Option<T>` and `Result<T, E>` both declare the success side's parameter
+    // first.
+    *args.first_mut()? = DataType::Unknown;
+    let base = state.generics.template_name(template).clone();
+    let file_idx = state.generics.template_file(template);
+    Some(instantiate(
+        &[],
+        &base,
+        &args,
+        (0u32, 0u32).into(),
+        &mut state.type_ctx(file_idx),
+    ))
+}
+
 /// The one type two instantiations of a declaration make, when every pair of
 /// their arguments lines up. An argument left at `any` takes the other side's
 /// type. Answers `None` for anything else, which keeps two unrelated types the
@@ -2608,7 +2718,23 @@ pub fn track_returns(
     fn_name: &str,
     fn_id: usize,
 ) -> Vec<DataType> {
-    let flow = track_return_flow(content, v, ctx, state, fn_name);
+    // A `?` the walk types is a return of the `None` or the `Err` its operand
+    // can hold; see `Expr::Propagate`.
+    state.propagations.push(Vec::new());
+    let mut flow = track_return_flow(content, v, ctx, state, fn_name);
+    let propagated = state.propagations.pop().unwrap_or_default();
+    // A declared return type is what the caller reads, and each `?` is checked
+    // against it where it is compiled, which names the `?` in the report.
+    let declared = state.fns[fn_id].return_type.is_some()
+        || state.fns[fn_id]
+            .generics
+            .as_ref()
+            .is_some_and(|g| g.return_type.is_some());
+    for operand in propagated.into_iter().filter(|_| !declared) {
+        if let Some(failure) = propagated_failure_type(&operand, state) {
+            add_return_type(&mut flow.types, failure, ctx, state);
+        }
+    }
     let mut shapes = ReturnShapes::default();
     collect_return_shapes(content, &mut shapes);
     if shapes.value && (shapes.bare || !flow.always_returns) {
@@ -2809,11 +2935,11 @@ fn track_return_flow(
                 let element = args[0].infer_type(v, ctx, state);
                 pin_pushed_element(obj, &element, v);
             }
-            Expr::ObjFunctionCall(obj, args, namespace, _, _, _, _)
-                if namespace.last().unwrap().as_str() == "insert" && args.len() == 2 =>
+            Expr::ArrayModify(obj, key, value, _, _)
+                if matches!(obj.infer_type(v, ctx, state), DataType::Map(_)) =>
             {
-                let key = args[0].infer_type(v, ctx, state);
-                let value = args[1].infer_type(v, ctx, state);
+                let key = key.infer_type(v, ctx, state);
+                let value = value.infer_type(v, ctx, state);
                 pin_inserted_entry(obj, &key, &value, v);
             }
             // A `throw` or an `exit` never comes back, so the path it ends is
@@ -3589,8 +3715,28 @@ impl Expr {
                     state.type_names(),
                 ),
             },
+            Self::Propagate(operand, span) => {
+                let operand_type = operand.infer_type(v, ctx, state);
+                let Some((success, _)) = propagation_sides(&operand_type, state) else {
+                    crate::compiler::compiler_errors::error_propagate_operand(
+                        &operand_type,
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                        state.type_names(),
+                    );
+                };
+                if let Some(frame) = state.propagations.last_mut()
+                    && !frame.contains(&operand_type)
+                {
+                    frame.push(operand_type);
+                }
+                success
+            }
             Self::ArrayGetIndex(array, _, span) => match array.infer_type(v, ctx, state) {
                 DataType::Array(array_type) => array_type.map_or(DataType::Null, |t| *t),
+                // `m[k]` reads the value stored under `k`.
+                DataType::Map(m) => m.1.unwrap_or(DataType::Unknown),
                 DataType::String => DataType::String,
                 DataType::Unknown => DataType::Unknown,
                 t => error_type_not_indexable(
@@ -4063,7 +4209,7 @@ impl Expr {
                         },
                         &[DataType::String, DataType::Array(None)]
                     ),
-                    "push" | "sort" | "remove" | "insert" => DataType::Null,
+                    "push" | "sort" | "remove" => DataType::Null,
                     "sqrt" | "round" | "floor" => DataType::Float,
                     "abs" => receiver_type!(
                         |t| match t {
@@ -4083,13 +4229,6 @@ impl Expr {
                         },
                         &[DataType::Array(None)]
                     ),
-                    "get" => receiver_type!(
-                        |t| match t {
-                            DataType::Map(m) => Some(m.1.clone().unwrap_or(DataType::Unknown)),
-                            _ => None,
-                        },
-                        &[DataType::Map(Box::from((None, None)))]
-                    ),
                     "keys" => receiver_type!(
                         |t| match t {
                             DataType::Map(m) => Some(DataType::Array(m.0.clone().map(Box::new))),
@@ -4106,13 +4245,12 @@ impl Expr {
                     ),
                     // No builtin takes this name, and the impl-method and
                     // struct/enum lookups above already missed, so the call
-                    // names nothing. `libs/std` documents methods that only
-                    // exist once their module is imported, which is the common
-                    // way to land here.
-                    _ => error_unknown_function(
+                    // names nothing. The report names the module that
+                    // declares the method, or the spelling that replaced it.
+                    _ => crate::compiler::compiler_errors::error_unknown_builtin_method(
                         method,
+                        crate::compiler::methods::builtin_receiver_name(&obj_type),
                         *fn_span,
-                        &Namespace::default(),
                         ctx.file_idx,
                         state.sources,
                     ),
@@ -4134,7 +4272,7 @@ impl Expr {
                 if let Some(w) = wildcard {
                     types.push(w[w.len() - 1].infer_type(v, ctx, state));
                 }
-                branch_value_type(types)
+                branch_value_type(types, ctx, state)
             }
             Self::InlineCondition(_, code, _, _) => {
                 let mut types: Vec<DataType> = Vec::with_capacity(code.len());
@@ -4144,7 +4282,7 @@ impl Expr {
                         types.push(code[0].infer_type(v, ctx, state));
                     }
                 }
-                branch_value_type(types)
+                branch_value_type(types, ctx, state)
             }
             Self::NamespacedRef(path, span, type_args) => {
                 if !type_args.is_empty() {
@@ -4241,15 +4379,29 @@ impl Expr {
 /// dispatches on, so every branch's type is kept for that test: `Fn` types
 /// compare equal whichever function they name. Otherwise the branches give a
 /// union of their distinct types.
-fn branch_value_type(types: Vec<DataType>) -> DataType {
+///
+/// Two instantiations of one generic declaration merge the way two returns of
+/// a body do (see [`add_return_type`]): `if c { Some(x) } else { None }` is an
+/// `Option<int>`, not a union of it with the `Option<any>` the bare `None`
+/// names.
+fn branch_value_type(types: Vec<DataType>, ctx: Ctx, state: &mut State<'_>) -> DataType {
     if let Some(fn_value) = merge_fn_types(&types) {
         return fn_value;
     }
     let mut distinct: Vec<DataType> = Vec::with_capacity(types.len());
     for t in types {
-        if !distinct.contains(&t) {
-            distinct.push(t);
+        if distinct.contains(&t) {
+            continue;
         }
+        if let Some((i, merged)) = distinct
+            .iter()
+            .enumerate()
+            .find_map(|(i, held)| merge_instantiations(held, &t, ctx, state).map(|m| (i, m)))
+        {
+            distinct[i] = merged;
+            continue;
+        }
+        distinct.push(t);
     }
     DataType::Union(Box::from(distinct)).check_poly()
 }

@@ -60,7 +60,9 @@ namespace that does not resolve. These reports suggest the closest name in scope
 when there is one. A name or a namespace that a standard library module the
 program does not import declares names the import instead, so `sqrt(x)` points
 at `import "std/math" as math;` and `fs::read(p)` at `import "std/fs" as fs;`.
-A namespace a `host` or `dylib` block declares resolves like
+A method a map no longer has is `no_such_method` with the spelling that
+replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
+for `get_or`. A namespace a `host` or `dylib` block declares resolves like
 any other, so a call it has no function for is reported against the function,
 naming the namespace it was looked for in. A dot call on a block's name, `app.rows(id)`,
 is `block_dot_call`: a block is reached with `::`.
@@ -124,7 +126,11 @@ is an enum, variant patterns on a value that is not one, and a `match` that does
 not cover every variant. The non-exhaustive report lists the variants you left
 out. A qualified pattern is also reported when its qualifier names an enum other
 than the matched value's, or names nothing at all; the report says which enum
-the pattern reaches and which one the match is on. A `|` alternative that binds
+the pattern reaches and which one the match is on. A `?` after a value that is
+neither an `Option` nor a `Result` is `propagate_operand`, and one in `main` or
+in a function that does not return the same enum, with the same error type for a
+`Result`, is `propagate_return_type`; see
+[error handling](../language/error-handling.md#passing-a-failure-on). A `|` alternative that binds
 other names, or the same names at other types, than the first alternative of
 its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
 on a value that is not an enum, is `match_without_wildcard`. See
@@ -178,7 +184,7 @@ clause matches and the string bound to the catch variable. See
 | --- | --- |
 | `index_out_of_bounds` | An array or string index outside the value |
 | `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end. A slice starting where the value ends is in range and produces an empty one |
-| `unknown_map_key` | Reading a map key that is not present |
+| `unknown_map_key` | Reading a map key that is not present with `m[k]`. `m.get(k)` answers `None` instead |
 
 ### Arithmetic
 
