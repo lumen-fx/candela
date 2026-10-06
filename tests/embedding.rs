@@ -274,8 +274,8 @@ fn unknown_script_fn_is_a_diagnostic() {
     let engine = Engine::new();
     let mut program = engine.compile("fn main() {}", "main.cdl").unwrap();
     let err = program.call("nope", &[]).unwrap_err();
-    assert!(!err.code.is_empty());
-    assert!(!err.message.is_empty());
+    assert_ne!(err.code, "");
+    assert_ne!(err.message, "");
 }
 
 /// `compile` compiles every fully annotated function at its declared parameter
@@ -1195,7 +1195,7 @@ fn main() {}
 
     let calls = calls.borrow();
     assert_eq!(calls.len(), 3);
-    assert!(calls[0].is_empty());
+    assert_eq!(calls[0], [] as [candela::Value; 0]);
     assert_eq!(calls[1], vec![Value::String("hi".to_owned())]);
     assert_eq!(
         calls[2],
@@ -2356,6 +2356,7 @@ fn main() {}
 fn json_parse_every_frame_reuses_freed_slots() {
     for idle in [0, 1] {
         let mut program = Engine::new()
+            .with_lib_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("libs"))
             .compile(PARSE_PER_FRAME, "j.cdl")
             .expect("compiles");
         for _ in 0..3000 {

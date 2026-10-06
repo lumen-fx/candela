@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(manifest.entry(), DEFAULT_ENTRY);
         assert_eq!(manifest.entry_path(), Path::new("/project/src/main.cdl"));
         assert_eq!(manifest.lock_path(), Path::new("/project/candela.lock"));
-        assert!(manifest.dependencies().is_empty());
+        assert_eq!(manifest.dependencies(), []);
     }
 
     #[test]
@@ -656,7 +656,7 @@ mod tests {
         .unwrap();
         assert!(manifest.remove_dependency("shapes"));
         assert!(!manifest.remove_dependency("shapes"));
-        assert!(manifest.dependencies().is_empty());
+        assert_eq!(manifest.dependencies(), []);
         assert!(!manifest.doc.to_string().contains("shapes"));
     }
 
@@ -665,6 +665,6 @@ mod tests {
         let manifest = parse(&new_manifest_text("demo")).unwrap();
         assert_eq!(manifest.name(), "demo");
         assert_eq!(manifest.version(), "0.1.0");
-        assert!(manifest.dependencies().is_empty());
+        assert_eq!(manifest.dependencies(), []);
     }
 }

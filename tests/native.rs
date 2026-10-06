@@ -513,7 +513,7 @@ fn code_built_for_another_machine_runs_as_bytecode_here() {
         let (image, _) = read_artifact(&bytes).unwrap();
         let section = &image.native[0];
         assert_eq!((section.arch, section.os), (arch, os), "{triple}");
-        assert!(!section.code.is_empty());
+        assert_ne!(section.code, [] as [u8; 0]);
         let mut program = load(&bytes);
         let here = cfg!(target_arch = "x86_64") == (arch == NativeArch::X86_64)
             && cfg!(target_os = "macos") == (os == NativeOs::MacOs)
