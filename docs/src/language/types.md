@@ -106,8 +106,9 @@ it, so a variable is never implicitly empty. Test for it with `is_null`.
 `x: null`, `-> null` and `int|null` are all rejected. A function that returns
 nothing leaves its return annotation off.
 
-`print(null)` prints `null`. For a value that is optional by design, prefer the
-`Option` enum from the standard library over `null`.
+`print(null)` prints `null`. `null` stands for "no value was returned" and
+nothing else: a value that may be absent is an `Option`, which the lookups that
+may find nothing (`m.get(k)`, `xs.first()`) answer, and which needs no import.
 
 ## Where you write a type
 

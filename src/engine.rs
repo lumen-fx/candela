@@ -677,6 +677,8 @@ impl Program {
             namespaces: &mut self.namespaces,
             generics: &mut self.generics,
             indirect_registers: &mut self.indirect_registers,
+            propagations: Vec::new(),
+            fn_returns: Vec::new(),
         }
     }
 

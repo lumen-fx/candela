@@ -47,7 +47,7 @@ The result is typed `any`, so read a field back with a downcast (`as_int`,
 `as_str`, `as_map`, `as_list`) or test it first with `is_int`, `is_map`, and the
 rest. Those are [built-in functions](builtins.md). A document mixes types within
 one object or array, and the downcast keeps that: the map `as_map` returns holds
-`any` keys and values, so it takes an `insert` of a string beside an int.
+`any` keys and values, so `m[k] = v` stores a string beside an int.
 
 ```rust
 import "std/json" as json;
@@ -55,8 +55,8 @@ import "std/json" as json;
 fn main() {
     let doc = json::parse("{\"name\": \"ada\", \"scores\": [1, 2, 3]}");
     let obj = as_map(doc);
-    print(as_str(obj.get("name")));
-    print(as_list(obj.get("scores")).len());
+    print(as_str(obj["name"]));
+    print(as_list(obj["scores"]).len());
 }
 ```
 

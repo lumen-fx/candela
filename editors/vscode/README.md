@@ -58,7 +58,7 @@ attribution details.
   libraries and `host "namespace" { rettype name(argtypes); ... }` for
   host-registered closures. A trailing `...` argument marks a variadic host
   function.
-- Modules: `import "file.cdl";` for a file, `import "std/list";` for a shipped
+- Modules: `import "file.cdl";` for a file, `import "std/json";` for a shipped
   library. A bare import merges the module's symbols into the file's scope;
   `import "..." as alias;` keeps them behind `alias::`.
 - Macros: `name!( ... )` hands the raw region between the parentheses to the

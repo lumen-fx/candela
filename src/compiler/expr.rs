@@ -197,6 +197,11 @@ pub enum Expr {
     ReturnVal(Box<Option<Self>>),
 
     ArrayGetIndex(Box<Self>, Box<Self>, Span),
+    /// Propagate(operand, span)
+    ///
+    /// `operand?`: the value inside a `Some` or an `Ok`, or an early return of
+    /// the `None` or the `Err` from the function it is written in.
+    Propagate(Box<Self>, Span),
     /// ArrayGetSlice(array, range_start, range_end, span)
     ///
     /// `range_end` is `None` for an open-ended slice, `a[i..]`, which runs to
@@ -311,6 +316,7 @@ impl Expr {
                 | Self::Match(_, _, _, _, true)
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
+                | Self::Propagate(_, _)
                 | Self::ArrayGetSlice(..)
                 | Self::Mul(..)
                 | Self::Div(..)
@@ -695,6 +701,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             }
         }
         Expr::GetStructField(obj, _, _, _)
+        | Expr::Propagate(obj, _)
         | Expr::BoolNeg(obj, _, _)
         | Expr::Neg(obj, _, _)
         | Expr::BitNot(obj, _, _) => {

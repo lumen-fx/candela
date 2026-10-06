@@ -289,6 +289,13 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                     }
                 }
             }
+            // `x?` hands a `None` or an `Err` back to the caller and reads the
+            // value out of anything else.
+            Some(Token::Question) => {
+                let (_, question) = parser.next_token();
+                base_span.end = question.end;
+                base = Expr::Propagate(Box::new(base), base_span);
+            }
             // A call attaches to the expression in front of it, so the
             // closure another call or an index hands back is called where it
             // stands instead of having to be bound first.

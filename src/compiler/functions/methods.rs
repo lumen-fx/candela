@@ -38,7 +38,7 @@ mod builtin_methods;
 /// resolves only when every member maps to the same name. Struct, enum, and
 /// `any` receivers return `None`; the first two dispatch through their own
 /// paths and the last stays on the builtin table.
-fn builtin_receiver_name(obj_type: &DataType) -> Option<&'static str> {
+pub fn builtin_receiver_name(obj_type: &DataType) -> Option<&'static str> {
     match obj_type {
         DataType::String => Some("string"),
         DataType::Array(_) => Some("list"),

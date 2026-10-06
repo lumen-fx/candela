@@ -183,13 +183,12 @@ fn main() {
 ## Enums in the standard library
 
 `Option` and `Result` are enums declared in candela and shipped with the
-toolchain. `Option<T>` is `Some(T)` or `None`; `Result<T, E>` is `Ok(T)` or
-`Err(E)`. The constructors take no type argument, since the value handed to one
-decides what the enum holds, and they are matched exactly like your own enums.
+toolchain, in the prelude every program has without an import. `Option<T>` is
+`Some(T)` or `None`; `Result<T, E>` is `Ok(T)` or `Err(E)`. The constructors
+take no type argument, since the value handed to one decides what the enum
+holds, and they are matched exactly like your own enums.
 
 ```rust
-import "std/option";
-
 fn main() {
     let found = Some(5);
     match found {

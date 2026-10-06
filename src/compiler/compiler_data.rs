@@ -367,6 +367,14 @@ pub struct State<'a> {
     pub namespaces: &'a mut FileNamespaces,
     pub generics: &'a mut Generics,
     pub indirect_registers: &'a mut IndirectRegisters,
+    /// One frame per function body whose returns are being worked out, holding
+    /// the operand type of every `?` the walk typed in it. Each is a return of
+    /// that operand's `None` or `Err`.
+    pub propagations: Vec<Vec<DataType>>,
+    /// The function bodies being compiled, innermost last: the name a
+    /// diagnostic uses and the type the body returns, which is what a `?`
+    /// in it has to hand back.
+    pub fn_returns: Vec<(SmolStr, DataType)>,
 }
 
 /// A checkpoint of the tables a compile attempt grows as it goes, taken by

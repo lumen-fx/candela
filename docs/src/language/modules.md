@@ -10,7 +10,7 @@ module.
 An import is the `import` keyword, a quoted path, and a semicolon.
 
 ```rust
-import "std/string";
+import "std/json" as json;
 import "./helpers.cdl";
 ```
 
@@ -22,7 +22,7 @@ The path decides where candela looks.
 - A path with no extension is a library import. Its first segment names a
   package the project depends on, when there is one by that name, and otherwise
   it resolves against the library directory shipped with the toolchain. So
-  `"std/string"` loads that module wherever you run the program from, and
+  `"std/json"` loads that module wherever you run the program from, and
   `"shapes/circle"` loads a file out of the `shapes` package.
 
 Any other extension is an error. Imports go at the top level of a file, among
@@ -146,18 +146,19 @@ and behind an alias by an `as` one.
 
 ## The standard library
 
-Standard library modules are library imports: `import "std/string";`,
-`import "std/map" as map;`, and so on. They ship as candela source beside the
+Standard library modules are library imports: `import "std/json" as json;`,
+`import "std/math" as math;`, and so on. They ship as candela source beside the
 toolchain and compile into your program like any other module. The
 [Standard library](../standard-library/overview.md) section lists what each one
 provides.
 
 The collection, conversion, and enum modules (`list`, `string`, `map`,
-`convert`, `option`, `result`)
-define their helpers as methods in `impl` blocks, so importing them is enough;
-the methods then resolve on the receiver's type. The `list` module goes one step
-further and loads automatically, so `xs.map(f)` works in a file with no imports
-at all.
+`convert`, `option`, `result`) are the prelude: every program has them with no
+import, so `xs.map(f)`, `s.capitalize()` and `Some(1)` work in a file with no
+imports at all. Their helpers are methods in `impl` blocks that resolve on the
+receiver's type. Importing one of them by name still works and reaches the same
+module. A call to a name an unimported module declares is a compile error whose
+help names the import, so `sqrt(x)` points at `import "std/math" as math;`.
 
 ## Packages
 

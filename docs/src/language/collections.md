@@ -101,8 +101,8 @@ fn main() {
 concatenates two lists into a new one.
 
 The rule holds for every collection method: a method that changes its receiver
-returns nothing (`push`, `remove`, `sort` and `reverse` on a list, `insert` and
-`remove` on a map, `add` and `remove` on a set). Every other method leaves the
+returns nothing (`push`, `remove`, `sort` and `reverse` on a list, `remove` on
+a map, `add` and `remove` on a set), and so does `m[k] = v`. Every other method leaves the
 receiver as it was and returns a new value, so `xs.sort_by(f)` and
 `"abc".reverse()` hand back a sorted list and a reversed string. `each`, which
 exists to call a function for its effect, is the one method that returns nothing
@@ -159,10 +159,15 @@ fn main() {
     print(xs.filter(fn(x) => x % 2 == 0));
     print(xs.reduce(0, fn(a, b) => a + b));
     print(xs.sum(), xs.min(), xs.max(), xs.first(), xs.last());
+    print(xs.max().unwrap_or(0));
     print(xs.take(2), xs.drop(2), xs.unique(), xs.chunk(2));
     print(xs.any(fn(x) => x > 3), xs.all(fn(x) => x > 0));
 }
 ```
+
+A lookup that may find nothing answers an `Option`: `first`, `last`, `min` and
+`max` give `Some` of the element, or `None` for an empty list. See
+[option](../standard-library/option.md).
 
 The functions you pass read the variables around them, so a predicate can test
 against what the scope holds; see [Functions](functions.md).
@@ -177,7 +182,7 @@ fn main() {
     let ages = {"ada": 36, "alan": 41};
     let by_number = {1: "one", 2: "two"};
     let empty = {};
-    print(ages.len(), by_number.get(1), empty.len());
+    print(ages.len(), by_number[1], empty.len());
 }
 ```
 
@@ -198,7 +203,7 @@ enum Cell { Num(int), Text(string) }
 fn width(cells: {string: Cell}) -> int {
     let w = 0;
     for name in cells {
-        w = w + match cells.get(name) {
+        w = w + match cells[name] {
             Cell::Num(_) => 1,
             Cell::Text(t) => t.len(),
         };
@@ -213,36 +218,40 @@ fn main() {
 
 A map that does name its types is still checked against the annotation, so
 `width({"a": 1})` does not compile. A `let` takes no annotation, so a local that
-starts empty and is never inserted into keeps keys and values of no type. Handing
+starts empty takes its key and value types from the first entry written into
+it, and one nothing is written into keeps keys and values of no type. Handing
 such a local to a parameter that declares what the map holds pins it as well, so
-what the function inserts reads back at that type.
+what the function writes reads back at that type.
 
 ### Reading and writing
 
 ```rust
 fn main() {
     let scores = {"a": 1};
-    scores.insert("b", 2);
-    scores.insert("a", 10);
-    print(scores.get("a"), scores.len());
+    scores["b"] = 2;
+    scores["a"] = 10;
+    scores["a"] += 5;
+    print(scores["a"], scores.len());
+    print(scores.get("z"), scores.get("z").unwrap_or(0));
     print(scores.contains("b"), scores.keys(), scores.values());
     scores.remove("b");
     print(scores.len());
 }
 ```
 
-`insert` adds a pair or replaces the value of an existing key. `remove` takes
-the entry under a key back out, and a key the map does not hold leaves it as it
-was. `get` raises when the key is absent, so test with `contains` first, or use
-the `get_or` method from the standard library's `map` module to supply a
-fallback.
+Brackets read and write an entry. `m[k]` reads the value under a key and raises
+`unknown_map_key` when the key is absent; `m[k] = v` adds the entry or replaces
+the value of an existing one. `m.get(k)` is the lookup that may find nothing: it
+answers `Some` of the value or `None`, so `m.get(k).unwrap_or(fallback)` reads
+with a fallback. `remove` takes the entry under a key back out, and a key the
+map does not hold leaves it as it was.
 
 ### Iterating
 
 Iterating a map walks its keys in the order they went in, and a literal's keys
-go in as written. `keys`, `values`, and printing read the same order. Inserting
+go in as written. `keys`, `values`, and printing read the same order. Writing
 a key that is already there replaces the value and leaves the entry where it
-is; removing a key and inserting it again puts it at the end. Two maps holding
+is; removing a key and writing it again puts it at the end. Two maps holding
 the same entries are equal whatever order they were built in.
 
 ```rust
@@ -250,7 +259,7 @@ fn main() {
     let scores = {"a": 1, "b": 2};
     let total = 0;
     for key in scores {
-        total += scores.get(key);
+        total += scores[key];
     }
     print(total);
 }

@@ -107,7 +107,7 @@ fn collections_cross_the_boundary() {
         }
 
         fn pick(m: {string: int}) -> int {
-            return m.get(\"b\");
+            return m[\"b\"];
         }
 
         fn main() {}
@@ -816,22 +816,22 @@ fn frame(names: string[], extra: {string: int}, n: int) -> int {
     for i in 0..n {
         let name = names[i % names.len()];
         let r = row(name + " row label long enough to pool " + str(i), "an attribute value " + str(i), i);
-        r.cells.push(extra.get("bonus"));
+        r.cells.push(extra["bonus"]);
         rows.push(r);
     }
     for i in 1..n {
         rows[i].cells.push(rows[i - 1].cells[0]);
-        rows[i - 1].attrs.insert("next", rows[i].label);
-        rows[i - 1].attrs.insert("key", "a replaced attribute value " + str(i));
+        rows[i - 1].attrs["next"] = rows[i].label;
+        rows[i - 1].attrs["key"] = "a replaced attribute value " + str(i);
     }
     rows.reverse();
     let dropped = rows[0];
     rows.remove(0);
     let sum = dropped.label.len();
     for r in rows {
-        sum += r.label.len() + r.attrs.get("key").len() + r.cells.len() + r.cells[0];
+        sum += r.label.len() + r.attrs["key"].len() + r.cells.len() + r.cells[0];
         if r.attrs.contains("next") {
-            sum += r.attrs.get("next").len();
+            sum += r.attrs["next"].len();
         }
     }
     return sum;
@@ -977,7 +977,7 @@ const PER_FRAME: &str = "
         return s;
     }
     fn weigh(m: {string: int[]}) -> int {
-        return m.get(\"first entry\")[0] + m.get(\"second entry\")[1];
+        return m[\"first entry\"][0] + m[\"second entry\"][1];
     }
     fn main() {}
 ";
@@ -1063,7 +1063,7 @@ const PARSE_PER_FRAME: &str = "import \"std/json\" as json;
 
     fn p() -> int {
         let v = as_list(json::parse(\"[[1, 2], {\\\"a\\\": 3}]\"));
-        return as_int(as_list(v[0])[1]) + as_int(as_map(v[1]).get(\"a\"));
+        return as_int(as_list(v[0])[1]) + as_int(as_map(v[1])[\"a\"]);
     }
     fn main() {}
 ";

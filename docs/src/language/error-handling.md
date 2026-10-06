@@ -21,7 +21,7 @@ wrong. The common ones come from conversions and lookups.
   not parse.
 - `index_out_of_bounds`, `slice_out_of_bounds`: a list or string index past the
   end.
-- `unknown_map_key`: `get` on a key the map does not hold.
+- `unknown_map_key`: `m[k]` on a key the map does not hold.
 - `division_by_zero`, `modulo_by_zero`.
 - `json_parse_error`: malformed input to `json::parse`.
 - `fs_not_found`, `fs_permission_denied`, and the other `fs_` kinds: file system
@@ -143,12 +143,12 @@ fn main() {
 An error is for the unexpected. When a value may reasonably be missing, or an
 operation may reasonably fail, return it in the type instead: `Option` for a
 value that may be absent, `Result` for an operation that may fail. Both are
-enums from the standard library, so the caller handles them with a `match` and
-cannot forget the failing case.
+enums from the standard library's prelude, so they need no import, and the
+caller handles them with a `match` and cannot forget the failing case. The
+lookups that may find nothing answer an `Option` this way: `m.get(k)`,
+`xs.first()`, `xs.max()`.
 
 ```rust
-import "std/result";
-
 fn divide(a, b) {
     if b == 0 {
         return Err("division by zero");
@@ -167,6 +167,40 @@ fn main() {
 
 `unwrap` on a `None` or an `Err` raises, which is the deliberate way to say a
 case cannot happen. See [Enums](enums.md) for matching them.
+
+### Passing a failure on
+
+`x?` after an `Option` or a `Result` reads the value out of a `Some` or an `Ok`.
+On a `None` or an `Err` it returns that value from the function it is written
+in, at once, so the caller gets the failure:
+
+```rust
+fn parse(text: string) -> Result<int, string> {
+    if text.is_int() {
+        return Ok(int(text));
+    }
+    return Err("not a number: " + text);
+}
+
+fn sum(a: string, b: string) -> Result<int, string> {
+    let x = parse(a)?;
+    let y = parse(b)?;
+    return Ok(x + y);
+}
+
+fn main() {
+    print(sum("1", "2"));
+    print(sum("1", "two"));
+}
+```
+
+The function a `?` is in has to return the same enum as its operand: an
+`Option` for a `?` on an `Option`, and for a `Result` one whose error type is
+the same. The success side does not have to match, since a `None` or an `Err`
+carries none of it. A function with no return annotation that uses `?` returns
+that enum. A `?` anywhere else is a compile error: in `main`, which has no
+caller to hand the failure to, or in a function that returns something else.
+Read the value with `match` or `unwrap_or` there instead.
 
 ## Assertions
 

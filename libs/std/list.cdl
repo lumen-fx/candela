@@ -1,25 +1,24 @@
 /// List methods built on Candela's array operators and built-in methods.
 ///
 /// Every helper is a method on the list value (`arr.sum()`, `arr.map(f)`),
-/// defined in an `impl list` block. The module loads automatically, so the
+/// defined in an `impl list` block. The module is part of the prelude, so the
 /// methods need no import. They are polymorphic through Candela's compile-time
 /// monomorphization: a single definition specializes to whatever element type
-/// the call site uses. Reductions such as `sum`, `min`, and `max` read their
-/// seed from the first element, so they require a non-empty list.
+/// the call site uses. A lookup that may find nothing (`first`, `last`, `min`,
+/// `max`) returns an `Option`; `sum` and `product` read their seed from the
+/// first element, so they require a non-empty list.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-impl list {
-    /// The first element. Requires a non-empty list.
-    fn first(self) {
-        return self[0];
-    }
+import "std/option";
 
-    /// The last element. Requires a non-empty list.
-    fn last(self) {
-        return self[self.len() - 1];
-    }
+impl list {
+    /// The first element as `Some`, or `None` for an empty list.
+    fn first(self) => if self.len() == 0 { None } else { Some(self[0]) };
+
+    /// The last element as `Some`, or `None` for an empty list.
+    fn last(self) => if self.len() == 0 { None } else { Some(self[self.len() - 1]) };
 
     /// True when the list has no elements.
     fn is_empty(self) {
@@ -46,26 +45,32 @@ impl list {
         return acc;
     }
 
-    /// The smallest element. Requires a non-empty list.
+    /// The smallest element as `Some`, or `None` for an empty list.
     fn min(self) {
+        if self.len() == 0 {
+            return None;
+        }
         let m = self[0];
         for x in self {
             if x < m {
                 m = x;
             }
         }
-        return m;
+        return Some(m);
     }
 
-    /// The largest element. Requires a non-empty list.
+    /// The largest element as `Some`, or `None` for an empty list.
     fn max(self) {
+        if self.len() == 0 {
+            return None;
+        }
         let m = self[0];
         for x in self {
             if x > m {
                 m = x;
             }
         }
-        return m;
+        return Some(m);
     }
 
     /// The index of the first element equal to `value`, or -1 if there is none.

@@ -24,7 +24,7 @@ struct Set<T> {
 impl Set<T> {
     /// Adds `x`. A member already present is unchanged.
     fn add(self, x: T) {
-        self.items.insert(x, true);
+        self.items[x] = true;
     }
 
     /// Takes `x` back out. A member the set does not hold is unchanged.
@@ -56,10 +56,10 @@ impl Set<T> {
     fn union(self, other: Set<T>) -> Set<T> {
         let r = Set<T>{ items: {} };
         for x in self.items {
-            r.items.insert(x, true);
+            r.items[x] = true;
         }
         for x in other.items {
-            r.items.insert(x, true);
+            r.items[x] = true;
         }
         return r;
     }
@@ -69,7 +69,7 @@ impl Set<T> {
         let r = Set<T>{ items: {} };
         for x in self.items {
             if other.items.contains(x) {
-                r.items.insert(x, true);
+                r.items[x] = true;
             }
         }
         return r;
@@ -81,7 +81,7 @@ impl Set<T> {
         let r = Set<T>{ items: {} };
         for x in self.items {
             if !other.items.contains(x) {
-                r.items.insert(x, true);
+                r.items[x] = true;
             }
         }
         return r;
@@ -93,12 +93,12 @@ impl Set<T> {
         let r = Set<T>{ items: {} };
         for x in self.items {
             if !other.items.contains(x) {
-                r.items.insert(x, true);
+                r.items[x] = true;
             }
         }
         for x in other.items {
             if !self.items.contains(x) {
-                r.items.insert(x, true);
+                r.items[x] = true;
             }
         }
         return r;

@@ -255,12 +255,25 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
                 name_span: e.name_span,
             })
             .collect(),
+        // A runtime error shows the source of the instruction that raised it,
+        // so a file no instruction came from needs no text in the artifact.
+        // The prelude is loaded into every program, and most of it is never
+        // called.
         sources: out
             .sources
             .iter()
-            .map(|s| SourceImage {
+            .enumerate()
+            .map(|(file, s)| SourceImage {
                 filename: s.filename.to_string(),
-                contents: s.contents.clone(),
+                contents: if out
+                    .instr_src
+                    .iter()
+                    .any(|src| usize::from(src.file_id) == file)
+                {
+                    s.contents.clone()
+                } else {
+                    String::new()
+                },
             })
             .collect(),
         allocated_arg_count: out.allocated_arg_count as u64,

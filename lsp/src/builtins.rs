@@ -165,14 +165,6 @@ pub const BUILTIN_METHODS: &[(&str, &str)] = &[
         "<T[]>.sort()\n\nSorts an array in place. Supports ints, floats, and strings.",
     ),
     (
-        "get",
-        "<{K: V}>.get(key: T) -> V\n\nReturns the value for `key`. Raises `unknown_map_key` if absent.",
-    ),
-    (
-        "insert",
-        "<{K: V}>.insert(key: T, value: V)\n\nInserts or updates a key-value pair in the map.",
-    ),
-    (
         "is_float",
         "<string>.is_float() -> bool\n\nReturns whether the string represents a float.",
     ),

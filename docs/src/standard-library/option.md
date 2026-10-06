@@ -1,10 +1,8 @@
 # option
 
-`Option` is a value that is either present or absent.
-
-```rust
-import "std/option";
-```
+`Option` is a value that is either present or absent. It is part of the
+[prelude](overview.md#the-prelude), so it needs no import. A lookup that may
+find nothing answers one: `m.get(k)`, `xs.first()`, `xs.max()`.
 
 ## The type
 
@@ -17,12 +15,9 @@ enum Option<T> {
 }
 ```
 
-Importing the module brings the variants into scope, so you construct and match
-them directly:
+You construct and match the variants directly:
 
 ```rust
-import "std/option";
-
 fn main() {
     let o = Some(5);
     match o {
@@ -37,8 +32,6 @@ type, so `Some(5)` is an `Option<int>` and the value bound in a `Some` arm comes
 back with the type that went in.
 
 ```rust
-import "std/option";
-
 struct Point {
     x: int,
     y: int,
@@ -64,13 +57,32 @@ wherever an `Option<T>` is expected. Name the argument (`Option<Point>`) where
 you want the check. See [enums](../language/enums.md) for the enum and match
 syntax, and [generics](../language/generics.md) for type parameters.
 
+`x?` reads the value out of a `Some` and hands a `None` back to the caller of
+the function it is written in, which has to return an `Option` too:
+
+```rust
+fn total(prices: {string: int}) -> Option<int> {
+    let a = prices.get("apple")?;
+    let b = prices.get("pear")?;
+    return Some(a + b);
+}
+
+fn main() {
+    print(total({"apple": 2, "pear": 3}));
+    print(total({"apple": 2}));
+}
+```
+
+See [error handling](../language/error-handling.md#passing-a-failure-on) for
+the rule.
+
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library.
 
 ## Methods
 
 The helpers are methods on the option value, defined in an `impl Option<T>`
-block; importing the module brings them in.
+block.
 
 ### is_some
 
@@ -149,8 +161,6 @@ o.filter(pred)
   otherwise. `pred` is not called on a `None`.
 
 ```rust
-import "std/option";
-
 fn describe(x) { return "value " + str(x); }
 
 fn main() {

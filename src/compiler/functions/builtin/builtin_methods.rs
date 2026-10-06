@@ -4,9 +4,7 @@
 use super::super::expr::Expr;
 use super::super::expr::Span;
 use super::super::type_system::DataType;
-use super::super::type_system::pin_inserted_entry;
 use super::super::type_system::pin_pushed_element;
-use crate::compiler::Namespace;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
@@ -14,7 +12,7 @@ use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_range;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
-use crate::compiler::compiler_errors::error_unknown_function;
+use crate::compiler::compiler_errors::error_unknown_builtin_method;
 use crate::compiler::functions::check_arg_type;
 use crate::compiler::functions::store_call_args;
 use crate::instr::Instr;
@@ -60,9 +58,7 @@ pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
             "remove",
             "sort",
         ],
-        "map" => &[
-            "len", "keys", "values", "contains", "get", "insert", "remove",
-        ],
+        "map" => &["len", "keys", "values", "contains", "remove"],
         "int" => &["abs"],
         "float" => &["abs", "sqrt", "round", "floor"],
         _ => &[],
@@ -597,67 +593,10 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFuncVoid(LibFuncVoid::Sort, id, 0));
             None
         }
-        "get" => {
-            check!(
-                DataType::Map(_),
-                &[DataType::Map(Box::from((None, None)))],
-                name,
-                1
-            );
-
-            if let DataType::Map(t) = obj_type
-                && let Some(key_type) = t.0
-            {
-                check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[key_type]);
-            }
-            let arg_id = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            state.free_reg(arg_id, v);
-            output.push(Instr::MapGet(id, arg_id, output_id));
-            state.add_to_src(ctx, output, args_indexes[0]);
-            Some(output_id)
-        }
-        "insert" => {
-            check!(
-                DataType::Map(_),
-                &[DataType::Map(Box::from((None, None)))],
-                name,
-                2
-            );
-            if let DataType::Map(m) = &obj_type {
-                if let Some(t) = &m.0 {
-                    let t = t.clone();
-                    check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[t]);
-                }
-                if let Some(t) = &m.1 {
-                    let t = t.clone();
-                    check_arg_type(name, v, ctx, state, args, args_indexes, 1, &[t]);
-                }
-            }
-            // An untyped empty map (`{}`) takes its key/value types from the
-            // first insert, mirroring how an empty array upgrades on `push`.
-            if matches!(&obj_type, DataType::Map(m) if m.0.is_none() && m.1.is_none()) {
-                let key_type = args[0].infer_type(v, ctx, state);
-                let val_type = args[1].infer_type(v, ctx, state);
-                pin_inserted_entry(obj, &key_type, &val_type, v);
-            }
-            let key_id = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            let val_id = args[1]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            state.free_reg(key_id, v);
-            state.free_reg(val_id, v);
-            output.push(Instr::MapInsertReg(id, key_id, val_id));
-            None
-        }
-        fn_name => error_unknown_function(
+        fn_name => error_unknown_builtin_method(
             fn_name,
+            super::builtin_receiver_name(&obj_type),
             fn_span,
-            &Namespace::default(),
             ctx.file_idx,
             state.sources,
         ),

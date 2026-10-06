@@ -62,8 +62,8 @@ range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks. `match` stands a
 value, its arms take a block or an expression, and `|` separates a pattern's
 alternatives. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates
-before it raises; calls, method calls, field access, indexing, and slicing bind
-tighter than every operator, and a call attaches to what a call or an index
+before it raises; calls, method calls, field access, indexing, slicing and the
+`?` that passes on a `None` or an `Err` bind tighter than every operator, and a call attaches to what a call or an index
 returned, so `adder(1)(2)` and `fs[0](x)` read as calls. Literals cover
 integers, floats with a decimal point or an exponent or both, strings with
 their escapes, `true`, `false`, `null`, lists, maps, struct literals with an optional

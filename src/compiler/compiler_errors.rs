@@ -37,6 +37,176 @@ fn removed_builtin(name: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// A method call on a string, list, map or number that names no method of its
+/// type. The help names the spelling that replaced a removed method, or the
+/// module whose `impl` block declares it.
+#[inline(never)]
+#[cold]
+pub fn error_unknown_builtin_method(
+    method: &str,
+    receiver: Option<&str>,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let help = |paint: fn(&str) -> String| match (receiver, method) {
+        (Some("map"), "insert") => Some(format!(
+            "A map entry is written with {}",
+            paint("m[key] = value")
+        )),
+        (Some("map"), "get_or") => Some(format!(
+            "A lookup with a fallback is {}",
+            paint("m.get(key).unwrap_or(fallback)")
+        )),
+        (Some(receiver), _) => std_index::module_with_method(receiver, method).map(|module| {
+            format!(
+                "{method} is a {receiver} method in std/{module}. Import it with {}",
+                paint(&format!("import \"std/{module}\";")),
+            )
+        }),
+        (None, _) => None,
+    };
+    let plain_help = help(|t| t.to_owned());
+    let help = help(|t| blue(t));
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            let mut report = Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Unknown method")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(match receiver {
+                        Some(receiver) => {
+                            format!("No method {} on type {}", red(method), blue(receiver))
+                        }
+                        None => format!("Cannot find method {}", red(method)),
+                    })
+                    .with_color(ariadne::Color::Red),
+            );
+            if let Some(help) = &help {
+                report = report.with_help(help);
+            }
+            report.finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "{}{}",
+            receiver.map_or_else(
+                || format!("Cannot find method {method}"),
+                |receiver| format!("No method {method} on type {receiver}"),
+            ),
+            plain_help.map_or_else(String::new, |help| format!(". {help}")),
+        ),
+        "no_such_method",
+    )
+}
+
+/// A `?` written after a value that is neither an `Option` nor a `Result`.
+#[inline(never)]
+#[cold]
+pub fn error_propagate_operand(
+    found: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let found = types.of(found);
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("? on a value that is not an Option or a Result")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!("This expression is of type {}", red(&found)))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "? reads the value out of a Some or an Ok, and hands a None or an Err back to the caller",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("? on a value of type {found}, which is not an Option or a Result"),
+        "propagate_operand",
+    )
+}
+
+/// A `?` whose `None` or `Err` has nowhere to go: it is written in `main`, or
+/// in a function that does not return the same kind of enum.
+#[inline(never)]
+#[cold]
+pub fn error_propagate_return(
+    function: Option<(&str, &DataType)>,
+    operand: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let operand = types.of(operand).to_string();
+    let kind = if operand.starts_with("Result") {
+        "Result"
+    } else {
+        "Option"
+    };
+    let (failure, article) = if kind == "Result" {
+        ("Err", "a")
+    } else {
+        ("None", "an")
+    };
+    let message = match function {
+        Some((name, returns)) if types.of(returns).to_string().starts_with(kind) => format!(
+            "? hands the {failure} of this {operand} back to the caller of {name}, and {name} returns {}, whose {failure} holds another type",
+            types.of(returns)
+        ),
+        Some((name, returns)) => format!(
+            "? hands the {failure} back to the caller of {name}, so {name} has to return {article} {kind}; it returns {}",
+            types.of(returns)
+        ),
+        None => {
+            format!("? hands the {failure} back to the caller, and main has no caller to take it")
+        }
+    };
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("? outside a function that returns its kind")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(&message)
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Read the value with {} or {} here instead",
+                blue("match"),
+                blue("unwrap_or"),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "propagate_return_type",
+    )
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_array_diff_types(

@@ -7,18 +7,18 @@ fn main() {
     // Empty-literal, insert, len.
     let m = {};
     assert::assert_true(m.is_empty());
-    m.insert("a", 1);
-    m.insert("b", 2);
-    m.insert("c", 3);
+    m["a"] = 1;
+    m["b"] = 2;
+    m["c"] = 3;
     assert::assert_eq(m.len(), 3);
     assert::assert_false(m.is_empty());
 
     // get / contains.
-    assert::assert_eq(m.get("b"), 2);
+    assert::assert_eq(m["b"], 2);
     assert::assert_true(m.contains("a"));
     assert::assert_false(m.contains("z"));
-    assert::assert_eq(m.get_or("c", 99), 3);
-    assert::assert_eq(m.get_or("z", 99), 99);
+    assert::assert_eq(m.get("c").unwrap_or(99), 3);
+    assert::assert_eq(m.get("z").unwrap_or(99), 99);
 
     // keys / values.
     assert::assert_eq(m.keys().len(), 3);
@@ -27,21 +27,21 @@ fn main() {
     // Iteration walks the keys; the values sum to 1+2+3.
     let sum = 0;
     for k in m {
-        sum += m.get(k);
+        sum += m[k];
     }
     assert::assert_eq(sum, 6);
 
     // Overwrite keeps the length and replaces the value.
-    m.insert("a", 10);
+    m["a"] = 10;
     assert::assert_eq(m.len(), 3);
-    assert::assert_eq(m.get("a"), 10);
+    assert::assert_eq(m["a"], 10);
 
     // The keys come back in the order they went in. Overwriting "a" left it
     // first; removing "b" and inserting it again makes it the newest entry.
     assert::assert_eq(m.keys(), ["a", "b", "c"]);
     assert::assert_eq(m.values(), [10, 2, 3]);
     m.remove("b");
-    m.insert("b", 2);
+    m["b"] = 2;
     assert::assert_eq(m.keys(), ["a", "c", "b"]);
 
     // Two maps holding the same entries are equal whatever order built them.
@@ -51,9 +51,9 @@ fn main() {
 
     // Non-string keys.
     let byint = {};
-    byint.insert(1, 100);
-    byint.insert(2, 200);
-    assert::assert_eq(byint.get(2), 200);
+    byint[1] = 100;
+    byint[2] = 200;
+    assert::assert_eq(byint[2], 200);
     assert::assert_true(byint.contains(1));
 
     print("map ok");

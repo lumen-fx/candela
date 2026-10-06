@@ -1103,3 +1103,46 @@ fn main() {
                 (identifier)
                 (arguments
                   (string_literal))))))))))
+
+================================================================================
+Propagation with ?
+================================================================================
+
+fn total(m) {
+    let a = m.get("a")?;
+    return Some(a + parse(m["b"])?.len());
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (propagate_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (string_literal)))))
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (identifier)
+              (method_call_expression
+                (propagate_expression
+                  (call_expression
+                    (identifier)
+                    (arguments
+                      (index_expression
+                        (identifier)
+                        (string_literal)))))
+                (identifier)
+                (arguments)))))))))

@@ -410,5 +410,7 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         value_callsites: FxHashSet::default(),
         optimize: out.optimize,
         namespaces: &mut out.namespaces,
+        propagations: Vec::new(),
+        fn_returns: Vec::new(),
     }
 }

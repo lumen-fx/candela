@@ -402,7 +402,7 @@ fn main() {
     print(fs[0](4), fs[1](4));
 
     let ops = {"inc": fn(x) => x + 1, "ten": fn(x) => x * 10};
-    print(ops.get("ten")(4));
+    print(ops["ten"](4));
 }
 ```
 

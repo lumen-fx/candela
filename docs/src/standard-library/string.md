@@ -1,17 +1,14 @@
 # string
 
 Substrings, characters, padding, capitalisation, line splitting, and counting,
-as methods on strings.
+as methods on strings. The module is part of the
+[prelude](overview.md#the-prelude), so they need no import.
 
-```rust
-import "std/string";
-```
-
-The import brings the methods in; they are defined in an `impl string` block
-(see [methods](../language/methods.md)) and sit on top of the built-in string
+The methods are defined in an `impl string` block (see
+[methods](../language/methods.md)) and sit on top of the built-in string
 methods and the indexing and slicing operators. The built-in methods (`len`,
-`split`, `trim`, `uppercase`, `replace`, `find`, and the rest) need no import
-and are listed in [built-in functions](builtins.md).
+`split`, `trim`, `uppercase`, `replace`, `find`, and the rest) are listed in
+[built-in functions](builtins.md).
 
 Indices and lengths count characters, so a four-letter word ending in an
 accented vowel has a length of 4 and its last index reads the accented vowel
@@ -37,8 +34,6 @@ s.substring(start, count)
 - Raises: `slice_out_of_bounds` when `start + count` runs past the end.
 
 ```rust
-import "std/string";
-
 fn main() {
     print("hello world".substring(6, 5));
 }
@@ -82,8 +77,6 @@ s.chars()
   empty string returns an empty list.
 
 ```rust
-import "std/string";
-
 fn main() {
     for c in "abc".chars() {
         print(c);
@@ -115,8 +108,6 @@ s.pad_left(width, fill)
   already that wide returns unchanged.
 
 ```rust
-import "std/string";
-
 fn main() {
     print("7".pad_left(3, "0"));
 }

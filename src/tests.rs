@@ -79,10 +79,7 @@ macro_rules! run_and_check_registers {
             &mut arrays,
             &crate::errors::ErrorCtx {
                 instr_src: &out.instr_src,
-                sources: &[Source {
-                    filename: filename.into(),
-                    contents: String::from($contents),
-                }],
+                sources: &out.sources,
             },
             &out.callsite_registers,
             &[],
@@ -124,10 +121,7 @@ macro_rules! run {
                 &mut arrays,
                 &crate::errors::ErrorCtx {
                     instr_src: &out.instr_src,
-                    sources: &[Source {
-                        filename: filename.into(),
-                        contents: String::from($contents),
-                    }],
+                    sources: &out.sources,
                 },
                 &out.callsite_registers,
                 &[],
@@ -4900,7 +4894,7 @@ pub fn map_get_key() {
         "
         fn main() {
             let m = {0: 42, 1: 67};
-            print(m.get(0));
+            print(m[0]);
         }
         ",
         42.into()
@@ -4914,8 +4908,8 @@ pub fn map_insert_new_pair() {
         fn main() {
             let m = {[0,1,2]: 0, [3,4,5]: 1};
             let a = [6,7,8];
-            m.insert(a, 2);
-            print(m.get(a));
+            m[a] = 2;
+            print(m[a]);
         }
         ",
         2.into()
@@ -4928,8 +4922,8 @@ pub fn map_overwrite_pair() {
         "
         fn main() {
             let m = {false: \"false\", true: \"true\"};
-            m.insert(false, \"true?\");
-            print(m.get(false).len());
+            m[false] = \"true?\";
+            print(m[false].len());
         }
         ",
         5.into()
@@ -4945,7 +4939,7 @@ pub fn map_loop() {
             for _ in 0..10 {
                 let x = 10;
                 let m = {1.0: x+10, 2.0: x+20};
-                sum += m.get(1.0) + m.get(2.0);
+                sum += m[1.0] + m[2.0];
             }
             print(sum);
         }",
@@ -6153,15 +6147,15 @@ pub fn method_on_builtin_map() {
         impl map {
             fn get_or(self, k, default) {
                 if self.contains(k) {
-                    return self.get(k);
+                    return self[k];
                 }
                 return default;
             }
         }
         fn main() {
             let m = {};
-            m.insert(\"a\", 5);
-            print(m.get_or(\"a\", 0) + m.get_or(\"b\", 30));
+            m[\"a\"] = 5;
+            print(m.get(\"a\").unwrap_or(0) + m.get(\"b\").unwrap_or(30));
         }
         ",
         35.into()
@@ -6575,12 +6569,12 @@ const OBJECTS_AFTER_OTHER_OBJECTS: &str = "
             let xs = [10, 20];
             let p = Point{ x: n, y: 2 };
             let m = { \"k\": 7 };
-            return xs.len() + p.x + m.get(\"k\");
+            return xs.len() + p.x + m[\"k\"];
         }
         fn main() {
             let first = [\"alpha\", \"beta\"];
             let earlier = { \"zz\": 99 };
-            print(first.len() + earlier.get(\"zz\") + build(1) + build(2));
+            print(first.len() + earlier[\"zz\"] + build(1) + build(2));
         }
         ";
 
@@ -6990,7 +6984,7 @@ pub fn a_declared_map_parameter_pins_an_empty_literal() {
         fn total(m: {string: Value}) -> int {
             let sum = 0;
             for k in m {
-                match m.get(k) {
+                match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
                 }
@@ -7041,7 +7035,7 @@ pub fn a_declared_map_parameter_pins_a_nested_empty_literal() {
         fn total(m: {string: Value}) -> int {
             let sum = 0;
             for k in m {
-                match m.get(k) {
+                match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
                 }
@@ -7080,7 +7074,7 @@ pub fn a_declared_map_return_pins_an_empty_literal() {
         fn total(m) {
             let sum = 5;
             for k in m {
-                match m.get(k) {
+                match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
                 }
@@ -7117,12 +7111,12 @@ pub fn a_typed_parameter_pins_an_empty_map_binding() {
         "
         struct P { x: int }
         fn fill(m: {string: P}) {
-            m.insert(\"a\", P { x: 1 });
+            m[\"a\"] = P { x: 1 };
         }
         fn main() {
             let m = {};
             fill(m);
-            print(m.get(\"a\").x);
+            print(m[\"a\"].x);
         }
         ",
         1.into()
@@ -7156,12 +7150,12 @@ pub fn a_typed_parameter_pins_a_nested_empty_map_binding() {
     run_and_check_registers!(
         "
         fn fill(m: {string: int[]}) {
-            m.insert(\"a\", [7]);
+            m[\"a\"] = [7];
         }
         fn main() {
             let m = {};
             fill(m);
-            print(m.get(\"a\")[0]);
+            print(m[\"a\"][0]);
         }
         ",
         7.into()
@@ -7196,8 +7190,8 @@ pub fn two_agreeing_parameters_pin_one_empty_binding() {
 /// is the ordinary argument mismatch, reported where that call passes it.
 #[test]
 pub fn a_second_disagreeing_parameter_is_reported() {
-    let src = "fn ints(m: {string: int}) { m.insert(\"a\", 1); }
-fn texts(m: {string: string}) { m.insert(\"b\", \"x\"); }
+    let src = "fn ints(m: {string: int}) { m[\"a\"] = 1; }
+fn texts(m: {string: string}) { m[\"b\"] = \"x\"; }
 fn main() {
     let m = {};
     ints(m);
@@ -7221,13 +7215,13 @@ pub fn a_pinned_binding_matches_on_an_enum_payload() {
         "
         enum Value { Num(int), Text(string) }
         fn fill(m: {string: Value}) {
-            m.insert(\"a\", Value::Text(\"abcd\"));
+            m[\"a\"] = Value::Text(\"abcd\");
         }
         fn main() {
             let m = {};
             fill(m);
             let sum = 0;
-            match m.get(\"a\") {
+            match m[\"a\"] {
                 Value::Num(n) => { sum = n; }
                 Value::Text(t) => { sum = t.len(); }
             }
@@ -7414,7 +7408,7 @@ pub fn a_struct_field_declares_what_an_empty_literal_holds() {
         fn total(h: Holder) -> int {
             let sum = 3;
             for k in h.rows {
-                match h.rows.get(k) {
+                match h.rows[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
                 }
@@ -7709,7 +7703,7 @@ pub fn json_parse_object_field() {
 
         fn main() {
             let obj = as_map(json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\"));
-            print(as_int(obj.get(\"x\")) + as_int(obj.get(\"y\")));
+            print(as_int(obj[\"x\"]) + as_int(obj[\"y\"]));
         }
         ",
         30.into()
@@ -7723,7 +7717,7 @@ pub fn json_parse_nested_array() {
 
         fn main() {
             let obj = as_map(json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\"));
-            let arr = as_list(obj.get(\"nums\"));
+            let arr = as_list(obj[\"nums\"]);
             print(arr.len());
         }
         ",
@@ -7819,9 +7813,9 @@ pub fn json_parse_survives_a_collection_mid_parse() {
                 if parsed.len() != ids.len() { bad += 1; }
                 for i in 0..ids.len() {
                     let got = as_map(parsed[i]);
-                    if as_int(got.get(\"id\")) != ids[i] { bad += 1; }
-                    if as_str(got.get(\"name\")) != names[i] { bad += 1; }
-                    let tags = as_list(got.get(\"tags\"));
+                    if as_int(got[\"id\"]) != ids[i] { bad += 1; }
+                    if as_str(got[\"name\"]) != names[i] { bad += 1; }
+                    let tags = as_list(got[\"tags\"]);
                     if as_int(tags[0]) != ids[i] { bad += 1; }
                     if as_str(tags[1]) != names[i] + \" again\" { bad += 1; }
                 }
@@ -8158,13 +8152,13 @@ pub fn map_values_moved_and_removed_during_marking_survive() {
         fn main() {
             let m = {0: [0]};
             for i in 1..100 {
-                m.insert(i, [i]);
+                m[i] = [i];
             }
             for round in 0..3000 {
                 let k = round % 100;
-                let moved = m.get(k);
-                m.insert(k, [round]);
-                m.insert(1000 + round % 7, moved);
+                let moved = m[k];
+                m[k] = [round];
+                m[1000 + round % 7] = moved;
                 m.remove(1000 + (round + 3) % 7);
                 let junk = [round, round, round];
             }
@@ -8254,7 +8248,7 @@ pub fn parsed_array_survives_array_gc() {
                     let parts = s.split(",");
                     i = i + 1;
                 }}
-                return as_list(root.get("libraries")).len();
+                return as_list(root["libraries"]).len();
             }}
 
             fn main() {{
@@ -8273,7 +8267,7 @@ pub fn json_roundtrip_preserves_int() {
 
         fn main() {
             let obj = as_map(json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))));
-            print(as_int(obj.get(\"a\")));
+            print(as_int(obj[\"a\"]));
         }
         ",
         7.into()
@@ -8300,8 +8294,8 @@ pub fn map_empty_literal_and_len() {
         "
         fn main() {
             let m = {};
-            m.insert(\"a\", 1);
-            m.insert(\"b\", 2);
+            m[\"a\"] = 1;
+            m[\"b\"] = 2;
             print(m.len());
         }
         ",
@@ -8315,7 +8309,7 @@ pub fn map_contains() {
         "
         fn main() {
             let m = {};
-            m.insert(\"a\", 1);
+            m[\"a\"] = 1;
             print(m.contains(\"a\"));
         }
         ",
@@ -8384,10 +8378,10 @@ pub fn map_remove_takes_a_typed_key() {
         "
         fn main() {
             let m = {};
-            m.insert(1, 10);
-            m.insert(2, 20);
+            m[1] = 10;
+            m[2] = 20;
             m.remove(1);
-            print(m.get(2));
+            print(m[2]);
         }
         ",
         20.into()
@@ -8413,9 +8407,9 @@ pub fn map_keys_values_len() {
         "
         fn main() {
             let m = {};
-            m.insert(1, 10);
-            m.insert(2, 20);
-            m.insert(3, 30);
+            m[1] = 10;
+            m[2] = 20;
+            m[3] = 30;
             print(m.keys().len() + m.values().len());
         }
         ",
@@ -8429,11 +8423,11 @@ pub fn map_iteration_over_keys() {
         "
         fn main() {
             let m = {};
-            m.insert(1, 10);
-            m.insert(2, 20);
+            m[1] = 10;
+            m[2] = 20;
             let s = 0;
             for k in m {
-                s += m.get(k);
+                s += m[k];
             }
             print(s);
         }
@@ -8449,8 +8443,8 @@ pub fn map_downcast_takes_mixed_value_types() {
 
         fn main() {
             let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
-            m.insert(\"b\", 2);
-            m.insert(\"c\", \"three\");
+            m[\"b\"] = 2;
+            m[\"c\"] = \"three\";
             print(m.len());
         }
         ",
@@ -8465,7 +8459,7 @@ pub fn map_downcast_entries_stay_dynamic() {
 
         fn main() {
             let m = as_map(json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\"));
-            print(as_int(m.get(\"a\")) + as_str(m.get(\"b\")).len());
+            print(as_int(m[\"a\"]) + as_str(m[\"b\"]).len());
         }
         ",
         4.into()
@@ -8479,8 +8473,8 @@ pub fn map_downcast_takes_mixed_key_types() {
 
         fn main() {
             let m = as_map(json::parse(\"{\\\"a\\\": 1}\"));
-            m.insert(\"b\", 2);
-            m.insert(7, 3);
+            m[\"b\"] = 2;
+            m[7] = 3;
             print(m.len());
         }
         ",
@@ -8519,15 +8513,12 @@ pub fn list_downcast_elements_stay_dynamic() {
 }
 
 #[test]
-pub fn empty_map_literal_pins_its_types_on_the_first_insert() {
-    let src = "fn main() { let m = {}; m.insert(\"a\", 1); m.insert(\"b\", \"s\"); }";
+pub fn empty_map_literal_pins_its_types_on_the_first_entry() {
+    let src = "fn main() { let m = {}; m[\"a\"] = 1; m[\"b\"] = \"s\"; }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
-    assert_eq!(d.code, "argument_type_mismatch");
-    assert_eq!(
-        d.message,
-        "Function insert expects this argument to be of type int, but this expression's type is string"
-    );
+    assert_eq!(d.code, "invalid_type");
+    assert!(d.message.contains("int"), "{d:?}");
 }
 
 #[test]
@@ -8552,8 +8543,8 @@ pub fn a_pinned_map_reads_back_in_a_return() {
         struct P { x: int }
         fn wrap() {
             let m = {};
-            m.insert(\"a\", P { x: 5 });
-            return m.get(\"a\").x;
+            m[\"a\"] = P { x: 5 };
+            return m[\"a\"].x;
         }
         fn main() {
             print(wrap());
@@ -8590,8 +8581,8 @@ pub fn a_pinned_map_reads_back_in_an_annotated_return() {
         struct P { x: int }
         fn wrap() -> int {
             let m = {};
-            m.insert(\"a\", P { x: 7 });
-            return m.get(\"a\").x;
+            m[\"a\"] = P { x: 7 };
+            return m[\"a\"].x;
         }
         fn main() {
             print(wrap());
@@ -8609,12 +8600,12 @@ pub fn a_parameter_pinned_map_reads_back_in_a_return() {
         "
         struct P { x: int }
         fn fill(m: {string: P}) {
-            m.insert(\"a\", P { x: 8 });
+            m[\"a\"] = P { x: 8 };
         }
         fn wrap() {
             let m = {};
             fill(m);
-            return m.get(\"a\").x;
+            return m[\"a\"].x;
         }
         fn main() {
             print(wrap());
@@ -9626,7 +9617,7 @@ pub fn dynamic_array_literal_argument() {
 pub fn const_map_literal_argument() {
     run_and_check_registers!(
         "
-        fn lookup(m) { return m.get(\"k\"); }
+        fn lookup(m) { return m[\"k\"]; }
         fn main() { print(lookup({\"k\": 7})); }
         ",
         7.into()
@@ -9637,7 +9628,7 @@ pub fn const_map_literal_argument() {
 pub fn dynamic_map_literal_argument() {
     run_and_check_registers!(
         "
-        fn lookup(m) { return m.get(\"k\"); }
+        fn lookup(m) { return m[\"k\"]; }
         fn main() {
             let n = 7;
             print(lookup({\"k\": n}));
@@ -9686,7 +9677,7 @@ pub fn map_literal_argument_to_method() {
         "
         struct Box { n: int }
         impl Box {
-            fn at(self, m) { return m.get(\"k\") + self.n; }
+            fn at(self, m) { return m[\"k\"] + self.n; }
         }
         fn main() {
             let b = Box { n: 1 };
@@ -9717,7 +9708,7 @@ pub fn nested_dynamic_literals_as_arguments() {
 pub fn dynamic_map_literal_in_a_loop_body() {
     run_and_check_registers!(
         "
-        fn lookup(m) { return m.get(\"k\"); }
+        fn lookup(m) { return m[\"k\"]; }
         fn main() {
             let s = 0;
             for i in 0..3 {
@@ -11216,8 +11207,8 @@ pub fn inference_rejects_an_unknown_method_name() {
     let src = "fn to_x(s: string) -> int { return 1; }\nfn main() { let s = \"1\"; let n = s.to_x(); print(n); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
-    assert_eq!(d.message, "Cannot find function to_x in this scope");
-    assert_eq!(d.code, "unknown_function");
+    assert_eq!(d.message, "No method to_x on type string");
+    assert_eq!(d.code, "no_such_method");
 }
 
 #[test]
@@ -11230,8 +11221,8 @@ pub fn inference_rejects_a_receiver_a_builtin_does_not_take() {
             "string",
         ),
         (
-            "fn main() { let a = 5; let b = a.get(0); print(b); }",
-            "get",
+            "fn main() { let a = 5; let b = a.contains(0); print(b); }",
+            "contains",
             "int",
         ),
         (
@@ -11754,7 +11745,7 @@ pub fn a_map_of_closures_dispatches_on_its_key() {
         "
         fn main() {
             let ops = {\"inc\": fn(x) { return x + 1; }, \"ten\": fn(x) { return x * 10; }};
-            print(ops.get(\"ten\")(4));
+            print(ops[\"ten\"](4));
         }
         ",
         40.into()
@@ -11981,7 +11972,7 @@ pub fn a_map_and_a_field_hold_a_declared_function_by_name() {
         fn main() {
             let ops = {\"double\": double};
             let b = Button { on_press: double };
-            print(ops.get(\"double\")(4) + b.on_press(4));
+            print(ops[\"double\"](4) + b.on_press(4));
         }
         ",
         16.into()
@@ -12279,7 +12270,7 @@ pub fn insert_keeps_its_receiver_while_its_arguments_compile() {
 
         fn main() {
             let s = S { m: {\"a\": 1}, text: \"a\", n: 3 };
-            s.m.insert(s.text, s.n);
+            s.m[s.text] = s.n;
             print(str(s.m) == \"{\\\"a\\\":3}\");
         }
         ",
@@ -12355,7 +12346,7 @@ pub fn a_map_get_keeps_its_receiver_while_the_key_compiles() {
 
         fn main() {
             let s = S { m: {\"a\": 7}, text: \"a\" };
-            print(s.m.get(s.text));
+            print(s.m[s.text]);
         }
         ",
         7.into()
@@ -12440,8 +12431,8 @@ pub fn a_nested_receiver_keeps_its_register() {
 
         fn main() {
             let rows = [Row { m: {\"a\": 1}, key: \"k\", n: 7 }];
-            rows[0].m.insert(rows[0].key, rows[0].n);
-            print(rows[0].m.get(rows[0].key));
+            rows[0].m[rows[0].key] = rows[0].n;
+            print(rows[0].m[rows[0].key]);
         }
         ",
         7.into()
@@ -12832,11 +12823,11 @@ pub fn iterating_a_map_walks_the_keys_in_insertion_order() {
         "
         fn main() {
             let m = {};
-            m.insert(\"e\", 5);
-            m.insert(\"d\", 4);
-            m.insert(\"c\", 3);
-            m.insert(\"b\", 2);
-            m.insert(\"a\", 1);
+            m[\"e\"] = 5;
+            m[\"d\"] = 4;
+            m[\"c\"] = 3;
+            m[\"b\"] = 2;
+            m[\"a\"] = 1;
             for k in m { print(k); }
         }
         ",
@@ -12852,9 +12843,9 @@ pub fn map_keys_and_values_come_back_in_insertion_order() {
         "
         fn main() {
             let m = {};
-            m.insert(\"e\", 5);
-            m.insert(\"d\", 4);
-            m.insert(\"c\", 3);
+            m[\"e\"] = 5;
+            m[\"d\"] = 4;
+            m[\"c\"] = 3;
             print(m.keys());
             print(m.values());
         }
@@ -12873,7 +12864,7 @@ pub fn a_reinserted_map_key_goes_to_the_end() {
             let m = {\"a\": 1, \"b\": 2, \"c\": 3};
             m.remove(\"a\");
             print(m.keys());
-            m.insert(\"a\", 9);
+            m[\"a\"] = 9;
             print(m.keys());
         }
         ",
@@ -12889,7 +12880,7 @@ pub fn overwriting_a_map_key_keeps_its_place() {
         "
         fn main() {
             let m = {\"a\": 1, \"b\": 2, \"c\": 3};
-            m.insert(\"a\", 10);
+            m[\"a\"] = 10;
             print(m.keys());
             print(m.values());
         }
@@ -12905,9 +12896,9 @@ pub fn an_int_keyed_map_keeps_insertion_order() {
         "
         fn main() {
             let m = {};
-            m.insert(3, 30);
-            m.insert(1, 10);
-            m.insert(2, 20);
+            m[3] = 30;
+            m[1] = 10;
+            m[2] = 20;
             print(m);
         }
         ",
@@ -13832,7 +13823,7 @@ pub fn enum_list_and_map_templates_survive_repeated_calls() {
             let xs = [];
             for i in 0..n { xs.push({\"k\": i, \"w\": 3}); }
             let t = 0;
-            for j in 0..xs.len() { t = t + xs[j].get(\"w\"); }
+            for j in 0..xs.len() { t = t + xs[j][\"w\"]; }
             return t;
         }
         fn main() {
@@ -14180,10 +14171,10 @@ pub fn a_built_string_finds_the_map_key_with_its_text() {
             let m = {\"abcdefghijabcdefghijabcdefghij\": 1};
             print(m.contains(r), m.contains(joined));
             let n = {};
-            n.insert(lit, 1);
-            n.insert(joined, 2);
-            print(n.len(), n.get(lit));
-            for k in n.keys() { print(m.get(k)); }
+            n[lit] = 1;
+            n[joined] = 2;
+            print(n.len(), n[lit]);
+            for k in n.keys() { print(m[k]); }
         }
     ";
     assert_eq!(run_output(src), "true\ntrue\ntrue\ntrue\n1\n2\n1\n");
@@ -14404,7 +14395,7 @@ fn main() {{
     let d = Opts {{ cwd: \"x\", ..Default::default() }};
     show(d);
     d.inner.tags.push(\"t\");
-    d.env.insert(\"k\", \"v\");
+    d.env[\"k\"] = \"v\";
     show(Opts::default());
     show(Opts {{ inner: Inner {{ n: 7, ..Default::default() }}, ..Default::default() }});
 }}
@@ -14801,7 +14792,7 @@ pub fn an_arrow_body_returns_its_expression() {
             print(double(4));
             print(greet(\"bo\"));
             let fs = {\"inc\": fn(x) => x + 1, \"neg\": fn(x) => 0 - x};
-            print(fs.get(\"inc\")(1));
+            print(fs[\"inc\"](1));
         }
     ";
     assert_eq!(run_output(src), "15\n12\n3\n24\n8\nhi bo\n2\n");
@@ -14974,53 +14965,74 @@ pub fn a_branch_value_calls_the_function_it_chose() {
     );
 }
 
-#[test]
-pub fn print_null_prints_null() {
-    let src = r"
-        fn nothing() { }
-        fn main() {
-            print(null);
-            let x = nothing();
-            print(x);
-        }
-    ";
-    assert_eq!(run_output(src), "null\nnull\n");
-}
+// ---------------------------------------------------------------------------
+// THE PRELUDE
+//
+// The methods of the builtin types and the Option and Result enums need no
+// import; everything else in the standard library does.
+// ---------------------------------------------------------------------------
 
 #[test]
-pub fn throw_is_a_statement() {
+pub fn the_prelude_needs_no_import() {
     let src = r#"
-        fn check(n: int) -> int {
-            if n > 2 { throw "too_big"; }
-            return n;
-        }
         fn main() {
-            try { print(check(5)); } catch "too_big" { print("caught"); }
-            print(check(1));
+            print(Some(3).unwrap_or(1), Ok(2).is_ok(), "abc".capitalize());
+            print({"a": 1}.is_empty(), "42".to_int() + 1, [1, 2, 3].sum());
         }
     "#;
-    assert_eq!(run_output(src), "caught\n1\n");
-
-    let src = "fn main() { throw(\"x\"); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_wellformed(&d, src);
-    assert_eq!(d.code, "throw_call");
-    assert!(d.message.contains("throw \"kind\";"), "{d:?}");
+    assert_eq!(run_output(src), "3\ntrue\nAbc\nfalse\n43\n6\n");
 }
 
+/// A program compiled with no library directory still has the prelude: the
+/// compiler carries its own copy.
 #[test]
-pub fn a_catch_for_a_kind_nothing_raises_warns() {
+pub fn the_prelude_needs_no_library_directory() {
+    let empty = std::env::temp_dir().join(format!("candela_no_std_{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut resolver = crate::compiler::imports::ImportResolver::new();
+    resolver.set_lib_dir(empty.clone());
+    let src =
+        "fn main() { print([4, 2].min().unwrap_or(0) + {\"k\": 1}.get(\"k\").unwrap_or(0)); }";
+    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    let was_capturing = set_capturing(true);
+    let result = run_diag_profile_with(src, "p.cdl", false, &resolver);
+    set_capturing(was_capturing);
+    let _ = std::fs::remove_dir_all(&empty);
+    result.unwrap();
+    assert_eq!(CAPTURED_OUTPUT.with(|o| o.take()), "3\n");
+}
+
+/// Importing a prelude module by name reaches the module the prelude loaded,
+/// so its names do not collide with themselves.
+#[test]
+pub fn importing_a_prelude_module_by_name_still_works() {
     let src = r#"
-        fn div(a: int, b: int) -> int { return a / b; }
+        import "std/option";
+        import "std/result";
+        import "std/list";
+        import "std/map";
+        import "std/string";
+        fn f() -> Option<int> { return None; }
+        fn main() { print(f().is_none(), Ok(1).ok()); }
+    "#;
+    assert_eq!(run_output(src), "true\nSome(1)\n");
+}
+
+/// A program's own enum with a variant the prelude also declares is the one a
+/// bare variant name reaches.
+#[test]
+pub fn a_program_s_own_variant_wins_over_the_prelude_s() {
+    let src = r#"
+        enum Maybe { Some(string), Nothing }
         fn main() {
-            try { print(div(1, 0)); } catch "divison_by_zero" { print("x"); } catch "division_by_zero" { print("y"); }
-            try { throw "mine"; } catch "mine" { print("m"); }
+            let m = Some("own");
+            match m {
+                Some(s) => print(s),
+                Nothing => print("none"),
+            }
         }
     "#;
-    let (_, warnings) = checked_with_warnings(src, "w.cdl");
-    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
-    assert_eq!(codes, ["unraisable_catch_kind"], "{warnings:?}");
-    assert_eq!(&src[warnings[0].span.clone()], "\"divison_by_zero\"");
+    assert_eq!(run_output(src), "own\n");
 }
 
 #[test]
@@ -15076,4 +15088,216 @@ pub fn the_file_system_is_a_module() {
     "#
     );
     assert_eq!(run_output(&src), "ab\ntrue\nfalse\n");
+}
+
+// ---------------------------------------------------------------------------
+// ONE SHAPE PER KIND OF ABSENCE
+// ---------------------------------------------------------------------------
+
+#[test]
+pub fn map_brackets_read_and_write() {
+    let src = r#"
+        fn main() {
+            let m = {};
+            m["a"] = 1;
+            m["b"] = 2;
+            m["a"] += 10;
+            m["b"] = m["b"] * 3;
+            print(m["a"], m["b"], m.len());
+            try { print(m["zz"]); } catch e { print(e); }
+            let nested = {"k": [1, 2]};
+            nested["k"][0] = 9;
+            print(nested["k"]);
+        }
+    "#;
+    assert_eq!(run_output(src), "11\n6\n2\nunknown_map_key\n[9,2]\n");
+}
+
+#[test]
+pub fn map_get_returns_an_option() {
+    let src = r#"
+        fn main() {
+            let m = {"a": 1};
+            print(m.get("a"), m.get("z"));
+            print(m.get("z").unwrap_or(7));
+            let n = match m.get("a") { Some(v) => v + 1, None => 0 };
+            print(n);
+        }
+    "#;
+    assert_eq!(run_output(src), "Some(1)\nNone\n7\n2\n");
+}
+
+#[test]
+pub fn removed_map_methods_name_their_replacement() {
+    for (src, replacement) in [
+        (
+            "fn main() { let m = {\"a\": 1}; m.insert(\"b\", 2); }",
+            "m[key] = value",
+        ),
+        (
+            "fn main() { let m = {\"a\": 1}; print(m.get_or(\"b\", 2)); }",
+            "m.get(key).unwrap_or(fallback)",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "no_such_method", "{src}");
+        assert!(d.message.contains(replacement), "{d:?}");
+    }
+}
+
+#[test]
+pub fn a_map_entry_keeps_the_value_type() {
+    let src = "fn main() { let m = {\"a\": 1}; m[\"b\"] = \"two\"; }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "invalid_type");
+}
+
+#[test]
+pub fn list_lookups_return_options() {
+    let src = r"
+        fn main() {
+            let xs = [3, 1, 2];
+            print(xs.first(), xs.last(), xs.min(), xs.max());
+            let none = [0];
+            none.remove(0);
+            print(none.first(), none.max().unwrap_or(-1));
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "Some(3)\nSome(2)\nSome(1)\nSome(3)\nNone\n-1\n"
+    );
+}
+
+#[test]
+pub fn print_null_prints_null() {
+    let src = r"
+        fn nothing() { }
+        fn main() {
+            print(null);
+            let x = nothing();
+            print(x);
+        }
+    ";
+    assert_eq!(run_output(src), "null\nnull\n");
+}
+
+#[test]
+pub fn question_mark_returns_the_none_or_the_err() {
+    let src = r#"
+        fn port(cfg: {string: string}) -> Option<int> {
+            let p = cfg.get("port")?;
+            return Some(int(p) + 1);
+        }
+        fn add(m) {
+            let a = m.get("a")?;
+            let b = m.get("b")?;
+            return Some(a + b);
+        }
+        fn parse(s: string) -> Result<int, string> {
+            if s == "" { return Err("empty"); }
+            return Ok(int(s));
+        }
+        fn twice(s: string) -> Result<float, string> {
+            let n = parse(s)?;
+            return Ok(float(n) * 2.0);
+        }
+        fn main() {
+            print(port({"port": "80"}), port({}));
+            print(add({"a": 1, "b": 2}), add({"a": 1}));
+            print(twice("21"), twice(""));
+            let f = fn(m) => Some(m.get("x")? + 1);
+            print(f({"x": 1}), f({"y": 1}));
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "Some(81)\nNone\nSome(3)\nNone\nOk(42.0)\nErr(\"empty\")\nSome(2)\nNone\n"
+    );
+}
+
+#[test]
+pub fn question_mark_needs_a_function_returning_its_kind() {
+    for (src, code) in [
+        (
+            "fn main() { let m = {\"a\": 1}; let x = m.get(\"a\")?; print(x); }",
+            "propagate_return_type",
+        ),
+        (
+            "fn f(m) -> int { let x = m.get(\"a\")?; return x; }\nfn main() { print(f({\"a\": 1})); }",
+            "propagate_return_type",
+        ),
+        (
+            "fn r() -> Result<int, int> { return Err(1); }\nfn f() -> Result<int, string> { let x = r()?; return Ok(x); }\nfn main() { print(f()); }",
+            "propagate_return_type",
+        ),
+        (
+            "fn f(m) { return Some(3?); }\nfn main() { print(f(1)); }",
+            "propagate_operand",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}");
+    }
+}
+
+#[test]
+pub fn throw_is_a_statement() {
+    let src = r#"
+        fn check(n: int) -> int {
+            if n > 2 { throw "too_big"; }
+            return n;
+        }
+        fn main() {
+            try { print(check(5)); } catch "too_big" { print("caught"); }
+            print(check(1));
+        }
+    "#;
+    assert_eq!(run_output(src), "caught\n1\n");
+
+    let src = "fn main() { throw(\"x\"); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "throw_call");
+    assert!(d.message.contains("throw \"kind\";"), "{d:?}");
+}
+
+#[test]
+pub fn a_catch_for_a_kind_nothing_raises_warns() {
+    let src = r#"
+        fn div(a: int, b: int) -> int { return a / b; }
+        fn main() {
+            try { print(div(1, 0)); } catch "divison_by_zero" { print("x"); } catch "division_by_zero" { print("y"); }
+            try { throw "mine"; } catch "mine" { print("m"); }
+        }
+    "#;
+    let (_, warnings) = checked_with_warnings(src, "w.cdl");
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["unraisable_catch_kind"], "{warnings:?}");
+    assert_eq!(&src[warnings[0].span.clone()], "\"divison_by_zero\"");
+}
+
+/// A module the program imports that declares a method the prelude also
+/// declares keeps its own: the prelude loads after the program's modules.
+#[test]
+pub fn an_imported_method_wins_over_the_prelude_s() {
+    let dir = std::env::temp_dir().join(format!("candela_prelude_order_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("mine.cdl"),
+        "impl string { fn capitalize(self) => \"mine\"; }\n",
+    )
+    .unwrap();
+    let main = dir.join("main.cdl");
+    let src = "import \"./mine.cdl\";\nfn main() { print(\"abc\".capitalize()); }\n";
+    CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+    let was_capturing = set_capturing(true);
+    let result = run_diag_profile_with(src, main.to_str().unwrap(), false, &std_resolver());
+    set_capturing(was_capturing);
+    let _ = std::fs::remove_dir_all(&dir);
+    result.unwrap();
+    assert_eq!(CAPTURED_OUTPUT.with(|o| o.take()), "mine\n");
 }

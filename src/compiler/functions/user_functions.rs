@@ -735,6 +735,20 @@ fn compile_function(
         type_args: Box::from(type_args),
         inline_body: None,
     });
+    // What a `?` in the body hands back has to be what the body returns.
+    let body_returns = call_return_type(
+        declared_return.as_ref().map(|(t, _)| t.clone()),
+        return_type.clone(),
+    );
+    let shown_name = if fn_name.starts_with(crate::compiler::type_system::ANON_FN_PREFIX) {
+        SmolStr::new_static("this function")
+    } else {
+        SmolStr::from(
+            fn_name
+                .rsplit_once(crate::compiler::expr::METHOD_SEP)
+                .map_or(fn_name, |(_, method)| method),
+        )
+    };
     // Cache the return type
     let key = specialization_key(type_args, infered_arg_types);
     if !func
@@ -755,6 +769,7 @@ fn compile_function(
     let return_downcast = declared_return
         .as_ref()
         .and_then(|(declared, _)| return_check(declared, state));
+    state.fn_returns.push((shown_name, body_returns));
     let parsed = {
         let _body = CompilingBody::enter(function_id);
         compile_expr(
@@ -772,6 +787,7 @@ fn compile_function(
             state,
         )
     };
+    state.fn_returns.pop();
     state.generics.pop_bindings();
     for i in anon_fns.into_iter().rev() {
         state.scope_mut(fn_file_idx).symbols.remove(i);

@@ -34,11 +34,11 @@ fn main() {
     assert::assert_eq([1, 2, 3].sort_by(fn(a, b) => a > b), [3, 2, 1]);
 
     // reductions and slicers as methods
-    assert::assert_eq(xs.first(), 1);
-    assert::assert_eq(xs.last(), 4);
+    assert::assert_eq(xs.first(), Some(1));
+    assert::assert_eq(xs.last(), Some(4));
     assert::assert_eq(xs.sum(), 10);
-    assert::assert_eq(xs.min(), 1);
-    assert::assert_eq(xs.max(), 4);
+    assert::assert_eq(xs.min(), Some(1));
+    assert::assert_eq(xs.max(), Some(4));
     assert::assert_eq(xs.take(2), [1, 2]);
     assert::assert_eq(xs.drop(2), [3, 4]);
     assert::assert_false(xs.is_empty());
