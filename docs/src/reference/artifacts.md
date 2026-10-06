@@ -173,6 +173,8 @@ been raised for:
 - the move chain and the add-to-a-float-field instructions, which renumber the
   instructions after them the same way
 - machine code sections, and the function table after the image
+- the type test `is` compiles to, and the type codes that check what a list or
+  a map holds
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

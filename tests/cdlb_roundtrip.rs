@@ -318,17 +318,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_fourteen_and_v2_is_rejected() {
-    // The version byte was bumped to 14 when artifacts gained their machine
-    // code sections and the function table. A freshly built artifact must
-    // carry version 14.
+fn current_format_version_is_fifteen_and_v2_is_rejected() {
+    // The version byte was bumped to 15 when the type test `is` gained its
+    // instruction and the type codes their nested form. A freshly built
+    // artifact must carry version 15.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 14, "current .cdlb format version must be 14");
+    assert_eq!(bytes[4], 15, "current .cdlb format version must be 15");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -359,7 +359,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 14);
+    assert_eq!(bytes[4], 15);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
@@ -998,7 +998,7 @@ fn an_overloaded_operator_roundtrips_through_cdlb() {
     let bytes = candela::build_bytecode(src.to_owned(), "ops.cdl", &candela::ImportResolver::new())
         .expect("compiles");
     assert_eq!(
-        bytes[4], 14,
+        bytes[4], 15,
         "an operator method needs no instruction of its own, so the artifact carries the current format version"
     );
 
