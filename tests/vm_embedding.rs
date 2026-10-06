@@ -1115,7 +1115,7 @@ host "process" {
 }
 
 fn in_dir(dir: string) -> bool {
-    return process::start("java", process::StartOptions { cwd: dir, ..Default::default() });
+    return process::start("java", process::StartOptions { cwd: dir, .. });
 }
 
 fn main() {}

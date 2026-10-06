@@ -5,7 +5,6 @@ use super::expr::Expr;
 use super::expr::METHOD_SEP;
 use super::expr::Span;
 use super::expr::UNARY_MINUS_METHOD;
-use super::expr::is_default_call;
 use super::expr::is_operator_method;
 use super::expr::is_unary_operator_method;
 use super::expr::mangle_method;
@@ -25,7 +24,6 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Struct;
 use crate::compiler::compiler_data::TypeNames;
 use crate::compiler::compiler_data::Variable;
-use crate::compiler::compiler_errors::error_default_without_type;
 use crate::compiler::compiler_errors::error_instantiation_depth;
 use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_invalid_type;
@@ -48,10 +46,9 @@ use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
 use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
-use crate::compiler::functions::fill_call_defaults;
+use crate::compiler::functions::reject_default_default;
 use crate::compiler::functions::resolve_callee;
 use crate::compiler::methods::check_receiver;
-use crate::compiler::methods::fill_method_defaults;
 use crate::compiler::methods::infer_operator_method;
 use crate::compiler::methods::reject_block_dot_call;
 use crate::compiler::resolve_enum_variant;
@@ -1417,7 +1414,7 @@ pub fn check_struct_default_fn(
                 if func.args.len() == 1 { "" } else { "s" }
             ),
             &format!(
-                "{struct_name}::default() and Default::default() call it with nothing, so it takes no parameters. A method that takes the value needs another name."
+                "{struct_name}::default() and {struct_name} {{ .. }} call it with nothing, so it takes no parameters. A method that takes the value needs another name."
             ),
             func.name_span,
             func.src_file,
@@ -1587,7 +1584,6 @@ pub fn literal_struct_id(
 ) -> u16 {
     if type_args.is_empty()
         && let Some(base) = base
-        && !is_default_call(base)
         && let Some((name, path)) = namespace.split_last()
         && let Some(template_idx) =
             find_template(path, name, state.scope(ctx.file_idx), state.generics)
@@ -2460,8 +2456,8 @@ pub fn collect_direct_fn_calls(
             Expr::Array(elems, _) => expr_stack.extend(elems.iter()),
             Expr::Struct(_, fields, _, _, base) => {
                 expr_stack.extend(fields.iter().map(|(_, expr, _, _)| expr));
-                if let Some(base) = base {
-                    expr_stack.push(&base.0);
+                if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
+                    expr_stack.push(base);
                 }
             }
             Expr::GetStructField(expr, _, _, _) => expr_stack.push(expr),
@@ -3899,30 +3895,15 @@ impl Expr {
                     }
                 }
             }
-            Self::FunctionCall(args, namespace, span, args_indexes, type_args) => {
-                // `S::default()` is the struct's default, and `Default::default()`
-                // one whose struct the position it stands in names; see
-                // `handle_functions`, which lowers them in the same order.
+            Self::FunctionCall(args, namespace, span, _, type_args) => {
+                // `S::default()` is the struct's default; see
+                // `handle_functions`, which lowers it in the same order.
                 if let Some(struct_id) =
                     struct_default_target(namespace, args, type_args, *span, ctx, state)
                 {
                     return DataType::Struct(struct_id);
                 }
-                if is_default_call(self) {
-                    error_default_without_type(ctx.file_idx, *span, state.sources);
-                }
-                if let Some(filled) =
-                    fill_call_defaults(args, namespace, args_indexes, type_args, v, ctx, state)
-                {
-                    return Self::FunctionCall(
-                        filled,
-                        namespace.clone(),
-                        *span,
-                        args_indexes.clone(),
-                        type_args.clone(),
-                    )
-                    .infer_type(v, ctx, state);
-                }
+                reject_default_default(namespace, *span, ctx, state);
                 // A call written with type arguments names either a variant of a
                 // generic enum (`Slot<int>::Filled(x)`) or a generic function,
                 // which may itself sit behind a module alias
@@ -4081,27 +4062,6 @@ impl Expr {
                 args_indexes,
                 type_args,
             ) => {
-                if let Some(filled) = fill_method_defaults(
-                    obj,
-                    args,
-                    namespace,
-                    args_indexes,
-                    type_args,
-                    v,
-                    ctx,
-                    state,
-                ) {
-                    return Self::ObjFunctionCall(
-                        obj.clone(),
-                        filled,
-                        namespace.clone(),
-                        *obj_span,
-                        *fn_span,
-                        args_indexes.clone(),
-                        type_args.clone(),
-                    )
-                    .infer_type(v, ctx, state);
-                }
                 let method = namespace.last().unwrap().as_str();
                 // A block's name is a namespace, not a value, so a dot call on
                 // one is refused before the receiver is typed, which would
@@ -4399,7 +4359,7 @@ impl Expr {
                     namespace,
                     fields,
                     type_args,
-                    base.as_deref().map(|(b, _)| b),
+                    base.as_ref().and_then(|b| b.0.base()),
                     *span,
                     v,
                     ctx,

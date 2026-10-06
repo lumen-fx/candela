@@ -56,10 +56,10 @@ use expr::Expr;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
 use expr::Span;
+use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
-use expr::is_default_call;
 use expr::mangle_method;
 use functions::handle_functions;
 use functions::handle_value_call;
@@ -760,7 +760,7 @@ enum StructFill {
     /// The struct value in this register, a `..base`.
     Base(u16),
     /// The values the fields were declared with, or the empty value of each
-    /// field's type: `S::default()` and `..Default::default()`.
+    /// field's type: `S::default()` and a bare `..`.
     Defaults,
 }
 
@@ -769,7 +769,7 @@ fn compile_struct_literal(
     namespace: &[SmolStr],
     fields: &[(SmolStr, Expr, Span, Span)],
     type_args: &[TypeExpr],
-    base: Option<&(Expr, Span)>,
+    base: Option<&(StructRest, Span)>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -780,7 +780,7 @@ fn compile_struct_literal(
         namespace,
         fields,
         type_args,
-        base.map(|(b, _)| b),
+        base.and_then(|(b, _)| b.base()),
         span,
         v,
         ctx,
@@ -819,7 +819,7 @@ fn compile_struct_literal(
     }
     let fill = match base {
         None => StructFill::Nothing,
-        Some((base, _)) if is_default_call(base) => {
+        Some((StructRest::Default, _)) => {
             match user_struct_default(expected_struct_idx as u16, state) {
                 Some(fn_id) => StructFill::Base(call_user_struct_default(
                     fn_id,
@@ -833,7 +833,7 @@ fn compile_struct_literal(
                 None => StructFill::Defaults,
             }
         }
-        Some((base, base_span)) => {
+        Some((StructRest::Base(base), base_span)) => {
             let base_type = base.infer_type(v, ctx, state);
             if base_type != DataType::Struct(state.structs[expected_struct_idx].id) {
                 compiler_errors::error_struct_base_type(
@@ -870,8 +870,8 @@ fn compile_struct_literal(
 /// The `default` function the `impl` block of struct `struct_idx` declares,
 /// which replaces the default the field declarations give. Inside that
 /// function's own body the struct's default is the one the fields give, so the
-/// function can start from `..Default::default()` or `S::default()` without
-/// calling itself.
+/// function can start from a bare `..` or `S::default()` without calling
+/// itself.
 fn user_struct_default(struct_idx: u16, state: &State<'_>) -> Option<usize> {
     let name = mangle_method(
         &state.structs[struct_idx as usize].name,
@@ -933,8 +933,8 @@ fn call_user_struct_default(
 }
 
 /// Lowers the default value of struct `struct_idx`: `S::default()`, and a
-/// `Default::default()` a struct-typed position resolved. A `default` function
-/// in the struct's `impl` block builds it when there is one.
+/// field of a struct type a default leaves unwritten. A `default` function in
+/// the struct's `impl` block builds it when there is one.
 pub(crate) fn compile_struct_default(
     struct_idx: u16,
     span: Span,
@@ -1043,14 +1043,6 @@ fn build_struct(
         let written = fields.iter().find(|(f, _, _, _)| *f == field_name);
         let (id, constant) = match (written, fill) {
             (Some((_, field_expr, _, field_value_span)), _) => {
-                let resolved;
-                let field_expr = match &state.structs[struct_idx].fields[field_idx].1 {
-                    DataType::Struct(id) if is_default_call(field_expr) => {
-                        resolved = Expr::StructDefault(*id, *field_value_span);
-                        &resolved
-                    }
-                    _ => field_expr,
-                };
                 let as_fn_value = compile_struct_field_type(
                     &name,
                     struct_idx,
@@ -1096,12 +1088,6 @@ fn build_struct(
                         }),
                         span,
                     ),
-                };
-                let value = match &field_type {
-                    DataType::Struct(id) if is_default_call(&value) => {
-                        Expr::StructDefault(*id, value_span)
-                    }
-                    _ => value,
                 };
                 let default_ctx = Ctx { file_idx, ..ctx };
                 let mut scope: Vec<Variable> = Vec::new();
@@ -6733,73 +6719,6 @@ type PendingFns = Vec<(
 /// Registering the finished scope in `file_namespaces` is the caller's: an
 /// imported file's scope is bound into the importer as well, while the entry
 /// file's is needed nowhere else and can be handed over whole.
-/// `code` with each `return Default::default();` in it, at any depth of
-/// nested blocks, returning the default of struct `struct_id` instead. `None`
-/// when there is no such statement. A closure's body is its own function and
-/// is left alone.
-fn resolve_default_returns(code: &[Expr], struct_id: u16) -> Option<Vec<Expr>> {
-    fn block(code: &[Expr], struct_id: u16, changed: &mut bool) -> Box<[Expr]> {
-        code.iter()
-            .map(|stmt| statement(stmt, struct_id, changed))
-            .collect()
-    }
-    fn statement(stmt: &Expr, id: u16, changed: &mut bool) -> Expr {
-        match stmt {
-            Expr::ReturnVal(value) => match value.as_ref() {
-                Some(call @ Expr::FunctionCall(_, _, span, _, _)) if is_default_call(call) => {
-                    *changed = true;
-                    Expr::ReturnVal(Box::new(Some(Expr::StructDefault(id, *span))))
-                }
-                _ => stmt.clone(),
-            },
-            Expr::Condition(cond, body, span, cond_span) => {
-                Expr::Condition(cond.clone(), block(body, id, changed), *span, *cond_span)
-            }
-            Expr::ElseIfBlock(cond, body, span) => {
-                Expr::ElseIfBlock(cond.clone(), block(body, id, changed), *span)
-            }
-            Expr::ElseBlock(body) => Expr::ElseBlock(block(body, id, changed)),
-            Expr::WhileBlock(cond, body, span) => {
-                Expr::WhileBlock(cond.clone(), block(body, id, changed), *span)
-            }
-            Expr::ForLoop(var, iterated, body, span) => Expr::ForLoop(
-                var.clone(),
-                iterated.clone(),
-                block(body, id, changed),
-                *span,
-            ),
-            Expr::IntForLoop(var, first, last, body, span, range_span) => Expr::IntForLoop(
-                var.clone(),
-                first.clone(),
-                last.clone(),
-                block(body, id, changed),
-                *span,
-                *range_span,
-            ),
-            Expr::EvalBlock(body) => Expr::EvalBlock(block(body, id, changed)),
-            Expr::LoopBlock(body) => Expr::LoopBlock(block(body, id, changed)),
-            Expr::TryCatchBlock(try_code, err_var, catch_code) => Expr::TryCatchBlock(
-                block(try_code, id, changed),
-                err_var.clone(),
-                block(catch_code, id, changed),
-            ),
-            Expr::Match(scrutinee, arms, wildcard, span, is_value) => Expr::Match(
-                scrutinee.clone(),
-                arms.iter()
-                    .map(|(patterns, body)| (patterns.clone(), block(body, id, changed)))
-                    .collect(),
-                wildcard.as_ref().map(|w| block(w, id, changed)),
-                *span,
-                *is_value,
-            ),
-            _ => stmt.clone(),
-        }
-    }
-    let mut changed = false;
-    let out = block(code, struct_id, &mut changed);
-    changed.then(|| out.into_vec())
-}
-
 /// Registers the structs a `host "ns" { ... }` block declares. Each is named
 /// behind the block's namespace, `ns::Name`, the way the block's functions are
 /// called, and its type is registered under that name.
@@ -7519,13 +7438,6 @@ fn resolve_types(
                     t_span,
                 )
             });
-        // A function declared to return a struct names the struct its
-        // `return Default::default();` statements build.
-        if let Some((DataType::Struct(struct_id), _)) = &fns[fn_id as usize].return_type
-            && let Some(code) = resolve_default_returns(&fns[fn_id as usize].code, *struct_id)
-        {
-            fns[fn_id as usize].code = Rc::from(code);
-        }
     }
     // A struct's own `default` replaces the one its field declarations give,
     // so it has to be callable the way that one is.

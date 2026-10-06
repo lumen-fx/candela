@@ -348,10 +348,8 @@ struct field. An enum or a function has no empty value, so a field of one needs
 a declared value before its struct has a default; asking for the default of such
 a struct is a compile error that names the field.
 
-`Default::default()` is the same default where the position already names the
-struct: after `..` in a literal, as an argument to a parameter declared with the
-struct type, and in a `return` of a function declared to return it. Together
-with `..` it gives a value that states only what differs:
+End a literal with a bare `..` to take every field it does not write from that
+default. It gives a value that states only what differs:
 
 ```rust
 struct Options {
@@ -365,13 +363,13 @@ fn run(name: string, opts: Options) {
 }
 
 fn main() {
-    run("build", Options { verbose: true, ..Default::default() });
-    run("test", Default::default());
+    run("build", Options { verbose: true, .. });
+    run("test", Options { .. });
+    run("lint", Options::default());
 }
 ```
 
-Anywhere else nothing says which struct is meant, so `let o =
-Default::default();` is a compile error; write `Options::default()` there.
+`Options { .. }` and `Options::default()` are the same value.
 
 A declared value is an expression, evaluated each time a default is built, in
 the file that declares the struct and with none of the caller's variables in
@@ -380,8 +378,8 @@ scope. Each default therefore gets lists and maps of its own.
 To build the default in code instead, declare a `default` function in the
 struct's `impl` block. It takes no parameters and returns the struct, and it
 replaces the default the fields give everywhere one is built:
-`Window::default()`, `Default::default()`, `..Default::default()`, and a field
-whose type is the struct.
+`Window::default()`, a literal ending in `..`, and a field whose type is the
+struct.
 
 ```rust
 struct Window {
@@ -392,7 +390,7 @@ struct Window {
 
 impl Window {
     fn default() -> Window {
-        let w = Window { ..Default::default() };
+        let w = Window { .. };
         w.area = w.width * w.height;
         return w;
     }
@@ -404,8 +402,8 @@ fn main() {
 ```
 
 Inside that function the struct's default is still the one its fields give, so
-`..Default::default()` and `Window::default()` there start from the declared
-values instead of calling the function again. A `default` that takes parameters
+`Window { .. }` and `Window::default()` there start from the declared values
+instead of calling the function again. A `default` that takes parameters
 or returns another type is a compile error.
 
 To give a struct behaviour, write an `impl` block; see [Methods](methods.md).

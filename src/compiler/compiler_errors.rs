@@ -998,8 +998,11 @@ pub fn error_struct_base_type(
     );
 }
 
-/// `Default::default()` written where no struct type says which default it is.
-pub fn error_default_without_type(file_idx: u16, span: Span, sources: &[Source]) -> ! {
+/// `Default::default()`, which a bare `..` in a struct literal and
+/// `S::default()` replaced.
+#[cold]
+#[inline(never)]
+pub fn error_default_removed(file_idx: u16, span: Span, sources: &[Source]) -> ! {
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1007,20 +1010,27 @@ pub fn error_default_without_type(file_idx: u16, span: Span, sources: &[Source])
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
-            .with_message("No type to take the default of")
+            .with_message("Unknown function")
             .with_label(
                 Label::new((src.filename.as_str(), span.into()))
-                    .with_message("Nothing here says which struct this is the default of")
+                    .with_message(format_args!(
+                        "Cannot find function {}",
+                        red("Default::default")
+                    ))
                     .with_color(ariadne::Color::Red),
             )
-            .with_help(format_args!("Name the struct: {}", blue("Name::default()")))
+            .with_help(format_args!(
+                "Default::default() is replaced by {} in a struct literal, or {}",
+                blue("S { .. }"),
+                blue("S::default()")
+            ))
             .finish()
         },
         sources,
         file_idx,
         span,
-        "Default::default() needs a struct type from where it is written; name the struct with Name::default()",
-        "default_without_type",
+        "Cannot find function Default::default. Default::default() is replaced by S { .. } in a struct literal, or S::default()",
+        "unknown_function",
     );
 }
 
