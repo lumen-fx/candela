@@ -256,6 +256,10 @@ Name the argument to choose which instantiation the body builds, since nothing
 in the call pins it:
 
 ```rust
+struct Store<T> {
+    seed: T,
+}
+
 struct Kind<T> {
     n: int,
 }
