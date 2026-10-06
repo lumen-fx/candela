@@ -112,7 +112,7 @@ Calls, method chains, and namespaced calls (libs/std/tests/test_string.cdl, pgo/
 fn main() {
     assert::assert_eq(string::substring("hello world", 6, 5), "world");
     print(pgo_dynlib::pgo_add_int(1,1));
-    print("-Hello-".trim_sequence("-").len());
+    print("-Hello-".trim_chars("-").len());
 }
 
 --------------------------------------------------------------------------------

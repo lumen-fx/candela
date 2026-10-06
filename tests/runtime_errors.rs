@@ -1236,17 +1236,17 @@ import \"std/string\";
 
 fn main() {
     let line = \"caf\u{e9} au lait\u{1f600} now\";
-    let at = line.find(\"lait\");
+    let at = line.index_of(\"lait\").unwrap();
     print(at);
     print(line.substring(at, 4));
     print(line[at..at + 4]);
-    print(line.find(\"\u{1f600}\"));
-    print(line[line.find(\"\u{1f600}\")]);
-    print(line.find(\"tea\"));
+    print(line.index_of(\"\u{1f600}\").unwrap());
+    print(line[line.index_of(\"\u{1f600}\").unwrap()]);
+    print(line.index_of(\"tea\"));
 }
 ",
     );
-    assert_eq!(out, ["8", "lait", "lait", "12", "\u{1f600}", "-1"]);
+    assert_eq!(out, ["8", "lait", "lait", "12", "\u{1f600}", "None"]);
 }
 
 /// A position past the last character is the ordinary index error, on a string

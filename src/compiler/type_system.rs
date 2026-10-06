@@ -4313,7 +4313,7 @@ impl Expr {
                 // return type from that method, specialized for the receiver
                 // and argument types.
                 if let Some(fn_id) = crate::compiler::methods::impl_method_on_builtin(
-                    method, &obj_type, args, v, ctx, state,
+                    method, &obj_type, args, *fn_span, v, ctx, state,
                 ) {
                     check_receiver(fn_id, method, *fn_span, ctx, state);
                     let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
@@ -4357,18 +4357,25 @@ impl Expr {
                     };
                 }
                 match method {
-                    "uppercase"
-                    | "lowercase"
-                    | "replace"
-                    | "trim"
-                    | "trim_sequence"
-                    | "trim_left"
-                    | "trim_right"
-                    | "trim_sequence_left"
-                    | "trim_sequence_right"
-                    | "join" => DataType::String,
+                    "uppercase" | "lowercase" | "replace" | "trim" | "trim_start" | "trim_end"
+                    | "trim_chars" | "trim_start_chars" | "trim_end_chars" | "join" => {
+                        DataType::String
+                    }
                     "starts_with" | "ends_with" | "contains" => DataType::Bool,
-                    "len" | "find" => DataType::Int,
+                    "len" => DataType::Int,
+                    "index_of" => {
+                        receiver_type!(
+                            |t| matches!(t, DataType::String | DataType::Array(_))
+                                .then_some(DataType::Null),
+                            &[DataType::String, DataType::Array(None)]
+                        );
+                        let v_len = v.len();
+                        crate::compiler::methods::declare_index_found(v, 0);
+                        let found = crate::compiler::methods::index_of_value(*fn_span)
+                            .infer_type(v, ctx, state);
+                        v.truncate(v_len);
+                        found
+                    }
                     "repeat" => receiver_type!(
                         |t| match t {
                             DataType::String => Some(DataType::String),
@@ -4398,15 +4405,16 @@ impl Expr {
                         },
                         &[DataType::Int, DataType::Float]
                     ),
-                    "split" => DataType::Array(Some(Box::from(DataType::String))),
-                    "partition" => receiver_type!(
+                    "split" => receiver_type!(
                         |t| match t {
+                            DataType::String =>
+                                Some(DataType::Array(Some(Box::from(DataType::String)))),
                             DataType::Array(element) => Some(DataType::Array(Some(Box::from(
                                 DataType::Array(element.clone())
                             )))),
                             _ => None,
                         },
-                        &[DataType::Array(None)]
+                        &[DataType::String, DataType::Array(None)]
                     ),
                     "keys" => receiver_type!(
                         |t| match t {

@@ -7,7 +7,7 @@ as methods on strings. The module is part of the
 The methods are defined in an `impl string` block (see
 [methods](../language/methods.md)) and sit on top of the built-in string
 methods and the indexing and slicing operators. The built-in methods (`len`,
-`split`, `trim`, `uppercase`, `replace`, `find`, and the rest) are listed in
+`split`, `trim`, `uppercase`, `replace`, `index_of`, and the rest) are listed in
 [built-in functions](builtins.md).
 
 Indices and lengths count characters, so a four-letter word ending in an

@@ -24,7 +24,8 @@ fn main() {
     assert::assert_eq(xs.reduce(1, fn(a, b) => a * b), 24);
 
     // predicate find/any/all as methods
-    assert::assert_eq(xs.find(is_even), 2);
+    assert::assert_eq(xs.find(is_even), Some(2));
+    assert::assert_eq(xs.find(fn(x) => x > 10), None);
     assert::assert_true(xs.any(is_even));
     assert::assert_false(xs.all(is_even));
     assert::assert_true([2, 4, 6].all(is_even));
