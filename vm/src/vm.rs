@@ -2103,6 +2103,8 @@ fn print_value(
             );
         }
         outln!(*handle, "}}");
+    } else if tgt.is_null() {
+        outln!(*handle, "null");
     }
 }
 

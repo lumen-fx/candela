@@ -106,9 +106,8 @@ it, so a variable is never implicitly empty. Test for it with `is_null`.
 `x: null`, `-> null` and `int|null` are all rejected. A function that returns
 nothing leaves its return annotation off.
 
-Passing `null` to `print` produces no output, so print a placeholder rather than
-the value itself when a value may be absent. For a value that is optional by
-design, prefer the `Option` enum from the standard library over `null`.
+`print(null)` prints `null`. For a value that is optional by design, prefer the
+`Option` enum from the standard library over `null`.
 
 ## Where you write a type
 
