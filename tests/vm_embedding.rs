@@ -479,7 +479,7 @@ fn a_runtime_error_comes_back_as_a_diagnostic() {
     match program.call("at", &[list.clone(), Value::Int(9)]) {
         Err(CallError::Runtime(diagnostic)) => {
             assert_eq!(diagnostic.filename, "bounds.cdl");
-            assert!(!diagnostic.code.is_empty());
+            assert_ne!(diagnostic.code, "");
         }
         other => panic!("expected a runtime error, got: {other:?}"),
     }
@@ -1068,12 +1068,21 @@ const PARSE_PER_FRAME: &str = "import \"std/json\";
     fn main() {}
 ";
 
+/// Builds and loads `PARSE_PER_FRAME`, reading std/json from this checkout.
+fn load_parse_per_frame() -> RuntimeProgram {
+    let mut resolver = candela::ImportResolver::new();
+    resolver.set_lib_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("libs"));
+    let bytes = build_bytecode(PARSE_PER_FRAME.to_owned(), "j.cdl", &resolver)
+        .expect("source must build to an artifact");
+    load_program(&bytes, &HostRegistry::new()).expect("artifact must load against the registry")
+}
+
 /// A parsed list or map takes a freed slot the way one the script builds
 /// does, so a program that parses every frame keeps the pools bounded instead
 /// of adding a slot per list and map in the document every frame.
 #[test]
 fn json_parse_every_frame_reuses_freed_slots() {
-    let mut program = load(PARSE_PER_FRAME, "j.cdl", &HostRegistry::new());
+    let mut program = load_parse_per_frame();
     program.run();
     for _ in 0..3000 {
         assert_eq!(program.call("p", &[]).unwrap(), Value::Int(5));
@@ -1088,7 +1097,7 @@ fn json_parse_every_frame_reuses_freed_slots() {
 /// parses run while a cycle is marking or sweeping.
 #[test]
 fn json_parse_every_frame_stays_whole_mid_cycle() {
-    let mut program = load(PARSE_PER_FRAME, "j.cdl", &HostRegistry::new());
+    let mut program = load_parse_per_frame();
     program.run();
     for _ in 0..3000 {
         program.collect(1);

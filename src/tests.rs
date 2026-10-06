@@ -14170,7 +14170,7 @@ pub fn a_loop_over_a_slice_walks_the_list_and_sees_the_slice() {
         .filter(|(_, instr)| matches!(instr, Instr::GetSliceArray(..)))
         .map(|(at, _)| at)
         .collect();
-    assert!(!slices.is_empty());
+    assert_ne!(slices, [] as [usize; 0]);
     for at in slices {
         assert!(
             matches!(out.instructions[at - 2], Instr::Jmp(size) if at - 2 + size as usize > at),
