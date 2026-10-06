@@ -9,13 +9,13 @@ on the built-in types resolve.
 
 The helpers are polymorphic through compile-time monomorphisation: one definition
 specialises to whatever element type the call site uses. A lookup that may find
-nothing (`first`, `last`, `min`, `max`) answers an [Option](option.md): `Some`
-of the element, or `None` for an empty list. The reductions `sum` and `product`
+nothing (`first`, `last`, `min`, `max`, `find`) answers an [Option](option.md):
+`Some` of the element, or `None` for an empty list or no match. The reductions `sum` and `product`
 read their seed from the first element, so they need a non-empty list.
 
 The module is pure candela, so it compiles into a `.cdlb` artifact and runs under
 `candela-vm` with no dynamic library. It builds on the built-in array methods
-(`len`, `push`, `contains`, `sort`, and the rest), which are listed in
+(`len`, `push`, `contains`, `index_of`, `sort`, and the rest), which are listed in
 [built-in functions](builtins.md).
 
 ## Element access
@@ -44,16 +44,6 @@ arr.is_empty()
 ```
 
 - Returns: a bool, true when `arr` has no elements.
-
-### index_of
-
-```rust
-arr.index_of(value)
-```
-
-- `value`: an element to look for.
-- Returns: the index of the first element equal to `value`, or -1 when there is
-  none.
 
 ### count
 
@@ -215,10 +205,12 @@ arr.find(f)
 ```
 
 - `f`: takes one element, returns a bool.
-- Returns: the first element for which `f` is true, or null when none match.
+- Returns: `Some` of the first element for which `f` is true, or `None` when
+  none match.
 
-`arr.find(x)` with a value rather than a function is the built-in index search,
-which returns an int index or -1. The argument type picks between the two.
+The position of a value is the built-in `arr.index_of(x)`, listed in
+[built-in functions](builtins.md). `find` with an argument that is not a
+function is a compile error naming it.
 
 ### any
 

@@ -244,20 +244,20 @@ Called on a string receiver.
 | `s.starts_with(prefix)` | bool | True when `s` begins with the string `prefix` |
 | `s.ends_with(suffix)` | bool | True when `s` ends with the string `suffix` |
 | `s.contains(needle)` | bool | True when the string `needle` occurs in `s` |
-| `s.find(needle)` | int | The position of the first occurrence of `needle`, or -1 |
+| `s.index_of(needle)` | `Option<int>` | `Some` with the position of the first occurrence of `needle`, or `None` |
 | `s.replace(from, to)` | string | `s` with every occurrence of `from` replaced by `to` |
 | `s.split(separator)` | string[] | `s` cut at each occurrence of the string `separator`; an empty `separator` answers the characters |
 | `s.trim()` | string | `s` without leading or trailing whitespace |
-| `s.trim_left()` | string | `s` without leading whitespace |
-| `s.trim_right()` | string | `s` without trailing whitespace |
-| `s.trim_sequence(chars)` | string | `s` with any of the characters in `chars` stripped from both ends |
-| `s.trim_sequence_left(chars)` | string | The same, from the start only |
-| `s.trim_sequence_right(chars)` | string | The same, from the end only |
+| `s.trim_start()` | string | `s` without leading whitespace |
+| `s.trim_end()` | string | `s` without trailing whitespace |
+| `s.trim_chars(chars)` | string | `s` with any of the characters in `chars` stripped from both ends |
+| `s.trim_start_chars(chars)` | string | The same, from the start only |
+| `s.trim_end_chars(chars)` | string | The same, from the end only |
 | `s.parse<T>()` | `Option<T>` | `Some` with the `int`, `float` or `bool` the text holds, or `None`; `"4"` reads as a float as well as an int |
 | `s.repeat(n)` | string | `s` joined to itself `n` times |
 | `s.reverse()` | string | A new string with the characters in reverse order |
 
-`len`, `find`, indexing, slicing, and `split` with an empty separator all count
+`len`, `index_of`, indexing, slicing, and `split` with an empty separator all count
 characters; the empty separator answers the characters one at a time.
 A character is a Unicode scalar value, so an accented letter or an emoji is one
 position and arrives whole. The `chars` method in the [string module](string.md)
@@ -274,25 +274,24 @@ list in place and return nothing; the rest return a new value.
 | `arr.push(x)` | nothing | Appends `x` |
 | `arr.remove(i)` | nothing | Removes the element at index `i`; raises `index_out_of_bounds` when `i` is outside the list |
 | `arr.contains(x)` | bool | True when some element equals `x` |
-| `arr.find(x)` | int | The index of the first element equal to `x`, or -1 |
+| `arr.index_of(x)` | `Option<int>` | `Some` with the index of the first element equal to `x`, or `None` |
 | `arr.repeat(n)` | list | The elements of `arr` repeated `n` times |
 | `arr.reverse()` | nothing | Reverses `arr` in place |
 | `arr.sort()` | nothing | Sorts `arr` in place, ascending |
 | `arr.join()` | string | The elements concatenated; the receiver has to be a list of strings |
 | `arr.join(separator)` | string | The same, with `separator` between elements |
-| `arr.partition(x)` | list[] | `arr` cut into sub-lists at each element equal to `x` |
+| `arr.split(x)` | list[] | `arr` cut into sub-lists at each element equal to `x` |
 
 `sort` picks its ordering from the first element: ints, floats, and strings sort
 ascending, and a list of any other element type is left unchanged. Strings sort
 by their bytes, the order `<` gives them; see
 [operators](../reference/operators.md).
 
-`arr.find(x)` is the index search. The same spelling with a function argument,
-`arr.find(predicate)`, is the [list module](list.md) helper that returns the
-matching element. The other higher-order methods (`map`, `filter`, `reduce`,
-`each`, `any`, `all`, `sort_by`), the reductions (`sum`, `product`) and the
-lookups (`first`, `last`, `min`, `max`, which answer an `Option`) come from that
-module, which is part of the prelude.
+The higher-order methods (`map`, `filter`, `reduce`, `each`, `find`, `any`,
+`all`, `sort_by`), the reductions (`sum`, `product`) and the lookups (`first`,
+`last`, `min`, `max`, which answer an `Option`) come from the
+[list module](list.md), which is part of the prelude. `find` takes a predicate;
+the position of a value is `index_of`.
 
 ## Map methods
 

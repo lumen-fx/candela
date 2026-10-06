@@ -705,7 +705,7 @@ fn main() {
     print(word.len());
     print(word[3]);
     print(word[0..4]);
-    print(word.find(\"\u{e9}\"));
+    print(word.index_of(\"\u{e9}\").unwrap());
     for c in word {
         print(c);
     }
@@ -1033,7 +1033,7 @@ fn main() {
     n.remove(joined);
     print(n.len());
     let xs = [lit];
-    print(xs.contains(r), xs.find(joined));
+    print(xs.contains(r), xs.index_of(joined).unwrap());
     let built = {};
     built[r] = 1;
     print({\"abcdefghijabcdefghijabcdefghij\": 1} == built);

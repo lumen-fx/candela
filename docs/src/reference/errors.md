@@ -62,7 +62,12 @@ program does not import declares names the import instead, so `sqrt(x)` points
 at `import "std/math" as math;` and `fs::read(p)` at `import "std/fs" as fs;`.
 A method a map no longer has is `no_such_method` with the spelling that
 replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
-for `get_or`. A namespace a `host` or `dylib` block declares resolves like
+for `get_or`. A renamed string or list method is reported the same way:
+`index_of` for a string's `find`, `split` for a list's `partition`, and
+`trim_start`, `trim_end`, `trim_chars`, `trim_start_chars` and `trim_end_chars`
+for `trim_left`, `trim_right`, `trim_sequence`, `trim_sequence_left` and
+`trim_sequence_right`. A list's `find` with an argument that is not a function
+is `find_takes_a_function`, and the help names `index_of`. A namespace a `host` or `dylib` block declares resolves like
 any other, so a call it has no function for is reported against the function,
 naming the namespace it was looked for in. A function a type in the namespace declares
 in its `impl` block is named with the type's path, so `set::new()` points at

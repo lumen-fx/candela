@@ -59,29 +59,85 @@ pub fn builtin_receiver_name(obj_type: &DataType) -> Option<&'static str> {
 /// `impl list { fn sum(self) ... }` lowers to the mangled free function
 /// `list#sum`, and `arr.sum()` finds it here by the receiver's type name. The
 /// builtin method table keeps precedence, so an `impl` cannot shadow core
-/// methods like `len` or `push`. The one carve-out is `find` on an array with
-/// a function argument: the builtin `find` is the index search by value, and
-/// the predicate form only exists as the `std/list` method. Returns `None`
-/// when the receiver is not a builtin type, the name belongs to the builtin
-/// table, or no impl method with the mangled name is loaded.
+/// methods like `len` or `push`. Returns `None` when the receiver is not a
+/// builtin type, the name belongs to the builtin table, or no impl method with
+/// the mangled name is loaded.
+///
+/// `xs.find(x)` with an argument that is not a function was the index search
+/// `index_of` replaced, and is reported here with that name.
 pub fn impl_method_on_builtin(
     name: &str,
     obj_type: &DataType,
     args: &[Expr],
+    fn_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<usize> {
     let type_name = builtin_receiver_name(obj_type)?;
-    let find_predicate = name == "find"
-        && type_name == "list"
-        && args.len() == 1
-        && matches!(args[0].infer_type(v, ctx, state), DataType::Fn(_));
-    if is_builtin_method(name, type_name) && !find_predicate {
+    if is_builtin_method(name, type_name) {
         return None;
+    }
+    if name == "find"
+        && type_name == "list"
+        && let [arg] = args
+        && !matches!(
+            arg.infer_type(v, ctx, state),
+            DataType::Fn(_) | DataType::FnValue(_) | DataType::Unknown
+        )
+    {
+        cold_path();
+        crate::compiler::compiler_errors::error_find_takes_a_function(
+            fn_span,
+            ctx.file_idx,
+            state.sources,
+        );
     }
     let mangled = mangle_method(type_name, name);
     state.fns.iter().position(|f| f.name == mangled)
+}
+
+/// The variable `xs.index_of(x)` holds the position the native search found
+/// in, `-1` where it found none. No program can write the name, so it shadows
+/// nothing.
+const INDEX_FOUND: &str = "[index found]";
+
+/// What `xs.index_of(x)` and `s.index_of(t)` answer from the position in
+/// [`INDEX_FOUND`]: `Some` with it, or `None` where the search found nothing.
+pub fn index_of_value(span: Span) -> Expr {
+    let found = || Expr::Var(SmolStr::new_static(INDEX_FOUND), span);
+    Expr::InlineCondition(
+        Box::new(Expr::Inf(
+            Box::new(found()),
+            Box::new(Expr::Int(0)),
+            span,
+            span,
+        )),
+        Box::from([
+            Expr::Var(SmolStr::new_static("None"), span),
+            Expr::ElseBlock(Box::from([Expr::FunctionCall(
+                Box::from([found()]),
+                Box::from([SmolStr::new_static("Some")]),
+                span,
+                Box::from([span]),
+                Box::from([]),
+            )])),
+        ]),
+        span,
+        span,
+    )
+}
+
+/// Declares the variable [`index_of_value`] reads the position from, held in
+/// `register`.
+pub fn declare_index_found(v: &mut Vec<Variable>, register: u16) {
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static(INDEX_FOUND),
+        register_id: register,
+        cell: false,
+        var_type: DataType::Int,
+    });
 }
 
 /// The variable `s.parse<T>()` holds its receiver in while it is parsed. No
@@ -384,7 +440,7 @@ pub fn handle_method_calls(
     // path. The `std` collection modules define their helpers this way. Type
     // arguments resolve against the method's own type parameters, exactly as
     // on a struct method.
-    if let Some(fn_id) = impl_method_on_builtin(name, &obj_type, args, v, ctx, state) {
+    if let Some(fn_id) = impl_method_on_builtin(name, &obj_type, args, fn_span, v, ctx, state) {
         check_receiver(fn_id, name, fn_span, ctx, state);
         let call_type_args = if type_args.is_empty() {
             Vec::new()

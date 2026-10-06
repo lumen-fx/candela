@@ -309,15 +309,15 @@ fn main() {
     for _ in 0..100000 {
         let s = "  Hello, World!  ";
         let t = s.trim();
-        let tl = s.trim_left();
-        let tr = s.trim_right();
-        let ts = "-Hello-".trim_sequence("-");
-        let tsl = "-Hello-".trim_sequence_left("-");
-        let tsr = "-Hello-".trim_sequence_right("-");
+        let tl = s.trim_start();
+        let tr = s.trim_end();
+        let ts = "-Hello-".trim_chars("-");
+        let tsl = "-Hello-".trim_start_chars("-");
+        let tsr = "-Hello-".trim_end_chars("-");
         let u = t.uppercase();
         let l = u.lowercase();
         let c = t.contains("World");
-        let f = t.find("World");
+        let f = t.index_of("World");
         let sw = t.starts_with("Hello");
         let ew = t.ends_with("!");
         let isf = "3.14".parse<float>();

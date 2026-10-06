@@ -15,6 +15,8 @@ use crate::compiler::compiler_errors::error_invalid_obj_type;
 use crate::compiler::compiler_errors::error_unknown_builtin_method;
 use crate::compiler::functions::check_arg_type;
 use crate::compiler::functions::store_call_args;
+use crate::compiler::methods::declare_index_found;
+use crate::compiler::methods::index_of_value;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use crate::instr::LibFuncVoid;
@@ -34,27 +36,19 @@ pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
             "len",
             "contains",
             "trim",
-            "trim_sequence",
-            "trim_left",
-            "trim_right",
-            "trim_sequence_left",
-            "trim_sequence_right",
-            "find",
+            "trim_start",
+            "trim_end",
+            "trim_chars",
+            "trim_start_chars",
+            "trim_end_chars",
+            "index_of",
             "parse",
             "repeat",
             "reverse",
             "split",
         ],
         "list" => &[
-            "len",
-            "contains",
-            "find",
-            "repeat",
-            "push",
-            "reverse",
-            "partition",
-            "join",
-            "remove",
+            "len", "contains", "index_of", "repeat", "push", "reverse", "split", "join", "remove",
             "sort",
         ],
         "map" => &["len", "keys", "values", "contains", "remove"],
@@ -264,7 +258,7 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFunc(LibFunc::Trim, id, output_id));
             Some(output_id)
         }
-        "trim_sequence" => {
+        "trim_chars" => {
             check!(DataType::String, &[DataType::String], name, 1);
 
             check_arg_type(
@@ -282,7 +276,9 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFunc(LibFunc::TrimSequence, id, output_id));
             Some(output_id)
         }
-        "find" => {
+        // The native search answers -1 where it finds nothing, which the
+        // `Option` built around it turns into `None`.
+        "index_of" => {
             check!(
                 DataType::String | DataType::Array(_),
                 &[DataType::String, DataType::Array(None)],
@@ -315,24 +311,31 @@ pub fn builtin_methods(
             }
 
             add_args!();
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::Find, id, output_id));
+            let found = state.alloc_reg();
+            output.push(Instr::CallLibFunc(LibFunc::Find, id, found));
             state.add_to_src(ctx, output, fn_span);
-            Some(output_id)
+            let v_len = v.len();
+            declare_index_found(v, found);
+            let value = index_of_value(fn_span)
+                .compile(v, ctx, state, output, tgt_id, false, true)
+                .unwrap_id();
+            v.truncate(v_len);
+            state.free_reg(found, v);
+            Some(value)
         }
-        "trim_left" => {
+        "trim_start" => {
             check!(DataType::String, &[DataType::String], name, 0);
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::TrimLeft, id, output_id));
             Some(output_id)
         }
-        "trim_right" => {
+        "trim_end" => {
             check!(DataType::String, &[DataType::String], name, 0);
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::TrimRight, id, output_id));
             Some(output_id)
         }
-        "trim_sequence_left" => {
+        "trim_start_chars" => {
             check!(DataType::String, &[DataType::String], name, 1);
 
             check_arg_type(
@@ -351,7 +354,7 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFunc(LibFunc::TrimSequenceLeft, id, output_id));
             Some(output_id)
         }
-        "trim_sequence_right" => {
+        "trim_end_chars" => {
             check!(DataType::String, &[DataType::String], name, 1);
 
             check_arg_type(
@@ -462,18 +465,18 @@ pub fn builtin_methods(
                 None
             }
         }
+        // A string splits at a separator string, and a list at a separator
+        // element, into the runs between them.
         "split" => {
-            check!(DataType::String, &[DataType::String], name, 1);
-            check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[obj_type]);
-            add_args!();
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::Split, id, output_id));
-            Some(output_id)
-        }
-        "partition" => {
-            check!(DataType::Array(_), &[DataType::Array(None)], name, 1);
-
-            if let DataType::Array(Some(array_elem_type)) = obj_type {
+            check!(
+                DataType::String | DataType::Array(_),
+                &[DataType::String, DataType::Array(None)],
+                name,
+                1
+            );
+            if obj_type == DataType::String {
+                check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[obj_type]);
+            } else if let DataType::Array(Some(array_elem_type)) = obj_type {
                 check_arg_type(
                     name,
                     v,

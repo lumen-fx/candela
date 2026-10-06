@@ -5,7 +5,7 @@
 /// methods need no import. They are polymorphic through Candela's compile-time
 /// monomorphization: a single definition specializes to whatever element type
 /// the call site uses. A lookup that may find nothing (`first`, `last`, `min`,
-/// `max`) returns an `Option`; `sum` and `product` read their seed from the
+/// `max`, `find`) returns an `Option`; `sum` and `product` read their seed from the
 /// first element, so they require a non-empty list.
 ///
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
@@ -71,16 +71,6 @@ impl list {
             }
         }
         return Some(m);
-    }
-
-    /// The index of the first element equal to `value`, or -1 if there is none.
-    fn index_of(self, value) {
-        for i in 0..self.len() {
-            if self[i] == value {
-                return i;
-            }
-        }
-        return 0 - 1;
     }
 
     /// The number of elements equal to `value`.
@@ -182,16 +172,15 @@ impl list {
         }
     }
 
-    /// The first element for which the predicate `f` returns true, or null when
-    /// none match. `f` takes one element and returns a bool. With a non-function
-    /// argument, `find` is the built-in index search instead.
+    /// The first element for which the predicate `f` returns true, as `Some`,
+    /// or `None` when none match. `f` takes one element and returns a bool.
     fn find(self, f) {
         for x in self {
             if f(x) {
-                return x;
+                return Some(x);
             }
         }
-        return null;
+        return None;
     }
 
     /// True when the predicate `f` returns true for at least one element.

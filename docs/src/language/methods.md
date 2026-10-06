@@ -231,21 +231,18 @@ fn main() {
 ```
 
 The built-in methods listed below keep precedence: an `impl list` method named
-`len` never resolves, `[1, 2].len()` stays the built-in length. The one
-exception is `find` on a list: with a function argument it resolves to the
-standard library's predicate search, because the built-in `find` is the index
-search by value and the argument type picks between the two.
+`len` never resolves, `[1, 2].len()` stays the built-in length.
 
 ## The built-in methods
 
 These come with the language and need no import.
 
-- Strings: `len`, `uppercase`, `lowercase`, `trim`, `trim_left`, `trim_right`,
-  `trim_sequence`, `trim_sequence_left`, `trim_sequence_right`, `starts_with`,
-  `ends_with`, `contains`, `find`, `replace`, `split`, `repeat`, `reverse`,
+- Strings: `len`, `uppercase`, `lowercase`, `trim`, `trim_start`, `trim_end`,
+  `trim_chars`, `trim_start_chars`, `trim_end_chars`, `starts_with`,
+  `ends_with`, `contains`, `index_of`, `replace`, `split`, `repeat`, `reverse`,
   `parse`.
-- Lists: `len`, `push`, `remove`, `contains`, `find`, `sort`, `reverse`,
-  `repeat`, `join`, `partition`.
+- Lists: `len`, `push`, `remove`, `contains`, `index_of`, `sort`, `reverse`,
+  `repeat`, `join`, `split`.
 - Maps: `len`, `remove`, `contains`, `keys`, `values`. An entry is read and
   written with brackets, `m[k]` and `m[k] = v`.
 - Integers: `abs`.
@@ -262,7 +259,7 @@ fn main() {
 Lists carry a second set of methods from the standard library's `list` module,
 available without an import: `map`, `filter`, `reduce`, `each`, `any`, `all`,
 `find`, `sort_by`, `first`, `last`, `is_empty`, `sum`, `product`, `min`, `max`,
-`index_of`, `count`, `unique`, `chunk`, `take`, and `drop`. See
+`count`, `unique`, `chunk`, `take`, and `drop`. See
 [Collections](collections.md). The standard library's `string` and `map`
 modules add methods to strings and maps the same way, also with no import: they are all part of the
 [prelude](../standard-library/overview.md#the-prelude).

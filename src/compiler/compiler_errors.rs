@@ -69,6 +69,13 @@ fn replaced_method(receiver: Option<&str>, method: &str) -> Option<&'static str>
         (_, "to_float") => "float(x)",
         (_, "to_bool") => "bool(x)",
         (_, "to_string") => "string(x)",
+        (Some("string"), "find") => "s.index_of(needle), which returns an Option<int>",
+        (Some("list"), "partition") => "xs.split(separator)",
+        (Some("string"), "trim_left") => "s.trim_start()",
+        (Some("string"), "trim_right") => "s.trim_end()",
+        (Some("string"), "trim_sequence") => "s.trim_chars(chars)",
+        (Some("string"), "trim_sequence_left") => "s.trim_start_chars(chars)",
+        (Some("string"), "trim_sequence_right") => "s.trim_end_chars(chars)",
         _ => return None,
     })
 }
@@ -142,6 +149,41 @@ pub fn error_unknown_builtin_method(
             plain_help.map_or_else(String::new, |help| format!(". {help}")),
         ),
         "no_such_method",
+    )
+}
+
+/// `xs.find(x)` with an argument that is not a function: the index search by
+/// value that `index_of` replaced. `find` takes a predicate.
+#[inline(never)]
+#[cold]
+pub fn error_find_takes_a_function(span: Span, file_idx: u16, sources: &[Source]) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            Report::build(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("find takes a function")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} searches with a predicate, and this argument is not a function",
+                        red("find")
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "The position of a value is {}, which returns an Option<int>",
+                blue("xs.index_of(x)")
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        "find takes a predicate function. The position of a value is xs.index_of(x), which returns an Option<int>",
+        "find_takes_a_function",
     )
 }
 

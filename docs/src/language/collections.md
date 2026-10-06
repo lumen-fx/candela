@@ -105,15 +105,16 @@ fn main() {
 ```rust
 fn main() {
     let xs = [10, 20, 30];
-    print(xs.len(), xs.contains(20), xs.find(30));
+    print(xs.len(), xs.contains(20), xs.index_of(30), xs.index_of(99));
     print(["a", "b"].join(", "));
-    print([1, 0, 2, 0, 3].partition(0));
+    print([1, 0, 2, 0, 3].split(0));
 }
 ```
 
-`find` returns the index of a value, or `-1` when it is absent. `join`
-concatenates a list of strings, with an optional separator. `partition` splits a
-list on a separator element.
+`index_of` answers the position of a value as `Some`, or `None` when it is
+absent. `join` concatenates a list of strings, with an optional separator.
+`split` cuts a list at each separator element, the way `split` cuts a string at
+each separator string.
 
 ### Iterating
 
@@ -148,11 +149,13 @@ fn main() {
     print(xs.max().unwrap_or(0));
     print(xs.take(2), xs.drop(2), xs.unique(), xs.chunk(2));
     print(xs.any(fn(x) => x > 3), xs.all(fn(x) => x > 0));
+    print(xs.find(fn(x) => x > 2));
 }
 ```
 
 A lookup that may find nothing answers an `Option`: `first`, `last`, `min` and
-`max` give `Some` of the element, or `None` for an empty list. See
+`max` give `Some` of the element, or `None` for an empty list, and `find` gives
+`Some` of the first element its predicate accepts, or `None`. See
 [option](../standard-library/option.md).
 
 The functions you pass read the variables around them, so a predicate can test

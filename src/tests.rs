@@ -1259,12 +1259,12 @@ pub fn array_push_len() {
 }
 
 #[test]
-pub fn array_partition() {
+pub fn array_split() {
     run_and_check_registers!(
         "
         fn main() {
             let x = [1,2,3,0,4,5,6];
-            let p = x.partition(0);
+            let p = x.split(0);
             print(p[0][0]+p[1][2]);
         }
         ",
@@ -1532,12 +1532,12 @@ pub fn string_replace() {
 }
 
 #[test]
-pub fn string_find() {
+pub fn string_index_of() {
     run_and_check_registers!(
         r#"
         fn main() {
             let s = "hello world";
-            print(s.find("world"));
+            print(s.index_of("world").unwrap());
         }
         "#,
         6.into()
@@ -3502,12 +3502,12 @@ pub fn string_parse_evaluates_its_receiver_once() {
 }
 
 #[test]
-pub fn string_trim_sequence() {
+pub fn string_trim_chars() {
     run_and_check_registers!(
         r#"
         fn main() {
             let s = "--hello--";
-            print(s.trim_sequence("-").len());
+            print(s.trim_chars("-").len());
         }
         "#,
         5.into()
@@ -3515,12 +3515,12 @@ pub fn string_trim_sequence() {
 }
 
 #[test]
-pub fn string_trim_sequence_left() {
+pub fn string_trim_start_chars() {
     run_and_check_registers!(
         r#"
         fn main() {
             let s = "--hello";
-            print(s.trim_sequence_left("-").len());
+            print(s.trim_start_chars("-").len());
         }
         "#,
         5.into()
@@ -3528,12 +3528,12 @@ pub fn string_trim_sequence_left() {
 }
 
 #[test]
-pub fn string_trim_sequence_right() {
+pub fn string_trim_end_chars() {
     run_and_check_registers!(
         r#"
         fn main() {
             let s = "hello--";
-            print(s.trim_sequence_right("-").len());
+            print(s.trim_end_chars("-").len());
         }
         "#,
         5.into()
@@ -3581,12 +3581,12 @@ pub fn string_reverse_method() {
 }
 
 #[test]
-pub fn array_find() {
+pub fn array_index_of() {
     run_and_check_registers!(
         "
         fn main() {
             let arr = [10, 20, 30, 40];
-            print(arr.find(30));
+            print(arr.index_of(30).unwrap());
         }
         ",
         2.into()
@@ -3594,15 +3594,18 @@ pub fn array_find() {
 }
 
 #[test]
-pub fn array_find_missing() {
-    run_and_check_registers!(
-        "
+pub fn array_index_of_missing() {
+    assert_eq!(
+        run_output(
+            "
         fn main() {
             let arr = [10, 20, 30];
-            print(arr.find(99));
+            print(arr.index_of(99));
+            print(arr.index_of(99).unwrap_or(-1));
         }
-        ",
-        (-1).into()
+        "
+        ),
+        "None\n-1\n"
     );
 }
 
@@ -7997,8 +8000,8 @@ pub fn strings_past_slot_65536_survive_a_collection() {
 }
 
 #[test]
-pub fn partitioned_lists_survive_a_collection_during_the_partition() {
-    // Partitioning makes one list per run between separators. A collection
+pub fn split_lists_survive_a_collection_during_the_split() {
+    // Splitting makes one list per run between separators. A collection
     // that ran while the later ones were being made freed the earlier ones,
     // and the lists made after it reused their slots.
     run_and_check_registers!(
@@ -8009,7 +8012,7 @@ pub fn partitioned_lists_survive_a_collection_during_the_partition() {
                 src.push(i);
                 src.push(-1);
             }
-            let parts = src.partition(-1);
+            let parts = src.split(-1);
             let bad = 0;
             for i in 0..600 {
                 if parts[i].len() != 1 || parts[i][0] != i { bad += 1; }
@@ -11229,8 +11232,8 @@ pub fn inference_rejects_a_receiver_a_builtin_does_not_take() {
             "int",
         ),
         (
-            "fn main() { let a = 5; let b = a.partition(2); print(b); }",
-            "partition",
+            "fn main() { let a = 5; let b = a.split(2); print(b); }",
+            "split",
             "int",
         ),
         (
@@ -12287,14 +12290,14 @@ pub fn contains_keeps_its_receiver_while_the_argument_compiles() {
 }
 
 #[test]
-pub fn find_keeps_its_receiver_while_the_argument_compiles() {
+pub fn index_of_keeps_its_receiver_while_the_argument_compiles() {
     run_and_check_registers!(
         "
         struct S { items: int[], n: int }
 
         fn main() {
             let s = S { items: [1, 2, 3], n: 3 };
-            print(s.items.find(s.n));
+            print(s.items.index_of(s.n).unwrap());
         }
         ",
         2.into()
@@ -12443,7 +12446,7 @@ pub fn a_call_result_receiver_keeps_its_register() {
 
         fn main() {
             let s = S { n: 3 };
-            print(nums().find(s.n));
+            print(nums().index_of(s.n).unwrap());
         }
         ",
         2.into()
@@ -15668,4 +15671,81 @@ fn main() { print(P { x: 2 }.make().x); }
     let d = compile_diag(src, "dot.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "method_without_receiver");
+}
+
+/// `index_of` answers a position as an `Option` on lists and strings, `find`
+/// answers the first element a predicate accepts, and `split` cuts a list at a
+/// separator element.
+#[test]
+pub fn index_of_find_and_split() {
+    let src = r#"
+        fn main() {
+            let xs = [3, 1, 4, 1];
+            print(xs.index_of(4), xs.index_of(9));
+            print(xs.find(fn(x) => x > 3), xs.find(fn(x) => x > 30));
+            print("hEACUTEllo".index_of("llo"), "hello".index_of("z"));
+            if xs.index_of(1) is Some(i) { print(i + 100); }
+            print([1, 0, 2, 0, 3].split(0));
+            print("  x  ".trim_start() + "|", "  x  ".trim_end() + "|");
+            print("xxhixx".trim_chars("x"), "xxhixx".trim_start_chars("x"), "xxhixx".trim_end_chars("x"));
+        }
+    "#
+    .replace("EACUTE", "\u{e9}");
+    assert_eq!(
+        run_output(&src),
+        "Some(2)\nNone\nSome(4)\nNone\nSome(2)\nNone\n101\n[[1],[2],[3]]\nx  |\n  x|\nhi\nhixx\nxxhi\n"
+    );
+}
+
+/// Each removed collection name is a compile error that names its
+/// replacement.
+#[test]
+pub fn removed_collection_names_point_at_their_replacements() {
+    for (src, code, wanted) in [
+        (
+            "fn main() { print([1, 2].find(2)); }",
+            "find_takes_a_function",
+            "xs.index_of(x)",
+        ),
+        (
+            "fn main() { print(\"ab\".find(\"b\")); }",
+            "no_such_method",
+            "s.index_of(needle)",
+        ),
+        (
+            "fn main() { print([1, 0].partition(0)); }",
+            "no_such_method",
+            "xs.split(separator)",
+        ),
+        (
+            "fn main() { print(\" a\".trim_left()); }",
+            "no_such_method",
+            "s.trim_start()",
+        ),
+        (
+            "fn main() { print(\"a \".trim_right()); }",
+            "no_such_method",
+            "s.trim_end()",
+        ),
+        (
+            "fn main() { print(\"xa\".trim_sequence(\"x\")); }",
+            "no_such_method",
+            "s.trim_chars(chars)",
+        ),
+        (
+            "fn main() { print(\"xa\".trim_sequence_left(\"x\")); }",
+            "no_such_method",
+            "s.trim_start_chars(chars)",
+        ),
+        (
+            "fn main() { print(\"ax\".trim_sequence_right(\"x\")); }",
+            "no_such_method",
+            "s.trim_end_chars(chars)",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}");
+        assert!(d.message.contains(wanted), "{src}: {d:?}");
+    }
 }

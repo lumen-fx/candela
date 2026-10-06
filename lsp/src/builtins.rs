@@ -97,28 +97,28 @@ pub const BUILTIN_METHODS: &[(&str, &str)] = &[
         "<string>.trim() -> string\n\nReturns the string with leading and trailing whitespace removed.",
     ),
     (
-        "trim_sequence",
-        "<string>.trim_sequence(s: string) -> string\n\nReturns the string with `s` removed from its start and end.",
+        "trim_start",
+        "<string>.trim_start() -> string\n\nReturns the string with leading whitespace removed.",
     ),
     (
-        "trim_left",
-        "<string>.trim_left() -> string\n\nReturns the string with leading whitespace removed.",
+        "trim_end",
+        "<string>.trim_end() -> string\n\nReturns the string with trailing whitespace removed.",
     ),
     (
-        "trim_right",
-        "<string>.trim_right() -> string\n\nReturns the string with trailing whitespace removed.",
+        "trim_chars",
+        "<string>.trim_chars(chars: string) -> string\n\nReturns the string with every character in `chars` removed from its start and end.",
     ),
     (
-        "trim_sequence_left",
-        "<string>.trim_sequence_left(s: string) -> string\n\nReturns the string with `s` removed from its start.",
+        "trim_start_chars",
+        "<string>.trim_start_chars(chars: string) -> string\n\nReturns the string with every character in `chars` removed from its start.",
     ),
     (
-        "trim_sequence_right",
-        "<string>.trim_sequence_right(s: string) -> string\n\nReturns the string with `s` removed from its end.",
+        "trim_end_chars",
+        "<string>.trim_end_chars(chars: string) -> string\n\nReturns the string with every character in `chars` removed from its end.",
     ),
     (
-        "find",
-        "<string>.find(e: string) -> int\n<T[]>.find(e: T) -> int\n\nReturns the index of `e`, or -1 if not found.",
+        "index_of",
+        "<string>.index_of(e: string) -> Option<int>\n<T[]>.index_of(e: T) -> Option<int>\n\nReturns the position of the first `e` as `Some`, or `None` when there is none.",
     ),
     (
         "repeat",
@@ -151,11 +151,7 @@ pub const BUILTIN_METHODS: &[(&str, &str)] = &[
     ),
     (
         "split",
-        "<string>.split(separator: string) -> string[]\n\nSplits a string on `separator`.",
-    ),
-    (
-        "partition",
-        "<T[]>.partition(separator: T) -> T[][]\n\nPartitions a collection on `separator`.",
+        "<string>.split(separator: string) -> string[]\n<T[]>.split(separator: T) -> T[][]\n\nSplits a string or a list into the runs between each `separator`.",
     ),
     (
         "join",
