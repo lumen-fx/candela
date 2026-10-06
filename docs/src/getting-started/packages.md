@@ -98,8 +98,8 @@ its entry point, the file its manifest names (`src/main.cdl` unless it says
 otherwise), and a path inside it reaches the files beside that entry:
 
 ```rust
-import "shapes" as shapes;        // the package's src/main.cdl
-import "shapes/circle" as circle; // src/circle.cdl inside the package
+import "shapes";        // the package's src/main.cdl
+import "shapes/circle"; // src/circle.cdl inside the package
 
 fn main() {
     print(shapes::area(3, 4));
@@ -107,7 +107,7 @@ fn main() {
 ```
 
 Nothing else about importing changes: the same one form, the same `as`, the
-same bare-import merge. See [modules](../language/modules.md).
+same lists of items. See [modules](../language/modules.md).
 
 ## The lock file
 

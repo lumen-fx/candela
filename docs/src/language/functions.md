@@ -135,7 +135,7 @@ a body may return an `int[]` from a function declared `-> any[]`, or a
 declared type.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn row() -> {any: any} {
     return {"name": "a"};

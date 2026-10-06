@@ -325,7 +325,7 @@ fn a_project_runs_against_the_package_it_depends_on() {
 
     std::fs::write(
         project.join("src").join("main.cdl"),
-        "import \"shapes\" as shapes;\nimport \"shapes/circle\" as circle;\n\nfn main() {\n    print(shapes::area(3, 4));\n    print(circle::circumference(2));\n}\n",
+        "import \"shapes\";\nimport \"shapes/circle\";\n\nfn main() {\n    print(shapes::area(3, 4));\n    print(circle::circumference(2));\n}\n",
     )
     .unwrap();
 
@@ -369,7 +369,7 @@ fn check_compiles_without_running_and_passes_offline_through() {
     .unwrap();
     std::fs::write(
         project.join("src").join("main.cdl"),
-        "import \"shapes\" as shapes;\n\nfn main() {\n    print(\"ran \" + string(shapes::area(2, 5)));\n}\n",
+        "import \"shapes\";\n\nfn main() {\n    print(\"ran \" + string(shapes::area(2, 5)));\n}\n",
     )
     .unwrap();
 
@@ -486,7 +486,7 @@ fn a_built_artifact_runs_with_no_source_tree() {
     .unwrap();
     std::fs::write(
         project.join("src").join("main.cdl"),
-        "import \"shapes\" as shapes;\n\nfn main() {\n    print(shapes::area(6, 7));\n}\n",
+        "import \"shapes\";\n\nfn main() {\n    print(shapes::area(6, 7));\n}\n",
     )
     .unwrap();
 

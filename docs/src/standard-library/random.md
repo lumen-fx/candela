@@ -8,7 +8,7 @@ It has been modified by the candela authors. See the NOTICE file.
 A seedable pseudo-random generator for ints and floats.
 
 ```rust
-import "std/random" as random;
+import "std/random";
 ```
 
 The generator is a PCG32 instance shared by the whole program. On the first call
@@ -38,45 +38,45 @@ random::seed(s)
 Restarts the generator from `s`. Two runs seeded with the same value draw the
 same sequence.
 
-## random_int
+## int
 
 ```rust
-random::random_int()
+random::int()
 ```
 
 - Returns: an int drawn from the generator's full range, so the result can be
   negative.
 
-## random_int_range
+## int_range
 
 ```rust
-random::random_int_range(min, max)
+random::int_range(min, max)
 ```
 
 - `min`, `max`: ints.
 - Returns: an int between `min` and `max`, with both ends included.
 
 ```rust
-import "std/random" as random;
+import "std/random";
 
 fn main() {
     random::seed(42);
-    print(random::random_int_range(1, 6));
+    print(random::int_range(1, 6));
 }
 ```
 
-## random
+## float
 
 ```rust
-random::random()
+random::float()
 ```
 
 - Returns: a float in the half-open range from 0 up to 1.
 
-## random_range
+## float_range
 
 ```rust
-random::random_range(min, max)
+random::float_range(min, max)
 ```
 
 - `min`, `max`: floats.

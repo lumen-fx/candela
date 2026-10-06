@@ -133,7 +133,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "candela --version exited with $LASTEXITCODE." }
 
           $program = @(
-            'import "std/list" as list;',
+            'import "std/list";',
             '',
             'fn main() {',
             '    print([1, 2, 3, 4].sum());',

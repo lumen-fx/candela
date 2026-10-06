@@ -9,43 +9,43 @@
 /// under `candela-vm` with no dynamic library.
 
 /// Raises "assertion failed" when `cond` is false.
-fn assert(cond) {
+fn that(cond) {
     if !cond {
         throw "assertion failed";
     }
 }
 
 /// Raises `msg` when `cond` is false.
-fn assert_msg(cond, msg) {
+fn msg(cond, message) {
     if !cond {
-        throw msg;
+        throw message;
     }
 }
 
 /// Raises when `cond` is false.
-fn assert_true(cond) {
+fn is_true(cond) {
     if !cond {
         throw "expected true";
     }
 }
 
 /// Raises when `cond` is true.
-fn assert_false(cond) {
+fn is_false(cond) {
     if cond {
         throw "expected false";
     }
 }
 
 /// Raises a message showing both sides when `a` and `b` differ.
-fn assert_eq(a, b) {
+fn eq(a, b) {
     if a != b {
-        throw "assert_eq failed: " + string(a) + " != " + string(b);
+        throw "assert::eq failed: " + string(a) + " != " + string(b);
     }
 }
 
 /// Raises a message showing the value when `a` and `b` are equal.
-fn assert_ne(a, b) {
+fn ne(a, b) {
     if a == b {
-        throw "assert_ne failed: both sides are " + string(a);
+        throw "assert::ne failed: both sides are " + string(a);
     }
 }

@@ -172,7 +172,7 @@ checks every key on the way, and gives the map a function declaring string
 keys accepts.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     let m = json::parse("{\"n\": 7}") as {string: any};
@@ -230,7 +230,7 @@ and returns 42.
 ## File system
 
 Files are read and written through the [fs module](fs.md), imported with
-`import "std/fs" as fs;`.
+`import "std/fs";`.
 
 ## String methods
 

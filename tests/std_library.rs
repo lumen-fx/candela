@@ -234,7 +234,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     std::fs::create_dir_all(&work).expect("create work dir");
     std::fs::write(
         work.join("prog.cdl"),
-        "import \"std/math\" as math;\nfn main() { print(math::sqrt(9.0)); }\n",
+        "import \"std/math\";\nfn main() { print(math::sqrt(9.0)); }\n",
     )
     .expect("write program");
 
@@ -313,8 +313,8 @@ fn json_map_set_inline_into_cdlb() {
         std::env::set_var("CANDELA_LIB_PATH", repo().join("libs"));
     }
     let src = r#"
-import "std/json" as json;
-import "std/set" as set;
+import "std/json";
+import "std/set";
 fn main() {
     let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}") as {any: any};
     print(obj["n"] as int);
@@ -451,7 +451,7 @@ fn hashing_a_nul_raises() {
     std::fs::create_dir_all(&work).expect("create work dir");
     std::fs::write(
         work.join("prog.cdl"),
-        "import \"std/hash\" as hash;\nfn main() { print(hash::md5(\"a\\0b\")); }\n",
+        "import \"std/hash\";\nfn main() { print(hash::md5(\"a\\0b\")); }\n",
     )
     .expect("write program");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));

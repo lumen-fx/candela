@@ -3,7 +3,7 @@
 md5, sha1 and sha256 digests of a string, each answered as lowercase hex.
 
 ```rust
-import "std/hash" as hash;
+import "std/hash";
 ```
 
 A digest covers the string's UTF-8 bytes, so the same text hashes the same in
@@ -33,7 +33,7 @@ hash::md5(s)
 - Returns: the md5 digest of `s`, as 32 lowercase hex digits.
 
 ```rust
-import "std/hash" as hash;
+import "std/hash";
 
 fn main() {
     print(hash::md5("abc"));

@@ -2340,7 +2340,7 @@ fn a_call_with_new_argument_types_compiles_its_own_entry() {
 }
 
 /// A function that parses a small document on every call and drops it.
-const PARSE_PER_FRAME: &str = "import \"std/json\" as json;
+const PARSE_PER_FRAME: &str = "import \"std/json\";
 
 fn p() -> int {
     let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];

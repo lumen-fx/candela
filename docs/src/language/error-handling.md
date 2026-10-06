@@ -211,8 +211,8 @@ standard library's own tests fail loudly.
 import "std/assert";
 
 fn main() {
-    assert_true(1 == 1);
-    assert_eq(2, 2);
+    assert::is_true(1 == 1);
+    assert::eq(2, 2);
     print("checks passed");
 }
 ```
@@ -222,11 +222,11 @@ own and a `try` around the check catches it like any other error. That is how a
 test harness reports which check failed instead of ending the run.
 
 ```rust
-import "std/assert" as assert;
+import "std/assert";
 
 fn main() {
     try {
-        assert::assert_eq(2, 3);
+        assert::eq(2, 3);
     } catch e {
         print("check failed: " + e);
     }

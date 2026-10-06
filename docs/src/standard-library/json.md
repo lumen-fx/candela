@@ -4,7 +4,7 @@ Parse a json string into candela values, and serialise candela values back to
 json.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 ```
 
 The module is pure candela over the runtime's own json primitives, so it
@@ -51,7 +51,7 @@ gives a map with string keys and `any` values, so `m[k] = v` stores a string
 beside an int.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     let doc = json::parse("{\"name\": \"ada\", \"scores\": [1, 2, 3]}");
@@ -81,7 +81,7 @@ in, so a document parsed with `parse` and handed straight back to `stringify`
 keeps the key order it was written with.
 
 ```rust
-import "std/json" as json;
+import "std/json";
 
 fn main() {
     let m = {"a": 1, "b": 2};

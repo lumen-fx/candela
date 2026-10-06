@@ -11,7 +11,7 @@
 /// This module is pure Candela and compiles into a `.cdlb` artifact that runs
 /// under `candela-vm` with no dynamic library.
 
-import "std/option";
+import "std/option" { Option };
 
 impl list {
     /// The first element as `Some`, or `None` for an empty list.

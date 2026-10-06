@@ -53,6 +53,7 @@ use compiler_data::State;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
+use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
 use expr::Span;
@@ -6139,6 +6140,13 @@ const fn symbol_ids_equal(a: SymbolKind, b: SymbolKind) -> bool {
 pub struct Namespace {
     pub symbols: Vec<(SmolStr, SymbolKind)>,
     pub children: Vec<(SmolStr, Self)>,
+    /// For a module bound by an import, the file it was read from, which is
+    /// what makes two bindings of one name the same module or two different
+    /// ones. Empty for a file's own scope and a `host` block.
+    pub file: SmolStr,
+    /// For a module bound by an import, its path as the import wrote it
+    /// (`std/json`, `./geometry.cdl`), for a message to name it by.
+    pub import_path: SmolStr,
 }
 
 /// The scope of every file in the program, keyed by its index in `sources`.
@@ -6341,7 +6349,7 @@ impl Namespace {
     ) -> &Self {
         match self.resolve(path) {
             Some(namespace) => namespace,
-            None => error_unknown_namespace(path, span, file_idx, sources),
+            None => error_unknown_namespace(path, span, self, file_idx, sources),
         }
     }
 }
@@ -6505,10 +6513,7 @@ fn load_prelude(
         let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
         generics.add_impls(parsed.impls, child_src_idx);
 
-        let mut child_namespace = Namespace {
-            symbols: Vec::new(),
-            children: Vec::new(),
-        };
+        let mut child_namespace = Namespace::default();
         parse_toplevel(
             parsed.code,
             &path,
@@ -6529,9 +6534,9 @@ fn load_prelude(
             generics,
             resolver,
         );
-        file_namespaces.insert(child_src_idx, child_namespace.clone());
+        file_namespaces.insert(child_src_idx, child_namespace);
         file_namespaces.mark_std(child_src_idx);
-        files.insert(path, child_namespace);
+        generics.mark_prelude_file(child_src_idx);
     }
 }
 
@@ -6804,6 +6809,135 @@ fn qualify_host_type(t: &TypeExpr, host_namespace: &SmolStr, local: &[SmolStr]) 
         })),
         other => other.clone(),
     }
+}
+
+/// Adds what one import brings in to the scope of the file that writes it.
+///
+/// `exports` is what the module declares. A namespace binding puts it behind
+/// its name; a list of items merges each named one into the file's own scope,
+/// with the `impl` methods of a type it names. A name already bound to a
+/// different module, an item the module does not declare, and an item that
+/// clashes with one the file already has are compile errors.
+fn bind_import(
+    namespace: &mut Namespace,
+    exports: Namespace,
+    binding: ImportBinding,
+    file_path: &Path,
+    module_display: &SmolStr,
+    merged_symbol_origins: &mut Vec<(SmolStr, SmolStr)>,
+    span: Span,
+    src_file_idx: u16,
+    sources: &[Source],
+) {
+    let file: SmolStr = file_path.to_string_lossy().as_ref().into();
+    match binding {
+        ImportBinding::Namespace(name) => {
+            if let Some((_, existing)) = namespace.children.iter().find(|(n, _)| *n == name) {
+                // The same module bound twice under one name is one binding.
+                if existing.file == file {
+                    return;
+                }
+                compiler_errors::error_import_name_collision(
+                    &name,
+                    &existing.import_path,
+                    module_display,
+                    span,
+                    src_file_idx,
+                    sources,
+                );
+            }
+            namespace.children.push((
+                name,
+                Namespace {
+                    file,
+                    import_path: module_display.clone(),
+                    ..exports
+                },
+            ));
+        }
+        ImportBinding::Items(items) => {
+            for (item, item_span) in items {
+                let found: Vec<(SmolStr, SymbolKind)> = exports
+                    .symbols
+                    .iter()
+                    .filter(|(name, kind)| {
+                        *name == item && !(name == "main" && matches!(kind, SymbolKind::Fn(_)))
+                    })
+                    .cloned()
+                    .collect();
+                if found.is_empty() {
+                    compiler_errors::error_import_item_not_exported(
+                        &item,
+                        module_display,
+                        &exported_names(&exports),
+                        item_span,
+                        src_file_idx,
+                        sources,
+                    );
+                }
+                // A type brings the functions its `impl` blocks declare.
+                let methods = exports.symbols.iter().filter(|(name, kind)| {
+                    matches!(kind, SymbolKind::Fn(_))
+                        && name
+                            .split_once(METHOD_SEP)
+                            .is_some_and(|(type_name, _)| type_name == item)
+                });
+                let methods: Vec<(SmolStr, SymbolKind)> = if found
+                    .iter()
+                    .any(|(_, kind)| !matches!(kind, SymbolKind::Fn(_)))
+                {
+                    methods.cloned().collect()
+                } else {
+                    Vec::new()
+                };
+                for (name, kind) in found.into_iter().chain(methods) {
+                    if let Some((_, existing)) = namespace.symbols.iter().find(|(n, _)| *n == name)
+                    {
+                        // The same underlying symbol arriving through two
+                        // routes is not a conflict.
+                        if symbol_ids_equal(*existing, kind) {
+                            continue;
+                        }
+                        let existing_origin = merged_symbol_origins
+                            .iter()
+                            .find(|(n, _)| *n == name)
+                            .map_or_else(
+                                || String::from("defined in this file"),
+                                |(_, module)| format!("imported from \"{module}\""),
+                            );
+                        compiler_errors::error_import_symbol_collision(
+                            &name,
+                            &existing_origin,
+                            module_display,
+                            item_span,
+                            src_file_idx,
+                            sources,
+                        );
+                    }
+                    merged_symbol_origins.push((name.clone(), module_display.clone()));
+                    namespace.symbols.push((name, kind));
+                }
+            }
+        }
+    }
+}
+
+/// The names a module declares that an import can name, in declaration
+/// order: its functions, structs and enums, without the `impl` methods that
+/// travel with a type and without a `main` of its own.
+fn exported_names(exports: &Namespace) -> Vec<SmolStr> {
+    let mut names: Vec<SmolStr> = Vec::new();
+    for (name, kind) in &exports.symbols {
+        if name.contains(METHOD_SEP)
+            || name.starts_with(type_system::ANON_FN_PREFIX)
+            || (name == "main" && matches!(kind, SymbolKind::Fn(_)))
+            || names.contains(name)
+        {
+            continue;
+        }
+        names.push(name.clone());
+    }
+    names
 }
 
 fn parse_toplevel(
@@ -7113,7 +7247,7 @@ fn parse_toplevel(
                     is_host: true,
                 });
             }
-            Expr::ImportFile(path, alias, is_logical, span) => {
+            Expr::ImportFile(path, binding, is_logical, span) => {
                 // Where the import reads from, and, for the error when it reads
                 // from nowhere, every place that was tried. A module the
                 // compiler carries comes with its text.
@@ -7193,10 +7327,7 @@ fn parse_toplevel(
                         parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
                     generics.add_impls(parsed.impls, child_src_idx);
 
-                    let mut child_namespace = Namespace {
-                        symbols: Vec::new(),
-                        children: Vec::new(),
-                    };
+                    let mut child_namespace = Namespace::default();
 
                     parse_toplevel(
                         parsed.code,
@@ -7222,63 +7353,31 @@ fn parse_toplevel(
                     if is_logical && path.starts_with("std/") {
                         file_namespaces.mark_std(child_src_idx);
                     }
-                    files.insert(file_path.clone(), child_namespace.clone());
-                    child_namespace
-                };
-
-                if let Some(alias) = alias {
-                    // `import "..." as name;` binds the module under a
-                    // namespace: its symbols are reachable as `name::symbol`.
-                    namespace.children.push((alias, child_namespace));
-                } else {
-                    // A bare import merges the module's symbols into this
-                    // file's own scope. The module path as written, used to
-                    // name the source in a collision error.
-                    let module_display: SmolStr = if is_logical {
-                        path.strip_suffix(".cdl").unwrap_or(path.as_str()).into()
-                    } else {
-                        path.clone()
-                    };
-                    for (name, kind) in child_namespace.symbols {
-                        // Only the entry file's `main` runs, so a module's own
-                        // `main` function is not one of the names it exports. A
-                        // package that keeps one would otherwise collide with
-                        // the importer's the moment it is bare-imported. Only
-                        // the function is held back: a struct or an enum named
-                        // `main` is a separate symbol and merges like any
-                        // other.
-                        if name == "main" && matches!(kind, SymbolKind::Fn(_)) {
-                            continue;
-                        }
-                        if let Some((_, existing)) =
-                            namespace.symbols.iter().find(|(n, _)| n == &name)
-                        {
-                            // The same underlying symbol arriving through two
-                            // routes (for example two modules that both import
-                            // a third) is not a conflict.
-                            if symbol_ids_equal(*existing, kind) {
-                                continue;
-                            }
-                            let existing_origin = merged_symbol_origins
-                                .iter()
-                                .find(|(n, _)| n == &name)
-                                .map_or_else(
-                                    || String::from("defined in this file"),
-                                    |(_, module)| format!("imported from \"{module}\""),
-                                );
-                            compiler_errors::error_import_symbol_collision(
-                                &name,
-                                &existing_origin,
-                                &module_display,
-                                span,
-                                src_file_idx,
-                                sources,
-                            );
-                        }
-                        merged_symbol_origins.push((name.clone(), module_display.clone()));
-                        namespace.symbols.push((name, kind));
+                    if is_logical && PRELUDE_MODULES.contains(&path.as_str()) {
+                        generics.mark_prelude_file(child_src_idx);
                     }
-                }
+                    // What an importer sees is what the module declares, the
+                    // snapshot taken before its own imports were bound; its
+                    // full scope, imports included, is its alone.
+                    files.get(&file_path).cloned().unwrap_or_default()
+                };
+                // The module path as written, to name the source in a message.
+                let module_display: SmolStr = if is_logical {
+                    path.strip_suffix(".cdl").unwrap_or(path.as_str()).into()
+                } else {
+                    path.clone()
+                };
+                bind_import(
+                    namespace,
+                    child_namespace,
+                    binding,
+                    &file_path,
+                    &module_display,
+                    &mut merged_symbol_origins,
+                    span,
+                    src_file_idx,
+                    sources,
+                );
             }
             _ => unsafe { unreachable_unchecked() },
         }

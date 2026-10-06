@@ -3,8 +3,12 @@
 A set of unique values.
 
 ```rust
-import "std/set";
+import "std/set" { Set };
 ```
+
+The examples on this page name the type in the import, so it is written
+`Set<int>`. Imported under the module's name alone, `import "std/set";`, it is
+`set::Set<int>`.
 
 `Set<T>` is a struct holding a map from member to a unit value, so it reuses the
 map's storage, hashing, and garbage collection rather than adding a runtime type
@@ -33,7 +37,7 @@ Set<int>::new()
 ```
 
 - Returns: a new empty `Set<int>`. Written bare, `Set::new()`, it returns a
-  `Set<any>`. Imported with `as`, the module's name goes in front:
+  `Set<any>`. Reached through the module's name, the name goes in front:
   `set::Set<int>::new()`.
 
 ## add
@@ -139,7 +143,7 @@ in. `a != b` is the same answer flipped. The two sets have to be the same
 ## Operators
 
 ```rust
-import "std/set";
+import "std/set" { Set };
 
 fn main() {
     let a = Set<int>::new();

@@ -253,11 +253,11 @@ fn main() {
 ## Sets
 
 A set holds each value at most once. It comes from the `set` module as
-`Set<T>`, a struct built out of a map. `Set<int>::new()` makes an empty one,
-naming the member type.
+`Set<T>`, a struct built out of a map. Name the type in the import to write it
+bare; `Set<int>::new()` then makes an empty one, naming the member type.
 
 ```rust
-import "std/set";
+import "std/set" { Set };
 
 fn main() {
     let s = Set<int>::new();
@@ -273,7 +273,7 @@ difference; each combines two sets into a new one, and each has a named method
 too.
 
 ```rust
-import "std/set";
+import "std/set" { Set };
 
 fn main() {
     let a = Set<int>::new();

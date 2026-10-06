@@ -1,11 +1,12 @@
 //! Integration tests for the import statement's binding rules.
 //!
-//! A bare `import "path";` merges the module's symbols (functions, structs,
-//! enums, impl methods) into the importing file's own scope; `import "path" as
-//! name;` binds them behind the `name::` namespace instead. A bare import that
-//! would redefine a name is a compile-time error naming both sources. These
-//! tests run small multi-file programs through the `candela` binary, since
-//! import resolution is relative to real files on disk.
+//! `import "path";` binds the module under the last segment of its path, so
+//! its names are reached as `name::symbol`; `import "path" as other;` picks the
+//! name. `import "path" { a, b };` brings the named items (functions, structs,
+//! enums, and the impl methods of a type) into the importing file's own scope,
+//! and an item that would redefine a name is a compile-time error naming both
+//! sources. These tests run small multi-file programs through the `candela`
+//! binary, since import resolution is relative to real files on disk.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -67,14 +68,14 @@ fn repo() -> PathBuf {
 }
 
 #[test]
-fn bare_file_import_merges_into_scope() {
+fn a_file_import_binds_the_module_name() {
     let output = run_program(
-        "bare_merge",
+        "binds_name",
         &[
             ("helper.cdl", "fn ping() { return 5; }\n"),
             (
                 "prog.cdl",
-                "import \"helper.cdl\";\nfn main() { print(ping()); }\n",
+                "import \"helper.cdl\";\nfn main() { print(helper::ping()); }\n",
             ),
         ],
     );
@@ -96,7 +97,7 @@ fn aliased_import_stays_namespaced() {
             ("b.cdl", "fn ping() { return 2; }\n"),
             (
                 "prog.cdl",
-                "import \"a.cdl\" as a;\nimport \"b.cdl\" as b;\nfn main() { print(a::ping() + b::ping()); }\n",
+                "import \"a.cdl\";\nimport \"b.cdl\";\nfn main() { print(a::ping() + b::ping()); }\n",
             ),
         ],
     );
@@ -135,14 +136,14 @@ fn unknown_function_in_an_aliased_namespace_suggests_the_declared_one() {
 }
 
 #[test]
-fn bare_import_collision_with_local_definition_errors() {
+fn selective_import_collision_with_local_definition_errors() {
     let output = run_program(
         "collide_local",
         &[
             ("helper.cdl", "fn ping() { return 5; }\n"),
             (
                 "prog.cdl",
-                "import \"helper.cdl\";\nfn ping() { return 6; }\nfn main() { print(ping()); }\n",
+                "import \"helper.cdl\" { ping };\nfn ping() { return 6; }\nfn main() { print(ping()); }\n",
             ),
         ],
     );
@@ -155,7 +156,7 @@ fn bare_import_collision_with_local_definition_errors() {
 }
 
 #[test]
-fn bare_import_collision_between_two_imports_errors() {
+fn selective_import_collision_between_two_imports_errors() {
     let output = run_program(
         "collide_imports",
         &[
@@ -163,7 +164,7 @@ fn bare_import_collision_between_two_imports_errors() {
             ("b.cdl", "fn ping() { return 2; }\n"),
             (
                 "prog.cdl",
-                "import \"a.cdl\";\nimport \"b.cdl\";\nfn main() { print(ping()); }\n",
+                "import \"a.cdl\" { ping };\nimport \"b.cdl\" { ping };\nfn main() { print(ping()); }\n",
             ),
         ],
     );
@@ -176,24 +177,24 @@ fn bare_import_collision_between_two_imports_errors() {
 }
 
 #[test]
-fn diamond_bare_imports_are_not_a_collision() {
-    // Two modules that both bare-import a third re-export the same underlying
-    // symbols; importing both is not a conflict.
+fn diamond_imports_are_not_a_collision() {
+    // Two modules that both import a third, and the entry file naming an item
+    // of the third, reach one module; nothing collides.
     let output = run_program(
         "diamond",
         &[
             ("base.cdl", "fn shared() { return 7; }\n"),
             (
                 "a.cdl",
-                "import \"base.cdl\";\nfn from_a() { return shared(); }\n",
+                "import \"base.cdl\" { shared };\nfn from_a() { return shared(); }\n",
             ),
             (
                 "b.cdl",
-                "import \"base.cdl\";\nfn from_b() { return shared() + 1; }\n",
+                "import \"base.cdl\";\nfn from_b() { return base::shared() + 1; }\n",
             ),
             (
                 "prog.cdl",
-                "import \"a.cdl\";\nimport \"b.cdl\";\nfn main() { print(from_a() + from_b()); }\n",
+                "import \"a.cdl\";\nimport \"b.cdl\";\nimport \"base.cdl\" { shared };\nfn main() { print(a::from_a() + b::from_b() - shared() + 7); }\n",
             ),
         ],
     );
@@ -216,10 +217,10 @@ fn legacy_namespaced_import_suggests_replacement() {
     assert!(stderr.contains("import \"std/list\";"), "stderr: {stderr}");
 }
 
-/// A bare library import merges the shipped module into scope; the enum and
-/// its impl methods both arrive.
+/// A prelude module imported by name keeps its enum, variants and methods
+/// reachable with no prefix, as they are with no import at all.
 #[test]
-fn bare_library_import_merges_enum_and_methods() {
+fn a_prelude_module_imported_by_name_keeps_its_bare_names() {
     let dir = std::env::temp_dir().join(format!("candela_imports_lib_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     std::fs::write(
@@ -262,7 +263,7 @@ fn aliased_module_sees_its_own_declarations() {
             ),
             (
                 "prog.cdl",
-                "import \"geom.cdl\" as geom;\n\
+                "import \"geom.cdl\";\n\
                  fn main() {\n\
                  print(geom::scaled(4));\n\
                  print(geom::origin().shifted().x);\n\
@@ -294,7 +295,7 @@ fn aliased_module_sees_its_own_enum() {
             ),
             (
                 "prog.cdl",
-                "import \"shapes.cdl\" as shapes;\n\
+                "import \"shapes.cdl\";\n\
                  fn main() { print(string(shapes::unit())); print(string(shapes::nothing())); }\n",
             ),
         ],
@@ -322,7 +323,7 @@ fn aliased_enum_variant_is_reached_through_its_enum() {
             ("shapes.cdl", "enum Shape { Circle(int), Empty }\n"),
             (
                 "prog.cdl",
-                "import \"shapes.cdl\" as shapes;\n\
+                "import \"shapes.cdl\";\n\
                  fn name(s: shapes::Shape) -> string {\n\
                      let out = \"?\";\n\
                      match s {\n\
@@ -622,7 +623,7 @@ fn aliased_variant_without_its_enum_is_unknown() {
             ("shapes.cdl", "enum Shape { Circle(int), Empty }\n"),
             (
                 "prog.cdl",
-                "import \"shapes.cdl\" as shapes;\n\
+                "import \"shapes.cdl\";\n\
                  fn build() { return shapes::Circle(1); }\n",
             ),
         ],
@@ -637,11 +638,11 @@ fn aliased_variant_without_its_enum_is_unknown() {
     );
 }
 
-/// An aliased module's own imports are its own: what it bare-imported and what
-/// it aliased are reachable from its bodies, and a closure it builds still
-/// resolves the function it calls.
+/// A namespaced module's own imports are its own: the items it named and the
+/// modules it bound are reachable from its bodies, and a closure it builds
+/// still resolves the function it calls.
 #[test]
-fn aliased_module_keeps_its_own_imports() {
+fn a_namespaced_module_keeps_its_own_imports() {
     let output = run_program(
         "aliased_nested",
         &[
@@ -649,14 +650,14 @@ fn aliased_module_keeps_its_own_imports() {
             ("side.cdl", "fn triple(n) { return n * 3; }\n"),
             (
                 "lib.cdl",
-                "import \"base.cdl\";\n\
-                 import \"side.cdl\" as side;\n\
+                "import \"base.cdl\" { twice };\n\
+                 import \"side.cdl\";\n\
                  fn apply(f, n) { return f(n); }\n\
                  fn compute(n) { let step = fn(x) { return twice(x); }; return apply(step, side::triple(n)); }\n",
             ),
             (
                 "prog.cdl",
-                "import \"lib.cdl\" as lib;\nfn main() { print(lib::compute(2)); }\n",
+                "import \"lib.cdl\";\nfn main() { print(lib::compute(2)); }\n",
             ),
         ],
     );
@@ -668,10 +669,10 @@ fn aliased_module_keeps_its_own_imports() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("12"));
 }
 
-/// A module that declares `main` can be bare-imported: only the entry file's
-/// `main` runs, so the module's is not one of the names the merge brings in.
+/// A module that declares `main` can have its items imported: only the entry
+/// file's `main` runs, so the module's is not one of the names it exports.
 #[test]
-fn bare_import_of_a_module_with_main_keeps_the_importers_main() {
+fn importing_items_of_a_module_with_main_keeps_the_importers_main() {
     let output = run_program(
         "bare_module_main",
         &[
@@ -681,7 +682,7 @@ fn bare_import_of_a_module_with_main_keeps_the_importers_main() {
             ),
             (
                 "prog.cdl",
-                "import \"helper.cdl\";\nfn main() { print(ping() + 1); }\n",
+                "import \"helper.cdl\" { ping };\nfn main() { print(ping() + 1); }\n",
             ),
         ],
     );
@@ -695,8 +696,8 @@ fn bare_import_of_a_module_with_main_keeps_the_importers_main() {
     assert_eq!(stdout.trim(), "6", "stdout: {stdout}");
 }
 
-/// A bare import holds back only the module's `main` function. A struct that
-/// happens to carry the same name is a separate symbol and merges like any
+/// An import holds back only the module's `main` function. A struct that
+/// happens to carry the same name is a separate symbol and is imported like any
 /// other; it used to be dropped with the function, leaving the importer with
 /// "Unknown struct main".
 ///
@@ -704,7 +705,7 @@ fn bare_import_of_a_module_with_main_keeps_the_importers_main() {
 /// module's `struct main` still collides with the importing file's own `fn
 /// main`. A library entry, which has none, is where the struct is reachable.
 #[test]
-fn bare_import_keeps_a_struct_named_main() {
+fn an_import_keeps_a_struct_named_main() {
     let output = check_program(
         "bare_module_main_struct",
         &[
@@ -714,7 +715,7 @@ fn bare_import_keeps_a_struct_named_main() {
             ),
             (
                 "prog.cdl",
-                "import \"helper.cdl\";\nfn build() { let m = main { a: 7 }; return m.a + ping(); }\n",
+                "import \"helper.cdl\" { main, ping };\nfn build() { let m = main { a: 7 }; return m.a + ping(); }\n",
             ),
         ],
     );
@@ -726,9 +727,10 @@ fn bare_import_keeps_a_struct_named_main() {
 }
 
 /// The files a program reaches a module through each bind it in their own
-/// form. `base.cdl` here is reached twice, once behind an alias in the entry
-/// file and once by `mid.cdl`'s bare import, and both routes work: the entry
-/// calls into `base::`, and `mid`'s own bodies call the names it merged.
+/// form. `base.cdl` here is reached twice, once under its name in the entry
+/// file and once by `mid.cdl`'s import of two of its items, and both routes
+/// work: the entry calls into `base::`, and `mid`'s own bodies call the names
+/// it named.
 #[test]
 fn a_module_reached_by_two_files_binds_in_both() {
     let output = run_program(
@@ -737,12 +739,12 @@ fn a_module_reached_by_two_files_binds_in_both() {
             ("base.cdl", BASE_MODULE),
             (
                 "mid.cdl",
-                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+                "import \"base.cdl\" { Tag, tag };\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
             ),
             (
                 "prog.cdl",
-                "import \"base.cdl\" as base;\n\
-                 import \"mid.cdl\" as mid;\n\
+                "import \"base.cdl\";\n\
+                 import \"mid.cdl\";\n\
                  fn main() { print(base::unwrap(mid::from_mid(4)) + base::cell(2).doubled()); }\n",
             ),
         ],
@@ -764,12 +766,12 @@ fn the_order_of_the_two_routes_to_a_module_does_not_matter() {
             ("base.cdl", BASE_MODULE),
             (
                 "mid.cdl",
-                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+                "import \"base.cdl\" { Tag, tag };\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
             ),
             (
                 "prog.cdl",
-                "import \"mid.cdl\" as mid;\n\
-                 import \"base.cdl\" as base;\n\
+                "import \"mid.cdl\";\n\
+                 import \"base.cdl\";\n\
                  fn main() { print(base::unwrap(mid::from_mid(4)) + base::cell(2).doubled()); }\n",
             ),
         ],
@@ -782,23 +784,23 @@ fn the_order_of_the_two_routes_to_a_module_does_not_matter() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
 }
 
-/// A bare import of a module another import already reached merges it into the
-/// importing file's own scope, so its function, its enum and its struct's
+/// Naming the items of a module another import already reached brings them
+/// into the importing file's own scope, so its functions and its struct's
 /// method are all written unqualified.
 #[test]
-fn a_module_reached_bare_and_through_another_merges_into_scope() {
+fn a_module_reached_by_name_and_through_another_brings_its_items() {
     let output = run_program(
         "two_routes_bare",
         &[
             ("base.cdl", BASE_MODULE),
             (
                 "mid.cdl",
-                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+                "import \"base.cdl\" { Tag, tag };\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
             ),
             (
                 "prog.cdl",
-                "import \"base.cdl\";\n\
-                 import \"mid.cdl\" as mid;\n\
+                "import \"base.cdl\" { unwrap, cell, tag };\n\
+                 import \"mid.cdl\";\n\
                  fn main() { print(unwrap(mid::from_mid(4)) + cell(2).doubled() + unwrap(tag(1))); }\n",
             ),
         ],
@@ -811,33 +813,32 @@ fn a_module_reached_bare_and_through_another_merges_into_scope() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
 }
 
-/// A module bare-imported directly and bare-imported again through another
-/// module brings its names in twice, and the same underlying symbol arriving
-/// twice is not a collision.
+/// What a module imports stays its own: the items `mid.cdl` named from
+/// `base.cdl` are not names of `mid`, bare or behind its namespace.
 #[test]
-fn bare_imports_of_a_module_and_of_its_importer_are_not_a_collision() {
-    let output = run_program(
-        "two_routes_both_bare",
-        &[
-            ("base.cdl", BASE_MODULE),
-            (
-                "mid.cdl",
-                "import \"base.cdl\";\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
-            ),
-            (
-                "prog.cdl",
-                "import \"base.cdl\";\n\
-                 import \"mid.cdl\";\n\
-                 fn main() { print(unwrap(from_mid(4)) + cell(3).doubled()); }\n",
-            ),
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "11");
+fn a_modules_imports_do_not_reach_its_importer() {
+    for (name, body) in [
+        ("bare", "fn main() { print(tag(1)); }\n"),
+        ("namespaced", "fn main() { print(mid::tag(1)); }\n"),
+    ] {
+        let output = run_program(
+            &format!("own_imports_{name}"),
+            &[
+                ("base.cdl", BASE_MODULE),
+                (
+                    "mid.cdl",
+                    "import \"base.cdl\" { Tag, tag };\nfn from_mid(n: int) -> Tag { return tag(n + 1); }\n",
+                ),
+                ("prog.cdl", &format!("import \"mid.cdl\";\n{body}")),
+            ],
+        );
+        assert!(!output.status.success(), "{name} compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Cannot find function") && stderr.contains("tag"),
+            "{name}: {stderr}"
+        );
+    }
 }
 
 /// One file reached through two spellings is one module. A library import
@@ -853,8 +854,8 @@ fn a_module_spelled_two_ways_is_loaded_once() {
     std::fs::write(libs.join("shared.cdl"), BASE_MODULE).expect("write module");
     std::fs::write(
         dir.join("prog.cdl"),
-        "import \"shared\";\n\
-         import \"./libs/shared.cdl\";\n\
+        "import \"shared\" { unwrap, tag, cell };\n\
+         import \"./libs/shared.cdl\" { unwrap, tag, cell };\n\
          fn main() { print(unwrap(tag(4)) + cell(1).doubled()); }\n",
     )
     .expect("write test file");
@@ -1008,4 +1009,216 @@ fn same_named_modules_in_two_packages_declare_the_same_type() {
         stderr.contains("left::types::Plain") && stderr.contains("right::types::Plain"),
         "stderr: {stderr}"
     );
+}
+
+/// Naming an item in an import brings it, and the methods of a type it names,
+/// into the file's scope; the module itself is bound under no name.
+#[test]
+fn selective_import_brings_the_named_items() {
+    let output = run_program(
+        "selective",
+        &[
+            ("base.cdl", BASE_MODULE),
+            (
+                "prog.cdl",
+                "import \"base.cdl\" { Cell, cell, tag, unwrap };\n\
+                 fn main() {\n\
+                     let c = Cell { n: 4 };\n\
+                     print(c.doubled() + cell(1).doubled() + unwrap(tag(3)));\n\
+                 }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "13");
+}
+
+/// An item a module does not declare is an error that lists what it does.
+#[test]
+fn selective_import_of_an_unknown_item_lists_the_exports() {
+    let output = run_program(
+        "selective_unknown",
+        &[
+            ("base.cdl", BASE_MODULE),
+            ("prog.cdl", "import \"base.cdl\" { cel };\nfn main() { }\n"),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("import_item_not_exported")
+            || (stderr.contains("declares no") && stderr.contains("cel")),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Tag, Cell, tag, cell, unwrap"),
+        "stderr: {stderr}"
+    );
+}
+
+/// A call to a name the file reaches only through a module's namespace is an
+/// error whose help names both ways to write it.
+#[test]
+fn a_name_behind_a_namespace_gets_help_naming_both_forms() {
+    let output = run_program(
+        "behind_namespace",
+        &[
+            ("helper.cdl", "fn ping() { return 5; }\n"),
+            (
+                "prog.cdl",
+                "import \"helper.cdl\";\nfn main() { print(ping()); }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("helper::ping") && stderr.contains("import \"helper.cdl\" { ping };"),
+        "stderr: {stderr}"
+    );
+}
+
+/// The same for a type written bare in front of `::` or in a struct literal.
+#[test]
+fn a_type_behind_a_namespace_gets_help_naming_both_forms() {
+    for (name, body) in [
+        ("literal", "fn main() { print(Cell { n: 1 }.n); }\n"),
+        ("path", "fn main() { print(Cell::nothing()); }\n"),
+    ] {
+        let output = run_program(
+            &format!("type_behind_namespace_{name}"),
+            &[
+                ("base.cdl", BASE_MODULE),
+                ("prog.cdl", &format!("import \"base.cdl\";\n{body}")),
+            ],
+        );
+        assert!(!output.status.success(), "{name} compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("base::Cell") && stderr.contains("import \"base.cdl\" { Cell };"),
+            "{name}: {stderr}"
+        );
+    }
+}
+
+/// A path whose last segment is not a name has to be given one with `as`.
+#[test]
+fn a_path_that_ends_in_no_name_needs_as() {
+    let output = run_program(
+        "not_a_name",
+        &[
+            ("my-lib.cdl", "fn ping() { return 5; }\n"),
+            ("prog.cdl", "import \"my-lib.cdl\";\nfn main() { }\n"),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("my-lib") && stderr.contains("as"),
+        "stderr: {stderr}"
+    );
+
+    let output = run_program(
+        "not_a_name_as",
+        &[
+            ("my-lib.cdl", "fn ping() { return 5; }\n"),
+            (
+                "prog.cdl",
+                "import \"my-lib.cdl\" as my_lib;\nfn main() { print(my_lib::ping()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "5");
+}
+
+/// Two imports that would bind one name to two modules are an error; the same
+/// module bound twice under one name is not.
+#[test]
+fn two_modules_under_one_name_collide() {
+    let output = run_program(
+        "name_collision",
+        &[
+            ("geo.cdl", "fn ping() { return 1; }\n"),
+            ("sub/geo.cdl", "fn ping() { return 2; }\n"),
+            (
+                "prog.cdl",
+                "import \"geo.cdl\";\nimport \"./sub/geo.cdl\";\nfn main() { }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("geo") && stderr.contains("sub/geo.cdl") && stderr.contains("as"),
+        "stderr: {stderr}"
+    );
+
+    let output = run_program(
+        "name_twice",
+        &[
+            ("geo.cdl", "fn ping() { return 1; }\n"),
+            (
+                "prog.cdl",
+                "import \"geo.cdl\";\nimport \"./geo.cdl\";\nfn main() { print(geo::ping()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// An `impl` block on a builtin type in a module bound under a namespace adds
+/// methods that resolve on the receiver with no prefix.
+#[test]
+fn builtin_type_methods_of_a_namespaced_module_need_no_prefix() {
+    let output = run_program(
+        "builtin_impl",
+        &[
+            (
+                "shout.cdl",
+                "impl string { fn shout(self) -> string => self + \"!\"; }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"shout.cdl\";\nfn main() { print(\"hi\".shout()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hi!");
+}
+
+/// A name and a list of items on one import is a parse error, and so is an
+/// empty list.
+#[test]
+fn an_import_takes_a_name_or_items_not_both() {
+    for (name, import) in [
+        ("both", "import \"geo.cdl\" as g { ping };"),
+        ("empty", "import \"geo.cdl\" {};"),
+    ] {
+        let output = run_program(
+            &format!("import_shape_{name}"),
+            &[
+                ("geo.cdl", "fn ping() { return 1; }\n"),
+                ("prog.cdl", &format!("{import}\nfn main() {{ }}\n")),
+            ],
+        );
+        assert!(!output.status.success(), "{name} compiled");
+    }
 }

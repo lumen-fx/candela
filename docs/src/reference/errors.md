@@ -44,6 +44,7 @@ Raised while the file is read, before any type is known.
 | `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
 | `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
+| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`) |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
@@ -59,7 +60,12 @@ Raised by the type checker once the file parses.
 namespace that does not resolve. These reports suggest the closest name in scope
 when there is one. A name or a namespace that a standard library module the
 program does not import declares names the import instead, so `sqrt(x)` points
-at `import "std/math" as math;` and `fs::read(p)` at `import "std/fs" as fs;`.
+at `import "std/math";` and `fs::read(p)` at `import "std/fs";`. A function or
+type the file reaches only through an imported module's name names both ways
+to write it: `parse(s)` after `import "std/json";` points at `json::parse(s)`
+and at `import "std/json" { parse };`. A std function that lost its module's
+name from its own is reported with the new spelling: `assert_eq` points at
+`assert::eq`, `random_int` at `random::int`.
 A method a map no longer has is `no_such_method` with the spelling that
 replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
 for `get_or`. A renamed string or list method is reported the same way:
@@ -172,9 +178,12 @@ built-in method, a name in a declaration that is neither a type nor one of its
 type parameters, and a generic type whose own fields name a deeper instantiation
 of itself without end. See [generics](../language/generics.md).
 
-**Import and library errors.** An import path that cannot be read, a bare import
-whose symbols collide with names already in scope, a `dylib` library that cannot
-be opened, a symbol the library does not export, and a `dylib` signature naming
+**Import and library errors.** An import path that cannot be read, an item
+named in an import that the module does not declare
+(`import_item_not_exported`, listing the ones it does), an item that collides
+with a name already in scope (`import_symbol_collision`), two modules bound
+under one name (`import_name_collision`), a `dylib` library that cannot be
+opened, a symbol the library does not export, and a `dylib` signature naming
 a type C has no representation for (`no_c_representation`). `candela check`
 opens no library, so it reports neither a library it cannot open nor a missing
 symbol. See
@@ -287,7 +296,7 @@ matches, the error is re-raised to the next enclosing `try`, and an error that
 reaches the top of the program is printed and ends it.
 
 ```rust
-import "std/fs" as fs;
+import "std/fs";
 
 fn main() {
     try {
