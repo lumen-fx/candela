@@ -15001,3 +15001,16 @@ pub fn a_branch_value_calls_the_function_it_chose() {
         "1.0\n0.0\n6\n50\n1.0\n0.0\none\ntwo\nmany\n"
     );
 }
+
+#[test]
+pub fn print_null_prints_null() {
+    let src = r"
+        fn nothing() { }
+        fn main() {
+            print(null);
+            let x = nothing();
+            print(x);
+        }
+    ";
+    assert_eq!(run_output(src), "null\nnull\n");
+}
