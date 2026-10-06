@@ -23,7 +23,7 @@ wrong. The common ones come from conversions and lookups.
   end.
 - `unknown_map_key`: `get` on a key the map does not hold.
 - `division_by_zero`, `modulo_by_zero`.
-- `json_parse_error`: malformed input to `json_parse`.
+- `json_parse_error`: malformed input to `json::parse`.
 - `fs_not_found`, `fs_permission_denied`, and the other `fs_` kinds: file system
   calls.
 

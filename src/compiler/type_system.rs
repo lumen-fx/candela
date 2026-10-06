@@ -1903,11 +1903,16 @@ fn declared_return_type(namespace: &[SmolStr], state: &State<'_>) -> Option<Data
 /// Keep in step with the match in `builtin_functions`, which lowers these
 /// calls: a name that lowers there and is missing here is reported as an
 /// unknown function, and a name here that does not lower there types a call
-/// that never reaches a built-in.
-fn builtin_fn_return_type(name: &str) -> Option<DataType> {
+/// that never reaches a built-in. `in_std` says the call is written in a
+/// standard library module, the only place the [`std_primitive_return_type`]
+/// names resolve.
+fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
+    if in_std && let Some(t) = std_primitive_return_type(name) {
+        return Some(t);
+    }
     Some(match name {
         "print" | "exit" | "throw" => DataType::Null,
-        "type" | "str" | "input" | "json_stringify" | "as_str" => DataType::String,
+        "type" | "str" | "input" | "as_str" => DataType::String,
         "float" | "as_float" => DataType::Float,
         "int" | "the_answer" | "as_int" => DataType::Int,
         "bool" | "as_bool" | "is_int" | "is_float" | "is_str" | "is_bool" | "is_list"
@@ -1917,29 +1922,30 @@ fn builtin_fn_return_type(name: &str) -> Option<DataType> {
         // A downcast to a collection yields an element/entry type of `any`
         // (Unknown). That is a known type, not a gap: the entries stay dynamic
         // instead of taking their type from the first `push`/`insert` the way an
-        // empty literal does. json::parse yields a fully dynamic value.
+        // empty literal does.
         "as_list" => DataType::Array(Some(Box::from(DataType::Unknown))),
         "as_map" => DataType::Map(Box::from((
             Some(DataType::Unknown),
             Some(DataType::Unknown),
         ))),
-        "json_parse" => DataType::Unknown,
         _ => return None,
     })
 }
 
-/// The type an `fs::` call yields, or `None` when the file library takes no
-/// function of that name. Keep in step with `fs_lib_functions`, which lowers
-/// these calls.
+/// The type a native primitive of the standard library yields, or `None` when
+/// none takes that name.
 ///
-/// These names are reachable only through the `fs` path. Answering for them off
-/// the bare last segment is what made a program's own `read` or `exists` infer
-/// as a file operation.
-fn fs_fn_return_type(name: &str) -> Option<DataType> {
+/// These are what `std/json` and `std/fs` are written on; only a standard
+/// library module reaches them, so a program has one spelling of each, the
+/// module's. Keep in step with `builtin_functions`.
+#[must_use]
+pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
     Some(match name {
-        "read" => DataType::String,
-        "exists" => DataType::Bool,
-        "write" | "append" | "delete" | "delete_dir" => DataType::Null,
+        "json_stringify" | "fs_read" => DataType::String,
+        // json::parse yields a fully dynamic value.
+        "json_parse" => DataType::Unknown,
+        "fs_exists" => DataType::Bool,
+        "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" => DataType::Null,
         _ => return None,
     })
 }
@@ -3755,17 +3761,6 @@ impl Expr {
                         .collect::<Vec<DataType>>()
                 };
                 if !path.is_empty() {
-                    if path == ["fs"] {
-                        return fs_fn_return_type(fn_name).unwrap_or_else(|| {
-                            error_unknown_function(
-                                fn_name,
-                                *span,
-                                &Namespace::default(),
-                                ctx.file_idx,
-                                state.sources,
-                            )
-                        });
-                    }
                     // A call into a `host` or `dylib` block takes its type from
                     // the declaration: `gpio::read` is whatever its block says it
                     // is, not the `read` that returns a string.
@@ -3834,7 +3829,9 @@ impl Expr {
                         state,
                     );
                 }
-                if let Some(return_type) = builtin_fn_return_type(fn_name) {
+                if let Some(return_type) =
+                    builtin_fn_return_type(fn_name, state.namespaces.is_std(ctx.file_idx))
+                {
                     return return_type;
                 }
                 // An unqualified call whose name is an enum variant (`Some(x)`)

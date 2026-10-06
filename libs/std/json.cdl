@@ -9,8 +9,9 @@
 ///
 /// `stringify` serializes any candela value back to a json string.
 ///
-/// This module is pure Candela and compiles into a `.cdlb` artifact that runs
-/// under `candela-vm` with no dynamic library.
+/// This module is pure Candela over the runtime's own json primitives, so it
+/// compiles into a `.cdlb` artifact that runs under `candela-vm` with no
+/// dynamic library.
 
 /// Parses a json string into a value (typed `any`).
 fn parse(text) {

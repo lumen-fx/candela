@@ -135,12 +135,14 @@ a body may return an `int[]` from a function declared `-> any[]`, or a
 declared type.
 
 ```rust
+import "std/json" as json;
+
 fn row() -> {any: any} {
     return {"name": "a"};
 }
 
 fn main() {
-    let rows = [as_map(json_parse("{\"id\": 1}"))];
+    let rows = [as_map(json::parse("{\"id\": 1}"))];
     rows.push(row());
     print(rows.len());
 }

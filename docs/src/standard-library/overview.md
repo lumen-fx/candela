@@ -10,8 +10,9 @@ The library ships as candela source. The toolchain installs a `libs` directory
 beside the `candela` executable:
 
 - `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `convert.cdl`,
-  `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`, `option.cdl`,
-  `random.cdl`, `result.cdl`, `set.cdl`, `string.cdl`, `time.cdl`.
+  `fs.cdl`, `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`,
+  `option.cdl`, `random.cdl`, `result.cdl`, `set.cdl`, `string.cdl`,
+  `time.cdl`.
 - `libs/std_src/` holds the C sources and the compiled dynamic libraries for the
   four modules that call into native code: `hash`, `math`, `random`, and
   `time`.
@@ -62,6 +63,9 @@ that export the same free-function name are a compile error; use `as` to keep
 them apart. The import form is covered in full in
 [modules](../language/modules.md).
 
+A call to a name a module you have not imported declares, such as `sqrt(x)` or
+`fs::read(path)`, is a compile error whose help names the import it needs.
+
 A library import's first segment is looked up among the packages the project
 depends on before the library directory, so a dependency named `std` would
 shadow the standard library. Nothing else about `std` is special: it is the
@@ -70,7 +74,7 @@ directory a library path falls back to.
 ## Built-ins and modules
 
 Built-in functions and methods are part of the language. `print`, `str`,
-`json_parse`, `arr.push(x)`, and `s.uppercase()` need no import and are
+`arr.push(x)`, and `s.uppercase()` need no import and are
 available under `candela-vm` with nothing installed. They are listed in
 [built-in functions](builtins.md).
 
@@ -100,6 +104,7 @@ when your file already binds the name `list`.
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
 | [convert](convert.md) | `to_int`, `to_float`, `to_string`, `to_bool` methods over the built-in conversions |
+| [fs](fs.md) | Read, write, append to and delete files |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string, as hex |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
 | [list](list.md) | Reductions, slicing, and higher-order methods on arrays |
