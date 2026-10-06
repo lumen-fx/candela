@@ -3,7 +3,7 @@
 A set of unique values.
 
 ```rust
-import "std/set" as set;
+import "std/set";
 ```
 
 `Set<T>` is a struct holding a map from member to a unit value, so it reuses the
@@ -12,8 +12,8 @@ of its own. Because it is a type of its own, the operations are methods on it:
 `s.add(x)`, `s.contains(x)`, and the set algebra through `|`, `&`, `-`, and
 `^^`.
 
-Create one with `set::new<int>()`, naming the member type. Nothing in a bare
-`set::new()` pins the type, so that hands back a `Set<any>`, which takes a
+Create one with `Set<int>::new()`, naming the member type. Nothing in a bare
+`Set::new()` pins the type, so that hands back a `Set<any>`, which takes a
 member of any type. `Set<int>` and `Set<any>` are separate types, like any other
 two instantiations of a generic; see [generics](../language/generics.md).
 
@@ -29,11 +29,12 @@ library.
 ## new
 
 ```rust
-set::new<int>()
+Set<int>::new()
 ```
 
-- Returns: a new empty `Set<int>`. Written bare, `set::new()`, it returns a
-  `Set<any>`.
+- Returns: a new empty `Set<int>`. Written bare, `Set::new()`, it returns a
+  `Set<any>`. Imported with `as`, the module's name goes in front:
+  `set::Set<int>::new()`.
 
 ## add
 
@@ -138,13 +139,13 @@ in. `a != b` is the same answer flipped. The two sets have to be the same
 ## Operators
 
 ```rust
-import "std/set" as set;
+import "std/set";
 
 fn main() {
-    let a = set::new<int>();
+    let a = Set<int>::new();
     a.add(1);
     a.add(2);
-    let b = set::new<int>();
+    let b = Set<int>::new();
     b.add(2);
     b.add(3);
 

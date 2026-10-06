@@ -1,10 +1,10 @@
 /// Checks for the `set` module. Prints "set ok" on success; a failed check
 /// aborts the run with a message.
-import "std/set" as set;
+import "std/set";
 import "std/assert" as assert;
 
 fn main() {
-    let s = set::new<int>();
+    let s = Set<int>::new();
     assert::assert_true(s.is_empty());
 
     s.add(1);
@@ -27,11 +27,11 @@ fn main() {
     assert::assert_eq(s.len(), 3);
 
     // Set algebra.
-    let a = set::new<int>();
+    let a = Set<int>::new();
     a.add(1);
     a.add(2);
     a.add(3);
-    let b = set::new<int>();
+    let b = Set<int>::new();
     b.add(2);
     b.add(3);
     b.add(4);
@@ -60,14 +60,14 @@ fn main() {
     assert::assert_eq((a ^^ b).members(), [1, 4]);
 
     // A compound assignment applies the matching operator.
-    let grown = set::new<int>();
+    let grown = Set<int>::new();
     grown.add(1);
     grown |= b;
     assert::assert_eq(grown.members(), [1, 2, 3, 4]);
 
     // Struct equality is field by field and map equality ignores order, so `==`
     // between two sets is already set equality and needs no method.
-    let same = set::new<int>();
+    let same = Set<int>::new();
     same.add(3);
     same.add(2);
     same.add(1);
@@ -87,15 +87,15 @@ fn main() {
     assert::assert_eq(total, 6);
 
     // String members.
-    let words = set::new<string>();
+    let words = Set<string>::new();
     words.add("hi");
     words.add("hi");
     words.add("bye");
     assert::assert_eq(words.len(), 2);
 
-    // Nothing in a bare `set::new()` pins the member type, so it hands back a
+    // Nothing in a bare `Set::new()` pins the member type, so it hands back a
     // `Set<any>`, which takes a member of any type.
-    let mixed = set::new();
+    let mixed = Set::new();
     assert::assert_true(mixed.is_empty());
     mixed.add(1);
     mixed.add("hi");

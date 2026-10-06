@@ -13553,11 +13553,11 @@ pub fn std_generics_keep_their_call_types() {
         run_output_std(
             "
             import \"std/option\";
-            import \"std/set\" as set;
+            import \"std/set\";
 
             fn main() {
                 print(Some(5).unwrap() + 1);
-                let s = set::new();
+                let s = Set::new();
                 s.add(1);
                 print(s.len());
             }
@@ -15580,4 +15580,92 @@ pub fn unannotated_let_changes_type() {
         }
     "#;
     assert_eq!(run_output(src), "one\n");
+}
+
+/// A receiverless `impl` function is called by its type's path: a struct's, an
+/// enum's, a generic instantiation's, and one behind a module alias, from
+/// inside the block as well as outside.
+#[test]
+pub fn receiverless_impl_functions_are_called_by_path() {
+    let src = r#"
+        struct P { x: int }
+        impl P {
+            fn origin() -> P { return P { x: 0 }; }
+            fn one() -> int { return P::origin().x + 1; }
+        }
+        enum Color { Red, Green }
+        impl Color { fn first() -> Color => Color::Red; }
+        struct Stack<T> { items: T[] }
+        impl Stack<T> {
+            fn new() -> Stack<T> => Stack<T> { items: [] };
+            fn push(self, x: T) { self.items.push(x); }
+        }
+        fn main() {
+            print(P::origin().x);
+            print(P::one());
+            print(Color::first() is Red);
+            let s = Stack<int>::new();
+            s.push(3);
+            print(s.items[0] + 1);
+            let a = Stack::new();
+            a.push(1);
+            a.push("x");
+            print(a.items.len());
+        }
+    "#;
+    assert_eq!(run_output(src), "0\n1\ntrue\n4\n2\n");
+}
+
+/// A set is made with `Set<int>::new()`, and behind a module alias with
+/// `set::Set<int>::new()`.
+#[test]
+pub fn a_set_is_made_by_its_path() {
+    let src = r#"
+        import "std/set";
+        fn main() {
+            let s = Set<int>::new();
+            s.add(2);
+            s.add(2);
+            print(s.len());
+        }
+    "#;
+    assert_eq!(run_output_std(src), "1\n");
+    let src = r#"
+        import "std/set" as set;
+        fn main() {
+            let s = set::Set<string>::new();
+            s.add("a");
+            print(s.members());
+        }
+    "#;
+    assert_eq!(run_output_std(src), "[\"a\"]\n");
+    let src = "import \"std/set\" as set; fn main() { let s = set::new<int>(); }";
+    let d = compile_diag(src, "set.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unknown_function_in_namespace");
+    assert!(d.message.contains("set::Set<T>::new()"), "{d:?}");
+}
+
+/// A path call to a method, and a dot call to a receiverless function, are
+/// each refused with the other spelling in the help.
+#[test]
+pub fn path_and_dot_calls_are_not_interchangeable() {
+    let src = "
+struct P { x: int }
+impl P { fn len(self) -> int => self.x; }
+fn main() { print(P::len()); }
+";
+    let d = compile_diag(src, "path.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "path_call_with_receiver");
+    assert!(d.message.contains("value.len(...)"), "{d:?}");
+
+    let src = "
+struct P { x: int }
+impl P { fn make() -> P => P { x: 1 }; }
+fn main() { print(P { x: 2 }.make().x); }
+";
+    let d = compile_diag(src, "dot.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "method_without_receiver");
 }

@@ -64,7 +64,9 @@ A method a map no longer has is `no_such_method` with the spelling that
 replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
 for `get_or`. A namespace a `host` or `dylib` block declares resolves like
 any other, so a call it has no function for is reported against the function,
-naming the namespace it was looked for in. A dot call on a block's name, `app.rows(id)`,
+naming the namespace it was looked for in. A function a type in the namespace declares
+in its `impl` block is named with the type's path, so `set::new()` points at
+`set::Set<T>::new()`. A dot call on a block's name, `app.rows(id)`,
 is `block_dot_call`: a block is reached with `::`.
 
 **Struct and field errors.** Reading a field a struct does not declare, building
@@ -85,7 +87,10 @@ and returns something else is reported against the annotation. A call has the
 type its function declares, so an argument taken from a call is checked against
 the declared return type, not against what the body returns. A dot call that
 reaches an `impl` function declared with no parameters is
-`method_without_receiver`: nothing would receive the value in front of the dot.
+`method_without_receiver`: nothing would receive the value in front of the dot,
+and the help names the path call, `Type::name()`. The reverse, a path call that
+reaches an `impl` function declaring a receiver, is `path_call_with_receiver`,
+and the help names the dot call.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,

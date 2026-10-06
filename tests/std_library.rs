@@ -320,11 +320,11 @@ fn main() {
     print(obj["n"] as int);
     print((obj["xs"] as any[]).len());
     print(json::stringify(json::parse("[1,2,3]")));
-    let s = set::new<int>();
+    let s = set::Set<int>::new();
     s.add(1);
     s.add(1);
     s.add(2);
-    let t = set::new<int>();
+    let t = set::Set<int>::new();
     t.add(2);
     t.add(3);
     print(s.len());

@@ -4,7 +4,7 @@
 /// the map's storage, hashing, and garbage collection rather than adding a
 /// separate runtime type. Being a type of its own is what lets the operations
 /// be methods: `s.add(x)`, `s.contains(x)`, and the set algebra through `|`,
-/// `&`, `-`, and `^^`. Create one with `set::new<int>()`, naming the member
+/// `&`, `-`, and `^^`. Create one with `Set<int>::new()`, naming the member
 /// type.
 ///
 /// Members come back from `members` in the order they were added, because the
@@ -22,6 +22,11 @@ struct Set<T> {
 }
 
 impl Set<T> {
+    /// A new empty set: `Set<int>::new()`, naming the member type.
+    fn new() -> Set<T> {
+        return Set<T>{ items: {} };
+    }
+
     /// Adds `x`. A member already present is unchanged.
     fn add(self, x: T) {
         self.items[x] = true;
@@ -123,9 +128,4 @@ impl Set<T> {
     fn ^^(self, other: Set<T>) -> Set<T> {
         return self.symmetric_difference(other);
     }
-}
-
-/// A new empty set. Name the member type, `set::new<int>()`, to pin it.
-fn new<T>() -> Set<T> {
-    return Set<T>{ items: {} };
 }
