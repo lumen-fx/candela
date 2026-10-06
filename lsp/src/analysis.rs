@@ -37,8 +37,10 @@ use candela::compiler::expr::METHOD_SEP;
 use candela::compiler::expr::{Expr, IsTarget, Span};
 use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::ANON_FN_PREFIX;
+use candela::compiler::{Namespace, SymbolKind};
 use candela::macros::MacroEnv;
 use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
+use smol_strc::SmolStr;
 
 /// A function or struct declaration, with enough information to render a
 /// document symbol / hover / go-to-definition target.
@@ -83,10 +85,35 @@ pub enum RefKind {
 pub struct RefSite {
     pub span: Span,
     pub kind: RefKind,
-    /// Bare (last path segment) name; `namespace::name` qualification is not
-    /// resolved, see the crate README's "known simplifications".
+    /// Bare (last path segment) name.
     pub target_name: String,
+    /// The module path in front of a free call (`["json"]` for
+    /// `json::parse(s)`); `None` for a method call, which resolves on its
+    /// receiver.
+    pub target_path: Option<Vec<String>>,
+    /// The function a free call resolves to in the scope of the file it is
+    /// written in, as an index into `ProgramSummary::functions`, when it
+    /// resolves to one; see `ProgramSummary::targets_of`.
+    pub target_fn: Option<usize>,
     pub src_file: u16,
+}
+
+/// What a name written in the buffer can be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeKind {
+    Function,
+    Struct,
+    Enum,
+}
+
+/// A name the buffer can write as it stands: its own declarations, the items
+/// its imports named, and `module::name` for each module an import bound.
+#[derive(Debug, Clone)]
+pub struct ScopeEntry {
+    pub label: String,
+    pub kind: ScopeKind,
+    /// For a function, its index into `ProgramSummary::functions`.
+    pub function: Option<usize>,
 }
 
 /// Everything this module extracts from a successful `compile()`, in plain
@@ -100,6 +127,8 @@ pub struct ProgramSummary {
     pub functions: Vec<FunctionSymbol>,
     pub structs: Vec<StructSymbol>,
     pub refs: Vec<RefSite>,
+    /// The names the buffer can write, for completion.
+    pub scope: Vec<ScopeEntry>,
 }
 
 /// The result of analyzing one buffer: a `Diagnostic` on failure (parse or
@@ -185,14 +214,65 @@ fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> P
         .map(|s| struct_symbol(s, types, buffer_text))
         .collect();
 
-    let refs = out.functions.iter().flat_map(collect_refs).collect();
+    let mut refs: Vec<RefSite> = out.functions.iter().flat_map(collect_refs).collect();
+    // A free call resolves in the scope of the file it is written in, which
+    // is what makes `geo::area` reach the `area` the module bound as `geo`
+    // declares rather than any `area` in the program.
+    for r in &mut refs {
+        if let Some(path) = &r.target_path {
+            let path: Vec<SmolStr> = path.iter().map(SmolStr::from).collect();
+            r.target_fn = out
+                .namespaces
+                .get(r.src_file)
+                .find_function(&path, &r.target_name);
+        }
+    }
 
     ProgramSummary {
         source_files,
         functions,
         structs,
         refs,
+        scope: scope_entries(out.namespaces.root()),
     }
+}
+
+/// The names the entry file can write: what its scope holds, and each module
+/// an import bound, behind that module's name.
+fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
+    let mut entries: Vec<ScopeEntry> = Vec::new();
+    let mut add = |label: String, kind: &SymbolKind| {
+        let (kind, function) = match kind {
+            SymbolKind::Fn(id) => (ScopeKind::Function, Some(*id as usize)),
+            SymbolKind::Struct(_) | SymbolKind::Template(_) => (ScopeKind::Struct, None),
+            SymbolKind::Enum(_) => (ScopeKind::Enum, None),
+        };
+        if !entries.iter().any(|e| e.label == label) {
+            entries.push(ScopeEntry {
+                label,
+                kind,
+                function,
+            });
+        }
+    };
+    for (name, kind) in &root.symbols {
+        if is_a_written_name(name) {
+            add(name.to_string(), kind);
+        }
+    }
+    for (alias, module) in &root.children {
+        // A `host` block's namespace has no file behind it; its functions
+        // live outside the scope tree.
+        if module.import_path.is_empty() {
+            continue;
+        }
+        for (name, kind) in &module.symbols {
+            if is_a_written_name(name) && name != "main" {
+                add(format!("{alias}::{name}"), kind);
+            }
+        }
+    }
+    entries
 }
 
 fn function_symbol(f: &Function, types: TypeNames<'_>) -> FunctionSymbol {
@@ -324,6 +404,8 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                     span: *span,
                     kind: RefKind::StructLiteral,
                     target_name: name.to_string(),
+                    target_path: None,
+                    target_fn: None,
                     src_file,
                 });
             }
@@ -361,11 +443,13 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             for a in args.iter() {
                 visit_expr(a, src_file, out);
             }
-            if let Some(name) = path.last() {
+            if let Some((name, module)) = path.split_last() {
                 out.push(RefSite {
                     span: *span,
                     kind: RefKind::Call,
                     target_name: name.to_string(),
+                    target_path: Some(module.iter().map(ToString::to_string).collect()),
+                    target_fn: None,
                     src_file,
                 });
             }
@@ -380,6 +464,8 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                     span: *fn_span,
                     kind: RefKind::Call,
                     target_name: name.to_string(),
+                    target_path: None,
+                    target_fn: None,
                     src_file,
                 });
             }
@@ -533,6 +619,16 @@ impl ProgramSummary {
     pub fn own_struct_decl_at(&self, offset: u32) -> Option<&StructSymbol> {
         self.own_structs()
             .find(|s| s.name_span.start <= offset && offset <= s.name_span.end)
+    }
+
+    /// The function declarations a call site can mean: the one its path
+    /// resolves to in its file's scope when it resolves, and otherwise every
+    /// function with its bare name (a method call, whose receiver decides).
+    pub fn targets_of<'a>(&'a self, r: &'a RefSite) -> Vec<&'a FunctionSymbol> {
+        match r.target_fn.and_then(|id| self.functions.get(id)) {
+            Some(f) => vec![f],
+            None => self.functions_named(&r.target_name).collect(),
+        }
     }
 
     /// All function declarations (from this buffer or an import) with the
@@ -814,5 +910,50 @@ mod tests {
             "{:?}",
             outcome.diagnostic.map(|d| d.message)
         );
+    }
+
+    /// A call through a module's name resolves to that module's function, not
+    /// to another of the same name, and completion offers the module's names
+    /// behind it and the named items bare.
+    #[test]
+    fn a_namespaced_call_resolves_through_its_module() {
+        let dir = std::env::temp_dir().join(format!("candela_lsp_ns_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        std::fs::write(dir.join("geo.cdl"), "fn area(w, h) { return w * h; }\n").unwrap();
+        std::fs::write(
+            dir.join("other.cdl"),
+            "fn area(w, h) { return 0; }\nfn unit() { return 1; }\n",
+        )
+        .unwrap();
+        let source = "import \"./geo.cdl\";\n\
+                      import \"./other.cdl\" { unit };\n\
+                      fn main() {\n\
+                      \x20   print(geo::area(2, 3) + unit());\n\
+                      }\n";
+        let path = dir.join("buffer.cdl");
+        let outcome = analyze(source, path.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let call = summary
+            .refs
+            .iter()
+            .find(|r| r.src_file == 0 && r.target_name == "area")
+            .expect("the call is recorded");
+        let targets = summary.targets_of(call);
+        assert_eq!(targets.len(), 1);
+        assert!(
+            summary.source_files[targets[0].src_file as usize].ends_with("geo.cdl"),
+            "{:?}",
+            summary.source_files
+        );
+        let labels: Vec<&str> = summary.scope.iter().map(|e| e.label.as_str()).collect();
+        assert!(labels.contains(&"geo::area"), "{labels:?}");
+        assert!(labels.contains(&"unit"), "{labels:?}");
+        assert!(!labels.contains(&"area"), "{labels:?}");
     }
 }
