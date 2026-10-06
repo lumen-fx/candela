@@ -5564,7 +5564,7 @@
     "fields": {
       "value": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "array_literal",

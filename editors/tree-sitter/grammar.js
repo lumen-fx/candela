@@ -703,7 +703,8 @@ module.exports = grammar({
         ),
       ),
 
-    // `..base` comes last and supplies every field the literal leaves out.
+    // `..base` comes last and supplies every field the literal leaves out; a
+    // bare `..` takes them from the struct's default.
     field_initializer_list: ($) =>
       seq(
         '{',
@@ -717,7 +718,7 @@ module.exports = grammar({
         '}',
       ),
 
-    struct_base: ($) => seq('..', field('value', $._expression)),
+    struct_base: ($) => seq('..', optional(field('value', $._expression))),
 
     field_initializer: ($) =>
       seq(field('name', $.identifier), ':', field('value', $._expression)),

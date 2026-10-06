@@ -8,8 +8,8 @@ new role is a compile error.
 This affects you if an `impl` block declares a function named `default`.
 
 A `fn default() -> S` with no parameters now runs wherever a default of the
-struct is built: `S::default()`, `Default::default()`, `..Default::default()`,
-and a field whose type is the struct. If it builds something other than what
+struct is built: `S::default()`, a literal ending in a bare `..`, and a field
+whose type is the struct. If it builds something other than what
 the field values give, those call sites now see its value.
 
 A `default` with parameters, including a method `fn default(self)`, or one that

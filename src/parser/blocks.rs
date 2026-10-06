@@ -416,8 +416,8 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
             field_type,
             (field_type_start, field_type_end).into(),
         ));
-        // `name: Type = value` gives the field the value `S::default()` and
-        // `..Default::default()` fill it with.
+        // `name: Type = value` gives the field the value `S::default()` and a
+        // bare `..` fill it with.
         if parser.peek_token() == Token::Equals {
             parser.next_token();
             let value_start = parser.peek_token_span().start;

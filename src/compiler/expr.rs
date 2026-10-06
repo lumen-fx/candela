@@ -29,17 +29,25 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
     format_args!("{type_name}{METHOD_SEP}{method_name}").to_smolstr()
 }
 
-/// Whether `expr` is `Default::default()`: the default of whatever struct type
-/// the position it is written in names.
-#[must_use]
-pub fn is_default_call(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::FunctionCall(args, path, _, _, type_args)
-            if args.is_empty()
-                && type_args.is_empty()
-                && matches!(&**path, [ty, f] if ty == "Default" && f == "default")
-    )
+/// Where a struct literal written with `..` takes the fields it does not
+/// write from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructRest {
+    /// `..base`: from another value of the struct's type.
+    Base(Expr),
+    /// A bare `..`: from the struct's default.
+    Default,
+}
+
+impl StructRest {
+    /// The expression a `..base` names, `None` for a bare `..`.
+    #[must_use]
+    pub const fn base(&self) -> Option<&Expr> {
+        match self {
+            Self::Base(base) => Some(base),
+            Self::Default => None,
+        }
+    }
 }
 
 /// What the right side of `is` names.
@@ -79,16 +87,16 @@ pub enum Expr {
     /// Struct(name, fields, span, type_args, base)
     ///
     /// `type_args` holds the arguments of a generic struct literal
-    /// (`Cell<int>{ value: 3 }`) and is empty otherwise. `base` is the
-    /// expression after `..` in a literal written with one
-    /// (`Opts { cwd: "a", ..base }`) with the span it was written at: the
-    /// fields the literal does not write are taken from it.
+    /// (`Cell<int>{ value: 3 }`) and is empty otherwise. `base` is what a
+    /// literal written with `..` takes the fields it does not write from,
+    /// `..base` (`Opts { cwd: "a", ..base }`) or a bare `..` for the struct's
+    /// default, with the span it was written at.
     Struct(
         Box<[SmolStr]>,
         Box<[(SmolStr, Self, Span, Span)]>,
         Span,
         Box<[TypeExpr]>,
-        Option<Box<(Self, Span)>>,
+        Option<Box<(StructRest, Span)>>,
     ),
     /// StructDeclare(name, fields, span, type_params, defaults)
     ///
@@ -105,8 +113,8 @@ pub enum Expr {
     /// StructDefault(struct_id, span)
     ///
     /// The default value of a struct, by its id: what `S::default()` and a
-    /// `Default::default()` whose type the position names lower to. Built by
-    /// the compiler, never by the parser.
+    /// field of a struct type left to its default lower to. Built by the
+    /// compiler, never by the parser.
     StructDefault(u16, Span),
     /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params)
     EnumDeclare(
@@ -676,8 +684,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             for (_, value, _, _) in fields {
                 scan_free_names(value, depth, bound, out);
             }
-            if let Some(base) = base {
-                scan_free_names(&base.0, depth, bound, out);
+            if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
+                scan_free_names(base, depth, bound, out);
             }
         }
         Expr::Match(scrutinee, arms, wildcard, _, _) => {

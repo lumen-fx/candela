@@ -14385,12 +14385,12 @@ pub fn a_struct_default_fills_every_field() {
         "{OPTS}
 fn main() {{
     show(Opts::default());
-    let d = Opts {{ cwd: \"x\", ..Default::default() }};
+    let d = Opts {{ cwd: \"x\", .. }};
     show(d);
     d.inner.tags.push(\"t\");
     d.env[\"k\"] = \"v\";
     show(Opts::default());
-    show(Opts {{ inner: Inner {{ n: 7, ..Default::default() }}, ..Default::default() }});
+    show(Opts {{ inner: Inner {{ n: 7, .. }}, .. }});
 }}
 "
     );
@@ -14401,39 +14401,6 @@ fn main() {{
     );
 }
 
-/// `Default::default()` is the default of the struct its position names: a
-/// typed parameter, a method's typed parameter, and an annotated return.
-#[test]
-pub fn default_resolves_from_the_type_its_position_names() {
-    let src = format!(
-        "{OPTS}
-fn make() -> Opts {{
-    if true {{
-        return Default::default();
-    }}
-    return Opts::default();
-}}
-
-impl Inner {{
-    fn with(self, o: Opts) -> int {{
-        return self.n + o.retries;
-    }}
-}}
-
-fn main() {{
-    show(Default::default());
-    show(make());
-    let i = Inner {{ n: 1, tags: [] }};
-    print(i.with(Default::default()));
-}}
-"
-    );
-    assert_eq!(
-        run_output(&src),
-        "here 3 false 0.0 0 0 0 null\nhere 3 false 0.0 0 0 0 null\n4\n"
-    );
-}
-
 /// Defaults inside a function body, where a literal is built each time the
 /// function runs rather than once.
 #[test]
@@ -14441,7 +14408,7 @@ pub fn struct_update_and_defaults_inside_a_loop() {
     let src = "
 struct Opts { cwd: string = \"here\", tags: string[], }
 fn build(cwd: string) -> Opts {
-    let base = Opts { cwd: cwd, ..Default::default() };
+    let base = Opts { cwd: cwd, .. };
     return Opts { tags: [\"t\"], ..base };
 }
 fn main() {
@@ -14491,16 +14458,16 @@ struct S { x: int, y: int = 2 }
 impl S { fn default() -> S { return S { x: 7, y: 3 }; } }
 struct T { s: S, n: int }
 fn take(s: S) -> int { return s.x; }
-fn make() -> S { return Default::default(); }
+fn make() -> S { return S { .. }; }
 fn main() {
     print(S::default().x);
-    let a = S { y: 9, ..Default::default() };
+    let a = S { y: 9, .. };
     print(string(a.x) + \" \" + string(a.y));
-    print(take(Default::default()));
+    print(take(S::default()));
     print(make().x);
     let t = T::default();
     print(string(t.s.x) + \" \" + string(t.s.y) + \" \" + string(t.n));
-    let u = T { n: 1, ..Default::default() };
+    let u = T { n: 1, .. };
     print(string(u.s.x) + \" \" + string(u.n));
 }
 ";
@@ -14517,8 +14484,8 @@ fn keep(s: S) -> S { return s; }
 impl S {
     fn default() -> S {
         let d = S::default();
-        let e = S { x: 5, ..Default::default() };
-        let f = keep(Default::default());
+        let e = S { x: 5, .. };
+        let f = keep(S { .. });
         return S { x: d.x + e.x + f.x + 1, y: d.y + e.y + f.y };
     }
 }
@@ -14536,7 +14503,7 @@ fn main() {
 pub fn a_generic_struct_default_function() {
     let src = "
 struct Cell<T> { value: T, n: int }
-impl Cell<T> { fn default() { return Cell<T> { n: 3, ..Default::default() }; } }
+impl Cell<T> { fn default() { return Cell<T> { n: 3, .. }; } }
 struct Holder { c: Cell<int> }
 fn main() {
     let a = Cell<string>::default();
@@ -14632,7 +14599,7 @@ fn main() { let b = B { x: 1 }; let a = A { ..b }; print(a.x); }
 pub fn a_field_the_struct_lacks_is_refused_beside_a_base() {
     let src = "
 struct A { x: int, }
-fn main() { let a = A { y: 1, ..Default::default() }; print(a.x); }
+fn main() { let a = A { y: 1, .. }; print(a.x); }
 ";
     let d = compile_diag(src, "field.cdl").unwrap_err();
     assert_wellformed(&d, src);
@@ -14643,7 +14610,7 @@ fn main() { let a = A { y: 1, ..Default::default() }; print(a.x); }
 pub fn a_written_field_of_the_wrong_type_is_refused_beside_a_base() {
     let src = "
 struct A { x: int, }
-fn main() { let a = A { x: \"no\", ..Default::default() }; print(a.x); }
+fn main() { let a = A { x: \"no\", .. }; print(a.x); }
 ";
     let d = compile_diag(src, "field.cdl").unwrap_err();
     assert_wellformed(&d, src);
@@ -14662,14 +14629,40 @@ fn main() { print(A::default().x); }
     assert_eq!(&src[d.span], "\"s\"");
 }
 
+/// `Default::default()` is gone in every position it used to resolve in, and
+/// the report names a bare `..` and `S::default()`.
 #[test]
-pub fn default_with_no_type_to_take_is_refused() {
+pub fn default_default_is_refused() {
+    for src in [
+        "fn main() { let a = Default::default(); print(a); }",
+        "struct S { a: int } fn main() { let s = S { a: 1, ..Default::default() }; print(s.a); }",
+        "struct S { a: int } fn f(s: S) -> int { return s.a; } fn main() { print(f(Default::default())); }",
+        "struct S { a: int } fn mk() -> S { return Default::default(); } fn main() { print(mk().a); }",
+        "struct S { a: int } struct T { s: S } fn main() { let t = T { s: Default::default() }; print(t.s.a); }",
+    ] {
+        let d = compile_diag(src, "none.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "unknown_function", "{src}");
+        assert!(d.message.contains("S { .. }"), "{src}: {d:?}");
+        assert!(d.message.contains("S::default()"), "{src}: {d:?}");
+    }
+}
+
+/// A bare `..` is the only thing after the fields, and the fields before it
+/// may be none at all.
+#[test]
+pub fn a_bare_rest_fills_from_the_default() {
     let src = "
-fn main() { let a = Default::default(); print(a); }
+struct Inner { n: int = 4 }
+struct Opts { cwd: string = \".\", verbose: bool, inner: Inner }
+fn main() {
+    let o = Opts { cwd: \"a\", .. };
+    print(o.cwd + \" \" + string(o.verbose) + \" \" + string(o.inner.n));
+    let p = Opts { .. };
+    print(p.cwd);
+}
 ";
-    let d = compile_diag(src, "none.cdl").unwrap_err();
-    assert_wellformed(&d, src);
-    assert_eq!(d.code, "default_without_type");
+    assert_eq!(run_output(src), "a false 4\n.\n");
 }
 
 /// An enum has no empty value, and a struct reached again through its own

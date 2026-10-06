@@ -316,8 +316,8 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             for (_, val, _, _) in fields.iter() {
                 visit_expr(val, src_file, out);
             }
-            if let Some(base) = base {
-                visit_expr(&base.0, src_file, out);
+            if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
+                visit_expr(base, src_file, out);
             }
             if let Some(name) = path.last() {
                 out.push(RefSite {

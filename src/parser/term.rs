@@ -11,6 +11,7 @@ use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
+use crate::compiler::expr::StructRest;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
@@ -48,19 +49,24 @@ fn parse_struct(
     type_args: Box<[TypeExpr]>,
 ) -> Expr {
     let mut fields: Vec<(SmolStr, Expr, Span, Span)> = Vec::with_capacity(4);
-    let mut base: Option<Box<(Expr, Span)>> = None;
+    let mut base: Option<Box<(StructRest, Span)>> = None;
     let end: u32;
     loop {
         // `..base` closes the literal: every field it does not write is taken
-        // from `base`, the way Rust's struct update syntax reads.
+        // from `base`, the way Rust's struct update syntax reads. A bare `..`
+        // takes them from the struct's default.
         if parser.peek_token() == Token::RangeDot {
-            parser.next_token();
-            let base_start = parser.peek_token_span().start;
-            let base_expr = parse_expr(parser);
-            base = Some(Box::new((
-                base_expr,
-                (base_start, parser.last_token_end as u32).into(),
-            )));
+            let dots = parser.next_token().1;
+            base = Some(Box::new(if parser.peek_token() == Token::RBrace {
+                (StructRest::Default, dots)
+            } else {
+                let base_start = parser.peek_token_span().start;
+                let base_expr = parse_expr(parser);
+                (
+                    StructRest::Base(base_expr),
+                    (base_start, parser.last_token_end as u32).into(),
+                )
+            }));
             let (next_token, span) = parser.next_token();
             if next_token != Token::RBrace {
                 cold_path();
@@ -69,7 +75,7 @@ fn parse_struct(
                     ParserErr::UnexpectedToken(
                         Token::RBrace,
                         next_token,
-                        "The `..base` of a struct literal comes last.",
+                        "The `..` of a struct literal comes last.",
                     ),
                 );
             }

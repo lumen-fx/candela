@@ -886,7 +886,7 @@ Struct update and defaults (docs/src/language/types.md)
 
 fn main() {
     let heading = Style { size: 18, bold: true, ..body };
-    run("build", Options { ..Default::default() });
+    run("build", Options { verbose: true, .. });
     let o = Options::default();
 }
 
@@ -918,12 +918,10 @@ fn main() {
             (struct_literal
               (identifier)
               (field_initializer_list
-                (struct_base
-                  (call_expression
-                    (qualified_identifier
-                      (identifier)
-                      (identifier))
-                    (arguments))))))))
+                (field_initializer
+                  (identifier)
+                  (boolean_literal))
+                (struct_base))))))
       (let_declaration
         (identifier)
         (call_expression

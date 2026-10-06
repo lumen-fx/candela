@@ -212,12 +212,12 @@ struct, defaults included:
 ```rust
 fn launch() -> bool {
     return process::start("java", ["-jar", "game.jar"], "game",
-        process::StartOptions { cwd: "instances/a", ..Default::default() });
+        process::StartOptions { cwd: "instances/a", .. });
 }
 ```
 
-`process::StartOptions::default()` and a bare `Default::default()` in the
-struct's parameter work as well; see [default values](../language/types.md#default-values).
+`process::StartOptions::default()` works as well; see
+[default values](../language/types.md#default-values).
 
 The closure is registered with `register_host_fn_typed`, naming the struct's
 fields in the order the block declares them, and receives the value as a

@@ -2389,11 +2389,11 @@ host "process" {
 }
 
 fn in_dir(dir: string) -> bool {
-    return process::start("java", ["-jar"], "game", process::StartOptions { cwd: dir, ..Default::default() });
+    return process::start("java", ["-jar"], "game", process::StartOptions { cwd: dir, .. });
 }
 
 fn plain() -> bool {
-    return process::start("java", [], "game", Default::default());
+    return process::start("java", [], "game", process::StartOptions { .. });
 }
 
 fn named() -> bool {
