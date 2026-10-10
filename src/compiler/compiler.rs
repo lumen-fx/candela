@@ -3543,15 +3543,11 @@ fn compile_array_index_assignment(
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
     state.free_reg(elem_id, v);
-    if {
-        if let DataType::Array(Some(array_type)) = &array_type
-            && array_type.as_ref() != &elem_type
-        {
-            true
-        } else {
-            false
-        }
-    } || (array_type == DataType::String && elem_type != DataType::String)
+    // An element takes the same rule a map entry and a `push` argument do: an
+    // `any` slot, such as the elements of an `as_list` list, holds any value.
+    if matches!(&array_type, DataType::Array(Some(held))
+            if !param_type_matches(held, &elem_type, state.generics))
+        || (array_type == DataType::String && elem_type != DataType::String)
     {
         error_cannot_push_type_to_array(
             &array_type,

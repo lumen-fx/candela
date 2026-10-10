@@ -166,10 +166,10 @@ operators of the language rather than functions, described in
 
 `as {any: any}` gives a map with `any` keys and values, and `as any[]` a list of
 `any`, because the entries of a dynamic collection are dynamic too. Such a
-collection takes a `push` or an `m[k] = v` of any type, in any order, and an
-entry read back out is an `any` that needs its own downcast. `as {string: any}`
-checks every key on the way, and gives the map a function declaring string
-keys accepts.
+collection takes a `push`, an `xs[i] = v` or an `m[k] = v` of any type, in any
+order, and an entry read back out is an `any` that needs its own downcast.
+`as {string: any}` checks every key on the way, and gives the map a function
+declaring string keys accepts.
 
 ```rust
 import "std/json";
