@@ -8572,6 +8572,40 @@ pub fn list_downcast_elements_stay_dynamic() {
     );
 }
 
+/// An index of an `any[]` list takes a value of any type, the same as a
+/// `push` onto it, so one record of a parsed list is replaced in place.
+#[test]
+pub fn list_downcast_index_assignment_takes_any_type() {
+    let printed = run_output_std(
+        "import \"std/json\";
+
+        fn main() {
+            let l = json::parse(\"[1, 2, 3]\") as any[];
+            l.push({\"a\": \"2\"});
+            l[0] = 5;
+            l[1] = \"two\";
+            l[2] = {\"b\": \"3\"};
+            l[3] = [7];
+            print((l[0] as int) + 1);
+            print(l[1] as string);
+            print((l[2] as {string: string})[\"b\"]);
+            print(((l[3] as any[])[0] as int) + 1);
+        }
+        ",
+    );
+    assert_eq!(printed, "6\ntwo\n3\n8\n");
+}
+
+/// A list with a declared element type still refuses a value of another type
+/// at an index.
+#[test]
+pub fn typed_list_index_assignment_rejects_another_type() {
+    let src = "fn main() { let xs = [1, 2]; xs[0] = \"no\"; print(xs.len()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "cannot_push_type_to_array");
+}
+
 #[test]
 pub fn empty_map_literal_pins_its_types_on_the_first_entry() {
     let src = "fn main() { let m = {}; m[\"a\"] = 1; m[\"b\"] = \"s\"; }";
