@@ -1,17 +1,15 @@
-# Rebuild your .cdlb artifacts: the artifact format is now version 16
+# Rebuild your .cdlb artifacts again: the artifact format is now version 16
 
-The `.cdlb` format moved from version 14 to version 16. Version 15 added the
-instruction the `is` type test compiles to for structs, enums, unions and
-collections, and the nested type codes that check what a list or a map holds.
-Version 16 added the entry the runtime runs event handlers through, and the
+The `.cdlb` format moved to version 16. It records the entry the runtime runs
+event handlers through for a program that imports `std/event`, and the
 instructions `std/event` and the new `std/fs` functions compile to.
 
 This affects you if you ship or keep `.cdlb` files built by an earlier
-release. The new `candela-vm`, and `load_program` in an embedding host, refuse
-them:
+toolchain, including one that already wrote version 15. The new `candela-vm`,
+and `load_program` in an embedding host, refuse them:
 
 ```text
-candela-vm: unsupported .cdlb format version 14 (this runtime understands version 16)
+candela-vm: unsupported .cdlb format version 15 (this runtime understands version 16)
 ```
 
 Rebuild each artifact from its source with the new toolchain:
@@ -21,4 +19,5 @@ candela build game.cdl
 ```
 
 An embedding host that builds artifacts with `build_bytecode` needs no code
-change; rebuild the artifacts it wrote before the upgrade.
+change. One that fills in a `ProgramImage` field by field sets the new
+`event_entry` field, `None` for a program with no event handlers.
