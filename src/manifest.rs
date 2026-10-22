@@ -80,6 +80,7 @@ pub struct Manifest {
     entry: String,
     candela: Option<String>,
     dependencies: Vec<Dependency>,
+    web_module: Option<String>,
 }
 
 impl Manifest {
@@ -130,9 +131,9 @@ impl Manifest {
         let invalid = |message: String| ManifestError::Invalid(path.to_path_buf(), message);
 
         for key in doc.iter().map(|(key, _)| key) {
-            if key != "package" && key != "dependencies" {
+            if !matches!(key, "package" | "dependencies" | "web") {
                 return Err(invalid(format!(
-                    "unknown table [{key}]. A manifest has [package] and [dependencies]"
+                    "unknown table [{key}]. A manifest has [package], [dependencies] and [web]"
                 )));
             }
         }
@@ -212,6 +213,37 @@ impl Manifest {
             }
         }
 
+        let web_module = match doc.get("web") {
+            None => None,
+            Some(item) => {
+                let table = item
+                    .as_table()
+                    .ok_or_else(|| invalid(String::from("[web] must be a table")))?;
+                for key in table.iter().map(|(key, _)| key) {
+                    if key != "module" {
+                        return Err(invalid(format!(
+                            "unknown key {key} in [web]. The known key is module"
+                        )));
+                    }
+                }
+                let module = table
+                    .get("module")
+                    .ok_or_else(|| invalid(String::from("no module in [web]")))?
+                    .as_str()
+                    .ok_or_else(|| invalid(String::from("module in [web] must be a string")))?
+                    .to_owned();
+                // Shipped inside the package like the entry, so it cannot
+                // climb out of it either.
+                if module.is_empty() || module.split(['/', '\\']).any(|part| part == "..") {
+                    return Err(invalid(format!(
+                        "module in [web] is {module:?}, which is not a path inside the package. \
+                         Write one, as web/{name}.js"
+                    )));
+                }
+                Some(module)
+            }
+        };
+
         let root = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -228,7 +260,15 @@ impl Manifest {
             entry,
             candela,
             dependencies,
+            web_module,
         })
+    }
+
+    /// The JavaScript module a browser embedder binds this package's web
+    /// `host` blocks to, as written under `[web]`, relative to the root.
+    #[must_use]
+    pub fn web_module(&self) -> Option<&str> {
+        self.web_module.as_deref()
     }
 
     /// The manifest file itself.
@@ -259,6 +299,13 @@ impl Manifest {
     #[must_use]
     pub fn entry_path(&self) -> PathBuf {
         self.root.join(&self.entry)
+    }
+
+    /// The package root: the directory the manifest is in, which every path
+    /// in it is relative to.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// The entry as it is written in the manifest.
@@ -458,6 +505,42 @@ mod tests {
             parse("[package]\nname = \"geom\"\nversion = \"0.3.1\"\nentry = \"run.cdl\"\n")
                 .unwrap();
         assert_eq!(manifest.entry_path(), Path::new("/project/run.cdl"));
+    }
+
+    #[test]
+    fn a_web_module_is_read_from_its_table() {
+        let text =
+            "[package]\nname = \"ws\"\nversion = \"0.1.0\"\n\n[web]\nmodule = \"web/ws.js\"\n";
+        assert_eq!(parse(text).unwrap().web_module(), Some("web/ws.js"));
+        let none = "[package]\nname = \"ws\"\nversion = \"0.1.0\"\n";
+        assert_eq!(parse(none).unwrap().web_module(), None);
+    }
+
+    #[test]
+    fn a_web_table_says_only_what_it_knows() {
+        for (web, needle) in [
+            ("[web]\n", "no module"),
+            ("[web]\nmodule = 1\n", "must be a string"),
+            ("[web]\nmodule = \"../x.js\"\n", "inside the package"),
+            ("[web]\nmodule = \"\"\n", "inside the package"),
+            (
+                "[web]\nmodule = \"w.js\"\nworker = \"w.js\"\n",
+                "unknown key worker",
+            ),
+            ("web = 1\n", "must be a table"),
+        ] {
+            let text = format!("[package]\nname = \"a\"\nversion = \"0.1.0\"\n{web}");
+            let text = if web.starts_with("web =") {
+                format!("{web}[package]\nname = \"a\"\nversion = \"0.1.0\"\n")
+            } else {
+                text
+            };
+            let message = parse(&text)
+                .err()
+                .unwrap_or_else(|| panic!("{web} was taken"))
+                .to_string();
+            assert!(message.contains(needle), "{web}: {message}");
+        }
     }
 
     #[test]
