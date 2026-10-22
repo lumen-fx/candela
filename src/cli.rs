@@ -285,6 +285,14 @@ fn target(file: Option<&str>, offline: bool) -> (PathBuf, ImportResolver) {
                     manifest.entry()
                 ));
             }
+            if let Some(module) = manifest.web_module()
+                && !manifest.root().join(module).is_file()
+            {
+                fail(&format!(
+                    "{} names the web module {module}, and there is no file there. Point [web] module at the JavaScript module this package ships",
+                    manifest.path().display(),
+                ));
+            }
             (path, resolve(&manifest, false, offline).0)
         }
         Err(e) => {

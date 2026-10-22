@@ -3,7 +3,9 @@
 The project manifest. Its presence makes a directory a project: `candela run`,
 `candela check` and `candela build` take their entry point from it, and
 `candela add`, `candela remove`, `candela fetch`, `candela update` and
-`candela publish` work on the package it describes.
+`candela publish` work on the package it describes. It has three tables:
+`[package]`, `[dependencies]`, and `[web]` for a package that also runs in a
+browser.
 
 ```toml
 [package]
@@ -87,6 +89,59 @@ A dependency on a package published for the `lumen` platform is refused by
 name. The two platforms ship different things, and a Lumen package holds
 nothing a candela import can reach.
 
+## [web]
+
+A package that also runs in a browser names the JavaScript module that carries
+its browser half:
+
+```toml
+[web]
+module = "web/websocket.js"
+```
+
+| Key | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `module` | string | yes | The ES module, as a path inside the package. The release packs it with the package |
+
+The package declares its browser surface in candela, as a `host` block under
+[`@cfg(web)`](../language/conditional-compilation.md), and the module exports
+a function of the same name for each function the block declares. A host that
+runs candela in a browser binds the two by name, so the signatures live once,
+in the package, and `candela check --cfg web` checks the package with no
+browser in sight. The same functions under `@cfg(not(web))` are the desktop
+half: a `dylib` block, or candela that raises.
+
+```rust
+@cfg(web)
+host "websocket" {
+    candela_websocket_open(int, string);
+    int candela_websocket_send(int, string);
+}
+```
+
+```js
+let candela;
+
+export function install(runtime, config) {
+  candela = runtime;
+}
+
+export function candela_websocket_open(source, url) { /* ... */ }
+export function candela_websocket_send(source, text) { /* ... */ }
+```
+
+The host calls `install` once, before the program runs, with `runtime`, the
+program's [event queue](../standard-library/event.md): `runtime.post(source,
+payload)` queues a JSON string for the source's handler, `runtime.hold(source)`
+says work under the source is still running, and `runtime.release(source)` ends
+that, behind the events already posted. `config` is the configuration the host
+keeps for the package, or nothing. Values cross between the host block and the
+module the way the host's binding carries them, which for the
+[first-party packages](../packages/index.md) is the way JSON carries them.
+
+The module has to exist: `candela check` refuses a manifest whose `[web]`
+module is not there.
+
 ## Editing
 
 `candela add` and `candela remove` rewrite the file in place and keep
@@ -105,6 +160,7 @@ package/
   src/
     main.cdl
   dist/          # native libraries, when the package ships any
+  web/           # the browser half, when [web] names one
 ```
 
 A release archive carries the manifest and the directory the `entry` sits in,
@@ -113,7 +169,8 @@ with the package root at the root of the archive, so the default entry makes it
 everything beside the manifest, apart from `dist/`, `target/`, any `.tar.gz`,
 `.tgz` or `.zip` lying there, and every name that starts with a dot, so `.git`,
 `.github` and `.gitignore` stay out. A package that ships native libraries
-carries `dist/` too, built per target.
+carries `dist/` too, built per target, and one with a `[web]` module carries the
+directory the module is in.
 
 ## Imports into a package
 

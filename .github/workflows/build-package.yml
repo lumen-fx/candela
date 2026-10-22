@@ -74,6 +74,7 @@ jobs:
       version: ${{ steps.read.outputs.version }}
       description: ${{ steps.read.outputs.description }}
       entry: ${{ steps.read.outputs.entry }}
+      web_module: ${{ steps.read.outputs.web_module }}
     steps:
       - uses: actions/checkout@v6
 
@@ -114,11 +115,26 @@ jobs:
           # toolchain is installed, so it cannot ask for it.
           entry="$(read_key entry)"
           [ -n "$entry" ] || entry="src/main.cdl"
+          # The browser half, when the package has one: [web] module names it.
+          web_module="$(awk '
+            /^[[:space:]]*\[/ { inside = ($0 ~ /^[[:space:]]*\[web\][[:space:]]*$/); next }
+            inside && $0 ~ "^[[:space:]]*module[[:space:]]*=" {
+              sub(/^[^=]*=[[:space:]]*/, "")
+              sub(/[[:space:]]+$/, "")
+              quote = substr($0, 1, 1)
+              if (quote == "\"" || quote == "'"'"'") {
+                sub("^" quote, "")
+                sub(quote ".*$", "")
+              }
+              print
+              exit
+            }' "$MANIFEST")"
           {
             echo "name=$name"
             echo "version=$version"
             echo "description=$(read_key description)"
             echo "entry=$entry"
+            echo "web_module=$web_module"
           } >> "$GITHUB_OUTPUT"
           echo "$name $version, entry $entry"
 
@@ -270,6 +286,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           NAME: ${{ needs.plan.outputs.name }}
           ENTRY: ${{ needs.plan.outputs.entry }}
+          WEB_MODULE: ${{ needs.plan.outputs.web_module }}
         run: |
           set -euo pipefail
           root="$(dirname "$MANIFEST")"
@@ -320,6 +337,17 @@ jobs:
           # it has already put it on the list.
           if [ -d "$root/dist" ] && [ "$entry_dir" != dist ]; then
             members+=("dist")
+          fi
+          # So does the directory the browser half sits in, which a host
+          # serves to the page. `candela check` has already refused a module
+          # that is not there or climbs out of the package.
+          if [ -n "$WEB_MODULE" ] && [ "$entry_dir" != "." ]; then
+            web_dir="$(dirname "$WEB_MODULE")"
+            if [ "$web_dir" = "." ]; then
+              members+=("$WEB_MODULE")
+            elif [ "$web_dir" != "$entry_dir" ] && [ "$web_dir" != dist ]; then
+              members+=("$web_dir")
+            fi
           fi
           tar -czf "$archive" -C "$root" "${members[@]}"
           tar -tzf "$archive"
