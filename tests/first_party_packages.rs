@@ -5,11 +5,10 @@
 //! which is the case the event seam exists for: the program's handlers run
 //! after `main` returns, and the program exits once its child has.
 //!
-//! The run needs the package's native library, which `cargo build
-//! --workspace` and `cargo test --workspace` leave beside the `candela`
-//! binary; a root `cargo test` builds no package, and that test says it
-//! skipped.
+//! The run needs the package's native library, which the test builds; see
+//! `built`.
 
+mod built;
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -120,22 +119,15 @@ fn main() {{
 #[test]
 fn a_process_reports_after_main_returns() {
     let binary = Path::new(env!("CARGO_BIN_EXE_candela"));
-    let built = binary.parent().unwrap();
-    let (prefix, ext) = if cfg!(windows) {
-        ("", "dll")
-    } else if cfg!(target_os = "macos") {
-        ("lib", "dylib")
-    } else {
-        ("lib", "so")
-    };
-    let library = built.join(format!("{prefix}candela_process.{ext}"));
-    if !library.is_file() {
-        eprintln!(
-            "skipping: {} is not built; run cargo test --workspace",
-            library.display()
-        );
-        return;
-    }
+    let ext = std::env::consts::DLL_EXTENSION;
+    let library = built::build(
+        &["-p", "candela-process"],
+        &format!(
+            "{}candela_process{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ),
+    );
 
     let dir = std::env::temp_dir().join(format!("candela_process_e2e_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

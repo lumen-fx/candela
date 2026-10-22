@@ -1,7 +1,7 @@
 //! Running a first-party package from candela in a test.
 //!
-//! [`stage`] copies a package into a scratch directory with the native
-//! library the test build made beside it, as `dist/<name>.<ext>`, which is
+//! [`stage`] builds a package's native library and copies the package into
+//! a scratch directory with the library beside it, as `dist/<name>.<ext>`, which is
 //! where the package's `dylib` block looks. [`run`] compiles a program that
 //! imports it, then runs event handlers the way an embedding host does until
 //! the program has reported what the test waits for.
@@ -11,6 +11,7 @@
 //! strings.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,14 +20,60 @@ use candela::Engine;
 /// How long [`run`] waits for the program to report what the test expects.
 pub const DEADLINE: Duration = Duration::from_secs(20);
 
-/// The directory cargo built this test binary's crates in.
-fn build_dir() -> PathBuf {
+/// The directory a nested build writes to: under the coverage target's
+/// `debug` profile during `cargo llvm-cov`, whose location the inherited
+/// `LLVM_PROFILE_FILE` gives away, so the report maps what the library ran;
+/// under the target directory otherwise. Its own directory either way, so
+/// the nested cargo never waits on the one running the tests.
+fn nested_target_dir() -> PathBuf {
+    if std::env::var_os("CARGO_LLVM_COV").is_some()
+        && let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE")
+        && let Some(root) = Path::new(&profile).parent()
+    {
+        return root.join("debug").join("nested");
+    }
+    // The test binary sits in <target>/<profile>/deps.
     let exe = std::env::current_exe().expect("the test binary has a path");
-    // target/<profile>/deps/<test binary>
     exe.parent()
         .and_then(Path::parent)
-        .expect("the test binary sits in target/<profile>/deps")
-        .to_path_buf()
+        .and_then(Path::parent)
+        .expect("the test binary sits in <target>/<profile>/deps")
+        .join("nested")
+}
+
+/// Builds the native library of the package `name`, the crate
+/// `candela-<name>`, and answers where it landed.
+///
+/// A workspace test run does not promise to have built another member's
+/// cdylib before the tests start, so each test builds what it loads. A warm
+/// tree makes this a no-op check.
+///
+/// # Panics
+///
+/// When the build fails.
+#[must_use]
+pub fn build_library(name: &str) -> PathBuf {
+    let target = nested_target_dir();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = Command::new(cargo)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args(["build", "-p", &format!("candela-{name}")])
+        .arg("--target-dir")
+        .arg(&target)
+        .output()
+        .expect("cargo runs");
+    assert!(
+        out.status.success(),
+        "building candela-{name} failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let path = target.join("debug").join(format!(
+        "{}candela_{name}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    assert!(path.is_file(), "{} was not built", path.display());
+    path
 }
 
 /// The repository's `libs`, where the standard library is.
@@ -62,14 +109,9 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// Copies the package at `package` into `into/<name>`, with the native library
-/// cargo built for it, `candela_<name>`, as `dist/<name>.<ext>` when the
+/// Copies the package at `package` into `into/<name>`, with its native
+/// library, built by [`build_library`], as `dist/<name>.<ext>` when the
 /// package has a native half. Answers the staged package root.
-///
-/// # Panics
-///
-/// When the library is not where cargo leaves it, which means the test did
-/// not build the package's native crate.
 #[must_use]
 pub fn stage(package: &Path, name: &str, into: &Path) -> PathBuf {
     let root = into.join(name);
@@ -81,20 +123,9 @@ pub fn stage(package: &Path, name: &str, into: &Path) -> PathBuf {
         copy_dir(&package.join("web"), &root.join("web"));
     }
     if package.join("native").is_dir() {
-        let (prefix, ext) = if cfg!(windows) {
-            ("", "dll")
-        } else if cfg!(target_os = "macos") {
-            ("lib", "dylib")
-        } else {
-            ("lib", "so")
-        };
-        let built = build_dir().join(format!("{prefix}candela_{name}.{ext}"));
-        assert!(
-            built.is_file(),
-            "{} is not built; build the package's native crate first",
-            built.display()
-        );
+        let built = build_library(name);
         std::fs::create_dir_all(root.join("dist")).expect("create dist");
+        let ext = std::env::consts::DLL_EXTENSION;
         std::fs::copy(&built, root.join("dist").join(format!("{name}.{ext}")))
             .expect("copy the native library");
     }

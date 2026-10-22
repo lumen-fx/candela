@@ -13,9 +13,24 @@
 use candela::HostRegistry;
 use candela::{build_bytecode, load_program};
 
+mod built;
 mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// The `candela-vm` binary, built for this run; see `built`.
+fn candela_vm() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            built::build(
+                &["-p", "candela-vm", "--bin", "candela-vm"],
+                &format!("candela-vm{}", std::env::consts::EXE_SUFFIX),
+            )
+        })
+        .clone()
+}
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -191,21 +206,7 @@ fn default_resolution_needs_no_env() {
 /// install lays out beside the binaries and nothing set.
 #[test]
 fn a_std_dylib_artifact_runs_from_any_directory() {
-    let candela_vm = Path::new(env!("CARGO_BIN_EXE_candela"))
-        .parent()
-        .expect("the test binary sits in a directory")
-        .join(if cfg!(windows) {
-            "candela-vm.exe"
-        } else {
-            "candela-vm"
-        });
-    if !candela_vm.exists() {
-        eprintln!(
-            "skipping a_std_dylib_artifact_runs_from_any_directory: {} not built",
-            candela_vm.display()
-        );
-        return;
-    }
+    let candela_vm = candela_vm();
 
     // The native module is compiled by the release workflow, not by cargo, so
     // a checkout that has not built it has nothing for the artifact to load.
