@@ -697,6 +697,24 @@ root binds without further setup.
 See [C libraries](c-libraries.md) for what a `dylib` import resolves to before
 any directory is searched.
 
+## The base directory
+
+```rust
+candela::set_base_dir(Some(app_root.clone()));
+```
+
+A relative path a script hands `std/fs`, or a package's native library, is
+resolved against the working directory unless the host names another
+directory here. An application whose files sit beside it, wherever it was
+started from, points this at its own directory instead of changing the
+process's working directory, which belongs to whatever program embeds it.
+
+The setting is the process's, read on every file call and by native libraries
+on their own threads. `set_base_dir` returns the directory that was in effect,
+`base_dir` reads it, and `None` goes back to the working directory.
+`candela_vm::set_base_dir` is the same function, for a program that links only
+the runtime.
+
 ## Values
 
 `Value` is the type that crosses the boundary in both directions:

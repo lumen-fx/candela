@@ -11,6 +11,10 @@ failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
 `fs_is_a_directory`, `fs_storage_full`, and the rest, listed in
 [the error catalogue](../reference/errors.md).
 
+A relative path resolves against the working directory. A Rust host that runs
+a script on behalf of an application can name another directory for it to
+resolve against instead; see [embedding](../integration/embedding.md#the-base-directory).
+
 ```rust
 import "std/fs";
 

@@ -42,6 +42,7 @@ use crate::rt::EnumType;
 use crate::rt::ErrorCatch;
 use crate::rt::HostFnSig;
 use crate::rt::Pools;
+use crate::rt::resolve_path;
 use crate::rt::Span;
 use crate::rt::Struct;
 use indexmap::IndexMap;
@@ -3410,17 +3411,18 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             // FILE SYSTEM FUNCTIONS
             // -----
             Instr::CallLibFunc(LibFunc::FsRead, path, dest_reg_id) => {
-                regs[dest_reg_id] =
-                    string!(match fs::read_to_string(regs[path].as_str(str_pool)) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            cold_path();
-                            error_with_catch!(ErrType::from(e.kind()));
-                        }
-                    });
+                regs[dest_reg_id] = string!(match fs::read_to_string(resolve_path(
+                    regs[path].as_str(str_pool)
+                )) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        cold_path();
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                });
             }
             Instr::CallLibFunc(LibFunc::FsExists, path, dest_reg_id) => {
-                regs[dest_reg_id] = match fs::exists(regs[path].as_str(str_pool)) {
+                regs[dest_reg_id] = match fs::exists(resolve_path(regs[path].as_str(str_pool))) {
                     Ok(b) => b.into(),
                     Err(e) => {
                         error_with_catch!(ErrType::from(e.kind()));
@@ -3429,9 +3431,10 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             // Overwrites a file, will create it if it doesn't exist
             Instr::CallLibFuncVoid(LibFuncVoid::FsWrite, path, contents) => {
-                if let Err(e) =
-                    fs::write(regs[path].as_str(str_pool), regs[contents].as_str(str_pool))
-                {
+                if let Err(e) = fs::write(
+                    resolve_path(regs[path].as_str(str_pool)),
+                    regs[contents].as_str(str_pool),
+                ) {
                     error_with_catch!(ErrType::from(e.kind()));
                 }
             }
@@ -3440,7 +3443,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 match fs::OpenOptions::new()
                     .append(true)
                     .create(true)
-                    .open(regs[path].as_str(str_pool))
+                    .open(resolve_path(regs[path].as_str(str_pool)))
                 {
                     Ok(mut f) => {
                         if let Err(e) = f.write_all(regs[contents].as_str(str_pool).as_bytes()) {
@@ -3454,13 +3457,13 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             }
             // Deletes the file located at `path`, throwing an error if it doesn't exist.
             Instr::CallLibFuncVoid(LibFuncVoid::FsDelete, path, _) => {
-                if let Err(e) = fs::remove_file(regs[path].as_str(str_pool)) {
+                if let Err(e) = fs::remove_file(resolve_path(regs[path].as_str(str_pool))) {
                     error_with_catch!(ErrType::from(e.kind()));
                 }
             }
             // Deletes the empty directory located at `path`
             Instr::CallLibFuncVoid(LibFuncVoid::FsDeleteDir, path, _) => {
-                if let Err(e) = fs::remove_dir(regs[path].as_str(str_pool)) {
+                if let Err(e) = fs::remove_dir(resolve_path(regs[path].as_str(str_pool))) {
                     error_with_catch!(ErrType::from(e.kind()));
                 }
             }

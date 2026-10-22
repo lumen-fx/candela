@@ -77,3 +77,6 @@ pub use rt::set_dylib_dirs;
 // How many leading command-line arguments `argv()` steps over.
 pub use rt::argv_skip;
 pub use rt::set_argv_skip;
+// The directory relative paths resolve against, which an embedder sets.
+pub use rt::base_dir;
+pub use rt::set_base_dir;
