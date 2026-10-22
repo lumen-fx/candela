@@ -104,9 +104,30 @@ side keeps ownership; return a static or otherwise owned buffer. A null pointer
 comes back as `null`.
 
 Arrays are passed as a pointer to the packed elements with no length alongside
-them, so pass the length as a separate `int` parameter. An array cannot be
-returned, because C does not convey how long it is; that signature raises
+them, so pass the length as a separate `int` parameter. An empty list is a
+valid pointer C must not read through. An array cannot be returned, because C
+does not convey how long it is; that signature raises
 `c_array_return_type_not_supported`.
+
+A list of ints or floats is C's to fill: what the function writes into the
+buffer is copied back into the list once it returns. That is how a C function
+hands back several numbers or a run of bytes. Make the list the size you need
+first, and the function writes up to that many elements:
+
+```rust
+dylib "mylib" {
+    int read_block(int[], int);
+}
+
+fn main() {
+    let buf = [0, 0, 0, 0, 0, 0, 0, 0];
+    let n = mylib::read_block(buf, buf.len());
+    print(buf[..n]);
+}
+```
+
+Strings, nested lists and structs inside a list are copies C cannot write
+back.
 
 Calls use the platform's default C calling convention. There is no way to select
 another.
