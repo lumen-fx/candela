@@ -211,6 +211,66 @@ The path form is what makes `time.so` resolve without a `lib` prefix, and the
 namespace comes from the last part of the path. Anyone importing the module
 calls `time::now()` and never sees the binding.
 
+## Posting events from a library
+
+A library whose work finishes on a thread of its own, such as a download or a
+child process, hands the result to the program as an event. The program
+registers a function for a source with [`event::on`](../standard-library/event.md),
+passes the source to the library, and the library posts to it. The function
+runs on the program's thread, after `main` has returned if need be.
+
+A library that wants to post exports `candela_dylib_init`. The runtime calls
+it once each time it opens the library, before the program can call in, with a
+table the library keeps for as long as the process lives:
+
+```c
+#include <stdint.h>
+
+typedef struct candela_runtime {
+    uint32_t abi;                                   /* 1 */
+    int64_t (*new_source)(void);
+    void (*post)(int64_t source, const char *payload);
+    void (*hold)(int64_t source);
+    void (*release)(int64_t source);
+    const char *(*base_dir)(void);
+} candela_runtime;
+
+static const candela_runtime *runtime;
+
+EXPORT void candela_dylib_init(const candela_runtime *table) {
+    if (table->abi == 1) {
+        runtime = table;
+    }
+}
+```
+
+Check `abi` before using the table: a later runtime that changes the table
+says so there. Every function in it may be called from any thread.
+
+| Field | What it does |
+| --- | --- |
+| `post` | Queues `payload`, UTF-8 text, for the handler of `source`. The text is copied |
+| `hold` | Says work under `source` is still running. The program stays running after `main` until every hold has ended |
+| `release` | Ends one hold, behind every event already posted under `source`. Once the last hold ends and its events are handled, the handler is let go |
+| `new_source` | A source of the library's own, for events nothing in the program asked for |
+| `base_dir` | The directory relative paths resolve against, or an empty string when the host set none and they resolve against the working directory |
+
+A start function holds the source it was given, starts its thread, and
+returns; the thread posts as it goes and releases the source after its last
+event:
+
+```c
+EXPORT void start(int64_t source) {
+    runtime->hold(source);
+    spawn_worker(source); /* posts with runtime->post, then runtime->release */
+}
+```
+
+A library loaded by something other than a candela runtime is never handed a
+table, so a library that may be loaded elsewhere checks for one before posting.
+The first-party packages are written this way; see
+[packages](../packages/index.md).
+
 ## Host functions instead
 
 A `host` block looks the same but binds to a Rust closure in an embedding

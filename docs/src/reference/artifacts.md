@@ -44,6 +44,9 @@ The artifact produces the same output as running the source through `candela`.
   it is variadic.
 - An export table: one entry per host-callable function, with the call
   trampoline the compiler emitted for it.
+- For a program that imports [std/event](../standard-library/event.md), the
+  trampoline the runtime runs event handlers through, after `main` and from
+  `dispatch_events`.
 - Machine code for the functions the code generator handles, for the machine
   the build ran on or the one `--target` named. See [machine code](#machine-code).
 - The function table: every compiled function with its name, where it starts,
@@ -175,6 +178,8 @@ been raised for:
 - machine code sections, and the function table after the image
 - the type test `is` compiles to, and the type codes that check what a list or
   a map holds
+- the event entry, and the instructions `std/event` and the directory, byte and
+  digest functions of `std/fs` compile to
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

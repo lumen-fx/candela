@@ -34,6 +34,12 @@ Hello, Ada!
 This is the mode to use while you are writing something. Compilation happens
 every time, so an edit takes effect on the next run with nothing to clean up.
 
+A program ends when `main` returns, unless it started work that is still
+running, such as a download or another program from a
+[package](../packages/index.md). Then it keeps running until that work has
+finished and its last result has been handled, and exits after that. See
+[event](../standard-library/event.md).
+
 ## The REPL
 
 Start `candela` with no arguments:

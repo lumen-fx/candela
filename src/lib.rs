@@ -142,6 +142,9 @@ pub use candela_vm::set_dylib_dirs;
 // native libraries packages ship.
 pub use candela_vm::base_dir;
 pub use candela_vm::set_base_dir;
+// How a host that runs its own loop learns an event arrived for its program.
+pub use candela_vm::EventWaker;
+pub use candela_vm::set_event_waker;
 // Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
@@ -192,30 +195,46 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
         allocated_arg_count,
         allocated_call_depth,
         sources,
+        event_entry,
         ..
     } = out;
     let err_ctx = ErrorCtx {
         instr_src: &instr_src,
         sources: &sources,
     };
-    if let Err(error) = vm::execute(
-        &instructions,
-        &mut RegisterFile(registers),
-        &mut pools,
-        &err_ctx,
-        &callsite_registers,
-        &dyn_lib_fns,
-        &structs,
-        &enums,
-        allocated_arg_count,
-        allocated_call_depth,
-        &[],
-        &[],
-        0,
-        None,
-    ) {
-        error.report(&err_ctx);
+    let mut registers = RegisterFile(registers);
+    let mut run = |registers: &mut RegisterFile, start: usize| {
+        if let Err(error) = vm::execute(
+            &instructions,
+            registers,
+            &mut pools,
+            &err_ctx,
+            &callsite_registers,
+            &dyn_lib_fns,
+            &structs,
+            &enums,
+            allocated_arg_count,
+            allocated_call_depth,
+            &[],
+            &[],
+            start,
+            None,
+        ) {
+            error.report(&err_ctx);
+        }
+    };
+    run(&mut registers, 0);
+    // Work `main` started may still be running: keep running its handlers
+    // until nothing is held and nothing is queued. A browser has one thread,
+    // so nothing posts there while the program is not running.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(entry) = event_entry {
+        registers.0[entry.arg_registers[0] as usize] = data::Data::int(-1);
+        registers.0[entry.arg_registers[1] as usize] = data::TRUE;
+        run(&mut registers, entry.entry as usize);
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = event_entry;
 }
 
 #[cfg(target_arch = "wasm32")]

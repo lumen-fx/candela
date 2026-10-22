@@ -715,6 +715,39 @@ on their own threads. `set_base_dir` returns the directory that was in effect,
 `candela_vm::set_base_dir` is the same function, for a program that links only
 the runtime.
 
+## Events
+
+A script that imports [std/event](../standard-library/event.md), directly or
+through a package, receives results from work running on other threads as
+events. `candela` and `candela-vm` run their handlers after `main` returns;
+a host runs them from its own loop instead, on the thread the program runs on.
+
+```rust
+let proxy = event_loop_proxy.clone();
+candela::set_event_waker(Some(std::sync::Arc::new(move || {
+    proxy.wake(); // something your loop sleeps on
+})));
+
+// In the loop, when woken:
+let ran = program.dispatch_events(64)?;
+```
+
+`set_event_waker` names a function called whenever an event or a release is
+queued, from whichever thread queued it. It should only signal: wake the loop,
+never call into the program. There is one waker per process, and the call
+returns the one it replaced.
+
+`dispatch_events(budget)` runs the handlers of up to `budget` events that have
+arrived for this program and answers how many ran. It never waits. A handler
+that raises an error no `try` catches comes back as the error, and the events
+behind it stay queued for the next call. A program that does not import
+`std/event` answers 0. `Program` and `RuntimeProgram` both have it.
+
+Each program receives the events of the sources it registered handlers for,
+so several programs in one process each see their own. An event for a source
+no program registered is dropped. Dropping a program forgets its handlers, and
+the work it started finds its later events dropped.
+
 ## Values
 
 `Value` is the type that crosses the boundary in both directions:

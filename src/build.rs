@@ -281,6 +281,7 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
         dyn_lib_fns,
         host_fns,
         exports,
+        event_entry: out.event_entry,
         native: Vec::new(),
     }
 }

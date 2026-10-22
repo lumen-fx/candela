@@ -9,8 +9,8 @@ prelude: every program has them with no import. The rest you import by path.
 The library ships as candela source. The toolchain installs a `libs` directory
 beside the `candela` executable:
 
-- `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `fs.cdl`,
-  `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`,
+- `libs/std/` holds one `.cdl` file per module: `assert.cdl`, `event.cdl`,
+  `fs.cdl`, `hash.cdl`, `json.cdl`, `list.cdl`, `map.cdl`, `math.cdl`,
   `option.cdl`, `random.cdl`, `result.cdl`, `set.cdl`, `string.cdl`,
   `time.cdl`.
 - `libs/std_src/` holds the C sources and the compiled dynamic libraries for the
@@ -105,6 +105,7 @@ Everything else is imported: `assert`, `fs`, `hash`, `json`, `math`,
 | --- | --- |
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
+| [event](event.md) | Results from work running elsewhere, delivered to a function |
 | [fs](fs.md) | Read, write, copy and delete files, digest them, and list and make directories |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string, as hex |
 | [json](json.md) | Parse a json string into candela values, and serialise back |

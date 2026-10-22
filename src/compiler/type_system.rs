@@ -2140,7 +2140,10 @@ pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
         "fs_list" => DataType::Array(Some(Box::new(DataType::String))),
         "fs_read_bytes" => DataType::Array(Some(Box::new(DataType::Int))),
         "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" | "fs_mkdir" | "fs_copy"
-        | "fs_write_bytes" => DataType::Null,
+        | "fs_write_bytes" | "event_on" => DataType::Null,
+        "event_source" => DataType::Int,
+        // `[source, handler, payload]`, or empty when nothing is queued.
+        "event_next" => DataType::Array(Some(Box::new(DataType::Unknown))),
         _ => return None,
     })
 }

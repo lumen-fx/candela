@@ -32,6 +32,10 @@ pub mod digest;
 #[cfg(any(target_arch = "wasm32", test))]
 pub mod intrinsics;
 
+// The queue events from other threads reach a program through, and the table
+// a native library posts to it with.
+pub mod events;
+
 // The `.cdlb` bytecode artifact format plus the load/run API.
 pub mod artifact;
 
@@ -83,3 +87,6 @@ pub use rt::set_argv_skip;
 // The directory relative paths resolve against, which an embedder sets.
 pub use rt::base_dir;
 pub use rt::set_base_dir;
+// How an embedder that runs its own loop learns an event arrived.
+pub use events::EventWaker;
+pub use events::set_event_waker;

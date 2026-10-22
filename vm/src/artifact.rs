@@ -33,6 +33,7 @@ use crate::embed::unmarshal_value;
 use crate::embed::value_matches_type;
 use crate::errors::Diagnostic;
 use crate::errors::ErrorCtx;
+use crate::errors::RuntimeError;
 use crate::instr::Instr;
 use crate::rt::DataType;
 use crate::rt::DynamicLibFn;
@@ -94,8 +95,10 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// the machine code sections ([`ProgramImage::native`]) and the function table
 /// that follows the image ([`FunctionTable`]). Version 15 added the type test
 /// `is` compiles to for a struct, an enum, a function, a union or a collection,
-/// and the nested type codes that check what a list or a map holds.
-const FORMAT_VERSION: u8 = 15;
+/// and the nested type codes that check what a list or a map holds. Version 16
+/// added the event entry ([`ProgramImage::event_entry`]) and the instructions
+/// `std/event` and the new `std/fs` functions compile to.
+const FORMAT_VERSION: u8 = 16;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
@@ -134,6 +137,10 @@ pub struct ProgramImage {
     /// compiler emitted for it at build time. This is what lets the VM invoke a
     /// script function by name with no compiler present.
     pub exports: Vec<ExportImage>,
+    /// The trampoline the runtime runs event handlers through: `std/event`'s
+    /// `dispatch`, taking a budget and whether to wait. Present when the
+    /// program imports `std/event`.
+    pub event_entry: Option<ExportImage>,
     /// Machine code for some of the program's functions, one section per
     /// machine it was built for. The VM runs the first section this machine
     /// can run and the bytecode for everything else; a program whose sections
@@ -370,6 +377,17 @@ struct Export {
     ret_register: u16,
 }
 
+impl From<ExportImage> for Export {
+    fn from(e: ExportImage) -> Self {
+        Self {
+            entry: e.entry as usize,
+            arg_registers: e.arg_registers.into_boxed_slice(),
+            arg_types: e.arg_types.into_boxed_slice(),
+            ret_register: e.ret_register,
+        }
+    }
+}
+
 /// A loaded, ready-to-run program image with owned runtime state.
 ///
 /// Produced by [`load_program`] from `.cdlb` bytes. [`Self::run`] executes it
@@ -387,6 +405,8 @@ pub struct RuntimeProgram {
     host_sigs: Vec<HostFnSig>,
     host_dispatch: Vec<HostDispatch>,
     exports: HashMap<String, Export>,
+    /// Where the event dispatcher's trampoline starts, when there is one.
+    event_entry: Option<Export>,
     structs: Vec<Struct>,
     enums: Vec<EnumType>,
     sources: Vec<Source>,
@@ -454,6 +474,55 @@ impl RuntimeProgram {
         if let Err(error) = result {
             error.report(&err_ctx);
         }
+        // Work `main` started may still be running: keep running its handlers
+        // until nothing is held and nothing is queued.
+        if self.event_entry.is_some()
+            && let Err(error) = self.run_events(-1, true)
+        {
+            let err_ctx = ErrorCtx {
+                instr_src: &self.instr_src,
+                sources: &self.sources,
+            };
+            error.report(&err_ctx);
+        }
+    }
+
+    /// Runs the handlers of events that have arrived for this program, at
+    /// most `budget` of them, and answers how many ran. Never waits.
+    ///
+    /// A host that runs its own loop calls this from it, on the thread the
+    /// program runs on, after the waker it set with
+    /// [`set_event_waker`](crate::set_event_waker) said something arrived. A
+    /// program that does not import `std/event` has no handlers, and the
+    /// answer is always 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError::Runtime`] when a handler raised an error no `try`
+    /// caught. The events behind it stay queued for the next call.
+    pub fn dispatch_events(&mut self, budget: u32) -> Result<usize, CallError> {
+        if self.event_entry.is_none() {
+            return Ok(0);
+        }
+        self.run_events(i64::from(budget), false).map_err(|error| {
+            CallError::Runtime(error.diagnostic(&ErrorCtx {
+                instr_src: &self.instr_src,
+                sources: &self.sources,
+            }))
+        })
+    }
+
+    /// Runs the event entry with `budget` and `wait`, answering how many
+    /// handlers ran.
+    fn run_events(&mut self, budget: i64, wait: bool) -> Result<usize, RuntimeError> {
+        let Some(entry) = &self.event_entry else {
+            return Ok(0);
+        };
+        let (start, ret) = (entry.entry, entry.ret_register as usize);
+        self.registers[entry.arg_registers[0] as usize] = Data::int(budget);
+        self.registers[entry.arg_registers[1] as usize] = Data::from(wait);
+        self.execute_raw(start)?;
+        Ok(self.registers[ret].as_int().max(0) as usize)
     }
 
     /// Invokes the exported function `name` with `args`, returning its value
@@ -548,6 +617,16 @@ impl RuntimeProgram {
     /// Runs the VM against the resident state starting at instruction `start`,
     /// capturing any runtime error as a [`Diagnostic`].
     fn execute_from(&mut self, start: usize) -> Result<(), Diagnostic> {
+        self.execute_raw(start).map_err(|error| {
+            error.diagnostic(&ErrorCtx {
+                instr_src: &self.instr_src,
+                sources: &self.sources,
+            })
+        })
+    }
+
+    /// Runs the VM against the resident state starting at instruction `start`.
+    fn execute_raw(&mut self, start: usize) -> Result<(), RuntimeError> {
         let err_ctx = ErrorCtx {
             instr_src: &self.instr_src,
             sources: &self.sources,
@@ -557,38 +636,27 @@ impl RuntimeProgram {
         // reclaim it (register state must persist across calls).
         let mut register_file = RegisterFile(std::mem::take(&mut self.registers));
 
-        let instructions = &self.instructions;
-        let pools = &mut self.pools;
-        let callsite_registers = &self.callsite_registers;
-        let dyn_lib_fns = &self.dyn_lib_fns;
-        let structs = &self.structs;
-        let enums = &self.enums;
-        let host_sigs = &self.host_sigs;
-        let host_dispatch = &self.host_dispatch;
-        let allocated_arg_count = self.allocated_arg_count;
-        let allocated_call_depth = self.allocated_call_depth;
-
         // An error comes back as a value, so a call sets up no unwind and
         // leaves the process panic hook alone.
         let result = vm::execute(
-            instructions,
+            &self.instructions,
             &mut register_file,
-            pools,
+            &mut self.pools,
             &err_ctx,
-            callsite_registers,
-            dyn_lib_fns,
-            structs,
-            enums,
-            allocated_arg_count,
-            allocated_call_depth,
-            host_sigs,
-            host_dispatch,
+            &self.callsite_registers,
+            &self.dyn_lib_fns,
+            &self.structs,
+            &self.enums,
+            self.allocated_arg_count,
+            self.allocated_call_depth,
+            &self.host_sigs,
+            &self.host_dispatch,
             start,
             self.native.as_ref(),
         );
 
         self.registers = std::mem::take(&mut register_file.0);
-        result.map_err(|error| error.diagnostic(&err_ctx))
+        result
     }
 }
 
@@ -742,18 +810,9 @@ impl RuntimeProgram {
         let exports = img
             .exports
             .into_iter()
-            .map(|e| {
-                (
-                    e.name,
-                    Export {
-                        entry: e.entry as usize,
-                        arg_registers: e.arg_registers.into_boxed_slice(),
-                        arg_types: e.arg_types.into_boxed_slice(),
-                        ret_register: e.ret_register,
-                    },
-                )
-            })
+            .map(|e| (e.name.clone(), Export::from(e)))
             .collect();
+        let event_entry = img.event_entry.map(Export::from);
 
         Ok(Self {
             instructions: img.instructions,
@@ -777,6 +836,7 @@ impl RuntimeProgram {
             host_sigs,
             host_dispatch,
             exports,
+            event_entry,
             structs,
             enums,
             sources: img

@@ -37,6 +37,7 @@ use crate::vm::StringPool;
 use crate::vm::map_insert;
 use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
+use candela_vm::artifact::ExportImage;
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
@@ -7177,6 +7178,9 @@ fn parse_toplevel(
                     };
                     let lib = lib
                         .unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources));
+                    // A library that posts events gets the runtime's table now,
+                    // before the program can call into it.
+                    candela_vm::events::init_library(&lib);
                     (Some(Rc::new(lib)), dylib_name)
                 };
                 // A standard-library module names its C library by a path
@@ -7780,6 +7784,9 @@ pub struct CompileOutput {
     /// Whether the program was compiled in the release profile, so a later
     /// compile against it (an export entry point) uses the same one.
     pub optimize: bool,
+    /// The entry point a runner and an embedder run event handlers through,
+    /// when the program imports `std/event`.
+    pub event_entry: Option<ExportImage>,
 }
 
 impl CompileOutput {
@@ -8056,7 +8063,7 @@ pub fn compile_profile(
         println!("------------------");
     }
 
-    CompileOutput {
+    let mut out = CompileOutput {
         instructions,
         registers,
         pools,
@@ -8077,5 +8084,8 @@ pub fn compile_profile(
         indirect_registers,
         generics,
         optimize,
-    }
+        event_entry: None,
+    };
+    out.event_entry = crate::trampoline::compile_event_entry(&mut out);
+    out
 }

@@ -373,6 +373,12 @@ pub enum LibFunc {
     /// fs::digest. The digest of the source file under the algorithm named
     /// by the stored argument, as lowercase hex.
     FsDigest = 56,
+    /// A fresh event source. Reads no register.
+    EventSource = 57,
+    /// The next event for a handler of this program, as the list
+    /// `[source, handler, payload]`, or an empty list when there is none. The
+    /// source register holds whether to wait for one while a source is held.
+    EventNext = 58,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and
@@ -413,6 +419,9 @@ pub enum LibFuncVoid {
     FsCopy = 7,
     /// fs::write_bytes(path, bytes).
     FsWriteBytes = 8,
+    /// event::on(source, handler): the closure that receives the source's
+    /// events.
+    EventOn = 9,
 }
 
 impl Instr {
@@ -688,6 +697,7 @@ impl Instr {
                         | LibFuncVoid::FsAppend
                         | LibFuncVoid::FsCopy
                         | LibFuncVoid::FsWriteBytes
+                        | LibFuncVoid::EventOn
                 ) {
                     f(b);
                 }
