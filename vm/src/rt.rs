@@ -446,6 +446,55 @@ pub fn dylib_dirs() -> Vec<PathBuf> {
     DYLIB_DIRS.with(|dirs| dirs.borrow().clone())
 }
 
+/// The directory relative paths resolve against, as a path and as the C
+/// string native libraries read. Every value ever set stays alive, since a
+/// library may still hold the pointer it was handed.
+static BASE_DIR: std::sync::Mutex<Option<(PathBuf, &'static std::ffi::CStr)>> =
+    std::sync::Mutex::new(None);
+
+/// Sets the directory a relative path resolves against, for the whole process,
+/// and returns the one that was in effect.
+///
+/// `std/fs` joins a relative path onto it, and a native library reads it
+/// through the table `candela_dylib_init` receives, so a package resolves its
+/// paths the same way. With none set, a relative path means what it means to
+/// the operating system: relative to the working directory. A host that runs
+/// a script on behalf of an application whose files sit somewhere other than
+/// the working directory points this at that directory rather than changing
+/// the process's working directory.
+pub fn set_base_dir(dir: Option<PathBuf>) -> Option<PathBuf> {
+    let entry = dir.map(|dir| {
+        let text = std::ffi::CString::new(dir.to_string_lossy().into_owned()).unwrap_or_default();
+        let leaked: &'static std::ffi::CStr = Box::leak(text.into_boxed_c_str());
+        (dir, leaked)
+    });
+    let mut slot = BASE_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::mem::replace(&mut *slot, entry).map(|(dir, _)| dir)
+}
+
+/// The directory [`set_base_dir`] put in effect, if any.
+#[must_use]
+pub fn base_dir() -> Option<PathBuf> {
+    BASE_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|(dir, _)| dir.clone())
+}
+
+/// `path` as the file system call should see it: joined onto the base
+/// directory when it is relative and one is set, unchanged otherwise.
+#[must_use]
+pub fn resolve_path(path: &str) -> PathBuf {
+    let given = Path::new(path);
+    match base_dir() {
+        Some(base) if given.is_relative() => base.join(given),
+        _ => given.to_path_buf(),
+    }
+}
+
 /// How many leading command-line arguments belong to the command rather than to
 /// the program. `argv()` steps over them.
 ///

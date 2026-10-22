@@ -138,6 +138,10 @@ pub use candela_vm::PoolStats;
 // its own sets them once.
 pub use candela_vm::dylib_dirs;
 pub use candela_vm::set_dylib_dirs;
+// The directory a relative path resolves against, for `std/fs` and for the
+// native libraries packages ship.
+pub use candela_vm::base_dir;
+pub use candela_vm::set_base_dir;
 // Compile a `.cdl` source string straight to `.cdlb` bytes (the `candela build`
 // path). Needs the compiler.
 #[cfg(feature = "compiler")]
