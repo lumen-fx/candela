@@ -359,10 +359,18 @@ pub const INIT_SYMBOL: &[u8] = b"candela_dylib_init";
 /// Hands `library` the table, when it exports `candela_dylib_init`. A library
 /// without the export is left as it is. Called every time a program opens the
 /// library, so the export has to be safe to call more than once.
+///
+/// A library that takes the table stays loaded for the rest of the process,
+/// whatever happens to the program that opened it: its threads post from
+/// outside any call the program makes, and keep running the library's code
+/// after their last event, returning and dropping what they held. Unloading
+/// the library under such a thread when the program goes would leave it
+/// running in memory that is no longer mapped.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn init_library(library: &libloading::Library) {
+pub fn init_library(library: &std::rc::Rc<libloading::Library>) {
     type Init = unsafe extern "C" fn(*const EventTable);
     if let Ok(init) = unsafe { library.get::<Init>(INIT_SYMBOL) } {
         unsafe { init(&raw const TABLE) };
+        std::mem::forget(std::rc::Rc::clone(library));
     }
 }

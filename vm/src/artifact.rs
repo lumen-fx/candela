@@ -893,6 +893,9 @@ fn resolve_dyn_lib_fns(
                     message: e.to_string(),
                 }
             })?);
+            // A library that posts events gets the runtime's table before
+            // the program can call into it.
+            crate::events::init_library(&lib);
             libs.insert(key, Rc::clone(&lib));
             lib
         };

@@ -7178,10 +7178,11 @@ fn parse_toplevel(
                     };
                     let lib = lib
                         .unwrap_or_else(|| error_cannot_load_dynlib(span, src_file_idx, sources));
+                    let lib = Rc::new(lib);
                     // A library that posts events gets the runtime's table now,
                     // before the program can call into it.
                     candela_vm::events::init_library(&lib);
-                    (Some(Rc::new(lib)), dylib_name)
+                    (Some(lib), dylib_name)
                 };
                 // A standard-library module names its C library by a path
                 // relative to its own source file, which an artifact never

@@ -562,15 +562,6 @@ pub(crate) fn open_library(
     filename: &str,
     origin: LibraryOrigin,
 ) -> Result<Library, libloading::Error> {
-    let lib = find_library(filename, origin)?;
-    // A library that posts events gets the runtime's table before the program
-    // can call into it.
-    crate::events::init_library(&lib);
-    Ok(lib)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn find_library(filename: &str, origin: LibraryOrigin) -> Result<Library, libloading::Error> {
     for dir in dylib_dirs() {
         if let Ok(lib) = unsafe { Library::new(dir.join(filename)) } {
             return Ok(lib);
