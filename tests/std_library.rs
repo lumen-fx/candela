@@ -469,3 +469,27 @@ fn hashing_a_nul_raises() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("null byte"), "{stderr}");
 }
+
+/// The directory functions, byte files and file digests, run in a scratch
+/// directory the script is handed as its first argument.
+#[test]
+fn fs_module() {
+    let scratch = std::env::temp_dir().join(format!("candela_std_fs_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("create scratch dir");
+    let path = repo().join("libs/std/tests/test_fs.cdl");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
+        .arg(&path)
+        .arg(&scratch)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let output = common::output_with_deadline(&mut command, "test_fs");
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("fs ok"),
+        "test_fs exited with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

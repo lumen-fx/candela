@@ -1,6 +1,7 @@
 # fs
 
-Read, write, append to and delete files.
+Read, write, copy and delete files, digest them, and list and make
+directories.
 
 ```rust
 import "std/fs";
@@ -82,3 +83,74 @@ fs::delete_dir(path)
 
 Deletes the empty directory at `path`. Raises when the directory is missing or
 still has entries. Returns nothing.
+
+## is_dir
+
+```rust
+fs::is_dir(path)
+```
+
+- Returns: true when `path` names a directory. A file or a missing path is
+  false.
+
+## list
+
+```rust
+fs::list(path)
+```
+
+- Returns: the names of the entries directly inside the directory at `path`,
+  sorted, as a `string[]`. Names, not paths: join one onto `path` to reach the
+  entry. The listing is one level deep.
+
+## mkdir
+
+```rust
+fs::mkdir(path)
+```
+
+Creates the directory at `path` and every missing directory above it. A
+directory that is already there is no error. Returns nothing.
+
+## copy
+
+```rust
+fs::copy(from, to)
+```
+
+Copies the file at `from` to `to`, replacing what was at `to`. Raises
+`fs_is_a_directory` when `from` is a directory: copy the files inside it.
+Returns nothing.
+
+## read_bytes
+
+```rust
+fs::read_bytes(path)
+```
+
+- Returns: the bytes of the file at `path`, as an `int[]` of values from 0 to
+  255.
+
+## write_bytes
+
+```rust
+fs::write_bytes(path, bytes)
+```
+
+Writes `bytes` to `path`, replacing what was there. Every element has to be a
+byte, 0 to 255; an element that is not raises `fs_not_a_byte` and nothing is
+written. Returns nothing.
+
+## digest
+
+```rust
+fs::digest(path, algorithm)
+```
+
+- `algorithm`: `"md5"`, `"sha1"` or `"sha256"`.
+- Returns: the digest of the file at `path`, as lowercase hex.
+- Raises: `fs_unknown_digest` for another algorithm.
+
+The file streams through the digest, so a large one never sits in memory
+whole. md5 and sha1 are for ids and checksums, not for security. To digest a
+string, use [hash](hash.md).

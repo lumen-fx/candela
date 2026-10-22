@@ -279,7 +279,11 @@ impl From<std::io::ErrorKind> for ErrType<'_> {
             std::io::ErrorKind::ReadOnlyFilesystem => ErrType::FsReadOnlyFilesystem,
             std::io::ErrorKind::StorageFull => ErrType::FsStorageFull,
             std::io::ErrorKind::TimedOut => ErrType::FsTimedOut,
-            _ => unsafe { unreachable_unchecked() },
+            std::io::ErrorKind::DirectoryNotEmpty => ErrType::FsDirectoryNotEmpty,
+            // The operating system can answer with kinds the list above does
+            // not name (a busy resource, a rename across devices), and Rust
+            // adds kinds over time.
+            _ => ErrType::FsOther,
         }
     }
 }
@@ -316,6 +320,13 @@ pub enum ErrType<'a> {
     FsReadOnlyFilesystem,
     FsStorageFull,
     FsTimedOut,
+    FsDirectoryNotEmpty,
+    /// A file system failure none of the kinds above names.
+    FsOther,
+    /// `fs::digest` was asked for an algorithm it does not compute.
+    FsUnknownDigest,
+    /// `fs::write_bytes` reached a value that is not a byte. Carries it.
+    FsNotAByte(i64),
     // NUMBER PARSING ERRORS
     InvalidInt,
     InvalidFloat,
@@ -378,6 +389,10 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::FsReadOnlyFilesystem => "The filesystem or storage medium is read-only, but a write operation was attempted".into(),
             ErrType::FsStorageFull => "Storage is full".into(),
             ErrType::FsTimedOut => "This operation timed out".into(),
+            ErrType::FsDirectoryNotEmpty => "The directory is not empty".into(),
+            ErrType::FsOther => "The file system operation failed".into(),
+            ErrType::FsUnknownDigest => "Unknown digest algorithm; use \"md5\", \"sha1\" or \"sha256\"".into(),
+            ErrType::FsNotAByte(value) => format_args!("{RED}{BOLD}{value}{RESET} is not a byte; a byte is 0 to 255, and nothing was written").to_smolstr(),
             ErrType::DivisionByZero => "Division by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
             ErrType::ModuloByZero => "Modulo by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
             ErrType::NegativeExponent(exp) => format_args!("An integer cannot be raised to the negative power {RED}{BOLD}{exp}{RESET}. Use floats for a fractional result").to_smolstr(),
@@ -451,6 +466,10 @@ impl ErrType<'_> {
             ErrType::FsReadOnlyFilesystem => "fs_read_only_filesystem",
             ErrType::FsStorageFull => "fs_storage_full",
             ErrType::FsTimedOut => "fs_timed_out",
+            ErrType::FsDirectoryNotEmpty => "fs_directory_not_empty",
+            ErrType::FsOther => "fs_other",
+            ErrType::FsUnknownDigest => "fs_unknown_digest",
+            ErrType::FsNotAByte(_) => "fs_not_a_byte",
             ErrType::InvalidInt => "invalid_int",
             ErrType::InvalidFloat => "invalid_float",
             ErrType::InvalidBool => "invalid_bool",

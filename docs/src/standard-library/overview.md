@@ -105,7 +105,7 @@ Everything else is imported: `assert`, `fs`, `hash`, `json`, `math`,
 | --- | --- |
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
-| [fs](fs.md) | Read, write, append to and delete files |
+| [fs](fs.md) | Read, write, copy and delete files, digest them, and list and make directories |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string, as hex |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
 | [list](list.md) | Reductions, slicing, and higher-order methods on arrays |

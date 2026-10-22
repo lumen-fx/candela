@@ -412,6 +412,7 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::FsRead
         | LibFunc::Input
         | LibFunc::JsonStringify
+        | LibFunc::FsDigest
         | LibFunc::AsStrVal => DataType::String,
         LibFunc::Contains
         | LibFunc::IsFloat
@@ -419,6 +420,7 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::StartsWith
         | LibFunc::EndsWith
         | LibFunc::FsExists
+        | LibFunc::FsIsDir
         | LibFunc::IsIntVal
         | LibFunc::IsFloatVal
         | LibFunc::IsStrVal
@@ -429,17 +431,21 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::IsTypeVal
         | LibFunc::Bool
         | LibFunc::AsBoolVal => DataType::Bool,
-        LibFunc::Find | LibFunc::Len | LibFunc::TheAnswer | LibFunc::Int | LibFunc::AsIntVal => {
-            DataType::Int
-        }
+        LibFunc::Find
+        | LibFunc::Len
+        | LibFunc::TheAnswer
+        | LibFunc::Int
+        | LibFunc::AsIntVal => DataType::Int,
         LibFunc::Float
         | LibFunc::SqrtFloat
         | LibFunc::Round
         | LibFunc::Floor
         | LibFunc::AsFloatVal => DataType::Float,
         LibFunc::Abs | LibFunc::Repeat => arg,
-        LibFunc::Argv | LibFunc::Split => DataType::Array(Some(Box::new(DataType::String))),
-        LibFunc::Range => DataType::Array(Some(Box::new(DataType::Int))),
+        LibFunc::Argv | LibFunc::Split | LibFunc::FsList => {
+            DataType::Array(Some(Box::new(DataType::String)))
+        }
+        LibFunc::Range | LibFunc::FsReadBytes => DataType::Array(Some(Box::new(DataType::Int))),
         LibFunc::Keys => match arg {
             DataType::Map(entry) => DataType::Array(entry.0.clone().map(Box::new)),
             _ => DataType::Array(None),

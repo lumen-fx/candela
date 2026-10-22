@@ -3467,6 +3467,107 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     error_with_catch!(ErrType::from(e.kind()));
                 }
             }
+            Instr::CallLibFunc(LibFunc::FsIsDir, path, dest_reg_id) => {
+                regs[dest_reg_id] = resolve_path(regs[path].as_str(str_pool)).is_dir().into();
+            }
+            // The names directly inside a directory, sorted, rooted on the
+            // recursion stack while the rest are made, as `argv` does.
+            Instr::CallLibFunc(LibFunc::FsList, path, dest) => {
+                let mut names = Vec::new();
+                match fs::read_dir(resolve_path(regs[path].as_str(str_pool))) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            match entry {
+                                Ok(entry) => {
+                                    names.push(entry.file_name().to_string_lossy().into_owned());
+                                }
+                                Err(e) => {
+                                    error_with_catch!(ErrType::from(e.kind()), 'main);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                }
+                names.sort_unstable();
+                let base = recursion_stack.len();
+                for name in names {
+                    let s = string!(name);
+                    recursion_stack.0.push(s);
+                }
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+                let list = obj_pool.get_mut(array_id as usize);
+                list.extend(recursion_stack.0.drain(base..));
+                regs[dest] = Data::array(array_id);
+            }
+            Instr::CallLibFunc(LibFunc::FsReadBytes, path, dest) => {
+                let bytes = match fs::read(resolve_path(regs[path].as_str(str_pool))) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                };
+                gc.note_bytes(bytes.len() * LIST_ENTRY_BYTES);
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+                let list = obj_pool.get_mut(array_id as usize);
+                list.extend(bytes.iter().map(|b| Data::int(i64::from(*b))));
+                regs[dest] = Data::array(array_id);
+            }
+            Instr::CallLibFunc(LibFunc::FsDigest, path, dest) => {
+                let algorithm = regs[args.pop_unchecked()];
+                let file = match fs::File::open(resolve_path(regs[path].as_str(str_pool))) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                };
+                match crate::digest::hex_digest(algorithm.as_str(str_pool), file) {
+                    Some(Ok(hex)) => regs[dest] = string!(hex),
+                    Some(Err(e)) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                    None => {
+                        error_with_catch!(ErrType::FsUnknownDigest);
+                    }
+                }
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::FsMkdir, path, _) => {
+                if let Err(e) = fs::create_dir_all(resolve_path(regs[path].as_str(str_pool))) {
+                    error_with_catch!(ErrType::from(e.kind()));
+                }
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::FsCopy, from, to) => {
+                let from = resolve_path(regs[from].as_str(str_pool));
+                if from.is_dir() {
+                    error_with_catch!(ErrType::FsIsADirectory);
+                }
+                if let Err(e) = fs::copy(from, resolve_path(regs[to].as_str(str_pool))) {
+                    error_with_catch!(ErrType::from(e.kind()));
+                }
+            }
+            // Every element has to be a byte; one that is not writes nothing.
+            Instr::CallLibFuncVoid(LibFuncVoid::FsWriteBytes, path, values) => {
+                let bytes: Result<Vec<u8>, i64> = obj_pool[regs[values].as_array()]
+                    .iter()
+                    .map(|value| {
+                        let value = value.as_int();
+                        u8::try_from(value).map_err(|_| value)
+                    })
+                    .collect();
+                match bytes {
+                    Ok(bytes) => {
+                        if let Err(e) = fs::write(resolve_path(regs[path].as_str(str_pool)), bytes)
+                        {
+                            error_with_catch!(ErrType::from(e.kind()));
+                        }
+                    }
+                    Err(value) => {
+                        error_with_catch!(ErrType::FsNotAByte(value));
+                    }
+                }
+            }
             #[cfg(target_arch = "wasm32")]
             Instr::CallLibFunc(LibFunc::Argv, _, dest) => {
                 regs[dest] = Data::array(alloc_array(

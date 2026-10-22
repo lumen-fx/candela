@@ -6,8 +6,8 @@ use super::super::expr::Span;
 use super::super::type_system::DataType;
 use super::super::type_system::format_detailed;
 use super::check_arg_type;
-#[cfg(not(target_arch = "wasm32"))]
-use super::fs_lib_functions::fs_lib_functions;
+use super::fs_lib_functions::is_std_primitive;
+use super::fs_lib_functions::std_lib_functions;
 use super::user_functions::handle_user_function;
 use crate::compiler::UnwrapId;
 use crate::compiler::compile_fn_value;
@@ -89,14 +89,14 @@ pub fn builtin_functions(
     // module's own spelling (`json::parse`, `fs::read`).
     let in_std = state.namespaces.is_std(ctx.file_idx);
     match name {
-        "fs_read" | "fs_exists" | "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir"
-            if in_std =>
-        {
+        // A browser has no file system, so `std/fs` does not compile there.
+        name if in_std && is_std_primitive(name) => {
             #[cfg(target_arch = "wasm32")]
-            crate::errors::wasm_error("WASM does not support the file system library");
-            #[cfg(not(target_arch = "wasm32"))]
-            fs_lib_functions(
-                &name[3..],
+            if name.starts_with("fs_") {
+                crate::errors::wasm_error("WASM does not support the file system library");
+            }
+            std_lib_functions(
+                name,
                 output,
                 v,
                 ctx,
