@@ -2336,6 +2336,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 // `dyn_lib_args` or from `keep_alive`.
                 let mut ffi_args: Vec<libffi::middle::Arg> = Vec::with_capacity(args.len());
                 keep_alive.clear();
+                let mut write_backs: Vec<ffi::WriteBack> = Vec::new();
 
                 for idx in 0..args.len() {
                     let data = regs[unsafe { *args.get_unchecked(idx) }];
@@ -2362,9 +2363,14 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                             ffi_args.push(libffi::middle::Arg::new(&*args_ptr.add(idx)));
                         }
                     } else if data.is_array() {
-                        let ptr = ffi::array_to_c_ptr(data, obj_pool, str_pool, keep_alive) as u64;
+                        let ptr = ffi::array_to_c_ptr(data, obj_pool, str_pool, keep_alive);
+                        // A list of numbers is C's to fill: what it writes
+                        // there is copied back once it returns.
+                        if let Some(wb) = ffi::write_back_of(data, ptr, obj_pool) {
+                            write_backs.push(wb);
+                        }
                         unsafe {
-                            args_ptr.add(idx).write(ptr);
+                            args_ptr.add(idx).write(ptr as u64);
                             ffi_args.push(libffi::middle::Arg::new(&*args_ptr.add(idx)));
                         }
                     } else if data.is_struct() {
@@ -2386,7 +2392,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
 
                 let func = unsafe { dyn_libs.get_unchecked(fn_id as usize) };
                 // Call the function, and convert the result back into Data
-                regs[dest] = unsafe {
+                let result = unsafe {
                     match func.get_return_type() {
                         DataType::Int => func.cif.call::<i64>(func.ptr, &ffi_args).into(),
                         DataType::Float => func.cif.call::<f64>(func.ptr, &ffi_args).into(),
@@ -2441,6 +2447,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         }
                     }
                 };
+                ffi::copy_back(&write_backs, obj_pool);
+                regs[dest] = result;
             }
             Instr::CallHostFunc(fn_id, dest) => {
                 let dispatch = unsafe { host_dispatch.get_unchecked(fn_id as usize) };

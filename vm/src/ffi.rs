@@ -51,7 +51,11 @@ pub fn array_to_c_ptr(
     keep_alive: &mut Vec<Box<[u8]>>,
 ) -> usize {
     let elems = &obj_pool[data.as_array()];
-    let first_array_element = unsafe { elems.get_unchecked(0) };
+    // An empty list has no element to say what it holds, and C reads none of
+    // it; it still gets a pointer it may hold, to a buffer of its own.
+    let Some(first_array_element) = elems.first() else {
+        return keep_buffer_alive(Box::new_uninit_slice(8), keep_alive);
+    };
     if first_array_element.is_int() {
         // C expects [u8; 8] for ints
         let mut bytes = Box::new_uninit_slice(elems.len() * 8);
@@ -312,4 +316,55 @@ pub fn c_struct_to_candela_struct(
         .get_mut(id as usize)
         .extend(recursion_stack.0.drain(base..));
     id
+}
+
+/// A list of ints or floats C received as a buffer, to copy back once the
+/// call returns.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct WriteBack {
+    /// The list's object-pool id.
+    pub list: usize,
+    /// Where the buffer C wrote into starts.
+    pub buffer: usize,
+    /// Whether the list holds floats rather than ints.
+    pub floats: bool,
+}
+
+/// What the list `data` is as a write-back, when C may have written into it:
+/// a non-empty list of ints or floats passed at the top level of a call.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_back_of(data: Data, buffer: usize, obj_pool: &ObjectPool) -> Option<WriteBack> {
+    let first = obj_pool[data.as_array()].first()?;
+    (first.is_int() || first.is_float()).then(|| WriteBack {
+        list: data.as_array(),
+        buffer,
+        floats: first.is_float(),
+    })
+}
+
+/// Copies what C left in each buffer back into the list it was made from, so
+/// a C function that fills an array it was handed fills the candela list.
+///
+/// The buffers are still alive in `keep_alive`, and each holds one 8-byte
+/// value per element of its list.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn copy_back(write_backs: &[WriteBack], obj_pool: &mut ObjectPool) {
+    for wb in write_backs {
+        let list = obj_pool.get_mut(wb.list);
+        for (i, slot) in list.iter_mut().enumerate() {
+            let mut bytes = [0u8; 8];
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (wb.buffer + i * 8) as *const u8,
+                    bytes.as_mut_ptr(),
+                    8,
+                );
+            }
+            *slot = if wb.floats {
+                Data::float(f64::from_ne_bytes(bytes))
+            } else {
+                Data::int(i64::from_ne_bytes(bytes))
+            };
+        }
+    }
 }
