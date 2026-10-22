@@ -89,7 +89,8 @@ pub fn builtin_functions(
     // module's own spelling (`json::parse`, `fs::read`).
     let in_std = state.namespaces.is_std(ctx.file_idx);
     match name {
-        // A browser has no file system, so `std/fs` does not compile there.
+        // A browser has no file system, so `std/fs` does not compile there;
+        // `std/event` does.
         name if in_std && is_std_primitive(name) => {
             #[cfg(target_arch = "wasm32")]
             if name.starts_with("fs_") {

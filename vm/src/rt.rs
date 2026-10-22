@@ -484,6 +484,17 @@ pub fn base_dir() -> Option<PathBuf> {
         .map(|(dir, _)| dir.clone())
 }
 
+/// The base directory as the C string a native library reads: empty when none
+/// is set.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn base_dir_c() -> &'static std::ffi::CStr {
+    BASE_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map_or(c"", |(_, text)| text)
+}
+
 /// `path` as the file system call should see it: joined onto the base
 /// directory when it is relative and one is set, unchanged otherwise.
 #[must_use]
@@ -551,6 +562,15 @@ pub(crate) fn open_library(
     filename: &str,
     origin: LibraryOrigin,
 ) -> Result<Library, libloading::Error> {
+    let lib = find_library(filename, origin)?;
+    // A library that posts events gets the runtime's table before the program
+    // can call into it.
+    crate::events::init_library(&lib);
+    Ok(lib)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_library(filename: &str, origin: LibraryOrigin) -> Result<Library, libloading::Error> {
     for dir in dylib_dirs() {
         if let Ok(lib) = unsafe { Library::new(dir.join(filename)) } {
             return Ok(lib);

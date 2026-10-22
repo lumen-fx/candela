@@ -447,6 +447,13 @@ pub struct GcState {
     byte_trigger: usize,
     /// The bytes the last finished mark phase found live.
     live_bytes: usize,
+    /// Values the runtime holds for the program outside its registers, each
+    /// under a key: the closures `std/event` registered, by source. They are
+    /// roots like the registers.
+    pins: Vec<(i64, Data)>,
+    /// Where the events of the sources the program registered handlers for
+    /// arrive, made when it registers the first.
+    pub(crate) inbox: Option<crate::events::Inbox>,
 }
 
 impl Default for GcState {
@@ -480,6 +487,8 @@ impl Default for GcState {
                 MIN_BYTE_THRESHOLD
             },
             live_bytes: 0,
+            pins: Vec::new(),
+            inbox: None,
         }
     }
 }
@@ -488,6 +497,34 @@ impl GcState {
     /// Whether this build runs a cycle on every allocation, a unit of work at
     /// a time, which is what the `gc-torture` feature turns on.
     pub const TORTURE: bool = TORTURE;
+
+    /// Holds `value` under `key` as a root, replacing what the key held.
+    pub(crate) fn pin(&mut self, strings: &mut StringPool, key: i64, value: Data) {
+        if let Some(slot) = self.pins.iter_mut().find(|(k, _)| *k == key) {
+            let old = std::mem::replace(&mut slot.1, value);
+            if self.marking() {
+                self.tracer.shade(strings, old);
+            }
+        } else {
+            self.pins.push((key, value));
+        }
+    }
+
+    /// The value pinned under `key`.
+    pub(crate) fn pinned(&self, key: i64) -> Option<Data> {
+        self.pins.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    }
+
+    /// Lets go of the value pinned under `key`. A cycle marking now still
+    /// marks it, as it would a value taken out of a list.
+    pub(crate) fn unpin(&mut self, strings: &mut StringPool, key: i64) {
+        if let Some(at) = self.pins.iter().position(|(k, _)| *k == key) {
+            let (_, old) = self.pins.swap_remove(at);
+            if self.marking() {
+                self.tracer.shade(strings, old);
+            }
+        }
+    }
 
     /// How many collections have begun over these pools.
     #[must_use]
@@ -680,6 +717,10 @@ impl GcState {
             for &d in root {
                 tracer.shade(strings, d);
             }
+        }
+        read += self.pins.len();
+        for &(_, d) in &self.pins {
+            tracer.shade(strings, d);
         }
         self.phase = Phase::Mark;
         // One unit per 64 values read, and one per 64 mark words cleared.
@@ -946,6 +987,7 @@ impl GcState {
         let mut seen_arrays = vec![false; objs.len()];
         let mut seen_maps = vec![false; maps.len()];
         let mut stack: Vec<Data> = roots.iter().flat_map(|r| r.iter().copied()).collect();
+        stack.extend(self.pins.iter().map(|(_, d)| *d));
         while let Some(d) = stack.pop() {
             if d.is_map() {
                 let id = d.as_map();

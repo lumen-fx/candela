@@ -20,13 +20,13 @@ enum Lowering {
     Void(LibFuncVoid),
 }
 
-/// The native primitives `std/fs` is written on: what each compiles to, and
-/// the type each argument has to be (`Unknown` takes any).
+/// The native primitives `std/fs` and `std/event` are written on: what each
+/// compiles to, and the type each argument has to be (`Unknown` takes any).
 ///
 /// Keep in step with `std_primitive_return_type` in the type system, which
 /// types the calls.
 fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
-    use DataType::{String as Str, Unknown};
+    use DataType::{Bool, Int, String as Str, Unknown};
     use Lowering::{Value, Void};
     const PATH: &[DataType] = &[Str];
     const TWO_PATHS: &[DataType] = &[Str, Str];
@@ -44,6 +44,9 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "fs_mkdir" => (Void(LibFuncVoid::FsMkdir), PATH),
         "fs_copy" => (Void(LibFuncVoid::FsCopy), TWO_PATHS),
         "fs_write_bytes" => (Void(LibFuncVoid::FsWriteBytes), &[Str, Unknown]),
+        "event_source" => (Value(LibFunc::EventSource), &[]),
+        "event_next" => (Value(LibFunc::EventNext), &[Bool]),
+        "event_on" => (Void(LibFuncVoid::EventOn), &[Int, Unknown]),
         _ => return None,
     })
 }

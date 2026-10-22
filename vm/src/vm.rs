@@ -42,9 +42,9 @@ use crate::rt::EnumType;
 use crate::rt::ErrorCatch;
 use crate::rt::HostFnSig;
 use crate::rt::Pools;
-use crate::rt::resolve_path;
 use crate::rt::Span;
 use crate::rt::Struct;
+use crate::rt::resolve_path;
 use indexmap::IndexMap;
 use lexical_core::FormattedSize;
 use memchr::memmem;
@@ -2336,8 +2336,8 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 // Each argument libffi reads, borrowed from its slot in
                 // `dyn_lib_args` or from `keep_alive`.
                 let mut ffi_args: Vec<libffi::middle::Arg> = Vec::with_capacity(args.len());
-                keep_alive.clear();
                 let mut write_backs: Vec<ffi::WriteBack> = Vec::new();
+                keep_alive.clear();
 
                 for idx in 0..args.len() {
                     let data = regs[unsafe { *args.get_unchecked(idx) }];
@@ -3567,6 +3567,48 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         error_with_catch!(ErrType::FsNotAByte(value));
                     }
                 }
+            }
+            // -----
+            // EVENTS
+            // -----
+            Instr::CallLibFunc(LibFunc::EventSource, _, dest) => {
+                regs[dest] = Data::int(crate::events::new_source());
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::EventOn, source, handler) => {
+                let source = regs[source].as_int();
+                gc.pin(str_pool, source, regs[handler]);
+                gc.inbox.get_or_insert_default().route(source);
+            }
+            // The next event a handler of this program takes, as
+            // `[source, handler, payload]`. A source whose last hold ended
+            // lets go of its handler.
+            Instr::CallLibFunc(LibFunc::EventNext, wait, dest) => {
+                let wait = regs[wait].is_true();
+                let (source, handler, payload) = loop {
+                    let Some(inbox) = &gc.inbox else {
+                        break (0, NULL, None);
+                    };
+                    match inbox.next(wait) {
+                        crate::events::Next::Event(source, payload) => {
+                            if let Some(handler) = gc.pinned(source) {
+                                break (source, handler, Some(payload));
+                            }
+                        }
+                        crate::events::Next::Ended(source) => gc.unpin(str_pool, source),
+                        crate::events::Next::Idle => break (0, NULL, None),
+                    }
+                };
+                let base = recursion_stack.len();
+                if let Some(payload) = payload {
+                    recursion_stack.0.push(Data::int(source));
+                    recursion_stack.0.push(handler);
+                    let text = string!(payload);
+                    recursion_stack.0.push(text);
+                }
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+                let list = obj_pool.get_mut(array_id as usize);
+                list.extend(recursion_stack.0.drain(base..));
+                regs[dest] = Data::array(array_id);
             }
             #[cfg(target_arch = "wasm32")]
             Instr::CallLibFunc(LibFunc::Argv, _, dest) => {

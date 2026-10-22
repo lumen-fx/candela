@@ -57,6 +57,18 @@ pub fn compile_trampoline(
     call_expr: &Expr,
     seed_vars: Vec<Variable>,
 ) -> (Vec<Instr>, Option<u16>) {
+    compile_trampoline_in(state, 0, offset, call_expr, seed_vars)
+}
+
+/// [`compile_trampoline`] with the call resolved in the scope of file
+/// `file_idx` rather than the entry file's.
+fn compile_trampoline_in(
+    state: &mut State<'_>,
+    file_idx: u16,
+    offset: u16,
+    call_expr: &Expr,
+    seed_vars: Vec<Variable>,
+) -> (Vec<Instr>, Option<u16>) {
     // A prior trampoline that aborted mid-inference (error unwind) may have
     // left stale entries in the return-type inference thread-local; clear it so
     // this compile starts clean, exactly as `compile()` does.
@@ -67,7 +79,7 @@ pub fn compile_trampoline(
         is_compiling_recursive: false,
         single_run: false,
         in_function: false,
-        file_idx: 0,
+        file_idx,
         offset,
         return_downcast: None,
     };
@@ -159,7 +171,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
     let mut exports = Vec::new();
     for (name, arg_types) in annotated_functions(out) {
         let host_callable = arg_types.iter().all(is_host_callable_type);
-        let export = compile_entry_point(out, &name, arg_types);
+        let export = compile_entry_point(out, 0, &name, arg_types);
         if host_callable {
             exports.push(export);
         }
@@ -211,7 +223,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         }
         let host_callable = arg_types.iter().all(is_host_callable_type);
         let checkpoint = compiler_state(out).checkpoint();
-        match collect_diagnostic(|| compile_entry_point(out, &name, arg_types)) {
+        match collect_diagnostic(|| compile_entry_point(out, 0, &name, arg_types)) {
             Ok(export) => {
                 if host_callable {
                     exports.push(export);
@@ -330,6 +342,7 @@ fn annotated_functions(out: &CompileOutput) -> Vec<(SmolStr, Vec<DataType>)> {
 /// instructions that were never emitted.
 fn compile_entry_point(
     out: &mut CompileOutput,
+    file_idx: u16,
     name: &str,
     arg_types: Vec<DataType>,
 ) -> ExportImage {
@@ -366,7 +379,7 @@ fn compile_entry_point(
     let entry = out.instructions.len() as u16;
     let (mut trampoline, ret_id) = {
         let mut state = compiler_state(out);
-        compile_trampoline(&mut state, entry, &call_expr, seed_vars)
+        compile_trampoline_in(&mut state, file_idx, entry, &call_expr, seed_vars)
     };
 
     trampoline.push(Instr::Halt(0));
@@ -386,6 +399,37 @@ fn compile_entry_point(
         // A function that returns nothing lands on register 0, the null sink.
         ret_register: ret_id.unwrap_or(0),
     }
+}
+
+/// The module the event dispatcher lives in, as the library import names it.
+const EVENT_MODULE: &str = "event";
+
+/// Compiles the entry point the runtime runs event handlers through, when the
+/// program imports `std/event`: a call of that module's `dispatch` at
+/// `(int, bool)`, the budget and whether to wait.
+///
+/// A runner calls it after `main` returns, and an embedder calls it from its
+/// own loop, so it exists whether or not the program ever calls `dispatch`
+/// itself. A program that does not import the module has no handlers to run
+/// and gets none.
+pub fn compile_event_entry(out: &mut CompileOutput) -> Option<ExportImage> {
+    let file = (0..out.sources.len()).find(|&file| {
+        out.namespaces.is_std(file as u16)
+            && std::path::Path::new(out.sources[file].filename.as_str())
+                .file_stem()
+                .is_some_and(|stem| stem == EVENT_MODULE)
+    })?;
+    // Register 0 is the null sink; see `compile_entry_points`.
+    if out.registers.is_empty() {
+        out.registers.push(NULL);
+        out.const_registers.entry(NULL).or_insert(0);
+    }
+    Some(compile_entry_point(
+        out,
+        file as u16,
+        "dispatch",
+        vec![DataType::Int, DataType::Bool],
+    ))
 }
 
 /// Borrows the compile result as the mutable state a trampoline compile writes

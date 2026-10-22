@@ -435,7 +435,8 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::Len
         | LibFunc::TheAnswer
         | LibFunc::Int
-        | LibFunc::AsIntVal => DataType::Int,
+        | LibFunc::AsIntVal
+        | LibFunc::EventSource => DataType::Int,
         LibFunc::Float
         | LibFunc::SqrtFloat
         | LibFunc::Round
@@ -446,6 +447,7 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
             DataType::Array(Some(Box::new(DataType::String)))
         }
         LibFunc::Range | LibFunc::FsReadBytes => DataType::Array(Some(Box::new(DataType::Int))),
+        LibFunc::EventNext => DataType::Array(Some(Box::new(DataType::Unknown))),
         LibFunc::Keys => match arg {
             DataType::Map(entry) => DataType::Array(entry.0.clone().map(Box::new)),
             _ => DataType::Array(None),

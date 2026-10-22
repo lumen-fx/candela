@@ -408,6 +408,11 @@ impl Engine {
             generics: out.generics,
             warnings,
             calls: FxHashMap::default(),
+            event_entry: out.event_entry.map(|entry| CompiledCall {
+                start: entry.entry as usize,
+                arg_registers: entry.arg_registers.into_boxed_slice(),
+                ret_register: entry.ret_register,
+            }),
         };
 
         // Instantiate: run `main` once so top-level state is established before
@@ -453,6 +458,9 @@ pub struct Program {
     /// The trampoline compiled for each function and argument types a host
     /// has called with.
     calls: FxHashMap<(String, String), CompiledCall>,
+    /// The trampoline event handlers run through, when the program imports
+    /// `std/event`.
+    event_entry: Option<CompiledCall>,
 }
 
 /// A host call compiled onto the resident instruction stream.
@@ -629,6 +637,30 @@ impl Program {
             arg_registers,
             ret_register: ret_id.unwrap_or(0),
         })
+    }
+
+    /// Runs the handlers of events that have arrived for this program, at
+    /// most `budget` of them, and answers how many ran. Never waits.
+    ///
+    /// A host that runs its own loop calls this from it, on the thread the
+    /// program runs on, after the waker it set with
+    /// [`set_event_waker`](crate::set_event_waker) said something arrived. A
+    /// program that does not import `std/event` has no handlers, and the
+    /// answer is always 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`Diagnostic`] when a handler raised an error no `try`
+    /// caught. The events behind it stay queued for the next call.
+    pub fn dispatch_events(&mut self, budget: u32) -> Result<usize, Diagnostic> {
+        let Some(entry) = &self.event_entry else {
+            return Ok(0);
+        };
+        let (start, ret) = (entry.start, entry.ret_register as usize);
+        self.registers[entry.arg_registers[0] as usize] = Data::int(i64::from(budget));
+        self.registers[entry.arg_registers[1] as usize] = Data::from(false);
+        self.execute_from(start)?;
+        Ok(self.registers[ret].as_int().max(0) as usize)
     }
 
     /// Does up to about `budget` units of garbage collection while the
