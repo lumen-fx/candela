@@ -258,10 +258,18 @@ kinds above cover the cases where a value is only known at run time.
 Every function of the [fs module](../standard-library/fs.md) maps the operating
 system's failure to one kind:
 `fs_not_found`, `fs_permission_denied`, `fs_already_exists`,
-`fs_is_a_directory`, `fs_not_a_directory`, `fs_invalid_filename`,
-`fs_invalid_data`, `fs_file_too_large`, `fs_storage_full`,
-`fs_read_only_filesystem`, `fs_out_of_memory`, `fs_timed_out`,
-`fs_interrupted`, `fs_deadlock`.
+`fs_is_a_directory`, `fs_not_a_directory`, `fs_directory_not_empty`,
+`fs_invalid_filename`, `fs_invalid_data`, `fs_file_too_large`,
+`fs_storage_full`, `fs_read_only_filesystem`, `fs_out_of_memory`,
+`fs_timed_out`, `fs_interrupted`, `fs_deadlock`, and `fs_other` for a failure
+none of those names.
+
+Two kinds come from what the call was given rather than from the system:
+
+| Kind | Raised by |
+| --- | --- |
+| `fs_not_a_byte` | `fs::write_bytes` with an element outside 0 to 255 |
+| `fs_unknown_digest` | `fs::digest` with an algorithm other than md5, sha1 and sha256 |
 
 ### Dynamic libraries
 

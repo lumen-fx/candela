@@ -24,6 +24,9 @@ pub mod embed;
 // json parse/stringify over the runtime value graph, backing `std/json`.
 pub mod json;
 
+// MD5, SHA-1 and SHA-256, for `fs::digest` and the browser's `std/hash`.
+pub mod digest;
+
 // The standard library's native functions, built in where no dynamic library
 // can be loaded.
 #[cfg(any(target_arch = "wasm32", test))]

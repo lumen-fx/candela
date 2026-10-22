@@ -364,6 +364,15 @@ pub enum LibFunc {
     /// The type test `is` compiles to for the types [`Self::AsTypeVal`]
     /// checks: the same list of [`type_code`]s, answered as a bool.
     IsTypeVal = 52,
+    /// fs::is_dir. Whether the source path names a directory.
+    FsIsDir = 53,
+    /// fs::list. The names inside the source directory, sorted.
+    FsList = 54,
+    /// fs::read_bytes. The bytes of the source file as a list of ints.
+    FsReadBytes = 55,
+    /// fs::digest. The digest of the source file under the algorithm named
+    /// by the stored argument, as lowercase hex.
+    FsDigest = 56,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and
@@ -398,6 +407,12 @@ pub enum LibFuncVoid {
     FsDelete = 3,
     FsDeleteDir = 4,
     Sort = 5,
+    /// fs::mkdir(path): the directory and every missing one above it.
+    FsMkdir = 6,
+    /// fs::copy(from, to): one file.
+    FsCopy = 7,
+    /// fs::write_bytes(path, bytes).
+    FsWriteBytes = 8,
 }
 
 impl Instr {
@@ -667,7 +682,13 @@ impl Instr {
 
             Self::CallLibFuncVoid(func, a, b) => {
                 f(a);
-                if matches!(*func, LibFuncVoid::FsWrite | LibFuncVoid::FsAppend) {
+                if matches!(
+                    *func,
+                    LibFuncVoid::FsWrite
+                        | LibFuncVoid::FsAppend
+                        | LibFuncVoid::FsCopy
+                        | LibFuncVoid::FsWriteBytes
+                ) {
                     f(b);
                 }
             }

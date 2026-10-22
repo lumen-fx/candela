@@ -1,8 +1,10 @@
-/// Reading and writing files.
+/// Reading and writing files and directories.
 ///
 /// Every function takes the path as a string and raises a catchable error on
 /// failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
-/// `fs_is_a_directory`, `fs_storage_full`, and the rest.
+/// `fs_is_a_directory`, `fs_storage_full`, and the rest. A relative path
+/// resolves against the working directory, or against the directory the
+/// embedding host set as the base.
 ///
 ///     import "std/fs";
 ///     fs::write("notes.txt", "hello");
@@ -41,3 +43,37 @@ fn delete(path: string) {
 fn delete_dir(path: string) {
     fs_delete_dir(path);
 }
+
+/// True when `path` names a directory.
+fn is_dir(path: string) -> bool => fs_is_dir(path);
+
+/// The names of the entries directly inside the directory at `path`, sorted.
+/// Names, not paths: join them onto `path` to reach the entries.
+fn list(path: string) -> string[] => fs_list(path);
+
+/// Creates the directory at `path` and every missing directory above it. A
+/// directory that is already there is no error.
+fn mkdir(path: string) {
+    fs_mkdir(path);
+}
+
+/// Copies the file at `from` to `to`, replacing what was at `to`. Raises
+/// `fs_is_a_directory` when `from` is a directory: copy the files inside it.
+fn copy(from: string, to: string) {
+    fs_copy(from, to);
+}
+
+/// The bytes of the file at `path`, each an int from 0 to 255.
+fn read_bytes(path: string) -> int[] => fs_read_bytes(path);
+
+/// Writes `bytes` to `path`, replacing what was there. Every element has to be
+/// a byte, 0 to 255; one that is not raises `fs_not_a_byte` and nothing is
+/// written.
+fn write_bytes(path: string, bytes: int[]) {
+    fs_write_bytes(path, bytes);
+}
+
+/// The digest of the file at `path` as lowercase hex, under `algorithm`:
+/// `"md5"`, `"sha1"` or `"sha256"`. The file streams through, so a large one
+/// never sits in memory whole. Another algorithm raises `fs_unknown_digest`.
+fn digest(path: string, algorithm: string) -> string => fs_digest(path, algorithm);

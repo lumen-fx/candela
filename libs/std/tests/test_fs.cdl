@@ -1,0 +1,55 @@
+import "std/assert";
+import "std/fs";
+
+// Runs in a scratch directory the caller names as the first argument.
+fn main() {
+    let root = argv()[0];
+    let dir = root + "/a/b";
+    fs::mkdir(dir);
+    fs::mkdir(dir);
+    assert::is_true(fs::is_dir(dir));
+    assert::is_false(fs::is_dir(root + "/missing"));
+
+    fs::write(dir + "/z.txt", "hello");
+    fs::write(dir + "/a.txt", "");
+    assert::eq(fs::list(dir), ["a.txt", "z.txt"]);
+    assert::eq(fs::list(root), ["a"]);
+
+    fs::copy(dir + "/z.txt", root + "/copy.txt");
+    assert::eq(fs::read(root + "/copy.txt"), "hello");
+    try {
+        fs::copy(dir, root + "/nope");
+        assert::that(false);
+    } catch "fs_is_a_directory" {}
+
+    fs::write_bytes(root + "/b.bin", [0, 1, 127, 255]);
+    assert::eq(fs::read_bytes(root + "/b.bin"), [0, 1, 127, 255]);
+    try {
+        fs::write_bytes(root + "/bad.bin", [1, 256]);
+        assert::that(false);
+    } catch "fs_not_a_byte" {}
+    assert::is_false(fs::exists(root + "/bad.bin"));
+
+    assert::eq(fs::digest(dir + "/z.txt", "md5"), "5d41402abc4b2a76b9719d911017c592");
+    assert::eq(fs::digest(dir + "/z.txt", "sha1"), "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
+    assert::eq(
+        fs::digest(dir + "/z.txt", "sha256"),
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    );
+    assert::eq(fs::digest(dir + "/a.txt", "md5"), "d41d8cd98f00b204e9800998ecf8427e");
+    try {
+        fs::digest(dir + "/z.txt", "crc32");
+        assert::that(false);
+    } catch "fs_unknown_digest" {}
+    try {
+        fs::digest(root + "/missing", "md5");
+        assert::that(false);
+    } catch "fs_not_found" {}
+
+    try {
+        fs::delete_dir(root + "/a");
+        assert::that(false);
+    } catch "fs_directory_not_empty" {}
+
+    print("fs ok");
+}

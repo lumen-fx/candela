@@ -2133,11 +2133,14 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
 #[must_use]
 pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
     Some(match name {
-        "json_stringify" | "fs_read" => DataType::String,
+        "json_stringify" | "fs_read" | "fs_digest" => DataType::String,
         // json::parse yields a fully dynamic value.
         "json_parse" => DataType::Unknown,
-        "fs_exists" => DataType::Bool,
-        "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" => DataType::Null,
+        "fs_exists" | "fs_is_dir" => DataType::Bool,
+        "fs_list" => DataType::Array(Some(Box::new(DataType::String))),
+        "fs_read_bytes" => DataType::Array(Some(Box::new(DataType::Int))),
+        "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" | "fs_mkdir" | "fs_copy"
+        | "fs_write_bytes" => DataType::Null,
         _ => return None,
     })
 }
