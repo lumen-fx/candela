@@ -48,9 +48,10 @@ The rest of the tree:
   `native/`, a Rust crate built as the shared library the package's `dylib`
   block loads. `packages/sys/` is the crate those native halves share: the
   event table a library receives and the string conventions of the C
-  boundary. A local run needs the built library copied to the package's
-  `dist/<name>.<ext>`, which the release does for every target with
-  `scripts/pack-packages.sh`.
+  boundary. `packages/testkit/` builds a package's library and runs the
+  package from candela in its tests. A local run outside the tests needs the
+  built library copied to the package's `dist/<name>.<ext>`, which the release
+  does for every target with `scripts/pack-packages.sh`.
 - `libs/std/` holds the standard library, written in candela. `libs/std/tests/`
   holds one `.cdl` test program per module.
 - `libs/std_src/` holds the C sources behind the `hash`, `math`, `random` and
@@ -195,11 +196,13 @@ cargo test -p candela-lsp
 The language server's suite spawns the built binary and drives it over its
 protocol, so build it first.
 
-Two tests skip rather than fail when their prerequisite is absent: the dynamic
-library round trip, which needs a system zlib it can open, and the artifact
-comparison, which needs the `candela-vm` binary built. Build
-`-p candela-vm --bin candela-vm` before `cargo test` if you want that one to
-run, and pass `-- --nocapture` to see whether anything skipped.
+A test that runs `candela-vm`, or loads a first-party package's native
+library, builds it first with a nested `cargo build` into a directory of its
+own under the target directory, so `cargo test` needs nothing built
+beforehand; under `cargo llvm-cov` that build is instrumented and measured
+like the rest. The dynamic library round trip skips rather than fails when the
+machine has no system zlib it can open; pass `-- --nocapture` to see whether
+it did.
 
 `CANDELA_LIB_PATH` points the compiler at a standard library directory. The
 suites set it to this checkout's `libs`, because a test binary is not laid out

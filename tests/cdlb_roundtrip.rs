@@ -9,12 +9,26 @@
 //! and its ability to carry instructions, the constant pools, structs, and
 //! sources.
 
+mod built;
 mod common;
 
 use candela::HostRegistry;
 use candela::load_program;
-use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// The `candela-vm` binary, built for this run; see `built`.
+fn candela_vm() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            built::build(
+                &["-p", "candela-vm", "--bin", "candela-vm"],
+                &format!("candela-vm{}", std::env::consts::EXE_SUFFIX),
+            )
+        })
+        .clone()
+}
 
 /// A unique scratch directory under the system temp dir. `.cdlb` builds resolve
 /// `import "..."` relative to the main file's path, so multi-file tests need
@@ -35,25 +49,10 @@ fn scratch_dir(tag: &str) -> PathBuf {
 /// Runs `program` through `candela <file>` and through `candela build` plus
 /// `candela-vm`, requiring the source run to print `expected` and the artifact
 /// run to match it byte for byte. `note` says what the expected output means
-/// when the comparison fails. Skips if `candela-vm` is not built alongside
-/// `candela`.
-fn agrees_across_source_and_artifact(
-    test: &str,
-    tag: &str,
-    program: &str,
-    expected: &str,
-    note: &str,
-) {
+/// when the comparison fails.
+fn agrees_across_source_and_artifact(tag: &str, program: &str, expected: &str, note: &str) {
     let candela = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
-        "candela-vm.exe"
-    } else {
-        "candela-vm"
-    });
-    if !candela_vm.exists() {
-        eprintln!("skipping {test}: {} not built", candela_vm.display());
-        return;
-    }
+    let candela_vm = candela_vm();
 
     let dir = scratch_dir(tag);
     let app = dir.join("app.cdl");
@@ -485,12 +484,10 @@ fn main() {
 
 /// A value past 32 bits reads the same through `candela <file>` and through
 /// `candela build` plus `candela-vm`, so the artifact carries the whole width
-/// rather than the half the register used to hold. Skips if `candela-vm` is
-/// not built alongside `candela`.
+/// rather than the half the register used to hold.
 #[test]
 fn wide_ints_agree_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "wide_ints_agree_across_source_and_artifact",
         "wide_ints",
         WIDE_INT_PROGRAM,
         "9223372036854775807\n2147483648\n8589934592\n-9000000000\n",
@@ -502,12 +499,10 @@ fn wide_ints_agree_across_source_and_artifact() {
 /// the same answers through `candela <file>` and through `candela build` plus
 /// `candela-vm`. The saved-register table a recursive call site writes is what
 /// both paths read on the way back out of a call, so a table keyed the wrong
-/// way shows up here as a wrong number. Skips if `candela-vm` is not built
-/// alongside `candela`.
+/// way shows up here as a wrong number.
 #[test]
 fn recursion_then_a_wider_function_agrees_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "recursion_then_a_wider_function_agrees_across_source_and_artifact",
         "recursion",
         RECURSION_PROGRAM,
         "55\n121\n",
@@ -516,12 +511,10 @@ fn recursion_then_a_wider_function_agrees_across_source_and_artifact() {
 }
 
 /// A call on what a call or an index returned reaches the same answers through
-/// `candela <file>` and through `candela build` plus `candela-vm`. Skips if
-/// `candela-vm` is not built alongside `candela`.
+/// `candela <file>` and through `candela build` plus `candela-vm`.
 #[test]
 fn indirect_calls_agree_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "indirect_calls_agree_across_source_and_artifact",
         "indirect_calls",
         INDIRECT_CALL_PROGRAM,
         "42\n42\n42\n",
@@ -531,24 +524,11 @@ fn indirect_calls_agree_across_source_and_artifact() {
 
 /// Full CLI round-trip: compile source with `candela`, run the `.cdlb` with the
 /// VM-only `candela-vm` with the source tree removed, and require byte-identical
-/// stdout to running the source directly. Skips if the `candela-vm` binary is
-/// not built alongside `candela` (e.g. a plain `cargo test` that did not build
-/// the vm package).
+/// stdout to running the source directly.
 #[test]
 fn cli_whole_program_output_matches_source_run() {
     let candela = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
-        "candela-vm.exe"
-    } else {
-        "candela-vm"
-    });
-    if !candela_vm.exists() {
-        eprintln!(
-            "skipping cli_whole_program_output_matches_source_run: {} not built",
-            candela_vm.display()
-        );
-        return;
-    }
+    let candela_vm = candela_vm();
 
     let dir = scratch_dir("cli");
     let util = dir.join("util.cdl");
@@ -604,23 +584,11 @@ fn cli_whole_program_output_matches_source_run() {
 
 /// The call depth limit belongs to the VM, so it holds for a `.cdlb` run the
 /// same way it holds for a source run: a runaway recursion stops with the
-/// error, and a deep one that ends still reaches its answer. Skips if
-/// `candela-vm` is not built alongside `candela`.
+/// error, and a deep one that ends still reaches its answer.
 #[test]
 fn the_call_depth_limit_holds_for_an_artifact_run() {
     let candela = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
-        "candela-vm.exe"
-    } else {
-        "candela-vm"
-    });
-    if !candela_vm.exists() {
-        eprintln!(
-            "skipping the_call_depth_limit_holds_for_an_artifact_run: {} not built",
-            candela_vm.display()
-        );
-        return;
-    }
+    let candela_vm = candela_vm();
 
     let dir = scratch_dir("call_depth");
     for (name, source, deep) in [
@@ -677,23 +645,11 @@ fn the_call_depth_limit_holds_for_an_artifact_run() {
 
 /// String positions count characters, and the VM is what counts them, so an
 /// artifact run indexes, slices and iterates a string with characters wider
-/// than one byte exactly as a source run does. Skips if `candela-vm` is not
-/// built alongside `candela`.
+/// than one byte exactly as a source run does.
 #[test]
 fn string_positions_count_characters_in_an_artifact_run() {
     let candela = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
-        "candela-vm.exe"
-    } else {
-        "candela-vm"
-    });
-    if !candela_vm.exists() {
-        eprintln!(
-            "skipping string_positions_count_characters_in_an_artifact_run: {} not built",
-            candela_vm.display()
-        );
-        return;
-    }
+    let candela_vm = candela_vm();
 
     let dir = scratch_dir("char_positions");
     let app = dir.join("app.cdl");
@@ -813,12 +769,10 @@ fn main() {
 /// A map reads in the same order through `candela <file>` and through
 /// `candela build` plus `candela-vm`: the artifact records a constant map's
 /// pairs in the order the program wrote them, so the literal keeps source
-/// order after a round-trip. Skips if `candela-vm` is not built alongside
-/// `candela`.
+/// order after a round-trip.
 #[test]
 fn map_order_agrees_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "map_order_agrees_across_source_and_artifact",
         "maporder",
         MAP_ORDER_PROGRAM,
         "{\"b\":1,\"a\":2,\"c\":3}\n[\"b\",\"c\",\"d\",\"a\"]\n[20,3,4,9]\n",
@@ -828,12 +782,10 @@ fn map_order_agrees_across_source_and_artifact() {
 
 /// A captured variable reads the same through `candela <file>` and through
 /// `candela build` plus `candela-vm`: the artifact carries the cell
-/// instructions and the environment each closure was built with. Skips if
-/// `candela-vm` is not built alongside `candela`.
+/// instructions and the environment each closure was built with.
 #[test]
 fn closures_agree_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "closures_agree_across_source_and_artifact",
         "closures",
         CLOSURE_PROGRAM,
         "7\n1\n2\n1\n9\n12\n321\n",
@@ -894,11 +846,10 @@ fn main() {
 
 /// Every function value reads `<fn>`, through `candela <file>` and through
 /// `candela build` plus `candela-vm` alike, and the call through one still
-/// reaches its body. Skips if `candela-vm` is not built alongside `candela`.
+/// reaches its body.
 #[test]
 fn function_text_agrees_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "function_text_agrees_across_source_and_artifact",
         "function_text",
         FUNCTION_TEXT_PROGRAM,
         "<fn>\n<fn>\n<fn>\n<fn>\n<fn>\n[<fn>,<fn>]\n{\"k\":<fn>}\nButton {on_press:<fn>}\n8\n",
@@ -931,8 +882,7 @@ fn main() {
 
 /// A struct reads as `Name {field:value}` everywhere it becomes text, through
 /// `candela <file>` and through `candela build` plus `candela-vm` alike: the
-/// artifact carries the field names the rendering reads. Skips if `candela-vm`
-/// is not built alongside `candela`.
+/// artifact carries the field names the rendering reads.
 #[test]
 fn struct_text_agrees_across_source_and_artifact() {
     let named = "P {x:1,name:\"n\"}";
@@ -943,7 +893,6 @@ fn struct_text_agrees_across_source_and_artifact() {
          Cell<int> {{value:3}}\nCell<int> {{value:3}}\n"
     );
     agrees_across_source_and_artifact(
-        "struct_text_agrees_across_source_and_artifact",
         "struct_text",
         STRUCT_TEXT_PROGRAM,
         &expected,
@@ -953,12 +902,10 @@ fn struct_text_agrees_across_source_and_artifact() {
 
 /// A function named where a value goes reaches the same body through `candela
 /// <file>` and through `candela build` plus `candela-vm`: the artifact carries
-/// the entry each name was compiled into. Skips if `candela-vm` is not built
-/// alongside `candela`.
+/// the entry each name was compiled into.
 #[test]
 fn function_names_agree_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "function_names_agree_across_source_and_artifact",
         "function_names",
         FUNCTION_NAME_PROGRAM,
         "8\n12\n8\n30\n",
@@ -1003,7 +950,6 @@ fn an_overloaded_operator_roundtrips_through_cdlb() {
     );
 
     agrees_across_source_and_artifact(
-        "an_overloaded_operator_roundtrips_through_cdlb",
         "operators",
         src,
         "4\n6\n-1\nfalse\ntrue\ntrue\ntrue\n",
@@ -1043,7 +989,6 @@ fn main() {
 #[test]
 fn string_keys_match_by_text_across_source_and_artifact() {
     agrees_across_source_and_artifact(
-        "string_keys_match_by_text_across_source_and_artifact",
         "strkeys",
         STRING_KEY_PROGRAM,
         "true\ntrue\n1\n1\n3\n0\ntrue\n0\ntrue\n",

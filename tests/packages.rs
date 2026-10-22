@@ -9,11 +9,26 @@
 //! One test leaves `LPM_BIN` unset and points the download at local files
 //! instead, so the path that installs the client is exercised too.
 
+mod built;
 mod common;
 
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// The `candela-vm` binary, built for this run; see `built`.
+fn candela_vm() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            built::build(
+                &["-p", "candela-vm", "--bin", "candela-vm"],
+                &format!("candela-vm{}", std::env::consts::EXE_SUFFIX),
+            )
+        })
+        .clone()
+}
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -453,22 +468,7 @@ fn check_refuses_the_body_a_build_refuses() {
 /// VM-only binary with no source tree and no client.
 #[test]
 fn a_built_artifact_runs_with_no_source_tree() {
-    let candela_bin = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela_bin)
-        .parent()
-        .unwrap()
-        .join(if cfg!(windows) {
-            "candela-vm.exe"
-        } else {
-            "candela-vm"
-        });
-    if !candela_vm.exists() {
-        eprintln!(
-            "skipping a_built_artifact_runs_with_no_source_tree: {} not built",
-            candela_vm.display()
-        );
-        return;
-    }
+    let candela_vm = candela_vm();
 
     let root = scratch_dir("build");
     let package = shapes_package(&root);

@@ -5,6 +5,7 @@
 //! `candela_dylib_init` and starts a thread per call that posts a few events
 //! under the source it was given, then releases it.
 
+mod built;
 mod common;
 mod ffi_fixture;
 
@@ -13,7 +14,21 @@ use candela::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The `candela-vm` binary, built for this run; see `built`.
+fn candela_vm() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            built::build(
+                &["-p", "candela-vm", "--bin", "candela-vm"],
+                &format!("candela-vm{}", std::env::consts::EXE_SUFFIX),
+            )
+        })
+        .clone()
+}
 
 const FIXTURE: &str = r#"
 use std::ffi::{c_char, CString};
@@ -138,25 +153,21 @@ fn handlers_run_after_main_while_work_is_held() {
 #[test]
 fn an_artifact_keeps_dispatching_under_candela_vm() {
     let candela = env!("CARGO_BIN_EXE_candela");
-    let candela_vm = Path::new(candela).parent().unwrap().join(if cfg!(windows) {
-        "candela-vm.exe"
-    } else {
-        "candela-vm"
-    });
-    if !candela_vm.exists() {
-        eprintln!("skipping: {} not built", candela_vm.display());
-        return;
-    }
+    let candela_vm = candela_vm();
     let dir = fixture("artifact");
     // An artifact re-opens a library by the name it recorded, and a bare name
     // goes to the system loader, which does not look in the working
     // directory. A path does, so this program names the library by one.
+    // On Windows the two names are the same file, `ticker.dll`.
     let ext = candela_vm::rt::TargetOs::CURRENT.dynamic_lib_extension();
     let built = dir.join(candela_vm::rt::resolve_library_filename(
         "ticker",
         candela_vm::rt::TargetOs::CURRENT,
     ));
-    std::fs::copy(&built, dir.join(format!("ticker.{ext}"))).unwrap();
+    let by_path = dir.join(format!("ticker.{ext}"));
+    if built != by_path {
+        std::fs::copy(&built, &by_path).unwrap();
+    }
     let app = dir.join("app.cdl");
     std::fs::write(
         &app,
