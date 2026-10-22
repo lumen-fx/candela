@@ -3,7 +3,8 @@
 # It has been modified by the candela authors. See the NOTICE file.
 name: release
 
-# Publishes the candela toolchain to a GitHub release on any vX.Y.Z tag.
+# Publishes the candela toolchain, and the first-party packages built from the
+# same tag, to a GitHub release on any vX.Y.Z tag.
 #
 # The assets come from build-artifacts.yml, which nightly.yml calls too. What
 # is here is the part only a tag does: check the tag against the manifest,
@@ -122,6 +123,112 @@ jobs:
     needs: release
     uses: ./.github/workflows/publish-extensions.yml
     secrets: inherit
+
+  # The first-party packages are on the release page now, built from this tag
+  # by build-artifacts.yml at the version the tag names: the packages version
+  # in lockstep with candela, and each asks for the candela that released it,
+  # since the event seam they post through arrives in that release. This tells
+  # the registry where each archive is, one `lpm release` per package, under
+  # the account that owns their names, whose token is the LPM_TOKEN secret.
+  #
+  # A package that fails does not stop the others, and the job fails at the
+  # end naming it. A re-run asks again for every package, so one the registry
+  # already took at this version fails again there; read which failed for the
+  # first time before re-running.
+  registry:
+    name: release the packages to the registry
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      # The registry client comes from the toolchain installer, which resolves
+      # and verifies it exactly as candela itself does.
+      - name: Install candela and the registry client
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://candela.lumenfx.dev/install.sh |
+            sh -s -- --version "$VERSION" --no-confirm --no-modify-path
+          echo "$HOME/.candela" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Tell the registry where each package is
+        shell: bash
+        env:
+          LPM_TOKEN: ${{ secrets.LPM_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LPM_TOKEN:-}" ]; then
+            echo "no LPM_TOKEN secret; the packages are on the release page but the registry was not told" >&2
+            exit 1
+          fi
+
+          # lpm reads its token from the config file `lpm login` writes, so
+          # this writes one, unreadable to anyone else, and removes it when the
+          # step ends. The same as build-package.yml does.
+          config_dir="$RUNNER_TEMP/lpm"
+          rm -rf "$config_dir"
+          mkdir -p "$config_dir"
+          chmod 700 "$config_dir"
+          trap 'rm -rf "$config_dir"' EXIT INT TERM
+          (
+            umask 077
+            printf '{"registry": "%s", "token": "%s"}\n' \
+              "https://reg.lumenfx.dev" "$LPM_TOKEN" \
+              > "$config_dir/config.json"
+          )
+          export LPM_CONFIG_DIR="$config_dir"
+
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          failed=()
+          for manifest in packages/*/candela.toml; do
+            name="$(basename "$(dirname "$manifest")")"
+            description="$(awk -F'"' '/^description[[:space:]]*=/ { print $2; exit }' "$manifest")"
+            version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' "$manifest")"
+            if [ "$version" != "$VERSION" ]; then
+              echo "$manifest is at $version and the tag at $VERSION; run scripts/bump-version.py" >&2
+              failed+=("$name")
+              continue
+            fi
+
+            args=()
+            for asset in $(printf '%s\n' "$assets" | grep -E "^${name}-[a-z0-9_-]+\.tar\.gz$"); do
+              target="${asset#"$name"-}"
+              target="${target%.tar.gz}"
+              args+=(--artifact "$target=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$asset")
+            done
+            if [ "${#args[@]}" -eq 0 ]; then
+              echo "the release carries no archive for $name" >&2
+              failed+=("$name")
+              continue
+            fi
+
+            # The name is claimed already; a claim the registry refuses as
+            # taken is the answer this wanted. Anything else is a failure.
+            if ! lpm publish "$name" --platform candela --description "$description" 2> publish.err; then
+              if ! grep -qiE 'package name is already taken|the registry answered 409' publish.err; then
+                cat publish.err >&2
+                failed+=("$name")
+                continue
+              fi
+            fi
+            if ! lpm release "$name" "$VERSION" "${args[@]}" --requires "candela@>=$VERSION" -d "$description"; then
+              failed+=("$name")
+            fi
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "not released to the registry: ${failed[*]}" >&2
+            exit 1
+          fi
 
   # Cutting a release is a tag push and nothing else, so the version main
   # carries has to move afterwards on its own. This commits that move straight

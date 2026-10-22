@@ -25,6 +25,9 @@ name: build-artifacts
 # One asset is not a native build: candela-web.tar.gz is candela compiled to
 # WebAssembly, for a host with a browser instead of a file system.
 #
+# The first-party packages ride along as <name>-<target>.tar.gz, one per
+# package and target; see the packages job.
+#
 # Every job leaves its output as a run artifact. The caller downloads the lot
 # with merge-multiple and decides what to publish it as.
 
@@ -344,12 +347,84 @@ jobs:
           name: candela-web
           path: candela-web.tar.gz
 
+  # The first-party packages under packages/, one archive per package and
+  # target, named <name>-<target>.tar.gz in the shape build-package.yml packs:
+  # the registry client unpacks them like any other package. A package with a
+  # native half is packed once per desktop target, carrying the library built
+  # for it as dist/<name>.<ext>; one without is packed once, as `any`. They
+  # ride with the toolchain's assets, so a release publishes them from the same
+  # tag and release.yml then tells the registry where they are.
+  packages:
+    name: packages (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            triple: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
+            triple: aarch64-unknown-linux-gnu
+          - os: macos-26-intel
+            target: macos-x86_64
+            triple: x86_64-apple-darwin
+          - os: macos-latest
+            target: macos-aarch64
+            triple: aarch64-apple-darwin
+          - os: windows-latest
+            target: windows-x86_64
+            triple: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: any
+            triple: ""
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        if: matrix.target != 'any'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.triple }}
+          rustflags: ""
+
+      # Every native crate under packages/, by the name its manifest gives it,
+      # so a package added there is built without this list changing.
+      - name: Build the native halves
+        if: matrix.target != 'any'
+        shell: bash
+        run: |
+          set -euo pipefail
+          crates=()
+          for manifest in packages/*/native/Cargo.toml; do
+            crates+=(-p "$(awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$manifest")")
+          done
+          cargo build --release --locked --target ${{ matrix.triple }} "${crates[@]}"
+
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.target }}" = any ]; then
+            scripts/pack-packages.sh any packed
+          else
+            scripts/pack-packages.sh ${{ matrix.target }} packed target/${{ matrix.triple }}/release
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: packed/*.tar.gz
+          if-no-files-found: error
+
   # One checksum file per set of assets, in sha256sum's own format, covering
   # every file the caller is about to publish. install.sh downloads it first
   # and refuses to install an archive whose hash is not the one recorded here.
   sums:
     name: checksum the assets
-    needs: [build, web]
+    needs: [build, web, packages]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
