@@ -66,6 +66,15 @@ nav = [
      "standard-library/string.md",
      "standard-library/time.md",
   ]},
+  {"Packages" = [
+     "packages/index.md",
+     "packages/process.md",
+     "packages/download.md",
+     "packages/archive.md",
+     "packages/websocket.md",
+     "packages/browser.md",
+     "packages/js.md",
+  ]},
   {"Reference" = [
      "reference/operators.md",
      "reference/errors.md",

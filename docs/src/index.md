@@ -129,6 +129,10 @@ which share `editors/tree-sitter/README.md`.
 import it, the [built-in functions](standard-library/builtins.md) that need no
 import, and a page for each module.
 
+**Packages** are the [first-party packages](packages/index.md) a program adds
+from the registry: running programs, downloads, archives, WebSocket
+connections, and a browser page's own APIs.
+
 **Reference** covers the [operators](reference/operators.md), the
 [error catalogue](reference/errors.md), the [CLI](reference/cli.md), the
 [manifest](reference/candela-toml.md), and the

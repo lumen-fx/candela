@@ -16,7 +16,7 @@ profile-guided release build, and WiX for the Windows installer.
 
 ## Layout
 
-The repository is a Cargo workspace of three crates:
+The repository is a Cargo workspace. Its three main crates:
 
 - The root package, `candela-lang`. The lexer, parser, type checker, code
   generator, REPL, the `Engine`/`Program` embedding API, and the `candela`
@@ -37,8 +37,20 @@ executor exists once. A reverse edge would be a dependency cycle and would fail
 to resolve, so the rule enforces itself; keep it in mind when deciding where new
 code belongs.
 
+The workspace also holds the native halves of the first-party packages; see
+`packages/` below. Nothing in the three crates depends on them.
+
 The rest of the tree:
 
+- `packages/` holds the [first-party packages](../packages/index.md), one
+  directory each: the manifest, the candela source under `src/`, the browser
+  half under `web/` for a package that has one, and the native half under
+  `native/`, a Rust crate built as the shared library the package's `dylib`
+  block loads. `packages/sys/` is the crate those native halves share: the
+  event table a library receives and the string conventions of the C
+  boundary. A local run needs the built library copied to the package's
+  `dist/<name>.<ext>`, which the release does for every target with
+  `scripts/pack-packages.sh`.
 - `libs/std/` holds the standard library, written in candela. `libs/std/tests/`
   holds one `.cdl` test program per module.
 - `libs/std_src/` holds the C sources behind the `hash`, `math`, `random` and
@@ -56,7 +68,8 @@ The rest of the tree:
 - `msi/` holds the WiX package definition and the script that builds the Windows
   installer.
 - `scripts/` holds the release tooling: `bump-version.py`, which sets the
-  version the tree calls itself, `release-fragments.sh` and
+  version the tree and the packages call themselves, `pack-packages.sh`, which
+  packs the first-party packages for one target, `release-fragments.sh` and
   `migration-notes.sh`, which file a release's migration notes and write them
   into its release notes, `check-breaking-change.py`, which checks a pull
   request's breaking-change label against its notes, and the checklist for

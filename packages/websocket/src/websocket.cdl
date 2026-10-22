@@ -1,0 +1,105 @@
+/// WebSocket connections, text frames only.
+///
+/// `open` connects and answers a handle at once. Everything that happens on
+/// the connection arrives as an `Event` passed to the function given to
+/// `open`: `Open` once it is up, a `Message` per text frame, an `Error` when
+/// something fails, and `Close` last, always.
+///
+///     import "websocket";
+///
+///     fn main() {
+///         let socket = 0;
+///         socket = websocket::open("wss://echo.example.com", fn(e) {
+///             match e {
+///                 Open => { websocket::send(socket, "hello"); }
+///                 Message(text) => {
+///                     print(text);
+///                     websocket::close(socket, 1000, "done");
+///                 }
+///                 Error(why) => print(why),
+///                 Close(code, reason, clean) => print("closed " + string(code)),
+///             }
+///         });
+///     }
+///
+/// On the desktop each connection runs on a thread of its own, and `wss://`
+/// is TLS with the Mozilla root set. In a browser the page's own WebSocket
+/// carries it. An `http://` or `https://` URL is taken as `ws://` or `wss://`,
+/// as a page takes it.
+
+import "std/event";
+import "std/json";
+
+@cfg(not(web))
+dylib "../dist/websocket" {
+    candela_websocket_open(int, string);
+    int candela_websocket_send(int, string);
+    int candela_websocket_close(int, int, string);
+    string candela_websocket_state(int);
+}
+
+@cfg(web)
+host "websocket" {
+    candela_websocket_open(int, string);
+    int candela_websocket_send(int, string);
+    int candela_websocket_close(int, int, string);
+    string candela_websocket_state(int);
+}
+
+/// What a connection reports.
+enum Event {
+    /// The connection is up.
+    Open,
+    /// A text frame arrived.
+    Message(string),
+    /// Something failed; a `Close` follows when the connection is over.
+    Error(string),
+    /// The connection is over: the close code, the reason, and whether the
+    /// closing handshake finished cleanly. Always the last event.
+    Close(int, string, bool),
+}
+
+/// Connects to `url` and answers a handle for `send`, `close` and `state`.
+fn open(url: string, on_event: fn(Event)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    websocket::candela_websocket_open(id, url);
+    return id;
+}
+
+/// Sends a text frame. False when the connection is not open.
+fn send(handle: int, text: string) -> bool => websocket::candela_websocket_send(handle, text) == 1;
+
+/// Starts closing the connection with `code`, 1000 for a normal close or 3000
+/// to 4999 for one of the program's own, and a reason of at most 123 bytes.
+/// False when there is no connection to close. Another code or a longer
+/// reason raises `websocket_bad_close`.
+fn close(handle: int, code: int, reason: string) -> bool {
+    let answer = websocket::candela_websocket_close(handle, code, reason);
+    if answer < 0 {
+        throw "websocket_bad_close";
+    }
+    return answer == 1;
+}
+
+/// `connecting`, `open`, `closing` or `closed`, which is also the answer for
+/// a handle with no connection.
+fn state(handle: int) -> string => websocket::candela_websocket_state(handle);
+
+/// The event a payload describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload) as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "open" {
+        return Open;
+    }
+    if kind == "message" {
+        return Message(fields["text"] as string);
+    }
+    if kind == "error" {
+        return Error(fields["message"] as string);
+    }
+    return Close(fields["code"] as int, fields["reason"] as string, fields["clean"] as bool);
+}

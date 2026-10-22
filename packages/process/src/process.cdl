@@ -1,0 +1,99 @@
+/// Running another program.
+///
+/// `start` starts a program and answers a handle at once. Everything after
+/// that arrives as an `Event` passed to the function given to `start`: each
+/// line the program writes, then how it ended. The exit is always the last
+/// event, and a program that could not start reports `Failed` instead.
+///
+///     import "process";
+///
+///     fn main() {
+///         process::start("git", ["status", "--short"], process::Options { .. }, fn(e) {
+///             match e {
+///                 Stdout(line) => print(line),
+///                 Stderr(line) => print("! " + line),
+///                 Exit(code) => print("exit " + string(code)),
+///                 Failed(why) => print(why),
+///             }
+///         });
+///     }
+///
+/// The program keeps running after `main` returns until every program it
+/// started has ended and its events have been handled.
+
+import "std/event";
+import "std/json";
+
+dylib "../dist/process" {
+    candela_process_start(int, string, string[], int, string, string, int);
+    int candela_process_stop(int);
+}
+
+/// How a program is started beyond its command line.
+struct Options {
+    /// The directory it starts in. Empty is the base directory the host set,
+    /// or the working directory.
+    cwd: string,
+    /// Variables set on top of the environment it inherits.
+    env: {string: string},
+    /// End the program when this one exits, instead of leaving it running.
+    end_at_exit: bool,
+}
+
+/// What a started program reports.
+enum Event {
+    /// One line it wrote to stdout, without the newline.
+    Stdout(string),
+    /// One line it wrote to stderr, without the newline.
+    Stderr(string),
+    /// It ended, with its exit code, or 128 plus the signal that ended it.
+    Exit(int),
+    /// It could not be started; the message says why.
+    Failed(string),
+}
+
+/// Starts `cmd` with `args` and answers a handle for `stop`. A `cmd` with a
+/// path separator in it is a path; a bare name is looked up on `PATH`.
+/// `on_event` receives every line the program writes and then its exit.
+fn start(cmd: string, args: string[], options: Options, on_event: fn(Event)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    let end_at_exit = 0;
+    if options.end_at_exit {
+        end_at_exit = 1;
+    }
+    process::candela_process_start(
+        id,
+        cmd,
+        args,
+        args.len(),
+        options.cwd,
+        json::stringify(options.env),
+        end_at_exit,
+    );
+    return id;
+}
+
+/// Ends the program started under `handle`, and every program it started.
+/// On Linux and macOS it is asked to end first and killed two seconds later if
+/// it has not; on Windows it ends at once. Its `Exit` still arrives last.
+/// False when it had already ended.
+fn stop(handle: int) -> bool => process::candela_process_stop(handle) == 1;
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload) as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "stdout" {
+        return Stdout(fields["line"] as string);
+    }
+    if kind == "stderr" {
+        return Stderr(fields["line"] as string);
+    }
+    if kind == "exit" {
+        return Exit(fields["code"] as int);
+    }
+    return Failed(fields["message"] as string);
+}

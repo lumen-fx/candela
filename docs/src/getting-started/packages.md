@@ -91,6 +91,10 @@ candela add shapes@1.2.3
 
 `candela remove shapes` takes it out again.
 
+The packages candela itself publishes, for running programs, downloading,
+unpacking archives and WebSocket connections, are added the same way; see
+[first-party packages](../packages/index.md).
+
 ## Import from a package
 
 A package is another place a library import reads from. Its own name reaches

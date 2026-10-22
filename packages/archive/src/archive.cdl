@@ -1,0 +1,72 @@
+/// Unpacking archives: zip, tar, and gzip-compressed tar.
+///
+/// `extract` starts an extraction and answers at once. It runs on a thread of
+/// its own and reports once, to the function given to `extract`: `Done` with
+/// the destination and how many files it wrote, or `Failed` with the reason.
+///
+///     import "archive";
+///
+///     fn main() {
+///         archive::extract("natives.jar", "natives", archive::Options { include: ["*.so"] }, fn(e) {
+///             match e {
+///                 Done(dest, files) => print(string(files) + " files in " + dest),
+///                 Failed(why) => print(why),
+///             }
+///         });
+///     }
+///
+/// The bytes decide the format, not the file name. What an archive may write
+/// is checked before anything is written: an entry naming an absolute path,
+/// climbing out with `..`, or resolving outside the destination fails the
+/// whole extraction. Symbolic and hard links are skipped, and are not counted.
+
+import "std/event";
+import "std/json";
+
+dylib "../dist/archive" {
+    candela_archive_extract(int, string, string, string[], int);
+    candela_archive_set_max_concurrent(int);
+}
+
+/// Which files an extraction keeps.
+struct Options {
+    /// Glob patterns of the files to write; empty writes every file. `*` and
+    /// `?` stay inside one path segment and `**` spans segments. A pattern
+    /// without a `/` matches the file name at any depth.
+    include: string[],
+}
+
+/// How an extraction ended.
+enum Event {
+    /// The archive is out: the destination, and how many files were written.
+    Done(string, int),
+    /// Nothing was extracted, or not all of it; the message says why.
+    Failed(string),
+}
+
+/// Unpacks the archive at `src` into the directory `dest`, creating it, and
+/// answers a handle. Relative paths resolve against the base directory the
+/// host set, or the working directory.
+fn extract(src: string, dest: string, options: Options, on_event: fn(Event)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    archive::candela_archive_extract(id, src, dest, options.include, options.include.len());
+    return id;
+}
+
+/// Caps how many extractions run at once, from 1 to 64; 4 until this is
+/// called. An extraction started past the cap reports `Failed` at once.
+fn set_max_concurrent(n: int) {
+    archive::candela_archive_set_max_concurrent(n);
+}
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload) as {string: any};
+    if fields["kind"] as string == "done" {
+        return Done(fields["dest"] as string, fields["files"] as int);
+    }
+    return Failed(fields["message"] as string);
+}

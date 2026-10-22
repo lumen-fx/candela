@@ -1,0 +1,171 @@
+/// The page's own JavaScript, reached from candela: global functions and
+/// values by dotted path, modules loaded at run time and held by handle, and
+/// DOM events.
+///
+/// Every function works in a browser, through the JavaScript module this
+/// package ships. Anywhere else each one raises `browser_only`, so a program
+/// written for a page compiles and runs on the desktop too; code that should
+/// do something else there picks a side with `@cfg(web)`.
+///
+/// A path is a dotted walk from the global object, so `Math.max` is
+/// `globalThis.Math.max`, and a function found there is called with the
+/// object it was found on as `this`. Values cross as JSON does. A call that
+/// answers with a promise takes a function the settled value arrives in.
+///
+/// `load` imports modules from the site's own origin. The host decides which
+/// other URLs it may load; see the host's documentation for how to allow one.
+
+import "std/event";
+import "std/json";
+
+@cfg(web)
+host "js" {
+    any candela_js_call(string, any[]);
+    candela_js_call_async(int, string, any[]);
+    any candela_js_get(string);
+    candela_js_set(string, any);
+    candela_js_load(int, string);
+    any candela_js_invoke(int, string, any[]);
+    candela_js_invoke_async(int, int, string, any[]);
+    bool candela_js_release(int);
+    bool candela_js_listen(int, string, string);
+    bool candela_js_unlisten(int);
+}
+
+/// A source whose one answer `on_done` reads as a `Result`.
+fn answer_source(on_done: fn(Result<any, string>)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        let fields = json::parse(payload) as {string: any};
+        if fields.contains("error") {
+            on_done(Err(fields["error"] as string));
+        } else {
+            on_done(Ok(fields["value"]));
+        }
+    });
+    return id;
+}
+
+// Each function has a browser half under `@cfg(web)` and, under
+// `@cfg(not(web))`, a desktop half that raises `browser_only`. A desktop half
+// that declares a return type returns a value after the throw, which never
+// runs; the compiler wants a value of that type on the way out.
+
+/// Calls the global function at `path` with `args` and answers what it
+/// returns. A function that returns a promise is called with `call_async`.
+@cfg(web)
+fn call(path: string, args: any[]) -> any => js::candela_js_call(path, args);
+@cfg(not(web))
+fn call(path: string, args: any[]) -> any {
+    throw "browser_only";
+    return null;
+}
+
+/// Calls the global function at `path` with `args`, and passes `on_done` what
+/// its promise settles to.
+@cfg(web)
+fn call_async(path: string, args: any[], on_done: fn(Result<any, string>)) {
+    js::candela_js_call_async(answer_source(on_done), path, args);
+}
+@cfg(not(web))
+fn call_async(path: string, args: any[], on_done: fn(Result<any, string>)) {
+    throw "browser_only";
+}
+
+/// The global value at `path`, such as `navigator.language`.
+@cfg(web)
+fn get(path: string) -> any => js::candela_js_get(path);
+@cfg(not(web))
+fn get(path: string) -> any {
+    throw "browser_only";
+    return null;
+}
+
+/// Sets the global value at `path`.
+@cfg(web)
+fn set(path: string, value: any) {
+    js::candela_js_set(path, value);
+}
+@cfg(not(web))
+fn set(path: string, value: any) {
+    throw "browser_only";
+}
+
+/// Imports the JavaScript module at `url` and passes `on_done` a handle to
+/// it, for `invoke`.
+@cfg(web)
+fn load(url: string, on_done: fn(Result<int, string>)) {
+    let id = answer_source(fn(answer) {
+        match answer {
+            Ok(handle) => on_done(Ok(handle as int)),
+            Err(why) => on_done(Err(why)),
+        }
+    });
+    js::candela_js_load(id, url);
+}
+@cfg(not(web))
+fn load(url: string, on_done: fn(Result<int, string>)) {
+    throw "browser_only";
+}
+
+/// Calls `method` on what `handle` holds, with `args`, and answers what it
+/// returns.
+@cfg(web)
+fn invoke(handle: int, method: string, args: any[]) -> any => js::candela_js_invoke(handle, method, args);
+@cfg(not(web))
+fn invoke(handle: int, method: string, args: any[]) -> any {
+    throw "browser_only";
+    return null;
+}
+
+/// Calls `method` on what `handle` holds, and passes `on_done` what its
+/// promise settles to.
+@cfg(web)
+fn invoke_async(handle: int, method: string, args: any[], on_done: fn(Result<any, string>)) {
+    js::candela_js_invoke_async(answer_source(on_done), handle, method, args);
+}
+@cfg(not(web))
+fn invoke_async(handle: int, method: string, args: any[], on_done: fn(Result<any, string>)) {
+    throw "browser_only";
+}
+
+/// Lets go of a handle. False when it held nothing.
+@cfg(web)
+fn release(handle: int) -> bool => js::candela_js_release(handle);
+@cfg(not(web))
+fn release(handle: int) -> bool {
+    throw "browser_only";
+    return false;
+}
+
+/// Calls `on_event` with each DOM `event` on `window`, `document`, or the
+/// element with the id `target`, described as a map: its `type`, and
+/// whichever of `key`, `code`, `button`, `clientX`, `clientY`, `deltaX`,
+/// `deltaY`, `detail`, `value` and `target` it has. Answers a handle for
+/// `unlisten`, or `None` when there is no such element.
+@cfg(web)
+fn listen(target: string, event: string, on_event: fn(any)) -> Option<int> {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(json::parse(payload));
+    });
+    if js::candela_js_listen(id, target, event) {
+        return Some(id);
+    }
+    return None;
+}
+@cfg(not(web))
+fn listen(target: string, event: string, on_event: fn(any)) -> Option<int> {
+    throw "browser_only";
+    return None;
+}
+
+/// Stops the listener `listen` answered `handle` for. False when there was
+/// none.
+@cfg(web)
+fn unlisten(handle: int) -> bool => js::candela_js_unlisten(handle);
+@cfg(not(web))
+fn unlisten(handle: int) -> bool {
+    throw "browser_only";
+    return false;
+}

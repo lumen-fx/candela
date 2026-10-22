@@ -24,12 +24,14 @@ keywords = ["candela", "scripting", "language", "interpreter", "embedded"]
 categories = ["compilers", "development-tools"]
 # The repository root carries things a published crate has no use for: the
 # artwork, the VS Code extension, the docs site sources, the installer, the MSI
-# and PGO inputs. Source, tests, the standard library, and the licenses ship.
+# and PGO inputs, and the first-party packages, which ship through the
+# registry. Source, tests, the standard library, and the licenses ship.
 exclude = [
     "assets/",
     "docs/",
     "editors/",
     "msi/",
+    "packages/",
     "pgo/",
     "scripts/",
     "about.hbs",
@@ -39,7 +41,7 @@ exclude = [
 ]
 
 # This manifest is both the `candela-lang` package (compiler front-end + CLI)
-# and the workspace root. Two extra members:
+# and the workspace root. The other members:
 #   * `vm` (crate `candela-vm`): the self-contained runtime core. `candela`
 #     DEPENDS ON it (strictly candela -> candela-vm), and its `candela-vm`
 #     binary and this crate's `candela` binary share that one VM implementation.
@@ -50,10 +52,23 @@ exclude = [
 #     the lexer/parser/type-checker; its tooling deps (tower-lsp, tokio, ...)
 #     never touch this crate's dependency graph or the `candela` binary. It is
 #     `publish = false`; nothing published depends on it.
+# The native halves of the first-party packages under `packages/` are members
+# too, each a cdylib with its own dependencies (an HTTP client, archive
+# readers, TLS). Nothing in `candela` or `candela-vm` depends on them; they
+# ship as packages a program opts into, never inside the runtime.
 # `default-members` keeps plain `cargo build` at the repo root building only the
 # `candela-lang` package (build `-p candela-vm` / `-p candela-lsp` explicitly).
 [workspace]
-members = ["lsp", "vm"]
+members = [
+    "lsp",
+    "vm",
+    "packages/sys",
+    "packages/testkit",
+    "packages/process/native",
+    "packages/download/native",
+    "packages/archive/native",
+    "packages/websocket/native",
+]
 default-members = ["."]
 
 [lints.clippy]

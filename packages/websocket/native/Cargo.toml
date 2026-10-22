@@ -1,0 +1,36 @@
+# The native half of the `websocket` package: one thread per connection,
+# text frames both ways, reported through the program's event queue. `wss://`
+# is TLS through rustls with the Mozilla root set. Built as the shared library
+# the package's candela code binds through `dylib "../dist/websocket"`.
+[package]
+name = "candela-websocket"
+# Never published: a package is versioned by its candela.toml, which moves
+# with candela's own version.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native half of candela's websocket package."
+
+[lib]
+# The release job copies the built library into the package as
+# `dist/websocket.<ext>`.
+name = "candela_websocket"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candela-package-sys = { path = "../../sys" }
+serde_json = "1"
+tungstenite = { version = "0.29", default-features = false, features = [
+    "handshake",
+    "__rustls-tls",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "ring",
+] }
+webpki-roots = "1"
+
+[dev-dependencies]
+candela-package-testkit = { path = "../../testkit" }

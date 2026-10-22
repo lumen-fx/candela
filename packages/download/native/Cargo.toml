@@ -1,0 +1,30 @@
+# The native half of the `download` package: streams a URL to a file on a
+# thread of its own, with progress, checksum verification and an atomic
+# finish, and reports through the program's event queue. Built as the shared
+# library the package's candela code binds through `dylib "../dist/download"`.
+[package]
+name = "candela-download"
+# Never published: a package is versioned by its candela.toml, which moves
+# with candela's own version.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native half of candela's download package."
+
+[lib]
+# The release job copies the built library into the package as
+# `dist/download.<ext>`.
+name = "candela_download"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candela-package-sys = { path = "../../sys" }
+serde_json = "1"
+# HTTP with TLS through rustls and the Mozilla root set.
+ureq = "3"
+sha1 = "0.10"
+sha2 = "0.10"
+
+[dev-dependencies]
+candela-package-testkit = { path = "../../testkit" }
