@@ -12,6 +12,7 @@
 
 use candela::HostRegistry;
 use candela::{build_bytecode, load_program};
+use candela_vm::rt::TargetOs;
 
 mod built;
 mod common;
@@ -208,27 +209,11 @@ fn default_resolution_needs_no_env() {
 fn a_std_dylib_artifact_runs_from_any_directory() {
     let candela_vm = candela_vm();
 
-    // The native module is compiled by the release workflow, not by cargo, so
-    // a checkout that has not built it has nothing for the artifact to load.
-    let native = if cfg!(windows) {
-        "math.dll"
-    } else if cfg!(target_os = "macos") {
-        "math.dylib"
-    } else {
-        "math.so"
-    };
-    let native_src = repo()
-        .join("libs")
-        .join("std_src")
-        .join("math")
-        .join(native);
-    if !native_src.exists() {
-        eprintln!(
-            "skipping a_std_dylib_artifact_runs_from_any_directory: {} not built",
-            native_src.display()
-        );
+    let Some(libs) = lib_dir_with_native("math", &["math.cdl"], "artifact") else {
         return;
-    }
+    };
+    let native = format!("math.{}", TargetOs::CURRENT.dynamic_lib_extension());
+    let native_src = libs.join("std_src").join("math").join(&native);
 
     let tmp = std::env::temp_dir().join(format!("candela_std_dylib_{}", std::process::id()));
     let work = tmp.join("work");
@@ -244,7 +229,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
         .arg("build")
         .arg("prog.cdl")
         .current_dir(&work)
-        .env("CANDELA_LIB_PATH", repo().join("libs"));
+        .env("CANDELA_LIB_PATH", &libs);
     let built = common::output_with_deadline(&mut build, "candela build");
     assert!(
         built.status.success(),
@@ -256,7 +241,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     by_env
         .arg("prog.cdlb")
         .current_dir(&work)
-        .env("CANDELA_LIB_PATH", repo().join("libs"));
+        .env("CANDELA_LIB_PATH", &libs);
     let named = common::output_with_deadline(&mut by_env, "candela-vm run");
     assert!(
         named.status.success() && String::from_utf8_lossy(&named.stdout).contains('3'),
@@ -274,7 +259,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     std::fs::create_dir_all(&native_dir).expect("create install layout");
     let installed_vm = bin_dir.join(candela_vm.file_name().expect("the binary has a name"));
     std::fs::copy(&candela_vm, &installed_vm).expect("copy binary");
-    std::fs::copy(&native_src, native_dir.join(native)).expect("copy the native module");
+    std::fs::copy(&native_src, native_dir.join(&native)).expect("copy the native module");
 
     // A sibling test spawning its own child can inherit the write handle this
     // copy just closed, which makes the fresh binary briefly unexecutable
@@ -297,6 +282,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     };
 
     let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&libs);
     assert!(
         beside.status.success() && String::from_utf8_lossy(&beside.stdout).contains('3'),
         "run beside the install layout failed: {:?}\nstdout: {}\nstderr: {}",
@@ -379,44 +365,51 @@ fn main() {
 
 /// Builds `libs/std_src/hash/hash.c` into a library directory of its own,
 /// beside a copy of `libs/std`, and answers that directory; `None` where no C
-/// compiler is on the path. The native modules are compiled by the release
-/// workflow, not by cargo, so the test builds the one it needs.
+/// compiler is on the path.
 fn lib_dir_with_hash(tag: &str) -> Option<PathBuf> {
-    let libs = std::env::temp_dir().join(format!("candela_std_hash_{tag}_{}", std::process::id()));
+    lib_dir_with_native("hash", &["hash.cdl", "assert.cdl", "list.cdl"], tag)
+}
+
+/// Builds `libs/std_src/<name>/<name>.c` into a library directory of its own,
+/// beside copies of the std `modules`, and answers that directory; `None`
+/// where no C compiler is on the path. The native modules are compiled by the
+/// release workflow, not by cargo, so a test builds the one it needs.
+fn lib_dir_with_native(name: &str, modules: &[&str], tag: &str) -> Option<PathBuf> {
+    let libs =
+        std::env::temp_dir().join(format!("candela_std_{name}_{tag}_{}", std::process::id()));
     let std_dir = libs.join("std");
-    let native_dir = libs.join("std_src").join("hash");
+    let native_dir = libs.join("std_src").join(name);
     std::fs::create_dir_all(&std_dir).expect("create std dir");
     std::fs::create_dir_all(&native_dir).expect("create native dir");
-    for module in ["hash.cdl", "assert.cdl", "list.cdl"] {
+    for module in modules {
         std::fs::copy(repo().join("libs/std").join(module), std_dir.join(module))
             .expect("copy module");
     }
-    let library = native_dir.join(if cfg!(windows) {
-        "hash.dll"
-    } else if cfg!(target_os = "macos") {
-        "hash.dylib"
-    } else {
-        "hash.so"
-    });
+    let library = native_dir.join(format!(
+        "{name}.{}",
+        TargetOs::CURRENT.dynamic_lib_extension()
+    ));
     let compiler = std::env::var("CC").unwrap_or_else(|_| String::from("cc"));
     let mut command = Command::new(compiler);
     command.args(["-O2", "-std=c11", "-shared", "-fPIC"]);
     if cfg!(target_os = "macos") {
         command.arg("-dynamiclib");
     }
-    let built = command
+    command
         .arg("-o")
         .arg(&library)
-        .arg(repo().join("libs/std_src/hash/hash.c"))
-        .output();
-    match built {
+        .arg(repo().join(format!("libs/std_src/{name}/{name}.c")));
+    if cfg!(target_os = "linux") {
+        command.arg("-lm");
+    }
+    match command.output() {
         Ok(output) if output.status.success() => Some(libs),
         Ok(output) => panic!(
-            "building hash.c failed: {}",
+            "building {name}.c failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ),
         Err(e) => {
-            eprintln!("skipping the hash module test: no C compiler ({e})");
+            eprintln!("skipping: no C compiler to build {name}.c ({e})");
             None
         }
     }
