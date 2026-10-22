@@ -1,0 +1,16 @@
+# What the first-party packages' tests share: staging a package with the
+# native library the test build just made, and running a candela program
+# against it in-process until the events it expects have arrived.
+[package]
+name = "candela-package-testkit"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Test support for candela's first-party packages."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+candela = { package = "candela-lang", path = "../.." }

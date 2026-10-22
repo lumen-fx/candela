@@ -1,0 +1,11 @@
+[package]
+name = "js"
+version = "0.1.6"
+description = "The page's own JavaScript: global functions and values, modules loaded at run time, DOM events"
+entry = "src/js.cdl"
+candela = ">=0.1.6"
+
+[dependencies]
+
+[web]
+module = "web/js.js"

@@ -1,0 +1,45 @@
+# The native half of the `process` package: starts a child, streams its output
+# and reports its exit as events on the program's queue. Built as the shared
+# library the package's candela code binds through `dylib "../dist/process"`.
+[package]
+name = "candela-process"
+# Never published: a package is versioned by its candela.toml, which moves
+# with candela's own version.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native half of candela's process package."
+
+[lib]
+# The release job copies the built library into the package as
+# `dist/process.<ext>`.
+name = "candela_process"
+crate-type = ["cdylib", "rlib"]
+
+# The program the tests run as a child: it echoes its arguments, writes one
+# line to stderr, and exits with the code it was asked for.
+[[bin]]
+name = "candela-process-test-child"
+path = "src/bin/test_child.rs"
+
+[dependencies]
+candela-package-sys = { path = "../../sys" }
+serde_json = "1"
+
+# Sending SIGTERM without unsafe code: `process::stop` asks a child to end
+# before it kills it.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+# The job object a child runs in on Windows, so a stop ends every program the
+# child started; std has no wrapper for it.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
+
+[dev-dependencies]
+candela-package-testkit = { path = "../../testkit" }

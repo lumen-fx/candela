@@ -1,0 +1,8 @@
+[package]
+name = "process"
+version = "0.1.6"
+description = "Run another program and receive its output and exit as events"
+entry = "src/process.cdl"
+candela = ">=0.1.6"
+
+[dependencies]

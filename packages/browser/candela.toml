@@ -1,0 +1,11 @@
+[package]
+name = "browser"
+version = "0.1.6"
+description = "What a browser offers a page outside its document: popups, messages, sharing, downloads, media queries, a file picker, fullscreen"
+entry = "src/browser.cdl"
+candela = ">=0.1.6"
+
+[dependencies]
+
+[web]
+module = "web/browser.js"

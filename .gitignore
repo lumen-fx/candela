@@ -15,3 +15,7 @@ docs/benchmarks.py
 *.dll
 node_modules
 .serena
+
+# What the release job and a local build put beside a package for its candela
+# code to load.
+packages/*/dist/

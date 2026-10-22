@@ -1,0 +1,11 @@
+[package]
+name = "websocket"
+version = "0.1.6"
+description = "WebSocket connections with text frames, on the desktop and in a browser"
+entry = "src/websocket.cdl"
+candela = ">=0.1.6"
+
+[dependencies]
+
+[web]
+module = "web/websocket.js"

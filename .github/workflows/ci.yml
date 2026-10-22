@@ -58,7 +58,7 @@ jobs:
           if [ "$EVENT" = "pull_request" ] &&
              [ -n "$BASE" ] &&
              git fetch --no-tags --depth=1 origin "$BASE"; then
-            pattern='^(src/|vm/|lsp/|libs/|tests/|examples/|pgo/|Cargo|rust-toolchain|\.github/(workflows/ci\.yml|scripts/))'
+            pattern='^(src/|vm/|lsp/|libs/|packages/|tests/|examples/|pgo/|Cargo|rust-toolchain|\.github/(workflows/ci\.yml|scripts/))'
             if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
               rust=false
             fi

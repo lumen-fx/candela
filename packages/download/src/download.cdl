@@ -1,0 +1,102 @@
+/// Downloading a URL to a file.
+///
+/// `to_file` starts a transfer and answers a handle at once. The transfer runs
+/// on a thread of its own and reports to the function given to `to_file`:
+/// progress as bytes arrive, then `Done` with the path once the whole file is
+/// in place, or `Failed` with the reason. `Done` or `Failed` is always the
+/// last event.
+///
+///     import "download";
+///
+///     fn main() {
+///         download::to_file("https://example.com/pack.zip", "pack.zip", download::Options { .. }, fn(e) {
+///             match e {
+///                 Progress(received, total) => print(string(received) + " of " + string(total)),
+///                 Done(path) => print("saved " + path),
+///                 Failed(why) => print(why),
+///             }
+///         });
+///     }
+///
+/// The destination only ever holds a complete file: the bytes land in a
+/// temporary file beside it that replaces it once the body has arrived and
+/// any checksum matched. A reply that is not a 2xx status fails the transfer.
+/// The program keeps running after `main` returns until every transfer it
+/// started has reported its last event.
+
+import "std/event";
+import "std/json";
+
+dylib "../dist/download" {
+    candela_download_start(int, string, string, string, int, int);
+    int candela_download_cancel(int);
+    candela_download_set_max_concurrent(int);
+}
+
+/// How one transfer runs.
+struct Options {
+    /// The digest the file has to match: `sha256:<64 hex digits>` or
+    /// `sha1:<40 hex digits>`, or a bare digest whose length names the
+    /// algorithm. Empty checks nothing.
+    checksum: string,
+    /// How long a quiet server is waited on, in milliseconds: for the reply to
+    /// start, and then for each next piece of the body. 0 waits indefinitely.
+    timeout_ms: int,
+    /// The largest body accepted, in bytes. 0 accepts any size.
+    max_bytes: int,
+}
+
+/// What a transfer reports.
+enum Event {
+    /// How many bytes have arrived, and how many the server said would; the
+    /// second is -1 when it did not say.
+    Progress(int, int),
+    /// The file is in place at this path.
+    Done(string),
+    /// The transfer did not happen, or was cancelled (the message is then
+    /// `cancelled`).
+    Failed(string),
+}
+
+/// Downloads `url` to `path` and answers a handle for `cancel`. A relative
+/// `path` resolves against the base directory the host set, or the working
+/// directory; missing directories on the way are created.
+fn to_file(url: string, path: string, options: Options, on_event: fn(Event)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    download::candela_download_start(
+        id,
+        url,
+        path,
+        options.checksum,
+        options.timeout_ms,
+        options.max_bytes,
+    );
+    return id;
+}
+
+/// Cancels the transfer started under `handle`. It then reports `Failed` with
+/// the message `cancelled`, as its last event. False when it had already
+/// finished.
+fn cancel(handle: int) -> bool => download::candela_download_cancel(handle) == 1;
+
+/// Caps how many transfers run at once, from 1 to 64; 4 until this is called.
+/// A transfer started past the cap reports `Failed` at once.
+fn set_max_concurrent(n: int) {
+    download::candela_download_set_max_concurrent(n);
+}
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload) as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "progress" {
+        return Progress(fields["received"] as int, fields["total"] as int);
+    }
+    if kind == "done" {
+        return Done(fields["path"] as string);
+    }
+    return Failed(fields["message"] as string);
+}

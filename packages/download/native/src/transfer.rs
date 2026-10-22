@@ -1,0 +1,446 @@
+//! The transfer itself: one URL streamed onto one path, on a plain
+//! [`Path`] with no script state around it.
+//!
+//! Three rules shape it:
+//!
+//! - **The destination never holds a half file.** Bytes land in a sibling temp
+//!   file and are renamed into place only once the body has finished and the
+//!   checksum has verified. Any failure removes the temp and leaves whatever
+//!   was at the destination untouched.
+//! - **One pass.** The hash is computed while the bytes are written, so
+//!   verifying a checksum costs no second read of the file.
+//! - **A status is an outcome.** A reply that is not 2xx fails the transfer.
+//!   You asked for a file and did not get one, so there is nothing to write.
+
+use std::fmt::Write as _;
+use std::fs::{self, File};
+use std::io::{BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
+
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
+use ureq::Agent;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{Connector as _, DefaultConnector};
+
+use crate::wait::WaitConnector;
+
+/// How much is read from the socket before the progress callback is offered
+/// another figure.
+const CHUNK: usize = 64 * 1024;
+
+/// The digests a checksum may name, in every refusal so the message says what
+/// to write instead.
+const FORMS: &str = "write `sha256:<64 hex digits>` or `sha1:<40 hex digits>`";
+
+/// What a transfer reports when it could not do what was asked: the message
+/// the script receives.
+pub type Failure = String;
+
+/// The digest a finished file has to match, if any.
+///
+/// Both digests check that a transfer arrived intact; neither says who
+/// produced the file. sha1 is accepted because it is what the registries an
+/// app downloads from publish, package indexes and artifact repositories
+/// alike, and a file matching the digest they published is a file that did
+/// not arrive corrupt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checksum {
+    /// Take whatever arrives.
+    None,
+    /// The file has to hash to these 32 bytes.
+    Sha256([u8; 32]),
+    /// The file has to hash to these 20 bytes.
+    Sha1([u8; 20]),
+}
+
+impl Checksum {
+    /// A hasher over the body, for whichever digest was asked for. `None`
+    /// when nothing is being checked, so an unchecked transfer hashes nothing.
+    fn hasher(&self) -> Option<Hasher> {
+        match self {
+            Checksum::None => None,
+            Checksum::Sha256(_) => Some(Hasher::Sha256(Sha256::new())),
+            Checksum::Sha1(_) => Some(Hasher::Sha1(Sha1::new())),
+        }
+    }
+
+    /// Compare a finished hasher against what the call asked for. The message
+    /// names the algorithm, so a mismatch reads the way the argument was
+    /// written.
+    fn verify(&self, hasher: Hasher) -> Result<(), Failure> {
+        let (algo, expected) = match self {
+            Checksum::None => return Ok(()),
+            Checksum::Sha256(expected) => ("sha256", expected.as_slice()),
+            Checksum::Sha1(expected) => ("sha1", expected.as_slice()),
+        };
+        let actual = hasher.finish();
+        if actual == expected {
+            return Ok(());
+        }
+        Err(format!(
+            "checksum mismatch; expected {algo}:{}, got {algo}:{}",
+            hex(expected),
+            hex(&actual)
+        ))
+    }
+}
+
+/// The running digest, so the read loop has one hashing path whichever
+/// algorithm the checksum named.
+enum Hasher {
+    Sha256(Sha256),
+    Sha1(Sha1),
+}
+
+impl Hasher {
+    /// Fold one chunk of the body in.
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Hasher::Sha256(h) => h.update(bytes),
+            Hasher::Sha1(h) => h.update(bytes),
+        }
+    }
+
+    /// The digest of everything folded in.
+    fn finish(self) -> Vec<u8> {
+        match self {
+            Hasher::Sha256(h) => h.finalize().to_vec(),
+            Hasher::Sha1(h) => h.finalize().to_vec(),
+        }
+    }
+}
+
+/// Which digest a checksum named, before its digits have been read.
+enum Algorithm {
+    Sha256,
+    Sha1,
+}
+
+/// The bounds a transfer runs under, from the call's options.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Limits {
+    /// How long a quiet connection is waited on before the transfer gives
+    /// up: for the reply to start, and then for each next read of the body.
+    /// `None` waits indefinitely.
+    pub timeout_ms: Option<u64>,
+    /// The largest body accepted, in bytes. `None` accepts any size.
+    pub max_bytes: Option<u64>,
+}
+
+/// What a cancelled transfer reports as its failure: the whole message, so a
+/// handler can tell a cancel from a failure by comparing it.
+pub const CANCELLED: &str = "cancelled";
+
+/// Which of the two ways a transfer ends got there first.
+const RUNNING: u8 = 0;
+const CANCELLED_STATE: u8 = 1;
+const FINISHED: u8 = 2;
+
+/// The switch one transfer shares with whoever may cancel it.
+///
+/// A transfer ends exactly once, either finished (its file in place, or its
+/// failure decided) or cancelled. Whichever side flips the switch first
+/// decides, so a cancel that loses the race to a finishing transfer answers
+/// false and the transfer's own outcome is the one reported.
+#[derive(Debug, Clone, Default)]
+pub struct Control(Arc<AtomicU8>);
+
+impl Control {
+    /// Cancel the transfer. True when it was still running, and so will not
+    /// report an outcome of its own.
+    pub fn cancel(&self) -> bool {
+        self.0
+            .compare_exchange(
+                RUNNING,
+                CANCELLED_STATE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Whether the transfer has been cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == CANCELLED_STATE
+    }
+
+    /// Settle the transfer as finished. False when a cancel got there first,
+    /// in which case the outcome is not the transfer's to report.
+    pub fn finish(&self) -> bool {
+        match self
+            .0
+            .compare_exchange(RUNNING, FINISHED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(state) => state == FINISHED,
+        }
+    }
+
+    /// Whether this is the same transfer's switch.
+    #[must_use]
+    pub fn same(&self, other: &Control) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// What a finished transfer wrote.
+#[derive(Debug, Clone)]
+pub struct Transferred {
+    /// The file, at the path it was asked for.
+    pub path: PathBuf,
+    /// How many bytes arrived.
+    pub received: u64,
+    /// What the server said would arrive, when it said.
+    pub total: Option<u64>,
+}
+
+/// Read a checksum as a script spelled it.
+///
+/// The spellings accepted are the empty string (no checking),
+/// `sha256:<64 hex digits>`, `sha1:<40 hex digits>`, and a bare hex string,
+/// whose length names the digest: 64 digits is a sha256 and 40 is a sha1. The
+/// prefix and the digits are matched without regard to case. Anything else is
+/// refused rather than guessed at, so a truncated or mistyped digest fails the
+/// call instead of silently checking nothing.
+pub fn parse_checksum(spec: &str) -> Result<Checksum, Failure> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Ok(Checksum::None);
+    }
+    let (algorithm, digits) = match spec.split_once(':') {
+        Some((algo, rest)) => {
+            let rest = rest.trim();
+            if algo.eq_ignore_ascii_case("sha256") {
+                (Algorithm::Sha256, rest)
+            } else if algo.eq_ignore_ascii_case("sha1") {
+                (Algorithm::Sha1, rest)
+            } else {
+                return Err(format!(
+                    "unsupported checksum format: `{algo}` is not an algorithm a checksum \
+                     names; {FORMS}"
+                ));
+            }
+        }
+        // A digest written without its algorithm names one by its length.
+        None => match spec.len() {
+            64 => (Algorithm::Sha256, spec),
+            40 => (Algorithm::Sha1, spec),
+            _ => {
+                return Err(format!(
+                    "unsupported checksum format: `{spec}` is neither 64 nor 40 hex digits; \
+                     {FORMS}"
+                ));
+            }
+        },
+    };
+    match algorithm {
+        Algorithm::Sha256 => {
+            let mut bytes = [0u8; 32];
+            read_digits(spec, digits, &mut bytes)?;
+            Ok(Checksum::Sha256(bytes))
+        }
+        Algorithm::Sha1 => {
+            let mut bytes = [0u8; 20];
+            read_digits(spec, digits, &mut bytes)?;
+            Ok(Checksum::Sha1(bytes))
+        }
+    }
+}
+
+/// Fill `bytes` from a hex string, whose length the buffer fixes. `spec` is
+/// the checksum as it was written, for the refusal to quote back.
+fn read_digits(spec: &str, digits: &str, bytes: &mut [u8]) -> Result<(), Failure> {
+    let wanted = bytes.len() * 2;
+    if digits.len() != wanted || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "unsupported checksum format: `{spec}` is not {wanted} hex digits; {FORMS}"
+        ));
+    }
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16)
+            .map_err(|_| format!("unsupported checksum format: `{spec}` is not hexadecimal"))?;
+    }
+    Ok(())
+}
+
+/// The lowercase hex spelling of a digest, as a checksum is written.
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+/// Stream `url` onto `dest`, hashing as it goes.
+///
+/// `progress` is offered the running byte count and the size the server
+/// declared, as often as bytes arrive; throttling it is the caller's business.
+/// The destination is replaced only by a complete, verified file.
+///
+/// A cancel through `control` stops the transfer within one poll of the
+/// connection, removes the temp file, and fails with [`CANCELLED`]; a
+/// destination is never replaced once the transfer has been cancelled.
+pub fn to_file(
+    url: &str,
+    dest: &Path,
+    checksum: &Checksum,
+    limits: &Limits,
+    control: &Control,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Transferred, Failure> {
+    let dir = match dest.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let temp = temp_path(dest, &dir)?;
+
+    let outcome = stream(url, &temp, checksum, limits, control, progress);
+    // Settled before the rename, so a cancel either lands first and the file
+    // never appears, or loses and the finished file is reported.
+    let outcome = match outcome {
+        Ok(_) if !control.finish() => Err(CANCELLED.to_string()),
+        Err(_) if control.is_cancelled() => Err(CANCELLED.to_string()),
+        other => other,
+    };
+    match outcome {
+        Ok((received, total)) => match fs::rename(&temp, dest) {
+            Ok(()) => Ok(Transferred {
+                path: dest.to_path_buf(),
+                received,
+                total,
+            }),
+            Err(e) => {
+                let _ = fs::remove_file(&temp);
+                Err(format!("{}: {e}", dest.display()))
+            }
+        },
+        Err(failure) => {
+            let _ = fs::remove_file(&temp);
+            Err(failure)
+        }
+    }
+}
+
+/// The sibling the bytes land in first. A per-process counter keeps two
+/// transfers racing the same destination off each other's file.
+fn temp_path(dest: &Path, dir: &Path) -> Result<PathBuf, Failure> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = dest
+        .file_name()
+        .ok_or_else(|| format!("{}: the path names no file", dest.display()))?;
+    Ok(dir.join(format!(
+        ".{}.part-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    )))
+}
+
+/// Everything between opening the connection and a finished, verified temp
+/// file. The caller owns the temp file's fate either way.
+fn stream(
+    url: &str,
+    temp: &Path,
+    checksum: &Checksum,
+    limits: &Limits,
+    control: &Control,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(u64, Option<u64>), Failure> {
+    // No deadline covers the whole transfer: one would kill exactly the large
+    // downloads this package exists for. Resolution and the connection are
+    // bounded by ureq; every wait for the server after that is capped by
+    // `WaitConnector`, so a body that keeps arriving runs as long as it takes
+    // and one that stops for longer than the timeout fails. The same
+    // transport is how a cancel reaches a quiet connection. Redirects (ten
+    // deep) and TLS (rustls over the web-PKI roots) are ureq's defaults.
+    let timeout = limits.timeout_ms.map(Duration::from_millis);
+    let config = Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_resolve(timeout)
+        .timeout_connect(timeout)
+        .build();
+    let agent = Agent::with_parts(
+        config,
+        DefaultConnector::new().chain(WaitConnector {
+            limit: timeout,
+            control: control.clone(),
+        }),
+        DefaultResolver::default(),
+    );
+
+    let mut reply = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
+    let status = reply.status().as_u16();
+    if !(200..300).contains(&status) {
+        return Err(format!("{url}: the server answered HTTP {status}"));
+    }
+    let total = reply.body().content_length();
+    if let (Some(total), Some(max)) = (total, limits.max_bytes)
+        && total > max
+    {
+        return Err(format!(
+            "{url}: the server declared {total} bytes and the limit is {max}; raise `max_bytes` \
+             in the options to accept it"
+        ));
+    }
+
+    let file = File::create(temp).map_err(|e| format!("{}: {e}", temp.display()))?;
+    let mut writer = BufWriter::new(file);
+    let mut reader = reply.body_mut().as_reader();
+    let mut hasher = checksum.hasher();
+    let mut buf = vec![0u8; CHUNK];
+    let mut received: u64 = 0;
+
+    loop {
+        if control.is_cancelled() {
+            return Err(CANCELLED.to_string());
+        }
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("{url}: {e} after {received} bytes"))?;
+        if n == 0 {
+            break;
+        }
+        received += n as u64;
+        if let Some(max) = limits.max_bytes
+            && received > max
+        {
+            return Err(format!(
+                "{url}: the body passed the {max} byte limit; raise `max_bytes` in the options \
+                 to accept it"
+            ));
+        }
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(&buf[..n]);
+        }
+        writer
+            .write_all(&buf[..n])
+            .map_err(|e| format!("{}: {e}", temp.display()))?;
+        progress(received, total);
+    }
+
+    // Checked before the file is put on disk for good: a body that hashes to
+    // something else is going to be thrown away, and there is no reason to pay
+    // for its durability first.
+    if let Some(hasher) = hasher {
+        checksum.verify(hasher).map_err(|e| format!("{url}: {e}"))?;
+    }
+
+    // On disk before the rename, so a machine that loses power mid-transfer
+    // finds either the old file at the destination or none, never a name
+    // promising bytes that were still in a buffer.
+    writer
+        .into_inner()
+        .map_err(|e| format!("{}: {e}", temp.display()))?
+        .sync_all()
+        .map_err(|e| format!("{}: {e}", temp.display()))?;
+
+    Ok((received, total))
+}
