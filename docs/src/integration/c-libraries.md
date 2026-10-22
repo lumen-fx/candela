@@ -247,6 +247,10 @@ EXPORT void candela_dylib_init(const candela_runtime *table) {
 Check `abi` before using the table: a later runtime that changes the table
 says so there. Every function in it may be called from any thread.
 
+A library that exports `candela_dylib_init` stays loaded until the process
+exits, even after every program that opened it is gone, because its threads
+may still be running its code.
+
 | Field | What it does |
 | --- | --- |
 | `post` | Queues `payload`, UTF-8 text, for the handler of `source`. The text is copied |
