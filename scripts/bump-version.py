@@ -16,6 +16,12 @@ Crates that do not publish keep versions of their own, on their own schedule:
 `candela-lsp` and the Zed extension are numbered for the tools they are, not for
 the release the toolchain is on, and this leaves them where they are.
 
+The first-party packages under `packages/` release with the toolchain at the
+same version, so each `candela.toml` there moves too: its `[package] version`,
+and the `candela` requirement, which names that same version as the oldest
+candela the package runs on. Their native crates never publish and carry no
+version of the tree.
+
 It also leaves alone every version that names a release. The docs tell an
 embedder to depend on a version that exists on crates.io, and the toolchain pins
 in CI point at builds that exist. The version here is what the tree will be
@@ -65,6 +71,11 @@ REQUIRED = {
     # Every crate this repository builds is recorded here by version.
     "Cargo.lock": "the resolved versions",
 }
+
+
+# The first-party packages' manifests.
+PACKAGE_MANIFESTS = "packages/*/candela.toml"
+CANDELA_REQUIREMENT = re.compile(r'^(\s*candela\s*=\s*)"[^"]*"(.*)$')
 
 
 class Edit(NamedTuple):
@@ -300,6 +311,42 @@ def rewrite_lock(path: Path, shipping: set[str], old: str, new: str) -> Edit:
     return Edit(path, "\n".join(lines), changed)
 
 
+def rewrite_package(path: Path, old: str, new: str) -> Edit:
+    """Move one first-party package's version and its candela requirement."""
+    lines = path.read_text(encoding="utf-8").split("\n")
+    changed = 0
+    section = ""
+    for index, line in enumerate(lines):
+        header = SECTION.match(line)
+        if header:
+            section = header.group(1)
+            continue
+        if section != "package":
+            continue
+        version = PACKAGE_VERSION.match(line)
+        if version and version.group(1) == old:
+            lines[index] = line.replace(f'"{old}"', f'"{new}"')
+            changed += 1
+        requirement = CANDELA_REQUIREMENT.match(line)
+        if requirement and requirement.group(0) != f'{requirement.group(1)}">={new}"{requirement.group(2)}':
+            lines[index] = f'{requirement.group(1)}">={new}"{requirement.group(2)}'
+            changed += 1
+    return Edit(path, "\n".join(lines), changed)
+
+
+def package_skew(text: str, new: str) -> list[str]:
+    """What in one package manifest does not say `new`."""
+    found = []
+    if package_version(text) != new:
+        found.append(f"the version is {package_version(text)}")
+    requirement = package_key(text, CANDELA_REQUIREMENT)
+    if requirement is None:
+        found.append("there is no candela requirement")
+    elif not any(line.strip().endswith(f'">={new}"') for line in package_lines(text) if CANDELA_REQUIREMENT.match(line)):
+        found.append(f"the candela requirement is not >={new}")
+    return found
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: bump-version.py <version>", file=sys.stderr)
@@ -335,7 +382,10 @@ def main(argv: list[str]) -> int:
 
     manifest_edits = [rewrite_manifest(path, shipping, old, new) for path in paths]
     lock_edit = rewrite_lock(lock, shipping, old, new)
-    edits = [*manifest_edits, lock_edit]
+    package_edits = [
+        rewrite_package(path, old, new) for path in sorted(ROOT.glob(PACKAGE_MANIFESTS))
+    ]
+    edits = [*manifest_edits, lock_edit, *package_edits]
 
     total = 0
     moved = set()
@@ -359,6 +409,10 @@ def main(argv: list[str]) -> int:
             f"  {edit.path.relative_to(ROOT)}: {line}" for line in skew(edit.text, shipping, new)
         ]
     problems += [f"  Cargo.lock: {line}" for line in lock_skew(lock_edit.text, shipping, new)]
+    for edit in package_edits:
+        problems += [
+            f"  {edit.path.relative_to(ROOT)}: {line}" for line in package_skew(edit.text, new)
+        ]
     if problems:
         print("\n".join(problems), file=sys.stderr)
         fail(f"the tree would not come out at {new}, so nothing was written")

@@ -33,6 +33,18 @@ at the top of the release notes (see [migration notes](#migration-notes)). A
 leg that fails takes the release with it, so a partial set of archives never
 goes out; fix what failed and re-run the workflow.
 
+`build-artifacts.yml` also builds the native half of every package under
+`packages/` for each desktop target and packs each package as
+`<name>-<target>.tar.gz`, so the first-party packages go out on the same
+release page. Once the release is published, the `registry` job in
+`release.yml` tells the registry where each archive is, one `lpm release` per
+package at the tag's version, requiring the candela of that version. It
+releases under the account that owns the package names, whose token is the
+`LPM_TOKEN` secret; without the secret the job fails and the registry is not
+told, though the archives are on the release page. A package the registry
+already has at that version fails again on a re-run, so read which package
+failed first before re-running the job.
+
 It then calls `publish.yml` and `publish-extensions.yml`, and commits
 `chore: set the version to X.Y.Z+1` straight to `main`, with the release's
 migration notes filed under its version in the same commit, so the tag is the
@@ -174,10 +186,13 @@ would be indistinguishable from a released one carrying the same number.
 
 `scripts/bump-version.py` takes the version to set and finds the places that
 carry it by what they are rather than from a list: the `candela-lang` and
-`candela-vm` package versions, the `candela-vm` pin in the root manifest, and
-both crates' entries in `Cargo.lock`. It writes nothing at all unless every one
-of them comes out at the version you asked for, so a literal it was never taught
-about stops the bump instead of shipping a version skew.
+`candela-vm` package versions, the `candela-vm` pin in the root manifest, both
+crates' entries in `Cargo.lock`, and in each `packages/*/candela.toml` the
+package version and the `candela = ">=X.Y.Z"` requirement, since the
+first-party packages release in lockstep with candela. It writes nothing at all
+unless every one of them comes out at the version you asked for, so a literal
+it was never taught about stops the bump instead of shipping a version skew.
+The packages' native crates never publish and carry no version of the tree.
 
 Two kinds of version stay where they are. The language server and the editor
 extensions are numbered as the tools they are, on their own schedule, and the
