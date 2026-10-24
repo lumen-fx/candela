@@ -1,6 +1,8 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use crate::compiler::compiler_data::InstrSrc;
+use crate::compiler::flow::carry_span;
 use crate::data::Data;
 use crate::instr::Instr;
 use rustc_hash::FxHashMap;
@@ -14,7 +16,27 @@ use rustc_hash::FxHashSet;
 /// retarget, which is what happens when a literal is built directly into the
 /// constant pool: the value sits in a register nothing wrote, and the caller
 /// moves it across itself.
-pub fn move_to_id(x: &mut [Instr], tgt_id: u16) -> bool {
+///
+/// A runtime error finds its place by the instruction that raised it, so each
+/// rewritten instruction takes the span the original had in `instr_src`.
+pub fn move_to_id(x: &mut [Instr], tgt_id: u16, instr_src: &mut Vec<InstrSrc>) -> bool {
+    let first = x
+        .iter()
+        .rposition(|w| w.get_tgt_id().is_some())
+        .unwrap_or_else(|| x.len().saturating_sub(1));
+    let before: Vec<Instr> = x.get(first..).unwrap_or_default().to_vec();
+    let moved = retarget(x, tgt_id);
+    for (old, new) in before.iter().zip(&x[first..]) {
+        if old != new {
+            carry_span(instr_src, *old, *new);
+        }
+    }
+    moved
+}
+
+/// [`move_to_id`] without the span table: rewrites the instructions from the
+/// last one that writes a register on.
+fn retarget(x: &mut [Instr], tgt_id: u16) -> bool {
     if x.is_empty()
         || matches!(
             x.last().unwrap(),

@@ -397,7 +397,9 @@ pub fn handle_user_function(
                 .compile(v, ctx, state, output, Some(tgt_id), false, true)
                 .unwrap_id()
         };
-        if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
+        if (output.len() == start_len || !move_to_id(output, tgt_id, state.instr_src))
+            && arg_id != tgt_id
+        {
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
@@ -1525,13 +1527,17 @@ fn inline_call(
     let landed_on = body.iter().enumerate().any(|(pos, instr)| {
         branch_target(pos, *instr).is_some_and(|target| target >= first && target <= before)
     });
-    if builds && written_once && reads == field_writes && !landed_on {
-        let at = start + builder.unwrap_or_default();
-        let old = output[at];
-        if move_to_id(&mut output[start..start + before], return_register) {
-            carry_span(old, output[at], state);
-            return;
-        }
+    if builds
+        && written_once
+        && reads == field_writes
+        && !landed_on
+        && move_to_id(
+            &mut output[start..start + before],
+            return_register,
+            state.instr_src,
+        )
+    {
+        return;
     }
     output.push(Instr::Mov(returned, return_register));
 }
