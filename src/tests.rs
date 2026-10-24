@@ -14468,6 +14468,44 @@ pub fn a_function_through_an_any_is_called() {
     );
 }
 
+/// A function handed out through a declared `fn(...)` return type is compiled
+/// at that signature, the way a `let` declared with one takes it: a bare
+/// parameter, an anonymous function and a closure all come back callable.
+#[test]
+pub fn a_function_returned_through_a_declared_fn_type_is_called() {
+    let src = "
+        fn twice(x) { return x * 2; }
+        fn named() -> fn(int) -> int { return twice; }
+        fn anon() -> fn(int) -> int { return fn(x) { return x + 1; }; }
+        fn adder(n: int) -> fn(int) -> int { return fn(x) => x + n; }
+        fn either(b: bool) -> fn(int) -> int {
+            if b { return fn(x) => x - 1; }
+            let f = fn(x) => x * 100;
+            return f;
+        }
+        fn short() -> fn(int) -> int => fn(x) => x * 3;
+        fn logger() -> fn(string) { return fn(s) { print(\"log \" + s); }; }
+        fn main() {
+            print(named()(4));
+            print(anon()(4));
+            let add5 = adder(5);
+            print(add5(1));
+            print(either(true)(1), either(false)(1));
+            print(short()(2));
+            logger()(\"hi\");
+        }
+    ";
+    assert_eq!(run_output(src), "8\n5\n6\n0\n100\n6\nlog hi\n");
+
+    let arity = "fn pick() -> fn(int) -> int { return fn(a, b) => a + b; }
+fn main() { print(pick()(1)); }";
+    let d = compile_diag(arity, "diag.cdl").unwrap_err();
+    assert_eq!(d.code, "invalid_type", "{}", d.message);
+    let body = "fn pick() -> fn(int) -> int { return fn(x) => \"s\" + x; }
+fn main() { print(pick()(1)); }";
+    assert!(compile_diag(body, "diag.cdl").is_err());
+}
+
 // ---------------------------------------------------------------------------
 // STRUCT UPDATE SYNTAX AND DEFAULTS
 // ---------------------------------------------------------------------------

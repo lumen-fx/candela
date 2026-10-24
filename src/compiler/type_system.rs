@@ -2308,6 +2308,10 @@ pub fn return_type_fits(declared: &DataType, body: &DataType, generics: &Generic
         return true;
     }
     match (declared, body) {
+        // A function returned through a declared `fn(...)` is checked against
+        // the signature where the `return` compiles, which reports a mismatch
+        // at the function rather than at the declaration.
+        (DataType::FnValue(_), DataType::Fn(_)) => true,
         (_, DataType::Union(members)) => members
             .iter()
             .all(|member| return_type_fits(declared, member, generics)),

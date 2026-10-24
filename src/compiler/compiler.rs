@@ -5040,9 +5040,26 @@ fn compile_return(
         output.push(Instr::VoidReturn);
         return;
     };
-    let mut id = x
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    // A function handed out through a declared `fn(...)` return is checked
+    // against that signature and compiled at it, the way a `let` declared with
+    // one takes it: the caller calls through the value at the declared types.
+    let declared_fn = state
+        .fn_returns
+        .last()
+        .map(|(_, returned)| returned.clone())
+        .filter(declared_holds_fn_signature);
+    if let Some(declared) = &declared_fn
+        && let DataType::Fn(fn_id) = x.infer_type(v, ctx, state)
+    {
+        let span = state.fns[fn_id as usize].name_span;
+        check_declared_fn(x, declared, span, output, v, ctx, state);
+    }
+    let mut id = if matches!(declared_fn, Some(DataType::FnValue(_))) {
+        compile_fn_value(x, v, ctx, state, output, None)
+    } else {
+        x.compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    };
     // A value typed `any` leaving a function declared to return a concrete type
     // is checked here, the one place it can be: the call site reads the
     // declared type and compiles against it. The wrong value raises the
