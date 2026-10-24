@@ -139,15 +139,15 @@ mimalloc = { version = "0.1.52", optional = true }
 toml_edit = "0.25.15"
 # The code generator behind the `native` feature, with the x86-64 and aarch64
 # backends a release build generates code for.
-cranelift-codegen = { version = "0.136.1", optional = true, default-features = false, features = ["std", "x86", "arm64"] }
-cranelift-frontend = { version = "0.136.1", optional = true, default-features = false, features = ["std"] }
+cranelift-codegen = { version = "0.137.0", optional = true, default-features = false, features = ["std", "x86", "arm64"] }
+cranelift-frontend = { version = "0.137.0", optional = true, default-features = false, features = ["std"] }
 target-lexicon = { version = "0.13.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Pinned to the locked version rather than `*`: crates.io rejects a wildcard
 # requirement, and this crate publishes.
 wasm-bindgen = "0.2.126"
-getrandom = { version = "0.3.4", features = ["wasm_js"] }
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
 
 # The browser build's own tests (tests/wasm_std.rs), run under
 # wasm-bindgen-test-runner.

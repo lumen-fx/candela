@@ -22,7 +22,7 @@ use super::ir::Term;
 use super::ir::UnaryOp;
 use candela_vm::native::abi;
 use cranelift_codegen::Context;
-use cranelift_codegen::FinalizedRelocTarget;
+use cranelift_codegen::RelocTarget;
 use cranelift_codegen::control::ControlPlane;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::AbiParam;
@@ -161,7 +161,7 @@ fn compile_one(
     let bytes = code.code_buffer().to_vec();
     let mut relocs = Vec::new();
     for reloc in code.buffer.relocs() {
-        let FinalizedRelocTarget::ExternalName(ir::ExternalName::User(name)) = &reloc.target else {
+        let RelocTarget::ExternalName(ir::ExternalName::User(name)) = &reloc.target else {
             return Err(format!("unexpected relocation {:?}", reloc.kind));
         };
         relocs.push((reloc.offset, names[name.as_u32() as usize], reloc.addend));
