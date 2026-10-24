@@ -530,29 +530,25 @@ impl Generics {
             .map(|(value, span)| (defaults.file_idx, value, *span))
     }
 
-    /// For each type parameter of a struct template, the field declared with
-    /// that parameter as its type. A literal written without type arguments
-    /// takes each parameter from the value in that field.
+    /// The type parameters of a struct template and the type each field is
+    /// declared with. A literal written without type arguments takes each
+    /// parameter from the values in the fields whose types mention it.
     #[must_use]
-    pub fn param_fields(&self, template_idx: usize) -> Vec<Option<SmolStr>> {
+    pub fn struct_params_and_fields(
+        &self,
+        template_idx: usize,
+    ) -> (Vec<SmolStr>, Vec<(SmolStr, TypeExpr)>) {
         let Some(template) = self.templates.get(template_idx) else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
-        let TemplateBody::Struct(fields) = &template.body else {
-            return vec![None; template.params.len()];
+        let fields = match &template.body {
+            TemplateBody::Struct(fields) => fields
+                .iter()
+                .map(|(name, field_type, _)| (name.clone(), field_type.clone()))
+                .collect(),
+            TemplateBody::Enum(_) => Vec::new(),
         };
-        template
-            .params
-            .iter()
-            .map(|param| {
-                fields
-                    .iter()
-                    .find(|(_, field_type, _)| {
-                        matches!(field_type, TypeExpr::Identifier(t, _) if t == param)
-                    })
-                    .map(|(field_name, _, _)| field_name.clone())
-            })
-            .collect()
+        (template.params.to_vec(), fields)
     }
 
     /// The generic declaration the last-registered template under `name` is,
@@ -1586,17 +1582,24 @@ pub fn struct_literal_id(
     if let Some(template_idx) =
         find_template(path, &name, state.scope(ctx.file_idx), state.generics)
     {
-        let param_fields = state.generics.param_fields(template_idx);
-        let mut args: Vec<DataType> = Vec::with_capacity(param_fields.len());
-        for field_name in param_fields {
-            args.push(
-                field_name
-                    .and_then(|f| fields.iter().find(|(n, _, _, _)| *n == f))
-                    .map_or(DataType::Unknown, |(_, value, _, _)| {
-                        value.infer_type(v, ctx, state)
-                    }),
-            );
+        let (params, declared) = state.generics.struct_params_and_fields(template_idx);
+        let mut bound: Vec<Option<DataType>> = vec![None; params.len()];
+        for (field_name, field_type) in &declared {
+            if bound.iter().all(Option::is_some) {
+                break;
+            }
+            if !field_type.mentions_any(&params) {
+                continue;
+            }
+            if let Some((_, value, _, _)) = fields.iter().find(|(n, _, _, _)| n == field_name) {
+                let found = value.infer_type(v, ctx, state);
+                bind_params_from_payload(field_type, &found, &params, &mut bound);
+            }
         }
+        let args: Vec<DataType> = bound
+            .into_iter()
+            .map(|b| b.unwrap_or(DataType::Unknown))
+            .collect();
         return instantiated_struct_id(path, &name, &args, span, ctx, state);
     }
     state

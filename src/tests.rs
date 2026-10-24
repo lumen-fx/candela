@@ -10363,6 +10363,29 @@ pub fn generic_struct_literal_without_type_arguments() {
     );
 }
 
+/// A field declared as a list or a map of a parameter pins it too, the way an
+/// enum variant's payload does (#218).
+#[test]
+pub fn generic_struct_literal_takes_a_parameter_through_a_list_or_map_field() {
+    let src = "
+        struct Stack<T> { items: T[] }
+        impl Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
+        struct Names<T> { by: {string: T}, count: int }
+        fn main() {
+            let s = Stack { items: [1, 2] };
+            print(s.top() + 1);
+            let held: string[] = [\"a\"];
+            let t = Stack { items: held };
+            print(t.top() + \"!\");
+            let n = Names { count: 1, by: {\"x\": 2.5} };
+            print(n.by[\"x\"] * 2.0);
+            let e = Stack { items: [] };
+            print(e.items.len());
+        }
+    ";
+    assert_eq!(run_output(src), "3\na!\n5.0\n0\n");
+}
+
 #[test]
 pub fn generic_instantiations_are_distinct_types() {
     run_and_check_registers!(

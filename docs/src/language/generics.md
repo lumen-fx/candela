@@ -88,7 +88,9 @@ fn main() {
 
 Written without type arguments, a literal takes each parameter from the value in
 the field declared with it, so `Pair{ key: "width", value: 40 }` is the same
-type as the one above. A parameter that no field pins is `any`.
+type as the one above. A field declared as a list or a map of a parameter pins
+it the same way: `Stack{ items: [1, 2] }` is a `Stack<int>` when `items` is a
+`T[]`. A parameter that no field pins is `any`.
 
 Type arguments nest, and a generic type is an ordinary type anywhere a type
 goes: a field, a parameter, a return annotation. A type that comes from a
