@@ -160,6 +160,12 @@ impl Transport for WaitTransport {
     fn is_open(&mut self) -> bool {
         self.inner.is_open()
     }
+
+    /// ureq refuses an `https` request on a transport that is not TLS, so a
+    /// wrapper has to say what it wraps.
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +268,39 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen[0].after, Duration::from_millis(100));
         assert_eq!(seen[0].reason, Timeout::Global);
+    }
+
+    /// A TLS connection, as far as the transport above it can tell.
+    #[derive(Debug)]
+    struct Secure(LazyBuffers);
+
+    impl Transport for Secure {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.0
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
+            Ok(true)
+        }
+        fn is_open(&mut self) -> bool {
+            true
+        }
+        fn is_tls(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn the_transport_is_tls_when_the_one_it_wraps_is() {
+        let (plain, _) = idle(500, true);
+        assert!(!plain.is_tls());
+        let secure = WaitTransport {
+            inner: Box::new(Secure(LazyBuffers::new(64, 64))),
+            ..plain
+        };
+        assert!(secure.is_tls());
     }
 
     /// A server that never sends: every wait runs its whole length and ends
