@@ -47,9 +47,7 @@ fn answer_source(on_done: fn(Result<any, string>)) -> int {
 }
 
 // Each function has a browser half under `@cfg(web)` and, under
-// `@cfg(not(web))`, a desktop half that raises `browser_only`. A desktop half
-// that declares a return type returns a value after the throw, which never
-// runs; the compiler wants a value of that type on the way out.
+// `@cfg(not(web))`, a desktop half that raises `browser_only`.
 
 /// Calls the global function at `path` with `args` and answers what it
 /// returns. A function that returns a promise is called with `call_async`.
@@ -58,7 +56,6 @@ fn call(path: string, args: any[]) -> any => js::candela_js_call(path, args);
 @cfg(not(web))
 fn call(path: string, args: any[]) -> any {
     throw "browser_only";
-    return null;
 }
 
 /// Calls the global function at `path` with `args`, and passes `on_done` what
@@ -78,7 +75,6 @@ fn get(path: string) -> any => js::candela_js_get(path);
 @cfg(not(web))
 fn get(path: string) -> any {
     throw "browser_only";
-    return null;
 }
 
 /// Sets the global value at `path`.
@@ -115,7 +111,6 @@ fn invoke(handle: int, method: string, args: any[]) -> any => js::candela_js_inv
 @cfg(not(web))
 fn invoke(handle: int, method: string, args: any[]) -> any {
     throw "browser_only";
-    return null;
 }
 
 /// Calls `method` on what `handle` holds, and passes `on_done` what its
@@ -135,7 +130,6 @@ fn release(handle: int) -> bool => js::candela_js_release(handle);
 @cfg(not(web))
 fn release(handle: int) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Calls `on_event` with each DOM `event` on `window`, `document`, or the
@@ -157,7 +151,6 @@ fn listen(target: string, event: string, on_event: fn(any)) -> Option<int> {
 @cfg(not(web))
 fn listen(target: string, event: string, on_event: fn(any)) -> Option<int> {
     throw "browser_only";
-    return None;
 }
 
 /// Stops the listener `listen` answered `handle` for. False when there was
@@ -167,5 +160,4 @@ fn unlisten(handle: int) -> bool => js::candela_js_unlisten(handle);
 @cfg(not(web))
 fn unlisten(handle: int) -> bool {
     throw "browser_only";
-    return false;
 }

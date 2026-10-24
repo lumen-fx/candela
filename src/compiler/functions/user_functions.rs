@@ -11,7 +11,6 @@ use super::super::type_system::DataType;
 use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::call_return_type;
 use super::super::type_system::can_reach;
-use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
 use super::super::type_system::indirect_return_type;
 use super::super::type_system::infer_user_fn_return_type;
@@ -686,21 +685,8 @@ fn compile_function(
         file_idx: fn_file_idx,
         ..ctx
     };
-    let fn_type = track_returns(fn_code, v, fn_ctx, state, fn_name, function_id);
-    let return_type = if fn_type.is_empty() {
-        // No tracked type means either no value is returned at all, or every
-        // returned value was itself dynamic (return-type tracking records no
-        // type for `Unknown`). A function handing back an `any` payload is
-        // dynamic, not null.
-        if check_if_returns_void(fn_code) {
-            DataType::Null
-        } else {
-            DataType::Unknown
-        }
-    } else {
-        // If function returns anything, check if it returns the same thing each time
-        DataType::Union(Box::from(fn_type)).check_poly()
-    };
+    let return_type =
+        track_returns(fn_code, v, fn_ctx, state, fn_name, function_id).body_type(fn_code);
 
     // A `-> Type` annotation pins what the body may hand back. Each
     // specialisation is checked separately, so an un-annotated parameter that
