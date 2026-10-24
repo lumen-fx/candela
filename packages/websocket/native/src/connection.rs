@@ -223,17 +223,40 @@ fn run(events: &Events, url: &str, inbox: &Receiver<Outgoing>) {
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
-            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                let (code, reason) = received.unwrap_or((1005, String::new()));
-                events.closed(code, reason, true);
-                return;
-            }
             Err(e) => {
-                events.error(format!("the connection failed: {e}"));
-                events.closed(1006, String::new(), false);
+                match ending(e, received) {
+                    Ending::Clean(code, reason) => events.closed(code, reason, true),
+                    Ending::Failed(message) => {
+                        events.error(format!("the connection failed: {message}"));
+                        events.closed(1006, String::new(), false);
+                    }
+                }
                 return;
             }
         }
+    }
+}
+
+/// How a connection that a read ended was closed.
+#[derive(Debug, PartialEq, Eq)]
+enum Ending {
+    /// The closing handshake finished: the code and reason the other side sent.
+    Clean(u16, String),
+    /// The transport failed before the other side's close frame arrived.
+    Failed(String),
+}
+
+/// Reads the error a read ended with. Once the other side's close frame has
+/// arrived the handshake is over, so however the transport goes away after it
+/// the close is clean: a TLS server that drops the stream without
+/// `close_notify` is as closed as one that shuts it down.
+fn ending(error: tungstenite::Error, received: Option<(u16, String)>) -> Ending {
+    match (error, received) {
+        (_, Some((code, reason))) => Ending::Clean(code, reason),
+        (tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed, None) => {
+            Ending::Clean(1005, String::new())
+        }
+        (e, None) => Ending::Failed(e.to_string()),
     }
 }
 
@@ -324,6 +347,25 @@ mod tests {
         assert_eq!(socket_url("https://a").unwrap(), "wss://a");
         assert!(socket_url("/relative").is_err());
         assert!(socket_url("ftp://a").is_err());
+    }
+
+    #[test]
+    fn a_transport_that_fails_after_the_close_frame_closes_cleanly() {
+        let eof = || {
+            tungstenite::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "peer closed connection without sending TLS close_notify",
+            ))
+        };
+        assert_eq!(
+            ending(eof(), Some((1000, "bye".into()))),
+            Ending::Clean(1000, "bye".into())
+        );
+        assert!(matches!(ending(eof(), None), Ending::Failed(m) if m.contains("close_notify")));
+        assert_eq!(
+            ending(tungstenite::Error::ConnectionClosed, None),
+            Ending::Clean(1005, String::new())
+        );
     }
 
     #[test]
