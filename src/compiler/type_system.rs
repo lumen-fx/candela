@@ -530,29 +530,27 @@ impl Generics {
             .map(|(value, span)| (defaults.file_idx, value, *span))
     }
 
-    /// For each type parameter of a struct template, the field declared with
-    /// that parameter as its type. A literal written without type arguments
-    /// takes each parameter from the value in that field.
+    /// The type parameters of a struct template and the type each field is
+    /// declared with. A literal written without type arguments takes each
+    /// parameter from the values in the fields whose types mention it.
+    ///
+    /// `template_idx` is one [`find_template`] answered. A literal that names
+    /// an enum template reads no fields, and the struct lookup after it
+    /// reports the name as no struct.
     #[must_use]
-    pub fn param_fields(&self, template_idx: usize) -> Vec<Option<SmolStr>> {
-        let Some(template) = self.templates.get(template_idx) else {
-            return Vec::new();
+    pub fn struct_params_and_fields(
+        &self,
+        template_idx: usize,
+    ) -> (Vec<SmolStr>, Vec<(SmolStr, TypeExpr)>) {
+        let template = &self.templates[template_idx];
+        let fields = match &template.body {
+            TemplateBody::Struct(fields) => fields
+                .iter()
+                .map(|(name, field_type, _)| (name.clone(), field_type.clone()))
+                .collect(),
+            TemplateBody::Enum(_) => Vec::new(),
         };
-        let TemplateBody::Struct(fields) = &template.body else {
-            return vec![None; template.params.len()];
-        };
-        template
-            .params
-            .iter()
-            .map(|param| {
-                fields
-                    .iter()
-                    .find(|(_, field_type, _)| {
-                        matches!(field_type, TypeExpr::Identifier(t, _) if t == param)
-                    })
-                    .map(|(field_name, _, _)| field_name.clone())
-            })
-            .collect()
+        (template.params.to_vec(), fields)
     }
 
     /// The generic declaration the last-registered template under `name` is,
@@ -1586,17 +1584,24 @@ pub fn struct_literal_id(
     if let Some(template_idx) =
         find_template(path, &name, state.scope(ctx.file_idx), state.generics)
     {
-        let param_fields = state.generics.param_fields(template_idx);
-        let mut args: Vec<DataType> = Vec::with_capacity(param_fields.len());
-        for field_name in param_fields {
-            args.push(
-                field_name
-                    .and_then(|f| fields.iter().find(|(n, _, _, _)| *n == f))
-                    .map_or(DataType::Unknown, |(_, value, _, _)| {
-                        value.infer_type(v, ctx, state)
-                    }),
-            );
+        let (params, declared) = state.generics.struct_params_and_fields(template_idx);
+        let mut bound: Vec<Option<DataType>> = vec![None; params.len()];
+        for (field_name, field_type) in &declared {
+            if bound.iter().all(Option::is_some) {
+                break;
+            }
+            if !field_type.mentions_any(&params) {
+                continue;
+            }
+            if let Some((_, value, _, _)) = fields.iter().find(|(n, _, _, _)| n == field_name) {
+                let found = value.infer_type(v, ctx, state);
+                bind_params_from_payload(field_type, &found, &params, &mut bound);
+            }
         }
+        let args: Vec<DataType> = bound
+            .into_iter()
+            .map(|b| b.unwrap_or(DataType::Unknown))
+            .collect();
         return instantiated_struct_id(path, &name, &args, span, ctx, state);
     }
     state
@@ -2308,6 +2313,10 @@ pub fn return_type_fits(declared: &DataType, body: &DataType, generics: &Generic
         return true;
     }
     match (declared, body) {
+        // A function returned through a declared `fn(...)` is checked against
+        // the signature where the `return` compiles, which reports a mismatch
+        // at the function rather than at the declaration.
+        (DataType::FnValue(_), DataType::Fn(_)) => true,
         (_, DataType::Union(members)) => members
             .iter()
             .all(|member| return_type_fits(declared, member, generics)),
@@ -2894,7 +2903,7 @@ pub fn track_returns(
     state: &mut State<'_>,
     fn_name: &str,
     fn_id: usize,
-) -> Vec<DataType> {
+) -> FnReturnFlow {
     // A `?` the walk types is a return of the `None` or the `Err` its operand
     // can hold; see `Expr::Propagate`.
     state.propagations.push(Vec::new());
@@ -2921,12 +2930,37 @@ pub fn track_returns(
         let declared = (!func.name.starts_with(ANON_FN_PREFIX)).then_some(func.name.as_str());
         error_missing_return(declared, func.name_span, ctx.file_idx, state.sources);
     }
-    flow.types
+    flow
 }
 
-struct FnReturnFlow {
+/// The types a body hands back, and whether every path through it ends in a
+/// `return` or in a statement that never comes back.
+pub struct FnReturnFlow {
     types: Vec<DataType>,
     always_returns: bool,
+}
+
+impl FnReturnFlow {
+    /// The one type a call to the body hands back.
+    ///
+    /// No tracked type means no `return` writes a value the walk could type:
+    /// either nothing is returned at all, or every returned value was itself
+    /// dynamic (the walk records no type for `Unknown`). A function handing
+    /// back an `any` payload is dynamic, not null. A body that returns nothing
+    /// and never reaches its end, one that only throws or exits, hands nothing
+    /// back either, so it fits whatever type it declares.
+    #[must_use]
+    pub fn body_type(self, content: &[Expr]) -> DataType {
+        if !self.types.is_empty() {
+            // If function returns anything, check if it returns the same thing each time
+            return DataType::Union(Box::from(self.types)).check_poly();
+        }
+        if check_if_returns_void(content) && !self.always_returns {
+            DataType::Null
+        } else {
+            DataType::Unknown
+        }
+    }
 }
 
 fn track_scoped_returns(
@@ -3395,27 +3429,14 @@ pub fn infer_user_fn_return_type(
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
-    let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
+    let flow = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
     state.generics.pop_bindings();
 
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
     v.truncate(v_len_before_args);
 
-    let body_type = if fn_type.is_empty() {
-        // No tracked type means either no value is returned at all, or every
-        // returned value was itself dynamic (return-type tracking records no
-        // type for `Unknown`). A function handing back an `any` payload is
-        // dynamic, not null.
-        if check_if_returns_void(&fn_code) {
-            DataType::Null
-        } else {
-            DataType::Unknown
-        }
-    } else {
-        // If function returns anything, check if it returns the same thing each time
-        DataType::Union(Box::from(fn_type)).check_poly()
-    };
+    let body_type = flow.body_type(&fn_code);
     let to_return = call_return_type(declared_return, body_type);
 
     // Cache the result

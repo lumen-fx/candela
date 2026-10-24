@@ -239,7 +239,10 @@ narrowest scope with a comment saying why.
 Continuous integration builds and tests the whole workspace on Linux, macOS and
 Windows, adds Linux runs with the `embed` feature and with `gc-torture`, and a
 WebAssembly build with its tests, and
-gates on `cargo fmt --all --check` and on clippy with warnings denied. A
+gates on `cargo fmt --all --check` and on clippy with warnings denied. On macOS
+it also builds `candela` with `-Cprofile-generate` and runs a program, because
+the release build's PGO step runs that same kind of binary and a C dependency
+instrumented by Apple clang crashes it at exit. A
 separate job exercises the Windows installer end to end when the installer or
 the update logic changes.
 

@@ -147,3 +147,51 @@ fn main() {{}}
     assert_eq!(seen, ["refused"]);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A server that goes away without a close frame ends the connection as a
+/// failure: an error naming it, then a close that is not clean, with the code
+/// that means no close frame came.
+#[test]
+fn a_server_that_drops_the_connection_is_a_failed_close() {
+    let dir = scratch("websocket-dropped");
+    let root = stage(package(), "websocket", &dir);
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        let socket = tungstenite::accept(stream).expect("handshake");
+        drop(socket);
+    });
+    let program = format!(
+        r#"
+{import}
+
+host "test" {{
+    seen(string);
+}}
+
+fn start() {{
+    websocket::open("ws://{addr}", fn(e) {{
+        match e {{
+            Open => test::seen("open"),
+            Message(text) => test::seen(text),
+            Error(why) => test::seen("error " + why),
+            Close(code, reason, clean) => test::seen("close " + string(code) + " " + string(clean)),
+        }}
+    }});
+}}
+
+fn main() {{}}
+"#,
+        import = import(&root, "websocket"),
+    );
+    let seen = run(&dir, &program, closed);
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen[0], "open");
+    assert!(
+        seen[1].starts_with("error the connection failed: "),
+        "{seen:?}"
+    );
+    assert_eq!(seen[2], "close 1006 false");
+    std::fs::remove_dir_all(&dir).ok();
+}

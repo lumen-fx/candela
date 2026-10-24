@@ -11,7 +11,6 @@ use super::super::type_system::DataType;
 use super::super::type_system::arg_types_specialize_equal;
 use super::super::type_system::call_return_type;
 use super::super::type_system::can_reach;
-use super::super::type_system::check_if_returns_void;
 use super::super::type_system::fn_bindings;
 use super::super::type_system::indirect_return_type;
 use super::super::type_system::infer_user_fn_return_type;
@@ -398,7 +397,9 @@ pub fn handle_user_function(
                 .compile(v, ctx, state, output, Some(tgt_id), false, true)
                 .unwrap_id()
         };
-        if (output.len() == start_len || !move_to_id(output, tgt_id)) && arg_id != tgt_id {
+        if (output.len() == start_len || !move_to_id(output, tgt_id, state.instr_src))
+            && arg_id != tgt_id
+        {
             output.push(Instr::Mov(arg_id, tgt_id));
         }
     }
@@ -686,21 +687,8 @@ fn compile_function(
         file_idx: fn_file_idx,
         ..ctx
     };
-    let fn_type = track_returns(fn_code, v, fn_ctx, state, fn_name, function_id);
-    let return_type = if fn_type.is_empty() {
-        // No tracked type means either no value is returned at all, or every
-        // returned value was itself dynamic (return-type tracking records no
-        // type for `Unknown`). A function handing back an `any` payload is
-        // dynamic, not null.
-        if check_if_returns_void(fn_code) {
-            DataType::Null
-        } else {
-            DataType::Unknown
-        }
-    } else {
-        // If function returns anything, check if it returns the same thing each time
-        DataType::Union(Box::from(fn_type)).check_poly()
-    };
+    let return_type =
+        track_returns(fn_code, v, fn_ctx, state, fn_name, function_id).body_type(fn_code);
 
     // A `-> Type` annotation pins what the body may hand back. Each
     // specialisation is checked separately, so an un-annotated parameter that
@@ -1539,13 +1527,17 @@ fn inline_call(
     let landed_on = body.iter().enumerate().any(|(pos, instr)| {
         branch_target(pos, *instr).is_some_and(|target| target >= first && target <= before)
     });
-    if builds && written_once && reads == field_writes && !landed_on {
-        let at = start + builder.unwrap_or_default();
-        let old = output[at];
-        if move_to_id(&mut output[start..start + before], return_register) {
-            carry_span(old, output[at], state);
-            return;
-        }
+    if builds
+        && written_once
+        && reads == field_writes
+        && !landed_on
+        && move_to_id(
+            &mut output[start..start + before],
+            return_register,
+            state.instr_src,
+        )
+    {
+        return;
     }
     output.push(Instr::Mov(returned, return_register));
 }

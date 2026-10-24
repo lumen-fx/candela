@@ -9,7 +9,6 @@ use crate::compiler::compiler_errors::error_cannot_find_dynlib_symbol;
 use crate::compiler::compiler_errors::error_cannot_load_dynlib;
 use crate::compiler::compiler_errors::error_cannot_push_type_to_array;
 use crate::compiler::compiler_errors::error_cannot_read_file;
-use crate::compiler::compiler_errors::error_conditional_expression_without_else;
 use crate::compiler::compiler_errors::error_division_by_zero;
 use crate::compiler::compiler_errors::error_duplicate_map_key;
 use crate::compiler::compiler_errors::error_invalid_index_type;
@@ -1968,7 +1967,6 @@ fn compile_match_value(
         &test,
         &code,
         span,
-        span,
         v,
         ctx,
         state,
@@ -3401,7 +3399,6 @@ fn compile_inline_condition_branch(
 fn compile_inline_condition(
     main_condition: &Expr,
     code: &[Expr],
-    span: Span,
     condition_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -3451,7 +3448,8 @@ fn compile_inline_condition(
         jmp_markers.push(output.len() - 1);
     }
 
-    let mut else_exists = false;
+    // The parser refuses an inline condition without an `else`, and every one
+    // the compiler builds itself ends in one, so the last branch is the `else`.
     for elem in &code[main_code_limit..] {
         if let Expr::ElseIfBlock(condition, code, condition_span) = elem {
             condition_markers.push(output.len());
@@ -3469,13 +3467,9 @@ fn compile_inline_condition(
             output.push(Instr::Jmp(0));
             jmp_markers.push(output.len() - 1);
         } else if let Expr::ElseBlock(code) = elem {
-            else_exists = true;
             condition_markers.push(output.len());
             compile_inline_condition_branch(code, v, ctx, state, output, return_id, as_fn_value);
         }
-    }
-    if !else_exists {
-        error_conditional_expression_without_else(span, ctx.file_idx, state.sources);
     }
 
     for y in jmp_markers {
@@ -4754,7 +4748,7 @@ fn write_scratch_into(
         && !v.iter().any(|var| var.register_id == scratch)
         && !state.const_registers.values().any(|&reg| reg == scratch)
         && !state.reserved_registers.contains(&scratch);
-    if !fresh || !move_to_id(&mut output[from..], dest) {
+    if !fresh || !move_to_id(&mut output[from..], dest, state.instr_src) {
         return false;
     }
     state.free_reg(scratch, v);
@@ -4877,7 +4871,7 @@ fn compile_var_assignment(
         .compile(v, ctx, state, output, Some(id), false, true)
         .unwrap_id();
     if output.len() != output_len {
-        if !move_to_id(output, id) && obj_id != id {
+        if !move_to_id(output, id, state.instr_src) && obj_id != id {
             output.push(Instr::Mov(obj_id, id));
         }
     } else if state.const_registers.values().any(|&v| v == obj_id) {
@@ -5040,9 +5034,26 @@ fn compile_return(
         output.push(Instr::VoidReturn);
         return;
     };
-    let mut id = x
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    // A function handed out through a declared `fn(...)` return is checked
+    // against that signature and compiled at it, the way a `let` declared with
+    // one takes it: the caller calls through the value at the declared types.
+    let declared_fn = state
+        .fn_returns
+        .last()
+        .map(|(_, returned)| returned.clone())
+        .filter(declared_holds_fn_signature);
+    if let Some(declared) = &declared_fn
+        && let DataType::Fn(fn_id) = x.infer_type(v, ctx, state)
+    {
+        let span = state.fns[fn_id as usize].name_span;
+        check_declared_fn(x, declared, span, output, v, ctx, state);
+    }
+    let mut id = if matches!(declared_fn, Some(DataType::FnValue(_))) {
+        compile_fn_value(x, v, ctx, state, output, None)
+    } else {
+        x.compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    };
     // A value typed `any` leaving a function declared to return a concrete type
     // is checked here, the one place it can be: the call site reads the
     // declared type and compiles against it. The wrong value raises the
@@ -5682,13 +5693,12 @@ impl Expr {
                     l, *span1, *span2, tgt_id, v, ctx, state, output,
                 ))
             }
-            Self::InlineCondition(main_condition, code, span, condition_span) => {
+            Self::InlineCondition(main_condition, code, _, condition_span) => {
                 debug_assert!(uses_id);
                 let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
                 Some(compile_inline_condition(
                     main_condition,
                     code,
-                    *span,
                     *condition_span,
                     v,
                     ctx,

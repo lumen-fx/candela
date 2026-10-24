@@ -4981,7 +4981,78 @@ fn compile_diag(src: &str, filename: &str) -> Result<(), Diagnostic> {
         debug, release,
         "a release build reports what a debug build does"
     );
+    if let Err(diagnostic) = &debug {
+        assert_report_names_the_place(src, filename, diagnostic);
+    }
     debug
+}
+
+/// A comment line of multi-byte text, put ahead of a program so that every
+/// byte offset after it differs from the character offset of the same spot.
+const WIDE_LINE: &str = "// \u{fc}n\u{ef}c\u{f6}d\u{e9} \u{2713} \u{65e5}\u{672c}\u{8a9e}\n";
+
+/// The byte offset of the place a person reads as `line` and `col` in `src`,
+/// both counted from one, the column in characters.
+fn byte_offset(src: &str, line: usize, col: usize) -> usize {
+    let line_start: usize = src.split_inclusive('\n').take(line - 1).map(str::len).sum();
+    line_start
+        + src[line_start..]
+            .chars()
+            .take(col - 1)
+            .map(char::len_utf8)
+            .sum::<usize>()
+}
+
+/// Renders the report for `src` behind [`WIDE_LINE`], the way a terminal
+/// shows it, and checks it lands on the code the structured `diagnostic` is
+/// about. Spans are byte offsets, and a report that read them as characters
+/// would land past that code.
+///
+/// The report has to show the line the diagnostic starts on, numbered as it is
+/// in the file, and its header has to name a place in the program at or before
+/// that start: a report opens at the code it is about or at the construct
+/// around it, such as the map that holds a repeated key.
+fn assert_report_names_the_place(src: &str, filename: &str, diagnostic: &Diagnostic) {
+    let shifted = format!("{WIDE_LINE}{src}");
+    let report = strip_ansi(&compile_report(&shifted, filename));
+    let header = format!("{}:", diagnostic.filename);
+    let Some(at) = report.find(&header) else {
+        panic!(
+            "the report for {} names {header}, got:\n{report}",
+            diagnostic.code
+        );
+    };
+    if diagnostic.filename != filename {
+        return;
+    }
+    let mut numbers = report[at + header.len()..]
+        .split(|c: char| !c.is_ascii_digit())
+        .take(2)
+        .map(|n| {
+            n.parse::<usize>()
+                .expect("the header names a line and column")
+        });
+    let (line, col) = (numbers.next().unwrap(), numbers.next().unwrap());
+    let start = WIDE_LINE.len() + diagnostic.span.start;
+    let opens_at = byte_offset(&shifted, line, col);
+    assert!(
+        (WIDE_LINE.len()..=start).contains(&opens_at),
+        "the report for {} opens at {line}:{col}, after the code at byte {start}:\n{report}",
+        diagnostic.code
+    );
+    let line_no = shifted[..start].matches('\n').count() + 1;
+    let text = shifted[..start]
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+        + shifted[start..].split('\n').next().unwrap_or_default();
+    let shown = format!("{line_no} \u{2502} {}", text.trim_end());
+    assert!(
+        report.contains(&shown),
+        "the report for {} shows `{shown}`, got:\n{report}",
+        diagnostic.code
+    );
 }
 
 /// Compiles then executes `src` under a diagnostic sink, surfacing parser,
@@ -5718,6 +5789,63 @@ pub fn stress_compiler_semantic_errors() {
         distinct.len() >= 6,
         "expected the compiler errors to be differentiated by code, saw only {distinct:?}"
     );
+}
+
+/// Every compile error renders a report that points at the code it is about,
+/// even with multi-byte text ahead of it in the file; [`compile_diag`] renders
+/// each one and checks the place it names. These are the kinds no other test
+/// here reaches.
+#[test]
+pub fn every_compile_error_kind_renders_at_its_place() {
+    let cases = [
+        // The parser refuses an `int` zero divisor under most left operands;
+        // under a `bool` it is the compiler that does.
+        ("fn main() {\n    print(true / 0);\n}", "division_by_zero"),
+        ("fn main() {\n    print(true % 0);\n}", "modulo_by_zero"),
+        (
+            "import \"no_such_module_here.cdl\";\nfn main() {}",
+            "cannot_read_file",
+        ),
+        (
+            "struct Point { x: int, y: int }\nfn main() {\n    let p = Point { x: 1 };\n    print(p.x);\n}",
+            "struct_missing_fields",
+        ),
+        (
+            "host \"app\" { int rows(string); }\nfn main() { print(app::rows(\"a\", \"b\")); }",
+            "arity_mismatch",
+        ),
+        (
+            "fn main() { print(input(\"a\", \"b\")); }",
+            "arity_mismatch_range",
+        ),
+        (
+            "host \"app\" { int rows(string); }\nfn main() { print(app.rows(\"a\")); }",
+            "block_dot_call",
+        ),
+        (
+            "import \"std/json\";\nfn f(a: json::Nothing) -> int { return 1; }\nfn main() { print(f(1)); }",
+            "unknown_type_in_namespace",
+        ),
+        (
+            "fn main() {\n    let m = {\"a\": 1, \"a\": 2};\n    print(m);\n}",
+            "duplicate_map_key",
+        ),
+        (
+            "fn main() {\n    let k = \"a\";\n    let m = {k: 1};\n    print(m);\n}",
+            "map_key_not_literal",
+        ),
+        (
+            "enum Pair<T> { One(T) }\nfn main() {\n    let p = Pair { x: 1 };\n    print(p);\n}",
+            "unknown_struct",
+        ),
+    ];
+    for (src, code) in cases {
+        let d = compile_diag(src, "kinds.cdl")
+            .err()
+            .unwrap_or_else(|| panic!("expected a diagnostic for: {src}"));
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "for source: {src}");
+    }
 }
 
 #[test]
@@ -8942,6 +9070,45 @@ fn main() { broken(1); }";
     assert_eq!(d.code, "invalid_type");
 }
 
+/// A body whose every path ends in a `throw` or an `exit` never comes back, so
+/// it needs no `return` of the type it declares (#211).
+#[test]
+pub fn a_body_that_only_throws_fits_its_declared_return_type() {
+    assert_eq!(
+        run_output(
+            "
+            struct S { a: int }
+            impl S {
+                fn get(self) -> int {
+                    throw \"no_get\";
+                }
+            }
+            fn fail() -> bool {
+                throw \"nope\";
+            }
+            fn either(x: int) -> string {
+                if x > 0 {
+                    throw \"pos\";
+                } else {
+                    throw \"neg\";
+                }
+            }
+            fn main() {
+                try { print(fail()); } catch e { print(e); }
+                try { print(either(-1).len()); } catch e { print(e); }
+                try { print(S { a: 1 }.get() + 1); } catch e { print(e); }
+            }
+            "
+        ),
+        "nope\nneg\nno_get\n"
+    );
+    // A path that can still reach the end of the body hands back nothing.
+    let src = "fn f(x: int) -> int { if x > 0 { throw \"a\"; } }
+fn main() { print(f(1)); }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_eq!(d.code, "invalid_type", "{}", d.message);
+}
+
 #[test]
 pub fn method_return_annotation_is_checked() {
     let src = "struct Rect { w: int, h: int }
@@ -10322,6 +10489,29 @@ pub fn generic_struct_literal_without_type_arguments() {
         ",
         12.into()
     );
+}
+
+/// A field declared as a list or a map of a parameter pins it too, the way an
+/// enum variant's payload does (#218).
+#[test]
+pub fn generic_struct_literal_takes_a_parameter_through_a_list_or_map_field() {
+    let src = "
+        struct Stack<T> { items: T[] }
+        impl Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
+        struct Names<T> { by: {string: T}, count: int }
+        fn main() {
+            let s = Stack { items: [1, 2] };
+            print(s.top() + 1);
+            let held: string[] = [\"a\"];
+            let t = Stack { items: held };
+            print(t.top() + \"!\");
+            let n = Names { count: 1, by: {\"x\": 2.5} };
+            print(n.by[\"x\"] * 2.0);
+            let e = Stack { items: [] };
+            print(e.items.len());
+        }
+    ";
+    assert_eq!(run_output(src), "3\na!\n5.0\n0\n");
 }
 
 #[test]
@@ -14427,6 +14617,44 @@ pub fn a_function_through_an_any_is_called() {
         d.message,
         "Cannot read this function value as function with annotated parameters"
     );
+}
+
+/// A function handed out through a declared `fn(...)` return type is compiled
+/// at that signature, the way a `let` declared with one takes it: a bare
+/// parameter, an anonymous function and a closure all come back callable.
+#[test]
+pub fn a_function_returned_through_a_declared_fn_type_is_called() {
+    let src = "
+        fn twice(x) { return x * 2; }
+        fn named() -> fn(int) -> int { return twice; }
+        fn anon() -> fn(int) -> int { return fn(x) { return x + 1; }; }
+        fn adder(n: int) -> fn(int) -> int { return fn(x) => x + n; }
+        fn either(b: bool) -> fn(int) -> int {
+            if b { return fn(x) => x - 1; }
+            let f = fn(x) => x * 100;
+            return f;
+        }
+        fn short() -> fn(int) -> int => fn(x) => x * 3;
+        fn logger() -> fn(string) { return fn(s) { print(\"log \" + s); }; }
+        fn main() {
+            print(named()(4));
+            print(anon()(4));
+            let add5 = adder(5);
+            print(add5(1));
+            print(either(true)(1), either(false)(1));
+            print(short()(2));
+            logger()(\"hi\");
+        }
+    ";
+    assert_eq!(run_output(src), "8\n5\n6\n0\n100\n6\nlog hi\n");
+
+    let arity = "fn pick() -> fn(int) -> int { return fn(a, b) => a + b; }
+fn main() { print(pick()(1)); }";
+    let d = compile_diag(arity, "diag.cdl").unwrap_err();
+    assert_eq!(d.code, "invalid_type", "{}", d.message);
+    let body = "fn pick() -> fn(int) -> int { return fn(x) => \"s\" + x; }
+fn main() { print(pick()(1)); }";
+    assert!(compile_diag(body, "diag.cdl").is_err());
 }
 
 // ---------------------------------------------------------------------------

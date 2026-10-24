@@ -22,7 +22,7 @@ use crate::errors::green;
 use crate::errors::red;
 use crate::errors::throw_compiler_error;
 use ariadne::Label;
-use ariadne::Report;
+use candela_vm::errors::build_report;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::fmt::Write as _;
@@ -129,7 +129,7 @@ pub fn error_unknown_builtin_method(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -172,7 +172,7 @@ pub fn error_find_takes_a_function(span: Span, file_idx: u16, sources: &[Source]
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -213,7 +213,7 @@ pub fn error_propagate_operand(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -275,7 +275,7 @@ pub fn error_propagate_return(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -316,7 +316,7 @@ pub fn error_array_diff_types(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), array_span.into()),
             )
@@ -361,7 +361,7 @@ pub fn error_invalid_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -432,7 +432,7 @@ pub fn error_shift_count_out_of_range(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -461,7 +461,7 @@ pub fn error_division_by_zero(modulo: bool, span: Span, file_idx: u16, sources: 
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -507,7 +507,7 @@ pub fn error_cannot_push_type_to_array(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -556,7 +556,7 @@ pub fn error_type_not_callable(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -598,7 +598,7 @@ pub fn error_type_not_indexable(
             } else {
                 "indexed"
             };
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -637,36 +637,6 @@ pub fn error_type_not_indexable(
     );
 }
 
-#[cold]
-#[inline(never)]
-pub fn error_conditional_expression_without_else(
-    span: Span,
-    file_idx: u16,
-    sources: &[Source],
-) -> ! {
-    throw_compiler_error(
-        &|| {
-            let src = &sources[file_idx as usize];
-            Report::build(
-                ariadne::ReportKind::Error,
-                (src.filename.as_str(), span.into()),
-            )
-            .with_message("Invalid inline conditional expression")
-            .with_label(
-                Label::new((src.filename.as_str(), span.into()))
-                    .with_message(format_args!("Inline if blocks must have an else branch."))
-                    .with_color(ariadne::Color::Red),
-            )
-            .finish()
-        },
-        sources,
-        file_idx,
-        span,
-        "Inline if blocks must have an else branch",
-        "conditional_without_else",
-    );
-}
-
 /// Reports an import that reaches no file, listing the paths that were tried.
 ///
 /// An import resolves against the standard library, a package root, or the
@@ -690,7 +660,7 @@ pub fn error_cannot_read_file(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -717,7 +687,7 @@ pub fn error_cannot_load_dynlib(span: Span, file_idx: u16, sources: &[Source]) -
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -753,7 +723,7 @@ pub fn error_type_has_no_c_representation(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), symbol_span.into()),
             )
@@ -792,7 +762,7 @@ pub fn error_cannot_find_dynlib_symbol(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), dynlib_span.into()),
             )
@@ -836,7 +806,7 @@ pub fn error_map_diff_types(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), map_span.into()),
             )
@@ -877,7 +847,7 @@ pub fn error_non_bool_condition(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -915,7 +885,7 @@ pub fn error_missing_return(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -954,7 +924,7 @@ pub fn error_unknown_struct(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), struct_span.into()),
             )
@@ -989,7 +959,7 @@ pub fn error_struct_no_such_field(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), struct_field_span.into()),
             )
@@ -1032,7 +1002,7 @@ pub fn error_struct_base_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), base_span.into()),
             )
@@ -1067,7 +1037,7 @@ pub fn error_default_removed(file_idx: u16, span: Span, sources: &[Source]) -> !
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1110,7 +1080,7 @@ pub fn error_struct_default_signature(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1146,7 +1116,7 @@ pub fn error_struct_field_no_default(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1187,7 +1157,7 @@ pub fn error_struct_missing_fields(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), struct_literal_span.into()),
             )
@@ -1241,7 +1211,7 @@ pub fn check_args(
         throw_compiler_error(
             &|| {
                 let src = &sources[file_idx as usize];
-                let report = Report::build(
+                let report = build_report(
                     ariadne::ReportKind::Error,
                     (src.filename.as_str(), span.into()),
                 )
@@ -1311,7 +1281,7 @@ pub fn error_invalid_obj_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1356,7 +1326,7 @@ pub fn check_args_user_fn(
             &|| {
                 let src = &state.sources[file_idx as usize];
                 let fn_src = &state.sources[fn_decl_span.1 as usize];
-                let mut report = Report::build(
+                let mut report = build_report(
                     ariadne::ReportKind::Error,
                     (src.filename.as_str(), span.into()),
                 )
@@ -1429,7 +1399,7 @@ pub fn check_args_range(
         throw_compiler_error(
             &|| {
                 let src = &sources[file_idx as usize];
-                let mut report = Report::build(
+                let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()))
             .with_message("Invalid argument count")
@@ -1494,7 +1464,7 @@ pub fn error_struct_unknown_field(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), field_span.into()),
             )
@@ -1553,7 +1523,7 @@ pub fn error_struct_field_invalid_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), struct_field_span.into()),
             )
@@ -1623,7 +1593,7 @@ pub fn error_variable_type_mismatch(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), value_span.into()),
             )
@@ -1725,7 +1695,7 @@ pub fn error_unknown_variable(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1823,7 +1793,7 @@ pub fn error_unknown_function(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1874,7 +1844,7 @@ pub fn error_no_such_method(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1920,7 +1890,7 @@ pub fn error_method_without_receiver(
         &|| {
             let src = &sources[file_idx as usize];
             let decl_src = &sources[decl.1 as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -1975,7 +1945,7 @@ pub fn error_path_call_with_receiver(
         &|| {
             let src = &sources[file_idx as usize];
             let decl_src = &sources[decl.1 as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2021,7 +1991,7 @@ pub fn error_match_value_without_wildcard(span: Span, file_idx: u16, sources: &[
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2073,7 +2043,7 @@ pub fn error_pattern_bindings_differ(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2116,7 +2086,7 @@ pub fn error_block_dot_call(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2157,7 +2127,7 @@ pub fn error_enum(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2200,7 +2170,7 @@ pub fn error_operator_method(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2237,7 +2207,7 @@ pub fn error_type_test(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2281,7 +2251,7 @@ pub fn error_match_not_enum(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2331,7 +2301,7 @@ pub fn error_pattern_enum_mismatch(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2403,7 +2373,7 @@ pub fn error_unknown_namespace(
         throw_compiler_error(
             &|| {
                 let src = &sources[file_idx as usize];
-                Report::build(
+                build_report(
                     ariadne::ReportKind::Error,
                     (src.filename.as_str(), span.into()),
                 )
@@ -2431,7 +2401,7 @@ pub fn error_unknown_namespace(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2538,7 +2508,7 @@ pub fn error_unknown_function_in_namespace(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2591,7 +2561,7 @@ pub fn error_function_already_defined(
         &|| {
             let src = &sources[file_idx as usize];
             let fn_src = &sources[func.src_file as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), redeclaration_span.into()),
             )
@@ -2657,7 +2627,7 @@ pub fn error_op(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span_l.extend(span_r).into()),
             );
@@ -2809,7 +2779,7 @@ pub fn error_unknown_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2853,7 +2823,7 @@ pub fn error_unknown_type_with_namespace(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2894,7 +2864,7 @@ pub fn error_duplicate_map_key(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -2930,7 +2900,7 @@ pub fn error_not_literal_map_key(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), map_span.into()),
             )
@@ -2968,7 +2938,7 @@ pub fn error_function_arg_invalid_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), arg_span.into()),
             )
@@ -3017,7 +2987,7 @@ pub fn error_function_arg_invalid_type_multiple(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), arg_span.into()),
             )
@@ -3067,7 +3037,7 @@ pub fn error_range_invalid_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3114,7 +3084,7 @@ pub fn error_import_symbol_collision(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3165,7 +3135,7 @@ pub fn error_import_name_collision(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3216,7 +3186,7 @@ pub fn error_import_item_not_exported(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            let report = Report::build(
+            let report = build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3258,7 +3228,7 @@ pub fn error_type_arg_count(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3300,7 +3270,7 @@ pub fn error_type_args_on_plain_type(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3335,7 +3305,7 @@ pub fn error_type_args_on_plain_function(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3370,7 +3340,7 @@ pub fn error_type_args_on_builtin_method(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3411,7 +3381,7 @@ pub fn error_unknown_type_param(
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3441,7 +3411,7 @@ pub fn error_instantiation_depth(span: Span, file_idx: u16, name: &str, sources:
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )
@@ -3480,7 +3450,7 @@ pub fn error_no_main(sources: &[Source]) -> ! {
     throw_compiler_error(
         &|| {
             let src = &sources[0];
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (src.filename.as_str(), span.into()),
             )

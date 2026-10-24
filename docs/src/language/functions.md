@@ -369,7 +369,8 @@ and `reduce` are ordinary calls; see [Collections](collections.md).
 `fn(A, B) -> R` is the type of a position that holds a function taking an `A`
 and a `B` and returning an `R`. Leave the arrow off for one that returns
 nothing: `fn()` and `fn(int)`. Write it wherever a type goes: on a parameter, on
-a struct field, as a type argument, or as the element type of a list.
+a struct field, as a return type, as a type argument, or as the element type of
+a list.
 
 ```rust
 fn apply(f: fn(int) -> int, x: int) -> int {
@@ -391,6 +392,20 @@ bound to a variable, or the name of a declared function. The declaration is what
 the body is compiled against, so a function whose body does not work at those
 parameter types, or hands back something else, is reported where it was written
 rather than where it is called.
+
+A function that hands back a function says so the same way, and the closure it
+returns keeps what it captured:
+
+```rust
+fn adder(n: int) -> fn(int) -> int {
+    return fn(x) => x + n;
+}
+
+fn main() {
+    let add5 = adder(5);
+    print(add5(1));
+}
+```
 
 A list, a map or a variable that holds more than one function needs no
 annotation. Each value carries which function it is, so the call goes to the one

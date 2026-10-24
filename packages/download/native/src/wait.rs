@@ -160,6 +160,12 @@ impl Transport for WaitTransport {
     fn is_open(&mut self) -> bool {
         self.inner.is_open()
     }
+
+    /// ureq refuses an `https` request on a transport that is not TLS, so a
+    /// wrapper has to say what it wraps.
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +268,77 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen[0].after, Duration::from_millis(100));
         assert_eq!(seen[0].reason, Timeout::Global);
+    }
+
+    /// What [`Secure`] answers a request with.
+    const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+
+    /// A TLS connection to a server that answers with [`REPLY`], as far as the
+    /// transport above it can tell. The reply holds its whole body, so it is
+    /// waited for once.
+    #[derive(Debug)]
+    struct Secure {
+        buffers: LazyBuffers,
+    }
+
+    impl Transport for Secure {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
+            self.buffers.input_append_buf()[..REPLY.len()].copy_from_slice(REPLY);
+            self.buffers.input_appended(REPLY.len());
+            Ok(true)
+        }
+        fn is_open(&mut self) -> bool {
+            true
+        }
+        fn is_tls(&self) -> bool {
+            true
+        }
+    }
+
+    /// Opens a [`Secure`] connection where the default chain would open a
+    /// socket and run a handshake over it.
+    #[derive(Debug)]
+    struct SecureConnector;
+
+    impl Connector<()> for SecureConnector {
+        type Out = Box<dyn Transport>;
+
+        fn connect(
+            &self,
+            _: &ConnectionDetails,
+            _: Option<()>,
+        ) -> Result<Option<Self::Out>, ureq::Error> {
+            Ok(Some(Box::new(Secure {
+                buffers: LazyBuffers::new(4096, 4096),
+            })))
+        }
+    }
+
+    /// ureq refuses an `https` request on a transport that is not TLS, and the
+    /// wait transport is the outermost one, so it is the one asked. An `https`
+    /// download goes through it to the server and reads the reply.
+    #[test]
+    fn an_https_request_runs_through_the_transport() {
+        let agent = ureq::Agent::with_parts(
+            ureq::Agent::config_builder().build(),
+            SecureConnector.chain(WaitConnector {
+                limit: Some(std::time::Duration::from_secs(5)),
+                control: Control::default(),
+            }),
+            ureq::unversioned::resolver::DefaultResolver::default(),
+        );
+        let mut reply = agent
+            .get("https://127.0.0.1/file")
+            .call()
+            .expect("an https request is let through");
+        assert_eq!(reply.status().as_u16(), 200);
+        assert_eq!(reply.body_mut().read_to_string().unwrap(), "ok");
     }
 
     /// A server that never sends: every wait runs its whole length and ends
