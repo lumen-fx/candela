@@ -533,14 +533,16 @@ impl Generics {
     /// The type parameters of a struct template and the type each field is
     /// declared with. A literal written without type arguments takes each
     /// parameter from the values in the fields whose types mention it.
+    ///
+    /// `template_idx` is one [`find_template`] answered. A literal that names
+    /// an enum template reads no fields, and the struct lookup after it
+    /// reports the name as no struct.
     #[must_use]
     pub fn struct_params_and_fields(
         &self,
         template_idx: usize,
     ) -> (Vec<SmolStr>, Vec<(SmolStr, TypeExpr)>) {
-        let Some(template) = self.templates.get(template_idx) else {
-            return (Vec::new(), Vec::new());
-        };
+        let template = &self.templates[template_idx];
         let fields = match &template.body {
             TemplateBody::Struct(fields) => fields
                 .iter()

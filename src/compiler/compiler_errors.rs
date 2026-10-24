@@ -637,36 +637,6 @@ pub fn error_type_not_indexable(
     );
 }
 
-#[cold]
-#[inline(never)]
-pub fn error_conditional_expression_without_else(
-    span: Span,
-    file_idx: u16,
-    sources: &[Source],
-) -> ! {
-    throw_compiler_error(
-        &|| {
-            let src = &sources[file_idx as usize];
-            build_report(
-                ariadne::ReportKind::Error,
-                (src.filename.as_str(), span.into()),
-            )
-            .with_message("Invalid inline conditional expression")
-            .with_label(
-                Label::new((src.filename.as_str(), span.into()))
-                    .with_message(format_args!("Inline if blocks must have an else branch."))
-                    .with_color(ariadne::Color::Red),
-            )
-            .finish()
-        },
-        sources,
-        file_idx,
-        span,
-        "Inline if blocks must have an else branch",
-        "conditional_without_else",
-    );
-}
-
 /// Reports an import that reaches no file, listing the paths that were tried.
 ///
 /// An import resolves against the standard library, a package root, or the
