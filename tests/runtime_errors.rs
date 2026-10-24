@@ -1333,3 +1333,26 @@ fn an_index_report_counts_characters() {
         "the report names the position and the character count: {said}"
     );
 }
+
+/// A variable written more than once gets its first value straight into its
+/// own register, and the error that value raises is still reported where it
+/// was written, in a program and in the prelude (#219).
+#[test]
+fn the_first_value_of_a_reassigned_variable_reports_its_own_place() {
+    let own = refuse(
+        "first_value_reassigned",
+        "fn total(xs) {\n    let t = xs[0];\n    t = t + 1;\n    return t;\n}\n\nfn main() {\n    let e: int[] = [];\n    print(total(e));\n}\n",
+    );
+    assert!(
+        own.contains("first_value_reassigned.cdl:2:13"),
+        "the report points at xs[0], got:\n{own}"
+    );
+    let prelude = refuse(
+        "empty_sum",
+        "fn main() {\n    let e: int[] = [];\n    print(e.sum());\n}\n",
+    );
+    assert!(
+        prelude.contains("list.cdl:") && !prelude.contains("empty_sum.cdl:1:1"),
+        "the report points into the list module, got:\n{prelude}"
+    );
+}

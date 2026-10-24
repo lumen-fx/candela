@@ -4754,7 +4754,7 @@ fn write_scratch_into(
         && !v.iter().any(|var| var.register_id == scratch)
         && !state.const_registers.values().any(|&reg| reg == scratch)
         && !state.reserved_registers.contains(&scratch);
-    if !fresh || !move_to_id(&mut output[from..], dest) {
+    if !fresh || !move_to_id(&mut output[from..], dest, state.instr_src) {
         return false;
     }
     state.free_reg(scratch, v);
@@ -4877,7 +4877,7 @@ fn compile_var_assignment(
         .compile(v, ctx, state, output, Some(id), false, true)
         .unwrap_id();
     if output.len() != output_len {
-        if !move_to_id(output, id) && obj_id != id {
+        if !move_to_id(output, id, state.instr_src) && obj_id != id {
             output.push(Instr::Mov(obj_id, id));
         }
     } else if state.const_registers.values().any(|&v| v == obj_id) {
