@@ -13,6 +13,18 @@ use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 
+/// Starts a report on `span`. Every span in candela is a byte range into the
+/// source, the way the lexer produces it. ariadne reads spans as character
+/// offsets unless told otherwise, which would put each label after the first
+/// non-ASCII character in a file on the wrong column.
+pub fn build_report<'a, S: ariadne::Span>(
+    kind: ReportKind<'a>,
+    span: S,
+) -> ariadne::ReportBuilder<'a, S> {
+    Report::build(kind, span)
+        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+}
+
 /// A structured compile/runtime error, produced instead of printing + exiting
 /// whenever a diagnostic sink is installed (see `collect_diagnostic`).
 ///
@@ -575,7 +587,7 @@ impl RuntimeError {
         }
         let mut out = crate::captured_output::stderr();
         let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
-        let report = Report::build(ReportKind::Error, (src.filename.as_str(), span.clone()))
+        let report = build_report(ReportKind::Error, (src.filename.as_str(), span.clone()))
             .with_label(
                 Label::new((src.filename.as_str(), span))
                     .with_message(self.message.as_str())
