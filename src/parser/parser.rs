@@ -35,6 +35,7 @@ use blocks::parse_match;
 use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
 use blocks::parse_while_block;
+use candela_vm::errors::build_report;
 use lexer::LexErr;
 use lexer::MacroToken;
 use lexer::parse_string;
@@ -338,7 +339,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     }
     let mut out = candela_vm::captured_output::stderr();
     let _ = writeln!(out, "{RED}CANDELA ERROR{RESET}");
-    let report = Report::build(
+    let report = build_report(
         ReportKind::Error,
         (src.filename.as_str(), (start as usize)..(end as usize)),
     )
@@ -961,7 +962,7 @@ fn error_unclosed_delimiter(
     };
     parser.throw_parser_err(
         || {
-            let mut report = Report::build(
+            let mut report = build_report(
                 ariadne::ReportKind::Error,
                 (parser.ctx.src.filename.as_str(), opener_span.into()),
             )
@@ -1012,7 +1013,7 @@ fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
     let span: Span = (parser.last_token_end as u32, parser.last_token_end as u32).into();
     parser.throw_parser_err(
         || {
-            Report::build(
+            build_report(
                 ariadne::ReportKind::Error,
                 (
                     parser.ctx.src.filename.as_str(),

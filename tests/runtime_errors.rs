@@ -619,6 +619,51 @@ fn main() {
 
 /// An unclosed delimiter is reported against the opener, not the end of the
 /// file, so a long body does not send the reader looking at the wrong line.
+/// Spans are byte offsets. A report read them as character offsets, so every
+/// error after the first non-ASCII character in a file pointed past the code it
+/// was about, often onto another line.
+#[test]
+fn a_report_after_non_ascii_text_points_at_the_code() {
+    let compile = refuse(
+        "after_accents_compile",
+        r#"fn main() {
+    let s = "héllo wörld";
+    let x = 1 + 0.5;
+    print(s, x);
+}
+"#,
+    );
+    assert!(
+        compile.contains("after_accents_compile.cdl:3:13"),
+        "the compile error points at the addition, got:\n{compile}"
+    );
+    let parse = refuse(
+        "after_accents_parse",
+        r#"fn main() {
+    let s = "ñññ";
+    print(s)
+}
+"#,
+    );
+    assert!(
+        parse.contains("after_accents_parse.cdl:3:13"),
+        "the parse error points past the call, got:\n{parse}"
+    );
+    let runtime = refuse(
+        "after_accents_runtime",
+        r#"fn main() {
+    let s = "日本語";
+    let xs = [1];
+    print(s, xs[5]);
+}
+"#,
+    );
+    assert!(
+        runtime.contains("after_accents_runtime.cdl:4:14"),
+        "the runtime error points at the index, got:\n{runtime}"
+    );
+}
+
 #[test]
 fn an_unclosed_delimiter_is_reported_against_its_opener() {
     let report = refuse(

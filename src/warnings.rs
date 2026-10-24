@@ -14,9 +14,9 @@ use crate::Diagnostic;
 use crate::rt::Source;
 use ariadne::Color;
 use ariadne::Label;
-use ariadne::Report;
 use ariadne::ReportKind;
 use candela_vm::captured_output;
+use candela_vm::errors::build_report;
 use std::cell::RefCell;
 
 thread_local! {
@@ -69,7 +69,7 @@ pub fn emit_warning(sources: &[Source], title: &str, warning: Diagnostic) {
         .find(|source| source.filename == warning.filename)
         .map_or("", |source| source.contents.as_str());
     let filename = warning.filename.as_str();
-    let report = Report::build(ReportKind::Warning, (filename, warning.span.clone()))
+    let report = build_report(ReportKind::Warning, (filename, warning.span.clone()))
         .with_message(title)
         .with_label(
             Label::new((filename, warning.span.clone()))
