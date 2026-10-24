@@ -617,8 +617,6 @@ fn main() {
     );
 }
 
-/// An unclosed delimiter is reported against the opener, not the end of the
-/// file, so a long body does not send the reader looking at the wrong line.
 /// Spans are byte offsets. A report read them as character offsets, so every
 /// error after the first non-ASCII character in a file pointed past the code it
 /// was about, often onto another line.
@@ -664,6 +662,8 @@ fn a_report_after_non_ascii_text_points_at_the_code() {
     );
 }
 
+/// An unclosed delimiter is reported against the opener, not the end of the
+/// file, so a long body does not send the reader looking at the wrong line.
 #[test]
 fn an_unclosed_delimiter_is_reported_against_its_opener() {
     let report = refuse(

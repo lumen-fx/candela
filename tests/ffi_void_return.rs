@@ -85,3 +85,71 @@ fn a_type_with_no_c_shape_is_a_compile_error() {
     }
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A comment of multi-byte text, put first in a program so that every byte
+/// offset after it differs from the character offset of the same spot.
+const WIDE_LINE: &str = "// \u{fc}n\u{ef}c\u{f6}d\u{e9} \u{2713} \u{65e5}\u{672c}\u{8a9e}\n";
+
+/// Drops the SGR escapes a report is coloured with.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        for escape in chars.by_ref() {
+            if escape.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// A signature the library cannot serve is reported the way the command line
+/// shows it, at the signature, even with multi-byte text earlier in the file:
+/// a type with no C shape and a symbol the library does not export.
+#[test]
+fn a_refused_signature_is_reported_at_it() {
+    let root = ffi_fixture::scratch_dir("void", "report");
+    let _library = ffi_fixture::build_cdylib(&root, "voidret", FIXTURE);
+    let script = root.join("app.cdl");
+
+    for (signature, place, label) in [
+        (
+            "bool stored();",
+            "app.cdl:3:10",
+            "stored takes or returns bool, which has no C representation",
+        ),
+        (
+            "int missing();",
+            "app.cdl:2:1",
+            "Cannot find symbol missing in this dynamic library",
+        ),
+    ] {
+        let src =
+            format!("{WIDE_LINE}dylib \"voidret\" {{\n    {signature}\n}}\n\nfn main() {{}}\n");
+        std::fs::write(&script, &src).expect("write the program");
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_candela"))
+            .arg(&script)
+            .output()
+            .expect("candela binary runs");
+        assert!(!output.status.success(), "{signature} is refused");
+        let report = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+        assert!(
+            report.contains(place),
+            "{signature} names {place}:\n{report}"
+        );
+        assert!(
+            report.contains(label),
+            "{signature} says {label}:\n{report}"
+        );
+        assert!(
+            report.contains(&format!("3 \u{2502}     {signature}")),
+            "{signature} shows the signature:\n{report}"
+        );
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
