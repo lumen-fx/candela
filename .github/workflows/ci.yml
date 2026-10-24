@@ -122,6 +122,20 @@ jobs:
         run: cargo build --workspace --features native --verbose
       - if: needs.changes.outputs.rust == 'true'
         run: cargo test --workspace --features native --verbose --no-fail-fast
+      # The release build gathers its PGO profile by running an instrumented
+      # `candela`. If a C dependency (mimalloc, libffi) is compiled with the
+      # profile flag too, Apple clang writes profile records in its own LLVM's
+      # format, rustc's profiler runtime misreads them, and the instrumented
+      # binary crashes writing the profile at exit. cc 1.8 stopped passing the
+      # flag on; this run catches it coming back before the nightly does.
+      - name: Run a PGO-instrumented candela
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'macOS'
+        env:
+          RUSTFLAGS: -Cprofile-generate=${{ runner.temp }}/pgo-check
+          CARGO_TARGET_DIR: target/pgo-check
+        run: |
+          cargo build --bin candela
+          target/pgo-check/debug/candela pgo/pgo-fizzbuzz.cdl
 
   test-embed:
     name: test embed
