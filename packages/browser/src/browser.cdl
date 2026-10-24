@@ -71,9 +71,7 @@ fn answer_source<T>(read: fn(any) -> T, on_done: fn(Result<T, string>)) -> int {
 }
 
 // Each function has a browser half under `@cfg(web)` and, under
-// `@cfg(not(web))`, a desktop half that raises `browser_only`. A desktop half
-// that declares a return type returns a value after the throw, which never
-// runs; the compiler wants a value of that type on the way out.
+// `@cfg(not(web))`, a desktop half that raises `browser_only`.
 
 /// Opens a popup window under `name`, with `window.open` features such as
 /// `"width=500,height=600"`. False when the browser blocked it.
@@ -82,7 +80,6 @@ fn open_popup(url: string, name: string, features: string) -> bool => browser::c
 @cfg(not(web))
 fn open_popup(url: string, name: string, features: string) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Closes the popup opened under `name`. False when there is none.
@@ -91,7 +88,6 @@ fn close_popup(name: string) -> bool => browser::candela_browser_close_popup(nam
 @cfg(not(web))
 fn close_popup(name: string) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Sends `data` to `opener`, `parent` or a popup by name, for a window at
@@ -101,7 +97,6 @@ fn post_message(target: string, data: any, origin: string) -> bool => browser::c
 @cfg(not(web))
 fn post_message(target: string, data: any, origin: string) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Closes this window, which the browser allows for a window a script opened.
@@ -132,7 +127,6 @@ fn can_share(data: {string: any}) -> bool => browser::candela_browser_can_share(
 @cfg(not(web))
 fn can_share(data: {string: any}) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Saves `text` as a file through the browser's download.
@@ -161,7 +155,6 @@ fn match_media(query: string) -> bool => browser::candela_browser_match_media(qu
 @cfg(not(web))
 fn match_media(query: string) -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Calls `on_change` with whether `query` matches each time that changes.
@@ -228,7 +221,6 @@ fn is_fullscreen() -> bool => browser::candela_browser_is_fullscreen();
 @cfg(not(web))
 fn is_fullscreen() -> bool {
     throw "browser_only";
-    return false;
 }
 
 /// Calls `handler` with every message another window posts to this one.

@@ -8942,6 +8942,45 @@ fn main() { broken(1); }";
     assert_eq!(d.code, "invalid_type");
 }
 
+/// A body whose every path ends in a `throw` or an `exit` never comes back, so
+/// it needs no `return` of the type it declares (#211).
+#[test]
+pub fn a_body_that_only_throws_fits_its_declared_return_type() {
+    assert_eq!(
+        run_output(
+            "
+            struct S { a: int }
+            impl S {
+                fn get(self) -> int {
+                    throw \"no_get\";
+                }
+            }
+            fn fail() -> bool {
+                throw \"nope\";
+            }
+            fn either(x: int) -> string {
+                if x > 0 {
+                    throw \"pos\";
+                } else {
+                    throw \"neg\";
+                }
+            }
+            fn main() {
+                try { print(fail()); } catch e { print(e); }
+                try { print(either(-1).len()); } catch e { print(e); }
+                try { print(S { a: 1 }.get() + 1); } catch e { print(e); }
+            }
+            "
+        ),
+        "nope\nneg\nno_get\n"
+    );
+    // A path that can still reach the end of the body hands back nothing.
+    let src = "fn f(x: int) -> int { if x > 0 { throw \"a\"; } }
+fn main() { print(f(1)); }";
+    let d = compile_diag(src, "diag.cdl").unwrap_err();
+    assert_eq!(d.code, "invalid_type", "{}", d.message);
+}
+
 #[test]
 pub fn method_return_annotation_is_checked() {
     let src = "struct Rect { w: int, h: int }

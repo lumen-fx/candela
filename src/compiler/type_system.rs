@@ -2894,7 +2894,7 @@ pub fn track_returns(
     state: &mut State<'_>,
     fn_name: &str,
     fn_id: usize,
-) -> Vec<DataType> {
+) -> FnReturnFlow {
     // A `?` the walk types is a return of the `None` or the `Err` its operand
     // can hold; see `Expr::Propagate`.
     state.propagations.push(Vec::new());
@@ -2921,12 +2921,37 @@ pub fn track_returns(
         let declared = (!func.name.starts_with(ANON_FN_PREFIX)).then_some(func.name.as_str());
         error_missing_return(declared, func.name_span, ctx.file_idx, state.sources);
     }
-    flow.types
+    flow
 }
 
-struct FnReturnFlow {
+/// The types a body hands back, and whether every path through it ends in a
+/// `return` or in a statement that never comes back.
+pub struct FnReturnFlow {
     types: Vec<DataType>,
     always_returns: bool,
+}
+
+impl FnReturnFlow {
+    /// The one type a call to the body hands back.
+    ///
+    /// No tracked type means no `return` writes a value the walk could type:
+    /// either nothing is returned at all, or every returned value was itself
+    /// dynamic (the walk records no type for `Unknown`). A function handing
+    /// back an `any` payload is dynamic, not null. A body that returns nothing
+    /// and never reaches its end, one that only throws or exits, hands nothing
+    /// back either, so it fits whatever type it declares.
+    #[must_use]
+    pub fn body_type(self, content: &[Expr]) -> DataType {
+        if !self.types.is_empty() {
+            // If function returns anything, check if it returns the same thing each time
+            return DataType::Union(Box::from(self.types)).check_poly();
+        }
+        if check_if_returns_void(content) && !self.always_returns {
+            DataType::Null
+        } else {
+            DataType::Unknown
+        }
+    }
 }
 
 fn track_scoped_returns(
@@ -3395,27 +3420,14 @@ pub fn infer_user_fn_return_type(
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
-    let fn_type = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
+    let flow = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
     state.generics.pop_bindings();
 
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
 
     v.truncate(v_len_before_args);
 
-    let body_type = if fn_type.is_empty() {
-        // No tracked type means either no value is returned at all, or every
-        // returned value was itself dynamic (return-type tracking records no
-        // type for `Unknown`). A function handing back an `any` payload is
-        // dynamic, not null.
-        if check_if_returns_void(&fn_code) {
-            DataType::Null
-        } else {
-            DataType::Unknown
-        }
-    } else {
-        // If function returns anything, check if it returns the same thing each time
-        DataType::Union(Box::from(fn_type)).check_poly()
-    };
+    let body_type = flow.body_type(&fn_code);
     let to_return = call_return_type(declared_return, body_type);
 
     // Cache the result
