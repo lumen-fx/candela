@@ -1,8 +1,8 @@
 [package]
 name = "archive"
-version = "0.1.6"
+version = "0.1.7"
 description = "Unpack zip, tar and tar.gz archives off the program's thread, reported as events"
 entry = "src/archive.cdl"
-candela = ">=0.1.6"
+candela = ">=0.1.7"
 
 [dependencies]

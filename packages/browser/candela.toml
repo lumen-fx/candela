@@ -1,9 +1,9 @@
 [package]
 name = "browser"
-version = "0.1.6"
+version = "0.1.7"
 description = "What a browser offers a page outside its document: popups, messages, sharing, downloads, media queries, a file picker, fullscreen"
 entry = "src/browser.cdl"
-candela = ">=0.1.6"
+candela = ">=0.1.7"
 
 [dependencies]
 

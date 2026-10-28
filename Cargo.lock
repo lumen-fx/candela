@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ariadne",
  "getrandom 0.4.3",
