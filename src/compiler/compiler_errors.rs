@@ -2630,7 +2630,35 @@ pub fn error_op(
     // derived operators have none of their own: `>` names `<`, because that is
     // what a type writes to get both.
     let receiver = if unary_shape { r } else { l };
+    // An `Option` or a `Result` in arithmetic is almost always a lookup whose
+    // value was meant, so the report says how to take the value out rather
+    // than how to give the wrapper an operator.
+    let wrapper = [l, r].into_iter().find_map(|side| match side {
+        DataType::Enum(id) => {
+            let variants: Vec<&str> = types.enums[*id as usize]
+                .variants
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect();
+            match variants.as_slice() {
+                ["Some", "None"] | ["None", "Some"] => Some(("Option", side)),
+                ["Ok", "Err"] | ["Err", "Ok"] => Some(("Result", side)),
+                _ => None,
+            }
+        }
+        _ => None,
+    });
     let define_it = operator_method(op).and_then(|(method, _)| {
+        if let Some((kind, side)) = wrapper {
+            return Some(format!(
+                "{} is an {kind} around the value. Take the value out first with {}, {}, {} or a {}",
+                blue(types.of(side)),
+                blue("?"),
+                blue(".unwrap()"),
+                blue(".unwrap_or(default)"),
+                blue("match"),
+            ));
+        }
         if !matches!(receiver, DataType::Struct(_) | DataType::Enum(_)) {
             return None;
         }
