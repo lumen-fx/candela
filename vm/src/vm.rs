@@ -166,8 +166,8 @@ struct PooledStr {
 /// string whose character count equals its byte length holds nothing but
 /// single-byte characters, and on it a character position is a byte position;
 /// that is the route indexing and slicing take. The cursor remembers where the
-/// last walk stopped, so stepping through a multi-byte string forwards resumes
-/// there instead of restarting at its first byte.
+/// last walk stopped, so stepping through a multi-byte string in either
+/// direction resumes there instead of restarting at its first byte.
 ///
 /// The pool also carries the collector's marks for its strings. Interning a
 /// string hands out a slot it found by its text, and the slot it finds has to
@@ -315,25 +315,64 @@ impl StringPool {
     /// The byte offset character `char_idx` starts at. The string has at least
     /// `char_idx` characters; at exactly that many the answer is its byte
     /// length, which is what a slice bound on the end of the string asks for.
+    ///
+    /// The walk starts from whichever known place is nearest: the start, the
+    /// cursor, or the end, whose position is the remembered count. Stepping
+    /// back through a string therefore costs a step per character, as stepping
+    /// forwards does.
     #[must_use]
     pub fn byte_offset(&self, id: usize, char_idx: usize) -> usize {
-        let bytes = self[id].as_bytes();
         let cursor = self.cursor.get();
-        let (mut at_char, mut at_byte) =
-            if cursor.id as usize == id && cursor.char_idx as usize <= char_idx {
-                (cursor.char_idx as usize, cursor.byte_off as usize)
-            } else {
-                (0, 0)
-            };
+        if cursor.id as usize == id && cursor.char_idx as usize <= char_idx {
+            let bytes = self[id].as_bytes();
+            let (mut at_char, mut at_byte) = (cursor.char_idx as usize, cursor.byte_off as usize);
+            while at_char < char_idx {
+                at_byte += utf8_width(bytes[at_byte]);
+                at_char += 1;
+            }
+            self.set_cursor(id, at_char, at_byte);
+            return at_byte;
+        }
+        self.byte_offset_from_nearest(id, char_idx, cursor)
+    }
+    #[inline(always)]
+    fn set_cursor(&self, id: usize, char_idx: usize, byte_off: usize) {
+        self.cursor.set(StrCursor {
+            id: id as u32,
+            char_idx: char_idx as u32,
+            byte_off: byte_off as u32,
+        });
+    }
+    /// [`Self::byte_offset`] when the cursor is not on the way to `char_idx`:
+    /// the walk starts from the start, the cursor behind it, or the end,
+    /// whichever is nearest. Out of line so the forward step through a string
+    /// stays small.
+    #[inline(never)]
+    fn byte_offset_from_nearest(&self, id: usize, char_idx: usize, cursor: StrCursor) -> usize {
+        let bytes = self[id].as_bytes();
+        let mut start = (0, 0);
+        if cursor.id as usize == id && cursor.char_idx as usize - char_idx < char_idx {
+            start = (cursor.char_idx as usize, cursor.byte_off as usize);
+        }
+        let end_char = self.char_len(id);
+        if end_char - char_idx < start.0.abs_diff(char_idx) {
+            start = (end_char, bytes.len());
+        }
+        let (mut at_char, mut at_byte) = start;
         while at_char < char_idx {
             at_byte += utf8_width(bytes[at_byte]);
             at_char += 1;
         }
-        self.cursor.set(StrCursor {
-            id: id as u32,
-            char_idx: at_char as u32,
-            byte_off: at_byte as u32,
-        });
+        while at_char > char_idx {
+            // A continuation byte matches `0b10xx_xxxx`; the character starts
+            // at the first byte before it that does not.
+            at_byte -= 1;
+            while bytes[at_byte] & 0xC0 == 0x80 {
+                at_byte -= 1;
+            }
+            at_char -= 1;
+        }
+        self.set_cursor(id, at_char, at_byte);
         at_byte
     }
 }
