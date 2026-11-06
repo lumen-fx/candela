@@ -539,6 +539,26 @@ pub fn error_cannot_push_type_to_array(
     );
 }
 
+/// Raised where a call names a variable rather than a function. A variable
+/// that held a function would have been called through, so this one holds a
+/// value of another type and the report names it; any other name is unknown.
+#[inline(never)]
+#[cold]
+pub fn error_unknown_or_uncallable(
+    fn_name: &str,
+    span: Span,
+    v: &[Variable],
+    scope: &Namespace,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    if let Some(var) = v.iter().rev().find(|var| var.name == fn_name) {
+        error_type_not_callable(&var.var_type, span, file_idx, sources, types);
+    }
+    error_unknown_function(fn_name, span, scope, file_idx, sources);
+}
+
 /// Raised where a call is written on an expression that holds no function.
 ///
 /// A closure's type names the function it is, so a callee whose type is
