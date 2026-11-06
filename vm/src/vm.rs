@@ -663,6 +663,23 @@ fn frame_room(m: &mut Machine<'_>, i: usize, regs: Regs) -> Option<usize> {
 /// the bytes the list grew by. Out of line, so a push that has room pays one
 /// test.
 #[cold]
+/// `base` raised to `exp`, wrapping on overflow the way every int operation
+/// does. The exponent is a full 64-bit count, so a large one is not cut down
+/// to a smaller power first. The parser folds a pair of literals with it too.
+#[inline(never)]
+#[must_use]
+pub const fn wrapping_pow(mut base: i64, mut exp: u64) -> i64 {
+    let mut acc: i64 = 1;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            acc = acc.wrapping_mul(base);
+        }
+        base = base.wrapping_mul(base);
+        exp >>= 1;
+    }
+    acc
+}
+
 #[inline(never)]
 fn grow_list(list: &mut Vec<Data>, gc: &mut GcState) {
     let before = list.capacity();
@@ -1413,13 +1430,13 @@ fn run(m: &mut Machine<'_>, start: usize) -> usize {
                 regs[dest] = (regs[o1].as_float() + regs[o2].as_float()).into();
             }
             Instr::AddInt(o1, o2, dest) => {
-                regs[dest] = (regs[o1].as_int() + regs[o2].as_int()).into();
+                regs[dest] = regs[o1].as_int().wrapping_add(regs[o2].as_int()).into();
             }
             Instr::MulFloat(o1, o2, dest) => {
                 regs[dest] = (regs[o1].as_float() * regs[o2].as_float()).into();
             }
             Instr::MulInt(o1, o2, dest) => {
-                regs[dest] = (regs[o1].as_int() * regs[o2].as_int()).into();
+                regs[dest] = regs[o1].as_int().wrapping_mul(regs[o2].as_int()).into();
             }
             Instr::DivFloat(o1, o2, dest) => {
                 regs[dest] = (regs[o1].as_float() / regs[o2].as_float()).into();
@@ -1428,7 +1445,7 @@ fn run(m: &mut Machine<'_>, start: usize) -> usize {
                 regs[dest] = (regs[o1].as_float() - regs[o2].as_float()).into();
             }
             Instr::SubInt(o1, o2, dest) => {
-                regs[dest] = (regs[o1].as_int() - regs[o2].as_int()).into();
+                regs[dest] = regs[o1].as_int().wrapping_sub(regs[o2].as_int()).into();
             }
             Instr::IncInt(reg) => regs[reg].inc_int(),
             Instr::DecInt(reg) => regs[reg].dec_int(),
@@ -1502,7 +1519,7 @@ fn run(m: &mut Machine<'_>, start: usize) -> usize {
                 }
             }
             Instr::AddIntImm(src, imm, dest) => {
-                regs[dest] = (regs[src].as_int() + i64::from(imm)).into();
+                regs[dest] = regs[src].as_int().wrapping_add(i64::from(imm)).into();
             }
             Instr::InfIntJmpBack(o1, o2, jump_size) => {
                 if regs[o1].as_int() < regs[o2].as_int() {
@@ -1559,7 +1576,7 @@ fn run(m: &mut Machine<'_>, start: usize) -> usize {
                 regs[dest] = (-regs[tgt].as_float()).into();
             }
             Instr::NegInt(tgt, dest) => {
-                regs[dest] = (-regs[tgt].as_int()).into();
+                regs[dest] = regs[tgt].as_int().wrapping_neg().into();
             }
             Instr::StoreFuncArg(id) => m.args.push(id),
             // Each store into the heap marks the value it overwrites while the
@@ -2571,7 +2588,9 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 if b == 0 {
                     error_with_catch!(ErrType::DivisionByZero);
                 }
-                regs[dest] = (regs[o1].as_int() / b).into();
+                // The one quotient past the range, the lowest int over -1, wraps
+                // back to itself the way every other int operation wraps.
+                regs[dest] = regs[o1].as_int().wrapping_div(b).into();
             }
             Instr::ModFloat(o1, o2, dest) => {
                 regs[dest] = (regs[o1].as_float() % regs[o2].as_float()).into();
@@ -2581,7 +2600,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 if b == 0 {
                     error_with_catch!(ErrType::ModuloByZero);
                 }
-                regs[dest] = (regs[o1].as_int() % b).into();
+                regs[dest] = regs[o1].as_int().wrapping_rem(b).into();
             }
             Instr::PowFloat(o1, o2, dest) => {
                 regs[dest] = (regs[o1].as_float().powf(regs[o2].as_float())).into();
@@ -2591,7 +2610,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 if exp < 0 {
                     error_with_catch!(ErrType::NegativeExponent(exp));
                 }
-                regs[dest] = (regs[o1].as_int().pow(exp as u32)).into();
+                regs[dest] = wrapping_pow(regs[o1].as_int(), exp.cast_unsigned()).into();
             }
             Instr::BitAndInt(o1, o2, dest) => {
                 regs[dest] = (regs[o1].as_int() & regs[o2].as_int()).into();
@@ -3004,7 +3023,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 regs[dest] = if tgt.is_float() {
                     tgt.as_float().abs().into()
                 } else {
-                    tgt.as_int().abs().into()
+                    tgt.as_int().wrapping_abs().into()
                 }
             }
             Instr::CallLibFunc(LibFunc::Reverse, tgt, dest) => {
