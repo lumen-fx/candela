@@ -15856,6 +15856,37 @@ pub fn let_annotation_types_the_variable() {
     assert_eq!(run_output(src), "4\n1\n2\ns\n3\n8\n5\n3\n");
 }
 
+/// A list or map literal written at a call widens into a parameter that names
+/// `any` inside it, the way it does into a declared `let`, and the body sees
+/// the declared type. A variable the caller keeps is still held to the strict
+/// rule.
+#[test]
+pub fn a_literal_argument_widens_into_an_any_parameter() {
+    let src = r#"
+        fn count(xs: any[]) -> int => xs.len();
+        fn widen(xs: any[]) -> any[] {
+            xs.push("s");
+            return xs;
+        }
+        fn size(m: {string: any}) -> int => m.len();
+        struct Bag { n: int }
+        impl Bag {
+            fn take(self, xs: any[]) -> int => self.n + xs.len();
+        }
+        fn main() {
+            print(count([3, 9, 4]));
+            print(widen([1, 2]));
+            print(size({"a": 1, "b": 2}));
+            print(Bag { n: 1 }.take([1, 2]));
+        }
+    "#;
+    assert_eq!(run_output(src), "3\n[1,2,\"s\"]\n2\n3\n");
+    let src =
+        "fn count(xs: any[]) -> int => xs.len();\nfn main() { let a = [1]; print(count(a)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_eq!(d.code, "argument_type_mismatch", "{d:?}");
+}
+
 /// An annotated union is narrowed by `is` like any other union-typed value.
 #[test]
 pub fn let_annotation_union_narrows() {

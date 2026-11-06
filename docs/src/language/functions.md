@@ -34,6 +34,12 @@ Writing `name: type` instead pins that parameter, and an argument of any other
 type is a compile error. Pin the ones you want fixed and leave the rest open;
 the two styles mix freely in one signature.
 
+A parameter that names `any` inside a list or map, such as `any[]` or
+`{string: any}`, takes only a value declared that way, since the callee may put
+anything into it: an `int[]` variable does not fit. A list or map literal
+written at the call is the exception, because nothing else holds it, so
+`count([3, 9, 4])` passes for `fn count(xs: any[])`.
+
 ```rust
 fn repeat(text: string, times) {
     let out = "";

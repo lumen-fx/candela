@@ -15,6 +15,7 @@ use super::super::type_system::fn_bindings;
 use super::super::type_system::indirect_return_type;
 use super::super::type_system::infer_user_fn_return_type;
 use super::super::type_system::instantiations_line_up;
+use super::super::type_system::let_type_fits;
 use super::super::type_system::param_type_matches;
 use super::super::type_system::pin_empty_literal_bindings;
 use super::super::type_system::pinned_arg_types;
@@ -223,9 +224,18 @@ pub fn handle_user_function(
         }
     }
     for (i, declared) in declared_arg_types.iter().enumerate() {
-        if let Some(declared) = declared
+        let Some(declared) = declared else { continue };
+        // A list or map literal written at the call is held by nothing else,
+        // so it may widen into a parameter that names `any` inside it, the
+        // way it may into a `let` that does; the body sees the declared type.
+        if matches!(args[i], Expr::Array(..) | Expr::Map(..))
             && !param_type_matches(declared, &infered_arg_types[i], state.generics)
+            && let_type_fits(declared, &infered_arg_types[i], true, state.generics)
         {
+            infered_arg_types[i] = declared.clone();
+            continue;
+        }
+        if !param_type_matches(declared, &infered_arg_types[i], state.generics) {
             error_function_arg_invalid_type(
                 &infered_arg_types[i],
                 declared,

@@ -16,11 +16,9 @@ else there picks a side with [`@cfg(web)`](../language/conditional-compilation.m
 import "js";
 
 fn main() {
-    let numbers: any[] = [3, 9, 4];
-    print(js::call("Math.max", numbers));
+    print(js::call("Math.max", [3, 9, 4]));
     print(js::get("navigator.language"));
-    let url: any[] = ["/hello.txt"];
-    js::call_async("fetch", url, fn(answer) {
+    js::call_async("fetch", ["/hello.txt"], fn(answer) {
         match answer {
             Ok(_) => print("fetched"),
             Err(why) => print(why),
@@ -38,9 +36,8 @@ number, a handle, that names it.
 A function that returns a promise is called through the `_async` form, and
 what the promise settles to arrives in the function passed to the call, as a
 `Result`: `Ok` with the value, or `Err` with the reason. Calling one through
-the plain form raises. The arguments go in an `any[]`, so a list written for
-them is declared as one, as `numbers` is above; a list literal passed straight
-in is typed by its elements and does not fit.
+the plain form raises. The arguments go in an `any[]`: write the list at the
+call, as above, or declare a variable that holds it as `any[]`.
 
 ## Globals
 
