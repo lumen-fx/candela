@@ -7863,7 +7863,11 @@ pub fn compile_profile(
     }
 
     let mut variables: Vec<Variable> = Vec::new();
-    let mut registers: Vec<Data> = Vec::new();
+    // Register 0 is where a call whose result nothing reads writes it: a
+    // dylib or host function that returns nothing still stores NULL in its
+    // destination. Nothing else is ever given it, so that write lands on no
+    // value the program holds.
+    let mut registers: Vec<Data> = vec![NULL];
     let mut pools: Pools = Pools::new(
         Pool::with_capacity(10),
         Pool::with_capacity(2),
