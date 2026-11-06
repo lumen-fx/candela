@@ -116,7 +116,9 @@ fn main() {
 ## break and continue
 
 `break` leaves the innermost loop; `continue` skips to its next iteration. Both
-work in `for`, `while`, and `loop`.
+work in `for`, `while`, and `loop`, and only in a loop of their own function:
+one with no loop around it is a compile error, even when the function is
+called from inside a loop.
 
 ```rust
 fn main() {

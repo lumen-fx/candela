@@ -5481,6 +5481,46 @@ pub fn diagnostics_unterminated_and_single_quoted_strings() {
     assert_eq!(&src[d.span], "'");
 }
 
+/// `break` and `continue` reach only a loop of their own function. Outside
+/// one they are a compile error, rather than a jump the loop of a calling
+/// function or of nothing at all patches.
+#[test]
+pub fn diagnostics_break_and_continue_outside_a_loop() {
+    for (src, wanted) in [
+        ("fn main() { break; }", "break"),
+        ("fn main() { if true { continue; } }", "continue"),
+        (
+            "fn f() { break; }\nfn main() { for i in 0..3 { f(); } }",
+            "break",
+        ),
+        (
+            "fn main() { for i in 0..3 { let g = fn() { break; }; g(); } }",
+            "break",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "outside_loop", "{src}");
+        assert_eq!(&src[d.span], wanted, "{src}");
+    }
+    let src = "
+        fn main() {
+            let n = 0;
+            while true {
+                for i in 0..5 {
+                    if i == 1 { continue; }
+                    if i == 3 { break; }
+                    n += i;
+                }
+                loop { break; }
+                break;
+            }
+            print(n);
+        }
+    ";
+    assert_eq!(run_output(src), "2\n");
+}
+
 /// A callee that holds no function is a compile error naming the type that
 /// cannot be called.
 #[test]

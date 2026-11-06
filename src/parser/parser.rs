@@ -86,6 +86,10 @@ struct Parser<'a> {
     /// configuration, and then dropped; a macro inside it is not expanded,
     /// since the expander may exist only where the code is compiled.
     inactive: u32,
+    /// How many loops of the function being parsed enclose the code being
+    /// parsed, which is where a `break` or a `continue` has a loop to leave.
+    /// A function body starts again from none.
+    loops: u32,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -167,6 +171,9 @@ enum ParserErr<'a> {
     AttributeWithoutItem,
     /// `throw(...)`, the call spelling `throw` had before it was a statement.
     ThrowCall,
+    /// A `break` or a `continue`, named here, with no loop around it in its
+    /// function.
+    OutsideLoop(&'static str),
 }
 
 impl ParserErr<'_> {
@@ -212,6 +219,7 @@ impl ParserErr<'_> {
             ParserErr::UnknownAttribute(_) => "unknown_attribute",
             ParserErr::AttributeWithoutItem => "attribute_without_item",
             ParserErr::ThrowCall => "throw_call",
+            ParserErr::OutsideLoop(_) => "outside_loop",
         }
     }
 }
@@ -342,6 +350,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::AttributeWithoutItem => {
             "An attribute applies to the declaration or statement after it, and nothing follows this one"
         }
+        ParserErr::OutsideLoop(keyword) => &format!(
+            "{BLUE}{BOLD}{keyword}{RESET} belongs inside a {BLUE}{BOLD}for{RESET}, {BLUE}{BOLD}while{RESET} or {BLUE}{BOLD}loop{RESET} body, and this function has none around it. A loop in the function that calls this one does not count"
+        ),
     };
     if crate::errors::diagnostics_enabled() {
         crate::errors::emit_diagnostic(
@@ -723,6 +734,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         nesting: parser.nesting,
         pending_gt: None,
         inactive: parser.inactive,
+        loops: parser.loops,
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -934,11 +946,19 @@ fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
         Token::Return => parse_return(input),
         Token::Throw => parse_throw(input),
         Token::Break => {
-            input.next_token();
+            let (_, span) = input.next_token();
+            if input.loops == 0 {
+                cold_path();
+                input.error(span, ParserErr::OutsideLoop("break"));
+            }
             Expr::Break
         }
         Token::Continue => {
-            input.next_token();
+            let (_, span) = input.next_token();
+            if input.loops == 0 {
+                cold_path();
+                input.error(span, ParserErr::OutsideLoop("continue"));
+            }
             Expr::Continue
         }
         _ => {
@@ -1917,6 +1937,7 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             nesting: 0,
             pending_gt: None,
             inactive: 0,
+            loops: 0,
         },
         &mut impls,
     );
