@@ -51,14 +51,19 @@ fn program(lines: &[Line], contents: &mut String) {
 
 /// The forms a typed line is tried in, best first.
 ///
-/// An expression is shown as `print(line)`, because showing a value is what a
-/// read-eval-print loop is for. Whether the reading holds is settled by
-/// compiling it: a line that turns out to be a statement compiles in the
-/// second form, as it was typed.
+/// An expression is shown by printing its value, because showing a value is
+/// what a read-eval-print loop is for. A value of `null`, which is what a call
+/// that returns nothing hands back, is not shown, so `print(x)` writes its
+/// line once rather than following it with `null`. Whether the reading holds
+/// is settled by compiling it: a line that turns out to be a statement
+/// compiles in the second form, as it was typed.
 fn forms(line: &str, kind: LineKind) -> Vec<String> {
     let mut forms = Vec::with_capacity(2);
     if kind == LineKind::Expression {
-        forms.push(format!("print({});", line.trim_end().trim_end_matches(';')));
+        forms.push(format!(
+            "{{ let __repl_value = {}; if __repl_value != null {{ print(__repl_value); }} }}",
+            line.trim_end().trim_end_matches(';')
+        ));
     }
     forms.push(as_typed(line));
     forms

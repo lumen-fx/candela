@@ -219,12 +219,16 @@ fn an_expression_line_prints_its_value() {
         1,
         "a call that prints and yields nothing prints once, got:\n{out}\n{err}"
     );
+    assert!(
+        !out.contains("null"),
+        "a call that yields nothing shows no value, got:\n{out}\n{err}"
+    );
 }
 
 /// A name nothing declares is an unknown variable, reported against the line
 /// as it was typed. The column says which: the prompt tries an expression
-/// wrapped in a `print` first, and an error naming that wrapper would point at
-/// text nobody wrote.
+/// wrapped in the code that prints its value first, and an error naming that
+/// wrapper would point at text nobody wrote.
 #[test]
 fn an_unknown_name_line_is_reported_and_dropped() {
     let (out, err) = session("nosuchname\nprint(\"after\");\n");

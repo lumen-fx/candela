@@ -81,7 +81,8 @@ in a file is typed as one line here, and a line opening with `{` reads as a
 block rather than a map literal.
 
 A line that is an expression prints its value, so a name, a calculation or a
-call with a result needs no `print` around it:
+call with a result needs no `print` around it. A call that returns nothing
+shows no value:
 
 ```
 > x * 2
