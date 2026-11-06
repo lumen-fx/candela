@@ -49,6 +49,10 @@ pub enum LexErr {
     FloatOutOfRange,
     /// A number whose exponent marker carries no digits, such as `1e`.
     FloatExponentMissingDigits,
+    /// A `"` the file ends after without a closing one.
+    UnterminatedString,
+    /// A `'`, which opens nothing: strings are written in double quotes.
+    SingleQuote,
 }
 
 #[derive(Logos, Debug, PartialEq, Clone, Copy)]
@@ -230,6 +234,10 @@ pub enum Token<'a> {
     Arrow,
 
     #[regex(r#"\"(?:[^\"\\]|\\.)*\""#, |lex| lex.slice())]
+    // The same opening with no closing quote, which only wins when the file
+    // ends first, so the report names the string rather than a stray symbol.
+    #[regex(r#"\"(?:[^\"\\]|\\.)*\\?"#, unterminated_string)]
+    #[token("'", single_quote)]
     String(&'a str),
 
     /// A macro invocation, `name!( ... )`. The pattern matches the head; the
@@ -297,6 +305,16 @@ fn read_float<'a>(lex: &Lexer<'a, Token<'a>>) -> Result<f64, LexErr> {
 }
 
 /// Refuses a number whose exponent marker has no digits after it.
+const fn unterminated_string<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<&'a str, LexErr> {
+    cold_path();
+    Err(LexErr::UnterminatedString)
+}
+
+const fn single_quote<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<&'a str, LexErr> {
+    cold_path();
+    Err(LexErr::SingleQuote)
+}
+
 const fn exponent_without_digits<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<f64, LexErr> {
     cold_path();
     Err(LexErr::FloatExponentMissingDigits)

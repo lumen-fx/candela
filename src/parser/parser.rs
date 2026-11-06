@@ -106,6 +106,10 @@ enum ParserErr<'a> {
     FloatLiteralOutOfRange,
     /// A number whose exponent marker carries no digits.
     FloatExponentMissingDigits,
+    /// A string the file ends inside.
+    UnterminatedString,
+    /// A `'`, where a string wants a `"`.
+    SingleQuote,
     /// (expected, received)
     UnexpectedToken(Token<'a>, Token<'a>, &'static str),
     /// (expected, received)
@@ -175,6 +179,8 @@ impl ParserErr<'_> {
             ParserErr::IntLiteralOutOfRange => "int_literal_out_of_range",
             ParserErr::FloatLiteralOutOfRange => "float_literal_out_of_range",
             ParserErr::FloatExponentMissingDigits => "float_exponent_missing_digits",
+            ParserErr::UnterminatedString => "unterminated_string",
+            ParserErr::SingleQuote => "single_quote",
             ParserErr::UnexpectedToken(..) | ParserErr::UnexpectedTokenStr(..) => {
                 "unexpected_token"
             }
@@ -218,6 +224,8 @@ const fn lex_err(e: LexErr) -> ParserErr<'static> {
         LexErr::IntOutOfRange => ParserErr::IntLiteralOutOfRange,
         LexErr::FloatOutOfRange => ParserErr::FloatLiteralOutOfRange,
         LexErr::FloatExponentMissingDigits => ParserErr::FloatExponentMissingDigits,
+        LexErr::UnterminatedString => ParserErr::UnterminatedString,
+        LexErr::SingleQuote => ParserErr::SingleQuote,
     }
 }
 
@@ -241,6 +249,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::FloatExponentMissingDigits => {
             "This exponent has no digits after it. Write the power, as in 1e3 or 2.5e-1"
         }
+        ParserErr::UnterminatedString => {
+            "This string is never closed: the file ends before its closing '\"'"
+        }
+        ParserErr::SingleQuote => &format!(
+            "Strings are written in double quotes, as in {BLUE}{BOLD}\"a\"{RESET}. candela has no character type, so a single character is a string too"
+        ),
         ParserErr::UnexpectedToken(expected, received, msg) => &format_args!(
             "Expected {BLUE}{BOLD}{expected}{RESET}, but got {RED}{BOLD}{received}{RESET}. {msg}"
         )
@@ -393,6 +407,22 @@ impl<'a> Parser<'a> {
     fn error(&self, span: Span, error: ParserErr) -> ! {
         throw_parser_error(self.ctx.src, span, error)
     }
+    /// Reports the text the lexer refused at `span`. A string the file ends
+    /// inside spans the rest of the file, so it is reported at its opening
+    /// quote.
+    #[cold]
+    #[inline(never)]
+    fn lex_error(&self, span: Span, error: LexErr) -> ! {
+        let span = if error == LexErr::UnterminatedString {
+            Span {
+                start: span.start,
+                end: span.start + 1,
+            }
+        } else {
+            span
+        };
+        self.error(span, lex_err(error))
+    }
     /// Opens one nesting level for the construct starting at `span`, or raises
     /// [`ParserErr::NestingTooDeep`] at it. Pair with [`Parser::leave`].
     #[inline(always)]
@@ -425,7 +455,7 @@ impl<'a> Parser<'a> {
         (
             t.0.unwrap_or_else(
                 #[cold]
-                |e| self.error(span, lex_err(e)),
+                |e| self.lex_error(span, e),
             ),
             span,
         )
@@ -444,7 +474,7 @@ impl<'a> Parser<'a> {
         };
         t.unwrap_or_else(
             #[cold]
-            |e| self.error(self.placed((start, end).into()), lex_err(e)),
+            |e| self.lex_error(self.placed((start, end).into()), e),
         )
     }
     #[inline(always)]
@@ -475,7 +505,7 @@ impl<'a> Parser<'a> {
             .map(|(t, span)| (*t, span.start, span.end))?;
         Some(t.unwrap_or_else(
             #[cold]
-            |e| self.error(self.placed((start, end).into()), lex_err(e)),
+            |e| self.lex_error(self.placed((start, end).into()), e),
         ))
     }
     #[inline(always)]

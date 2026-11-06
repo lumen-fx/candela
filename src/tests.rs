@@ -5464,6 +5464,23 @@ pub fn diagnostics_float_exponent_without_digits() {
     assert_eq!(&src[d.span], "1e");
 }
 
+/// A string the file ends inside is reported at its opening quote, and a
+/// single quote is reported as the wrong quote, rather than either being an
+/// unknown token.
+#[test]
+pub fn diagnostics_unterminated_and_single_quoted_strings() {
+    let src = "fn main() {\n    print(\"open);\n}\n";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "unterminated_string");
+    assert_eq!(&src[d.span], "\"");
+    let src = "fn main() { let c = 'a'; }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "single_quote");
+    assert_eq!(&src[d.span], "'");
+}
+
 /// A callee that holds no function is a compile error naming the type that
 /// cannot be called.
 #[test]
