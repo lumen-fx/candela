@@ -1,4 +1,5 @@
-//! Lists crossing into C: an empty list, and a list of numbers C fills in.
+//! Lists crossing into C: an empty list, a list of numbers C fills in, and a
+//! list of structs.
 
 mod ffi_fixture;
 
@@ -38,11 +39,39 @@ pub unsafe extern "C" fn halve(out: *mut f64, len: i64) {
         *out.add(i) /= 2.0;
     }
 }
+
+#[repr(C)]
+pub struct Point {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+pub struct Tagged {
+    id: i64,
+    at: Point,
+}
+
+/// The sum of `id + at.x * 10 + at.y * 100` over the first `len` structs at
+/// `items`.
+#[no_mangle]
+pub unsafe extern "C" fn weigh(items: *const Tagged, len: i64) -> f64 {
+    (0..len as usize)
+        .map(|i| {
+            let t = &*items.add(i);
+            t.id as f64 + t.at.x * 10.0 + t.at.y * 100.0
+        })
+        .sum()
+}
 "#;
 
 const PROGRAM: &str = r#"
+struct Point { x: float, y: float }
+struct Tagged { id: int, at: Point }
+
 dylib "arrays" {
     int sum(int[], int);
+    float weigh(Tagged[], int);
     int count(string[], int);
     int squares(int[], int);
     halve(float[], int);
@@ -68,6 +97,14 @@ fn halved() -> float[] {
     let xs = [1.0, 3.0];
     arrays::halve(xs, 2);
     return xs;
+}
+
+fn weighed() -> float {
+    let items = [
+        Tagged { id: 1, at: Point { x: 2.0, y: 3.0 } },
+        Tagged { id: 4, at: Point { x: 5.0, y: 6.0 } },
+    ];
+    return arrays::weigh(items, items.len());
 }
 
 fn main() {}
@@ -110,6 +147,18 @@ fn a_list_of_numbers_is_written_back() {
     assert_eq!(
         program.call("halved", &[]).unwrap(),
         Value::Array(vec![Value::Float(0.5), Value::Float(1.5)])
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A list of structs reaches C as the structs packed back to back, nested
+/// struct fields included.
+#[test]
+fn a_list_of_structs_crosses_packed() {
+    let (root, mut program) = program("structs");
+    assert_eq!(
+        program.call("weighed", &[]).unwrap(),
+        Value::Float(1.0 + 20.0 + 300.0 + 4.0 + 50.0 + 600.0)
     );
     std::fs::remove_dir_all(&root).ok();
 }

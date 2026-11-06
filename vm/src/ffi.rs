@@ -98,6 +98,21 @@ pub fn array_to_c_ptr(
             }
         }
         keep_buffer_alive(ptr_bytes, keep_alive)
+    } else if first_array_element.is_struct() {
+        // C expects the structs packed back to back, each padded to its own
+        // alignment, which the size get_struct_size reports already includes
+        let mut packed: Vec<u8> = Vec::new();
+        for e in elems {
+            packed.extend(candela_struct_to_c_struct(
+                e.as_struct(),
+                obj_pool,
+                string_pool,
+                keep_alive,
+            ));
+        }
+        let ptr = packed.as_ptr() as usize;
+        keep_alive.push(packed.into_boxed_slice());
+        ptr
     }
     // Any other element type has no C equivalent
     else {
