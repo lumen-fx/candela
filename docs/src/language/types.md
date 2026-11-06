@@ -29,6 +29,13 @@ infinity the program then runs on.
 Arithmetic that leaves the range wraps around it rather than raising, so a sum
 past the top comes back at the bottom.
 
+A string literal is written in double quotes and may run over several lines.
+Inside it, `\n`, `\t`, `\r` and `\0` stand for a newline, a tab, a carriage
+return and a null character, and `\"` and `\\` for a quote and a backslash. A
+backslash before any other character is kept as written, so `"\d"` is two
+characters. Any other character, accented letters and emoji included, is
+written as itself.
+
 Lists and maps are covered in [Collections](collections.md), functions in
 [Functions](functions.md), and your own types in [Enums](enums.md) and in
 [Structs](#structs) below. A function's type is inferred wherever the value
