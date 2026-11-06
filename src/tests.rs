@@ -5521,8 +5521,45 @@ pub fn diagnostics_break_and_continue_outside_a_loop() {
     assert_eq!(run_output(src), "2\n");
 }
 
+/// A value that is not a function, passed where a parameter declares one, is
+/// the argument mismatch it is rather than a value the body calls through.
+#[test]
+pub fn diagnostics_a_non_function_for_a_function_parameter() {
+    for src in [
+        "fn ap(f: fn(int) -> int, x: int) -> int => f(x);\nfn main() { print(ap(3, 1)); }",
+        "fn all(fs: (fn(int) -> int)[]) -> int => fs[0](2);\nfn main() { print(all([1, 2])); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "argument_type_mismatch", "{src}: {d:?}");
+    }
+    let src = "
+        fn ap(f: fn(int) -> int, x: int) -> int => f(x);
+        fn all(fs: (fn(int) -> int)[]) -> int => fs[0](2) + fs[1](2);
+        fn double(x: int) -> int => x * 2;
+        fn main() {
+            let g = double;
+            print(ap(double, 1), ap(fn(x) => x + 1, 1), ap(g, 5));
+            print(all([double, fn(x) => x]));
+        }
+    ";
+    assert_eq!(run_output(src), "2\n2\n10\n6\n");
+}
+
 /// A callee that holds no function is a compile error naming the type that
 /// cannot be called.
+/// A call that names a variable holding something other than a function
+/// reports that type, rather than a function it cannot find.
+#[test]
+pub fn diagnostics_calling_a_variable_that_is_not_a_function() {
+    let src = "fn ap(f, x) { return f(x); }\nfn main() { print(ap(3, 1)); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "type_not_callable");
+    assert!(d.message.contains("int"), "{}", d.message);
+    assert_eq!(&src[d.span], "f");
+}
+
 #[test]
 pub fn diagnostics_calling_a_value_that_is_not_a_function() {
     let src = "fn one() { return 1; }\nfn main() { print(one()(2)); }";

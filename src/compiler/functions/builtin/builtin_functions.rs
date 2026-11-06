@@ -16,7 +16,7 @@ use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_range;
-use crate::compiler::compiler_errors::error_unknown_function;
+use crate::compiler::compiler_errors::error_unknown_or_uncallable;
 use crate::data::Data;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
@@ -409,12 +409,14 @@ pub fn builtin_functions(
                     output,
                 ))
             } else {
-                error_unknown_function(
+                error_unknown_or_uncallable(
                     fn_name,
                     span,
+                    v,
                     state.scope(ctx.file_idx),
                     ctx.file_idx,
                     state.sources,
+                    state.type_names(),
                 );
             }
         }

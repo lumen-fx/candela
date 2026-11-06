@@ -214,13 +214,17 @@ pub fn handle_user_function(
     // compiled at the types the declaration names, and the body sees the
     // declared type rather than the one function this call happens to pass, so
     // the call inside it dispatches on the value.
+    // An argument that is not a function keeps its own type, so the check
+    // below reports it rather than the body calling through it.
     for (i, declared) in declared_arg_types.iter().enumerate() {
         if let Some(declared) = declared
             && declared_holds_fn_signature(declared)
         {
             let declared = declared.clone();
             check_declared_fn(&args[i], &declared, args_indexes[i], output, v, ctx, state);
-            infered_arg_types[i] = declared;
+            if holds_functions_where_declared(&declared, &infered_arg_types[i]) {
+                infered_arg_types[i] = declared;
+            }
         }
     }
     for (i, declared) in declared_arg_types.iter().enumerate() {
@@ -1193,6 +1197,26 @@ pub fn check_declared_fn(
             state.sources,
             state.type_names(),
         );
+    }
+}
+
+/// Whether `value` holds a function wherever `declared` says the shape of one:
+/// a function for `fn(...)`, and a list or map whose elements do for a list or
+/// map of them. An empty literal holds none to say otherwise.
+fn holds_functions_where_declared(declared: &DataType, value: &DataType) -> bool {
+    match (declared, value) {
+        // A dynamic value is checked where it is called.
+        (_, DataType::Unknown)
+        | (DataType::FnValue(_), DataType::Fn(_) | DataType::FnValue(_))
+        | (DataType::Array(Some(_)), DataType::Array(None)) => true,
+        (DataType::Array(Some(d)), DataType::Array(Some(v))) => {
+            holds_functions_where_declared(d, v)
+        }
+        (DataType::Map(d), DataType::Map(v)) => match (&d.1, &v.1) {
+            (Some(d), Some(v)) => holds_functions_where_declared(d, v),
+            _ => true,
+        },
+        _ => false,
     }
 }
 

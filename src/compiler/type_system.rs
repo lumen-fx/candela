@@ -39,6 +39,7 @@ use crate::compiler::compiler_errors::error_type_not_indexable;
 use crate::compiler::compiler_errors::error_unknown_function;
 use crate::compiler::compiler_errors::error_unknown_function_in_namespace;
 use crate::compiler::compiler_errors::error_unknown_namespace;
+use crate::compiler::compiler_errors::error_unknown_or_uncallable;
 use crate::compiler::compiler_errors::error_unknown_struct;
 use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
@@ -4243,12 +4244,14 @@ impl Expr {
                 {
                     return DataType::Enum(enum_id);
                 }
-                error_unknown_function(
+                error_unknown_or_uncallable(
                     fn_name,
                     *span,
+                    v,
                     state.scope(ctx.file_idx),
                     ctx.file_idx,
                     state.sources,
+                    state.type_names(),
                 )
             }
             Self::ObjFunctionCall(
