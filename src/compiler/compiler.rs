@@ -5964,12 +5964,8 @@ impl Expr {
                         output,
                     ))
                 } else {
-                    compiler_errors::error_enum(
-                        "Unknown enum variant",
-                        &format!("{} does not name an enum variant", path.join("::")),
-                        *span,
-                        ctx.file_idx,
-                        state.sources,
+                    crate::compiler::type_system::error_unknown_namespaced_ref(
+                        path, *span, ctx, state,
                     );
                 }
             }
