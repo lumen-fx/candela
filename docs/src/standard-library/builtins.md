@@ -28,8 +28,10 @@ print(value, ...)
 
 Writes each argument to standard output, one per line. Takes any number of
 arguments of any type and returns nothing. A list prints as `[1,2,3]`, a map as
-`{a:1,b:2}`, a struct as `Name {field:value}`, and an enum value as its variant
-name with any payload in brackets. A float keeps its decimal point wherever it
+`{"a":1,"b":2}`, a struct as `Name {field:value}`, and an enum value as its
+variant name with any payload in brackets. A string prints bare on its own and
+in quotes inside a list, map, struct or payload, so `print(["a"])` writes
+`["a"]`. A float keeps its decimal point wherever it
 appears, so `print(3.0)` writes `3.0` and `print([3.0])` writes `[3.0]`, the
 same text `string` gives. `null`, the value of a call that returns nothing, prints as
 `null`. An infinity prints as `inf` and a not-a-number as `NaN`.
