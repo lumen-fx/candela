@@ -5560,6 +5560,23 @@ pub fn diagnostics_calling_a_variable_that_is_not_a_function() {
     assert_eq!(&src[d.span], "f");
 }
 
+/// A module's function written without its call says it is a function to call,
+/// rather than that it names no enum variant.
+#[test]
+pub fn diagnostics_a_module_function_without_its_call() {
+    let src = "import \"std/math\";\nfn main() { print(math::pi); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert!(d.message.contains("math::pi(...)"), "{}", d.message);
+    let src = "import \"std/math\";\nfn main() { print(math::nope); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert!(
+        d.message.contains("does not name an enum variant"),
+        "{}",
+        d.message
+    );
+}
+
 #[test]
 pub fn diagnostics_calling_a_value_that_is_not_a_function() {
     let src = "fn one() { return 1; }\nfn main() { print(one()(2)); }";

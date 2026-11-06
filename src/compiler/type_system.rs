@@ -2051,6 +2051,43 @@ pub fn resolve_generic_call(
     (fn_id, args)
 }
 
+/// Raised where `path` is written as a value and names no enum variant. A path
+/// to a function is reported as the call it was meant to be, since only a
+/// function's bare name is a value.
+#[cold]
+#[inline(never)]
+pub fn error_unknown_namespaced_ref(
+    path: &[SmolStr],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> ! {
+    let written = path.join("::");
+    if path.split_last().is_some_and(|(name, namespace)| {
+        state
+            .scope(ctx.file_idx)
+            .find_function(namespace, name)
+            .is_some()
+    }) {
+        crate::compiler::compiler_errors::error_enum(
+            "Function used as a value",
+            &format!(
+                "{written} is a function, called as {written}(...). Only a function's bare name is a value; pass this one on wrapped, as in fn(x) => {written}(x)"
+            ),
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    crate::compiler::compiler_errors::error_enum(
+        "Unknown enum variant",
+        &format!("{written} does not name an enum variant"),
+        span,
+        ctx.file_idx,
+        state.sources,
+    );
+}
+
 /// Checks the type arguments a call is written with against the parameters the
 /// function it resolves to declares, and resolves them to types.
 ///
@@ -4554,13 +4591,7 @@ impl Expr {
                 if let Some((enum_id, _)) = variant_constructor_at(path, &[], *span, ctx, state) {
                     DataType::Enum(enum_id)
                 } else {
-                    crate::compiler::compiler_errors::error_enum(
-                        "Unknown enum variant",
-                        &format!("{} does not name an enum variant", path.join("::")),
-                        *span,
-                        ctx.file_idx,
-                        state.sources,
-                    );
+                    error_unknown_namespaced_ref(path, *span, ctx, state);
                 }
             }
             Self::Struct(namespace, fields, span, type_args, base) => {

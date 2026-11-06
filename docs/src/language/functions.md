@@ -351,7 +351,8 @@ function written at the call site. A declared function's name is the function
 itself wherever a value goes, so a `let`, a return, a list or map element and a
 struct field each take it by name, and the call goes to what the name handed
 over. The value carries the signature the function was declared with, so the
-call is checked against it.
+call is checked against it. A function reached through a module, such as
+`math::sqrt`, is not a value by its path; wrap it: `fn(x) => math::sqrt(x)`.
 
 ```rust
 fn twice(x: int) -> int {
