@@ -34,6 +34,7 @@ Raised while the file is read, before any type is known.
 | Unexpected token | A token that cannot appear where it does, including a missing type name, a bad function or variable name, a struct field name that is not an identifier, and `null` after `is` or `as`, where the report points at `== null` |
 | Unexpected end of file | The file ends inside a construct |
 | Unknown token | Characters that do not lex, such as a stray symbol |
+| String literal | A string the file ends inside, reported at its opening quote (`unterminated_string`), or a `'`, since strings are written in double quotes (`single_quote`) |
 | Number literal | An `int` or a `float` literal whose value is past what the type holds, or an exponent marker with no digits after it, as in `1e` |
 | Unclosed delimiter | A `(`, `[` or `{` that is never closed; the report points at the opener |
 | Missing semicolon | A statement not ended with `;` |
