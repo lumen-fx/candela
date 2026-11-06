@@ -266,21 +266,44 @@ impl JsonParser<'_> {
         }
     }
 
+    fn skip_digits(&mut self) {
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+    }
+
     fn parse_number(&mut self) -> Result<Data, &'static str> {
+        // The json grammar: an optional minus, then `0` or a digit run that
+        // does not start with `0`, then an optional fraction and exponent,
+        // each with at least one digit.
         let start = self.pos;
         let mut is_float = false;
         if self.peek() == Some(b'-') {
             self.pos += 1;
         }
-        while let Some(c) = self.peek() {
-            match c {
-                b'0'..=b'9' => self.pos += 1,
-                b'.' | b'e' | b'E' | b'+' | b'-' => {
-                    is_float = true;
-                    self.pos += 1;
-                }
-                _ => break,
+        match self.peek() {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => self.skip_digits(),
+            _ => return Err("invalid number"),
+        }
+        if self.peek() == Some(b'.') {
+            is_float = true;
+            self.pos += 1;
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("invalid number");
             }
+            self.skip_digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            is_float = true;
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("invalid number");
+            }
+            self.skip_digits();
         }
         let text = match std::str::from_utf8(&self.bytes[start..self.pos]) {
             Ok(t) => t,
@@ -475,6 +498,44 @@ mod json_tests {
             assert!(
                 json_parse(bad, &mut obj, &mut map, &mut strings).is_err(),
                 "{bad:?} must not parse"
+            );
+        }
+    }
+
+    /// A number is read by the json grammar, so a leading zero, a bare point
+    /// and an exponent with no digits are malformed, alone or inside a list,
+    /// and every form the grammar allows reads as the value it writes.
+    #[test]
+    fn numbers_follow_the_json_grammar() {
+        for bad in [
+            "01", "-01", "1.", ".5", "-.5", "1e", "1e+", "-", "--1", "1.e3", "0x10",
+        ] {
+            let (mut obj, mut map, mut strings) = pools();
+            assert!(
+                json_parse(bad, &mut obj, &mut map, &mut strings).is_err(),
+                "{bad:?} must not parse"
+            );
+            let (mut obj, mut map, mut strings) = pools();
+            assert!(
+                json_parse(&format!("[{bad}]"), &mut obj, &mut map, &mut strings).is_err(),
+                "[{bad}] must not parse"
+            );
+        }
+        for (good, value) in [
+            ("0", Data::int(0)),
+            ("-0", Data::int(0)),
+            ("10", Data::int(10)),
+            ("-12", Data::int(-12)),
+            ("0.5", Data::float(0.5)),
+            ("-1.25e2", Data::float(-125.0)),
+            ("1E-2", Data::float(0.01)),
+            ("2e+1", Data::float(20.0)),
+        ] {
+            let (mut obj, mut map, mut strings) = pools();
+            assert_eq!(
+                json_parse(good, &mut obj, &mut map, &mut strings),
+                Ok(value),
+                "{good:?}"
             );
         }
     }

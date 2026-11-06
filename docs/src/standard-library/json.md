@@ -40,6 +40,10 @@ The mapping from json to candela is:
 | `true`, `false` | bool |
 | `null` | null |
 
+A number is read by the json grammar, so `01`, `1.` and `.5` are malformed. A
+number without a fraction or exponent that is past what an `int` holds reads as
+a `float`.
+
 An object becomes a map that holds its keys in document order, which is the
 order `stringify` writes them back out in.
 
