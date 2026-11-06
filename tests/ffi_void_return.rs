@@ -36,6 +36,41 @@ fn round_trip() {
 fn main() {}
 ";
 
+/// A call that returns nothing writes no value the program holds: the
+/// variable declared first, which takes the first register a program hands
+/// out, still holds its value after a void C call.
+#[test]
+fn a_void_c_call_leaves_the_programs_values_alone() {
+    let root = ffi_fixture::scratch_dir("void", "keeps");
+    let _library = ffi_fixture::build_cdylib(&root, "voidret", FIXTURE);
+    let script = root.join("app.cdl");
+    let src = "
+dylib \"voidret\" {
+    store(int);
+}
+
+fn main() {
+    let x = 5;
+    let y = 0.5;
+    voidret::store(1);
+    print(x, y >= 0.0);
+}
+";
+    std::fs::write(&script, src).expect("write the program");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_candela"))
+        .arg(&script)
+        .output()
+        .expect("run candela");
+    std::fs::remove_dir_all(&root).ok();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "5\ntrue\n",
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn a_void_c_function_runs() {
     let root = ffi_fixture::scratch_dir("void", "store");
