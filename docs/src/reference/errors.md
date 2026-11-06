@@ -47,6 +47,7 @@ Raised while the file is read, before any type is known.
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`) |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
+| `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |

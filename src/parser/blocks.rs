@@ -92,6 +92,14 @@ pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
 /// body with `;`, the way a statement ends; an anonymous function's arrow
 /// body ends where the expression does.
 pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
+    // A loop around an anonymous function is not one its body can leave.
+    let loops = std::mem::take(&mut parser.loops);
+    let body = parse_fn_body_in(parser, declaration);
+    parser.loops = loops;
+    body
+}
+
+fn parse_fn_body_in(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
     if parser.peek_token_opt() != Some(Token::FatArrow) {
         return parse_block(parser);
     }
@@ -104,6 +112,14 @@ pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
         );
     }
     vec![Expr::ReturnVal(Box::new(Some(value)))]
+}
+
+/// The block a loop repeats, where `break` and `continue` reach the loop.
+fn parse_loop_body(parser: &mut Parser<'_>) -> Vec<Expr> {
+    parser.loops += 1;
+    let code = parse_block(parser);
+    parser.loops -= 1;
+    code
 }
 
 /// LBrace Expr RBrace
@@ -122,7 +138,7 @@ pub fn parse_while_block(input: &mut Parser<'_>) -> Expr {
     let t = input.next_token();
     debug_assert_eq!(t.0, Token::While);
     let (while_condition, condition_span) = parse_condition_expr(input);
-    let while_code = parse_block(input);
+    let while_code = parse_loop_body(input);
     Expr::WhileBlock(
         Box::new(while_condition),
         Box::from(while_code),
@@ -156,7 +172,7 @@ pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
         let start2 = parser.peek_token_span().start;
         let upper_bound = parse_expr_no_struct(parser);
         let end2 = parser.last_token_end as u32;
-        let for_loop_code = parse_block(parser);
+        let for_loop_code = parse_loop_body(parser);
         Expr::IntForLoop(
             id,
             Box::new(Expr::Int(0)),
@@ -174,7 +190,7 @@ pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
             let start2 = parser.peek_token_span().start;
             let upper_bound = parse_expr_no_struct(parser);
             let end2 = parser.last_token_end as u32;
-            let for_loop_code = parse_block(parser);
+            let for_loop_code = parse_loop_body(parser);
             Expr::IntForLoop(
                 id,
                 Box::new(for_collection),
@@ -184,7 +200,7 @@ pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
                 (start2, end2).into(),
             )
         } else {
-            let for_loop_code = parse_block(parser);
+            let for_loop_code = parse_loop_body(parser);
             Expr::ForLoop(
                 id,
                 Box::new(for_collection),
@@ -706,7 +722,7 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
 pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {
     let (t, _) = input.next_token();
     debug_assert_eq!(t, Token::Loop);
-    Expr::LoopBlock(Box::from(parse_block(input)))
+    Expr::LoopBlock(Box::from(parse_loop_body(input)))
 }
 
 /// Parses a `match` statement into an [`Expr::Match`]: the scrutinee, the arm
