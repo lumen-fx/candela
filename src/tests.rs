@@ -3992,6 +3992,31 @@ pub fn comparison_still_parses_beside_the_shifts() {
     );
 }
 
+/// Indexing a multi-byte string backwards, by jumps, and from the end finds the
+/// same characters a forward walk does, whatever position the last index left
+/// the pool's cursor at.
+#[test]
+pub fn a_multi_byte_string_indexes_in_any_order() {
+    let src = "
+        fn main() {
+            let s = \"a\u{e9}b\u{1f600}c\u{4e2d}d\u{e9}\u{e9}e\";
+            let chars = s.split(\"\");
+            let ok = true;
+            let i = s.len() - 1;
+            while i >= 0 {
+                if s[i] != chars[i] { ok = false; }
+                i -= 1;
+            }
+            for j in [9, 0, 5, 3, 8, 1, 7, 2, 6, 4, 9] {
+                if s[j] != chars[j] { ok = false; }
+                if s[j..] != chars[j..].join() { ok = false; }
+            }
+            print(ok, s[s.len() - 1], s[3], s[2..6]);
+        }
+    ";
+    assert_eq!(run_output(src), "true\ne\n\u{1f600}\nb\u{1f600}c\u{4e2d}\n");
+}
+
 #[test]
 pub fn string_index() {
     run_and_check_registers!(
