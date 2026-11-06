@@ -2490,6 +2490,30 @@ pub fn int_wraps_on_underflow() {
     );
 }
 
+/// Every int operation wraps, the quotient and remainder of the lowest int by
+/// -1 and a power past the range included, whether the operands are only
+/// known at run time or are literals the parser folds. The exponent counts in
+/// full, so a large one is not cut down to a small power.
+#[test]
+pub fn every_int_operation_wraps() {
+    let src = "
+        fn main() {
+            let m = -9223372036854775807 - 1;
+            let n = -1;
+            print(m / n, m % n, -m, m.abs(), m * n);
+            let e = 4294967297;
+            print(3 ^ e, 3 ^ 40, 2 ^ 64);
+            print(3 ^ 4294967297, 2 ^ 4294967296);
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "-9223372036854775808\n0\n-9223372036854775808\n-9223372036854775808\n\
+         -9223372036854775808\n7473929035676909571\n-6289078614652622815\n0\n\
+         7473929035676909571\n0\n"
+    );
+}
+
 #[test]
 pub fn negative_int_literal() {
     run_and_check_registers!(

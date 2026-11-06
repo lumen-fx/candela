@@ -15,6 +15,7 @@ use crate::parser::parse_type;
 use crate::parser::parse_type_args;
 use crate::parser::type_args_ahead;
 use crate::vm::shift_count_in_range;
+use crate::vm::wrapping_pow;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
 use std::hint::unreachable_unchecked;
@@ -166,7 +167,7 @@ pub fn add_op(
         Token::OpPow => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => {
                 if y >= 0 {
-                    Expr::Int(x.pow(y as u32))
+                    Expr::Int(wrapping_pow(x, y.cast_unsigned()))
                 } else {
                     cold_path();
                     parser.error(span_l.extend(span_r), ParserErr::IntegerNegativeExponent);
