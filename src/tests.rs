@@ -5602,6 +5602,23 @@ pub fn diagnostics_a_module_function_without_its_call() {
     );
 }
 
+/// Arithmetic on an `Option` or a `Result` points at taking the value out,
+/// rather than at giving the wrapper an operator method.
+#[test]
+pub fn diagnostics_arithmetic_on_an_option_says_to_take_the_value_out() {
+    for src in [
+        "fn main() { let xs = [1, 2]; print(xs.max() + 1); }",
+        "fn main() { let r: Result<int, string> = Ok(1); print(2 * r); }",
+    ] {
+        let report = strip_ansi(&compile_report(src, "diag.kl"));
+        assert!(report.contains("Take the value out first"), "{report}");
+        assert!(!report.contains("Define it with"), "{report}");
+    }
+    let src = "enum E { A, B }\nfn main() { print(E::A + 1); }";
+    let report = strip_ansi(&compile_report(src, "diag.kl"));
+    assert!(report.contains("Define it with"), "{report}");
+}
+
 #[test]
 pub fn diagnostics_calling_a_value_that_is_not_a_function() {
     let src = "fn one() { return 1; }\nfn main() { print(one()(2)); }";
