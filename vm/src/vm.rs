@@ -3705,8 +3705,34 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 list.extend(recursion_stack.0.drain(base..));
                 regs[dest] = Data::array(array_id);
             }
-            Instr::CallLibFuncVoid(LibFuncVoid::Sort, tgt, _) => {
+            Instr::CallLibFuncVoid(LibFuncVoid::Sort, tgt, checked) => {
                 let id = regs[tgt].as_array();
+                // A list typed `any[]` can hold anything, so its sort first
+                // checks every element is of the kind the first one is, and
+                // that sort knows an order for that kind. A typed list was
+                // checked by the compiler and skips this.
+                if checked != 0
+                    && let Some(&first) = obj_pool[id].first()
+                {
+                    let kind = |d: Data| {
+                        if d.is_int() {
+                            0
+                        } else if d.is_float() {
+                            1
+                        } else if d.is_string() {
+                            2
+                        } else {
+                            3
+                        }
+                    };
+                    let first_kind = kind(first);
+                    let differs = obj_pool[id].iter().find(|&&d| kind(d) != first_kind);
+                    if first_kind == 3 || differs.is_some() {
+                        cold_path();
+                        let other = differs.map_or(first.type_name(), |d| d.type_name());
+                        error_with_catch!(ErrType::SortWithoutOrder(first.type_name(), other));
+                    }
+                }
                 if gc.marking() {
                     rescan_list(gc, id);
                 }

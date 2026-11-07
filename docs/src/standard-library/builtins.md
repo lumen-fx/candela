@@ -285,10 +285,15 @@ list in place and return nothing; the rest return a new value.
 | `arr.join(separator)` | string | The same, with `separator` between elements |
 | `arr.split(x)` | list[] | `arr` cut into sub-lists at each element equal to `x` |
 
-`sort` picks its ordering from the first element: ints, floats, and strings sort
-ascending, and a list of any other element type is left unchanged. Strings sort
-by their bytes, the order `<` gives them; see
-[operators](../reference/operators.md).
+`sort` orders ints, floats and strings ascending, strings by their bytes, the
+order `<` gives them; see [operators](../reference/operators.md). A list of
+structs or enums sorts by the `<` its type defines as an
+[operator method](../language/methods.md), keeping equal elements in the order
+they were in. Any other element type, a tuple included, has no order, and `sort` on it is the
+compile error `sort_without_order`. A list typed `any[]` is checked when it
+sorts: its elements must all be ints, all floats or all strings, or the call
+raises `sort_without_order`. `sort_by` takes an order of your own for anything
+else.
 
 The higher-order methods (`map`, `filter`, `reduce`, `each`, `find`, `any`,
 `all`, `sort_by`), the reductions (`sum`, `product`) and the lookups (`first`,

@@ -376,6 +376,10 @@ pub enum ErrType<'a> {
     /// A call that would stand one frame past the call-depth limit. Carries the
     /// name the call site wrote and the limit it reached.
     CallDepthExceeded(&'a str, usize),
+    /// `sort` on an `any` list whose elements are not all ints, all floats or
+    /// all strings, the values it knows an order for. Carries the type names
+    /// of the first element and of the one that differs from it.
+    SortWithoutOrder(&'static str, &'static str),
 }
 
 impl From<ErrType<'_>> for SmolStr {
@@ -418,6 +422,8 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
             ErrType::NotAString(got) => format_args!("Cannot use this {RED}{BOLD}{got}{RESET} value as a {BLUE}{BOLD}string{RESET}").to_smolstr(),
             ErrType::CallDepthExceeded(name, limit) => format_args!("The call to {RED}{BOLD}{name}{RESET} stands {BLUE}{BOLD}{limit}{RESET} calls deep, which is the call depth limit").to_smolstr(),
+            ErrType::SortWithoutOrder(first, other) if first == other => format_args!("Cannot sort a list of {RED}{BOLD}{first}{RESET} values, which have no order sort knows").to_smolstr(),
+            ErrType::SortWithoutOrder(first, other) => format_args!("Cannot sort a list holding both {RED}{BOLD}{first}{RESET} and {RED}{BOLD}{other}{RESET} values").to_smolstr(),
         }
     }
 }
@@ -458,6 +464,7 @@ pub const BUILTIN_KINDS: &[&str] = &[
     "host_fn_error",
     "not_a_string",
     "call_depth_exceeded",
+    "sort_without_order",
 ];
 
 impl ErrType<'_> {
@@ -500,6 +507,7 @@ impl ErrType<'_> {
             ErrType::HostFn(_, _) => "host_fn_error",
             ErrType::NotAString(_) => "not_a_string",
             ErrType::CallDepthExceeded(_, _) => "call_depth_exceeded",
+            ErrType::SortWithoutOrder(_, _) => "sort_without_order",
         }
     }
 }
