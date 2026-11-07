@@ -16690,3 +16690,45 @@ pub fn sort_uses_the_order_a_type_defines() {
         assert_eq!(d.code, "sort_without_order", "{src}: {d:?}");
     }
 }
+
+/// A list or map literal written straight into a place declared with `any`
+/// in it, a parameter or a `let`, may hold values of several types there; a
+/// literal anywhere else still holds one.
+#[test]
+pub fn a_literal_into_any_may_mix_types() {
+    let src = r#"
+        struct Spark { ttl: float }
+        struct Position { x: float }
+        struct Commands { ops: any[] }
+        impl Commands {
+            fn spawn(self, bundle: any[]) { self.ops.push(bundle); }
+        }
+        fn count(xs: any[]) -> int => xs.len();
+        fn size(m: {string: any}) -> int => m.len();
+        fn main() {
+            print(count([Spark { ttl: 0.5 }, Position { x: 1.0 }]));
+            let cmd = Commands { ops: [] };
+            cmd.spawn([Spark { ttl: 0.5 }, Position { x: 1.0 }]);
+            print(cmd.ops.len());
+            let row: any[] = [1, "a", 2.5, true];
+            print(row);
+            row = ["b", 3];
+            print(row);
+            print(size({"a": 1, "b": "two"}));
+            let config: {string: any} = {"name": "a", "size": 3};
+            print(config);
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "2\n1\n[1,\"a\",2.5,true]\n[\"b\",3]\n2\n{\"name\":\"a\",\"size\":3}\n"
+    );
+    for src in [
+        "fn main() { let xs = [1, \"a\"]; }",
+        "fn f(xs: int[]) {}\nfn main() { f([1, \"a\"]); }",
+        "fn main() { let xs: any[] = [[1, \"a\"]]; }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+    }
+}

@@ -380,6 +380,9 @@ pub fn handle_user_function(
         }
 
         if inline {
+            if let Some(declared) = &declared_arg_types[i] {
+                state.mark_literal_target(&args[i], declared);
+            }
             let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
                 compile_fn_value(&args[i], v, ctx, state, output, None)
             } else {
@@ -392,6 +395,9 @@ pub fn handle_user_function(
         }
 
         if last_calling.is_some_and(|last| i < last) {
+            if let Some(declared) = &declared_arg_types[i] {
+                state.mark_literal_target(&args[i], declared);
+            }
             let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
                 compile_fn_value(&args[i], v, ctx, state, output, None)
             } else {
@@ -404,6 +410,9 @@ pub fn handle_user_function(
         }
 
         let start_len = output.len();
+        if let Some(declared) = &declared_arg_types[i] {
+            state.mark_literal_target(&args[i], declared);
+        }
         let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
             compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
         } else {

@@ -474,5 +474,6 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         captured_binders: Vec::new(),
         string_slots: StringSlots::default(),
         chain_values: Vec::new(),
+        literal_target: None,
     }
 }

@@ -404,6 +404,10 @@ pub struct State<'a> {
     /// The left operands of a long operator chain the compiler has already
     /// compiled, innermost last; see [`ChainValue`].
     pub chain_values: Vec<ChainValue>,
+    /// A list or map literal about to compile into a place declared with
+    /// `any` inside it, by address, with that declared type; see
+    /// [`State::mark_literal_target`].
+    pub literal_target: Option<(*const Expr, DataType)>,
 }
 
 /// A left operand of a long chain of binary operators, `a + b + ... + z`,
@@ -613,6 +617,24 @@ impl State<'_> {
         slots.ids.insert(s.to_owned(), slots.indexed as u32);
         slots.indexed = pool.len();
         data
+    }
+    /// Records that `value`, when it is a list or map literal, is written
+    /// straight into a place declared `declared`: a parameter or a `let`.
+    /// Nothing else holds the literal, so where the declaration says `any` its
+    /// elements, keys or values may differ in type, the way they may once
+    /// pushed one by one.
+    pub fn mark_literal_target(&mut self, value: &Expr, declared: &DataType) {
+        if matches!(value, Expr::Array(..) | Expr::Map(..)) {
+            self.literal_target = Some((std::ptr::from_ref(value), declared.clone()));
+        }
+    }
+    /// The declared type [`Self::mark_literal_target`] recorded for `literal`,
+    /// taken so no other literal reads it.
+    pub fn take_literal_target(&mut self, literal: &Expr) -> Option<DataType> {
+        match self.literal_target.take() {
+            Some((at, declared)) if std::ptr::eq(at, literal) => Some(declared),
+            _ => None,
+        }
     }
     /// The register and type of `expr` when it is a chain operand compiled
     /// ahead of its operator; see [`ChainValue`].
