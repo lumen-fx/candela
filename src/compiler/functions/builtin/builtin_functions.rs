@@ -17,7 +17,6 @@ use crate::compiler::compiler_data::Variable;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_range;
 use crate::compiler::compiler_errors::error_unknown_or_uncallable;
-use crate::data::Data;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
 use smol_strc::SmolStr;
@@ -121,10 +120,8 @@ pub fn builtin_functions(
             let infered = args[0].infer_type(v, ctx, state);
             // The name is a constant: a register the allocator can hand out
             // again would lose it to whatever lands there before the next run.
-            let name = Data::p_str(
-                format_detailed(&infered, state).as_str(),
-                &mut state.pools.strings,
-            );
+            let name = format_detailed(&infered, state);
+            let name = state.intern_str(name.as_str());
             Some(state.const_register(name))
         }
         "float" => {
@@ -210,7 +207,7 @@ pub fn builtin_functions(
                 span,
             );
             let id = if args.is_empty() {
-                let prompt = Data::p_str("", &mut state.pools.strings);
+                let prompt = state.intern_str("");
                 state.const_register(prompt)
             } else {
                 check_arg_type(

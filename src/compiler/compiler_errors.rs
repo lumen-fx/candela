@@ -3719,3 +3719,114 @@ pub fn error_no_main(sources: &[Source]) -> ! {
         "no_main_function",
     );
 }
+
+/// What a program ran out of when it is too large to compile: each is
+/// numbered by a 16-bit id in the bytecode.
+#[derive(Clone, Copy, Debug)]
+pub enum ProgramLimit {
+    /// Every variable, temporary value and constant of the whole program.
+    Registers,
+    /// The one instruction stream every function compiles into.
+    Instructions,
+    /// The functions the program declares or the compiler makes.
+    Functions,
+    /// The structs the program declares or a generic instantiates.
+    Structs,
+    /// The enums the program declares or a generic instantiates.
+    Enums,
+}
+
+impl ProgramLimit {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Registers => "registers",
+            Self::Instructions => "instructions",
+            Self::Functions => "functions",
+            Self::Structs => "structs",
+            Self::Enums => "enums",
+        }
+    }
+}
+
+/// The most of each [`ProgramLimit`] one program can hold. An id is 16 bits
+/// wide, and one value is kept back so a count always fits one too.
+pub const PROGRAM_LIMIT: usize = u16::MAX as usize;
+
+/// Reports a program past one of the bytecode's limits, at `span`: the
+/// function whose compile crossed it, or the declaration that did.
+#[cold]
+#[inline(never)]
+pub fn error_program_too_large(
+    limit: ProgramLimit,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    let noun = limit.noun();
+    let detail = match limit {
+        ProgramLimit::Registers => {
+            "Every variable, temporary value and constant in the program takes a register, and all functions share them"
+        }
+        ProgramLimit::Instructions => {
+            "Every function compiles into one instruction stream, so the limit is for the whole program"
+        }
+        ProgramLimit::Functions | ProgramLimit::Structs | ProgramLimit::Enums => {
+            "The limit counts every one the program declares, used or not"
+        }
+    };
+    let help = match limit {
+        ProgramLimit::Registers => {
+            "Keep a large table of data in a file the program reads, rather than written out in the source"
+        }
+        ProgramLimit::Instructions | ProgramLimit::Functions => {
+            "Generate data rather than code: one loop over a table instead of a statement or a function per entry"
+        }
+        ProgramLimit::Structs | ProgramLimit::Enums => {
+            "Describe the cases with data, one struct and a field naming the kind, instead of a type per case"
+        }
+    };
+    let message = format!(
+        "This program needs more than {} {noun}, the most one program can have",
+        group_digits(PROGRAM_LIMIT)
+    );
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Program too large")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format!(
+                        "Compiling this takes the program past {} {noun}",
+                        group_digits(PROGRAM_LIMIT)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(detail)
+            .with_help(help)
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "program_too_large",
+    )
+}
+
+/// `n` with a comma between each group of three digits, as the docs write
+/// numbers.
+fn group_digits(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}

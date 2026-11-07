@@ -591,7 +591,7 @@ fn compile_function(
             let register_id = if indirect {
                 state.indirect_arg_register(i)
             } else {
-                state.registers.push(NULL);
+                state.push_reg(NULL);
                 (state.registers.len() - 1) as u16
             };
             Variable {
@@ -615,7 +615,9 @@ fn compile_function(
 
     // Record start location for the compiled func body
     let fn_start = output.len();
-    let loc = fn_start as u16 + ctx.offset;
+    let loc = usize::from(ctx.offset) + fn_start;
+    state.check_instructions(loc);
+    let loc = loc as u16;
     // A value built for this function carries where its body starts, which is
     // known here and read by every indirect call that reaches it.
     if indirect {
@@ -786,7 +788,7 @@ fn compile_function(
                 file_idx: fn_file_idx,
                 single_run: false,
                 in_function: true,
-                offset: ctx.offset + output.len() as u16,
+                offset: ctx.advance_offset(output.len()).offset,
                 return_downcast,
                 ..ctx
             },
@@ -1467,7 +1469,7 @@ fn bind_body_registers(
     let mut renamed: Vec<(u16, u16)> = Vec::new();
     for &(param, arg) in bindings {
         if writes(param) || placed.contains(&param) {
-            state.registers.push(NULL);
+            state.push_reg(NULL);
             let fresh = (state.registers.len() - 1) as u16;
             output.push(Instr::Mov(arg, fresh));
             renamed.push((param, fresh));
@@ -1479,7 +1481,7 @@ fn bind_body_registers(
         if let Some(reg) = instr.get_tgt_id()
             && !renamed.iter().any(|&(from, _)| from == reg)
         {
-            state.registers.push(NULL);
+            state.push_reg(NULL);
             renamed.push((reg, (state.registers.len() - 1) as u16));
         }
     }

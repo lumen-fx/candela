@@ -29,8 +29,12 @@ use crate::compiler::FileNamespaces;
 use crate::compiler::compiler_data::Dynamiclib;
 use crate::compiler::compiler_data::Function;
 use crate::compiler::compiler_data::IndirectRegisters;
+use crate::compiler::compiler_data::PROGRAM_LIMIT;
+use crate::compiler::compiler_data::ProgramLimit;
 use crate::compiler::compiler_data::State;
+use crate::compiler::compiler_data::StringSlots;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_data::program_too_large;
 use crate::compiler::expr::Expr;
 use crate::compiler::imports::DEFAULT_PACKAGE_ENTRY;
 use crate::compiler::imports::ImportResolver;
@@ -649,6 +653,12 @@ impl Program {
 
         // Each argument is a variable seeded into a register of its own, which
         // holds this call's value while the trampoline compiles.
+        if self.registers.len() + args.len() > PROGRAM_LIMIT {
+            return Err(collect_diagnostic(|| {
+                program_too_large(ProgramLimit::Registers, &self.functions, &self.sources)
+            })
+            .unwrap_err());
+        }
         let arg_registers: Box<[u16]> = args
             .iter()
             .map(|_| {
@@ -692,7 +702,10 @@ impl Program {
         let offset = self.instructions.len() as u16;
         let (mut output, ret_id) = match collect_diagnostic(|| {
             let mut state = self.compiler_state();
-            compile_trampoline(&mut state, offset, &call_expr, seed_vars)
+            let compiled = compile_trampoline(&mut state, offset, &call_expr, seed_vars);
+            // The halt that ends the run comes after it.
+            state.check_instructions(usize::from(offset) + compiled.0.len() + 1);
+            compiled
         }) {
             Ok(compiled) => compiled,
             Err(diagnostic) => {
@@ -791,6 +804,7 @@ impl Program {
             propagations: Vec::new(),
             fn_returns: Vec::new(),
             captured_binders: Vec::new(),
+            string_slots: StringSlots::default(),
         }
     }
 

@@ -356,23 +356,36 @@ impl Data {
     /// Same as str(), except this never runs the GC because this function is called by the compiler
     #[inline(always)]
     pub fn p_str(s: &str, string_pool: &mut StringPool) -> Self {
-        Self::interned(s, string_pool).unwrap_or_else(|| {
-            let string_pool_id = string_pool.len() as u64;
-            string_pool.push(s.to_owned());
-            Self::tagged(NAN_STRING_LARGE | string_pool_id)
-        })
+        Self::interned(s, string_pool).unwrap_or_else(|| Self::new_pooled(s, string_pool))
     }
     /// `s` as a value without allocating: inline if it is six bytes or
     /// shorter, else the pool slot already holding it, if one does.
     pub fn interned(s: &str, string_pool: &mut StringPool) -> Option<Self> {
-        if s.len() <= 6 {
+        if Self::fits_inline(s) {
             return Some(Self::small_str(s));
         }
         let id = string_pool.iter().position(|existing| existing == s)?;
+        Some(Self::pooled(id, string_pool))
+    }
+    /// Whether `s` is stored inside the value rather than in the string pool.
+    #[inline(always)]
+    #[must_use]
+    pub const fn fits_inline(s: &str) -> bool {
+        s.len() <= 6
+    }
+    /// The string in pool slot `id`, for a caller that found the slot itself.
+    pub fn pooled(id: usize, string_pool: &mut StringPool) -> Self {
         // The program may hold nothing that reaches this slot, so a cycle in
         // progress counts it as reached from here on.
         string_pool.shade(id);
-        Some(Self::tagged(NAN_STRING_LARGE | id as u64))
+        Self::tagged(NAN_STRING_LARGE | id as u64)
+    }
+    /// `s` in a new pool slot, for a caller that knows no slot holds it yet.
+    /// Never runs the GC, like [`Self::p_str`].
+    pub fn new_pooled(s: &str, string_pool: &mut StringPool) -> Self {
+        let string_pool_id = string_pool.len() as u64;
+        string_pool.push(s.to_owned());
+        Self::tagged(NAN_STRING_LARGE | string_pool_id)
     }
     /// Allocates a string, storing it directly inside the value if it is six
     /// bytes or shorter and in the string pool otherwise. A pooled string can

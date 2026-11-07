@@ -16494,3 +16494,68 @@ pub fn tuple_errors() {
         assert_eq!(d.code, code, "{src}: {d:?}");
     }
 }
+
+/// A program past the bytecode's 16-bit limits is a compile error naming the
+/// limit it crossed, never a program whose constants share a register or
+/// whose calls land in the wrong place.
+#[test]
+pub fn a_program_past_a_bytecode_limit_does_not_compile() {
+    use std::fmt::Write as _;
+    // Each distinct literal is a constant register of its own.
+    let mut src = String::from("fn main() {\n    let xs: int[] = [];\n");
+    for i in 0..70_000 {
+        writeln!(src, "    xs.push({});", 1_000_000 + i).unwrap();
+    }
+    src.push_str("    print(xs.len());\n}\n");
+    let d = compile_diag(&src, "big.cdl").unwrap_err();
+    assert_wellformed(&d, &src);
+    assert_eq!(d.code, "program_too_large", "{d:?}");
+    assert!(
+        d.message.contains("65,535 registers"),
+        "names the limit: {d:?}"
+    );
+
+    // Every function compiles into one instruction stream.
+    let mut src = String::new();
+    for k in 0..5_000 {
+        writeln!(
+            src,
+            "fn f{k}(x: int) -> int {{\n    let a = x + 1;\n    let b = a * 2;\n    let c = b - 3;\n    let d = c + a;\n    let e = d * b;\n    if e > 1000000 {{ return e % 1000; }}\n    return e;\n}}"
+        )
+        .unwrap();
+    }
+    src.push_str("fn main() {\n    let s = 0;\n");
+    for k in 0..5_000 {
+        writeln!(src, "    s = (s + f{k}({k})) % 1000003;").unwrap();
+    }
+    src.push_str("    print(s);\n}\n");
+    let d = compile_diag(&src, "big.cdl").unwrap_err();
+    assert_eq!(d.code, "program_too_large", "{d:?}");
+    assert!(
+        d.message.contains("65,535 instructions"),
+        "names the limit: {d:?}"
+    );
+}
+
+/// A program just under the register limit compiles and keeps every constant
+/// apart.
+#[test]
+pub fn a_program_just_under_the_register_limit_runs() {
+    use std::fmt::Write as _;
+    let mut src = String::from("fn main() {\n    let xs: string[] = [];\n");
+    for i in 0..60_000 {
+        writeln!(src, "    xs.push(\"constant-string-number-{i}\");").unwrap();
+    }
+    src.push_str(
+        "    let bad = 0;\n    for i in 0..xs.len() {\n        if xs[i] != \"constant-string-number-\" + string(i) { bad += 1; }\n    }\n    print(bad);\n    print(xs[59999]);\n}\n",
+    );
+    for optimize in [false, true] {
+        CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
+        let was_capturing = set_capturing(true);
+        let result = run_diag_profile(&src, "big.cdl", optimize);
+        set_capturing(was_capturing);
+        let printed = CAPTURED_OUTPUT.with(|o| o.take());
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(printed, "0\nconstant-string-number-59999\n");
+    }
+}
