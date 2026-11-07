@@ -1481,6 +1481,16 @@ pub fn error_struct_unknown_field(
     fields: &[(SmolStr, DataType, Span)],
     sources: &[Source],
 ) -> ! {
+    if struct_name.starts_with('(') {
+        error_tuple_index(
+            file_idx,
+            field_span,
+            field,
+            struct_name,
+            fields.len(),
+            sources,
+        );
+    }
     throw_compiler_error(
         &|| {
             let src = &sources[file_idx as usize];
@@ -1522,6 +1532,139 @@ pub fn error_struct_unknown_field(
         field_span,
         &format!("The field {field} isn't defined in struct {struct_name}"),
         "struct_field_not_defined",
+    );
+}
+
+/// Reports `t.2` on a tuple of two elements, or a name after the `.` of a
+/// tuple, which has no named fields.
+#[cold]
+#[inline(never)]
+fn error_tuple_index(
+    file_idx: u16,
+    span: Span,
+    field: &SmolStr,
+    tuple: &SmolStr,
+    arity: usize,
+    sources: &[Source],
+) -> ! {
+    let message = if field.bytes().all(|b| b.is_ascii_digit()) {
+        format!(
+            "{tuple} has {arity} elements, numbered 0 to {}, so it has no element {field}",
+            arity - 1
+        )
+    } else {
+        format!("A tuple's elements are read by position, {tuple} has no field {field}")
+    };
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("No such tuple element")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} has {arity} elements, so this reads none of them",
+                        blue(tuple)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Read an element by its position, from {} to {}",
+                blue(".0"),
+                blue(format!(".{}", arity - 1))
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "tuple_index_out_of_range",
+    );
+}
+
+/// Reports `t.0 = x`. A tuple is built whole and read by position; its
+/// elements are not assigned one at a time.
+#[cold]
+#[inline(never)]
+pub fn error_tuple_element_assign(
+    file_idx: u16,
+    span: Span,
+    tuple: &SmolStr,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Tuple elements are not assigned")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This assigns one element of a {}",
+                        blue(tuple)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(format_args!(
+                "Build a new tuple instead, as in {}, or use a struct for a value whose fields change",
+                blue("t = (x, t.1);")
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("An element of a {tuple} is not assigned on its own; build a new tuple"),
+        "tuple_element_assign",
+    );
+}
+
+/// Reports a tuple pattern, in a `let` or a `match` arm, whose number of
+/// places does not fit the value it is matched against: a value that is not
+/// a tuple, or a tuple of another size.
+#[cold]
+#[inline(never)]
+pub fn error_tuple_pattern_mismatch(
+    file_idx: u16,
+    span: Span,
+    places: usize,
+    found: &DataType,
+    sources: &[Source],
+    names: TypeNames<'_>,
+) -> ! {
+    let found = names.of(found).to_string();
+    let message = format!("This pattern has {places} places, but the value is {found}");
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Tuple pattern does not fit the value")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This pattern has {places} places, but the value is {}",
+                        red(&found)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help("A tuple pattern takes a tuple with one element for each of its places")
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &message,
+        "tuple_pattern_mismatch",
     );
 }
 
@@ -1878,12 +2021,21 @@ pub fn error_no_such_method(
                     ))
                     .with_color(ariadne::Color::Red),
             )
-            .with_help(format_args!(
-                "Define it with {}",
-                blue(format_args!(
-                    "impl {type_name} {{ fn {method}(self, ...) {{ ... }} }}"
-                )),
-            ))
+            .with_help(if type_name.starts_with('(') {
+                // A tuple takes no methods; a value that needs one is a struct.
+                format!(
+                    "A tuple has no methods. Pass it to a function, or make it a {} with an {} block",
+                    blue("struct"),
+                    blue("impl")
+                )
+            } else {
+                format!(
+                    "Define it with {}",
+                    blue(format_args!(
+                        "impl {type_name} {{ fn {method}(self, ...) {{ ... }} }}"
+                    )),
+                )
+            })
             .finish()
         },
         sources,
@@ -2660,6 +2812,15 @@ pub fn error_op(
             ));
         }
         if !matches!(receiver, DataType::Struct(_) | DataType::Enum(_)) {
+            return None;
+        }
+        // A tuple takes no methods, so no `impl` gives it an operator.
+        if let DataType::Struct(id) = receiver
+            && types
+                .structs
+                .get(*id as usize)
+                .is_some_and(|s| s.is_tuple())
+        {
             return None;
         }
         let name = types.of(receiver);

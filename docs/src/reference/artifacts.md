@@ -96,8 +96,8 @@ A function gets an entry when all of the following hold:
 - It is defined in the file you are building, not in a module it imports.
 - It is reachable by its bare name, and it is not `main`.
 - Every parameter has a type a host value can be: `int`, `float`, `bool`,
-  `string`, `null`, `any`, a struct whose fields are all such types, a union of
-  those, an array of those, or a string-keyed map of those.
+  `string`, `null`, `any`, a struct or a tuple whose fields are all such types,
+  a union of those, an array of those, or a string-keyed map of those.
 
 The parameter types are what a host's arguments are checked against. A
 function with a parameter typed as an enum or a function is left out, since a

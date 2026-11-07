@@ -12,6 +12,7 @@ use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::StructRest;
+use crate::compiler::expr::tuple_literal;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
@@ -193,6 +194,9 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         Token::Int(i64::MIN) => parser.error(t_span, ParserErr::IntLiteralOutOfRange),
         Token::Int(i) => Expr::Int(i),
         Token::Float(f) => Expr::Float(f),
+        // `.5`: the float with nothing before its point. The digits cannot
+        // overflow, so the text always reads as a float.
+        Token::DotDigits(s) => Expr::Float(s.parse().unwrap_or_default()),
         Token::String(s) => Expr::String(parse_string(s)),
         // MACRO: name!( raw region ), expanded by the embedder and parsed here
         Token::Macro(region) => expand_macro(parser, region, t_span),
@@ -312,11 +316,32 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             }
             Expr::Array(Box::from(elems), Box::from(elem_spans))
         }
-        // LParen Expr RParen
+        // LParen Expr RParen, or a tuple: LParen Expr (Comma Expr)+ RParen
         Token::LParen => {
+            let first_start = parser.peek_token_span().start;
             let v = parse_expr(parser);
-            parser.next_token_expect(Token::RParen, "Unmatched ')'");
-            v
+            if parser.peek_token() != Token::Comma {
+                parser.next_token_expect(Token::RParen, "Unmatched ')'");
+                return v;
+            }
+            let mut elements = vec![(v, Span::from((first_start, parser.last_token_end as u32)))];
+            while parser.peek_token() == Token::Comma {
+                let comma = parser.next_token().1;
+                // A comma before the `)` closes the list, the way it may
+                // after a list's last element.
+                if parser.peek_token() == Token::RParen {
+                    if elements.len() == 1 {
+                        cold_path();
+                        parser.error(comma, ParserErr::TupleOfOne);
+                    }
+                    break;
+                }
+                let start = parser.peek_token_span().start;
+                let element = parse_expr(parser);
+                elements.push((element, (start, parser.last_token_end as u32).into()));
+            }
+            let end = parser.next_token_expect(Token::RParen, "Unmatched ')'").end;
+            tuple_literal(elements, (t_span.start, end).into())
         }
         // - Expr
         Token::OpSub => {

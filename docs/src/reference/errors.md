@@ -43,6 +43,7 @@ Raised while the file is read, before any type is known.
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
+| Tuple | A tuple of one element, `(a,)`, in a value, a type or a `let` pattern (`tuple_of_one`); a place in a `let` pattern that is not a name, `_` or a nested pattern (`tuple_pattern_element`) |
 | `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
 | Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`) |
@@ -91,6 +92,15 @@ field that has neither a declared value nor an empty one, such as an enum field,
 takes parameters or returns another type is `struct_default_signature`.
 `Default::default()` is `unknown_function`, and the help names a bare `..` in
 the literal and `S::default()`. See [types](../language/types.md#default-values).
+
+**Tuple errors.** Reading an element past a tuple's last, or a name after a
+tuple's dot, is `tuple_index_out_of_range`, and the help gives the positions the
+tuple has. Assigning one element, `t.0 = x`, is `tuple_element_assign`: build a
+new tuple instead. A `let` pattern or a `match` arm's tuple pattern with a number
+of places the value does not have, or held against a value that is not a tuple,
+is `tuple_pattern_mismatch`. `|` alternatives of a tuple arm that bind
+different names are `pattern_bindings_differ`, as they are for an enum arm. See
+[types](../language/types.md#tuples).
 
 **Arity and argument errors.** Calling a function with too few or too many
 arguments, or with an argument whose type the parameter does not accept, whether
@@ -154,7 +164,8 @@ in a function that does not return the same enum, with the same error type for a
 [error handling](../language/error-handling.md#passing-a-failure-on). A `|` alternative that binds
 other names, or the same names at other types, than the first alternative of
 its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
-on a value that is not an enum, is `match_without_wildcard`. See
+on a value that is not an enum, is `match_without_wildcard`, unless its last arm
+is a tuple pattern of names and `_` alone. See
 [control flow](../language/control-flow.md#match-as-an-expression).
 
 **Type test and downcast errors.** A downcast the operand's static type rules

@@ -131,6 +131,9 @@
 (field_expression
   field: (identifier) @property)
 
+(field_expression
+  field: (tuple_index) @property)
+
 (identifier) @variable
 
 ; Literals

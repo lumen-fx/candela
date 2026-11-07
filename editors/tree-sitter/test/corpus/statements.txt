@@ -478,3 +478,39 @@ fn main() {
           (type_identifier)
           (type_identifier))
         (map_literal)))))
+
+================================================================================
+Let declarations with a tuple pattern
+================================================================================
+
+fn main() {
+    let (a, (b, _)) = (1, (2, 3));
+    let (x, y): (int, int) = pair;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (tuple_pattern
+          (identifier)
+          (tuple_pattern
+            (identifier)
+            (identifier)))
+        (tuple_expression
+          (integer_literal)
+          (tuple_expression
+            (integer_literal)
+            (integer_literal))))
+      (let_declaration
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (tuple_type
+          (type_identifier)
+          (type_identifier))
+        (identifier)))))

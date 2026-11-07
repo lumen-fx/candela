@@ -19,6 +19,7 @@
     { "include": "#function-call" },
     { "include": "#types" },
     { "include": "#strings" },
+    { "include": "#tuple-index" },
     { "include": "#numbers" },
     { "include": "#type-arguments" },
     { "include": "#operators" },
@@ -263,6 +264,14 @@
           ]
         }
       ]
+    },
+    "tuple-index": {
+      "comment": "t.0 reads a tuple element: the digits after a value's dot are a position, not a float.",
+      "match": "(?<=[A-Za-z0-9_)\\]])(\\.)([0-9]+)\\b",
+      "captures": {
+        "1": { "name": "punctuation.accessor.candela" },
+        "2": { "name": "variable.other.member.candela" }
+      }
     },
     "numbers": {
       "patterns": [

@@ -14,7 +14,7 @@ impl std::fmt::Display for Token<'_> {
             Token::Macro(m) => write!(f, "the macro '{}!'", m.name),
             Token::Identifier(_) => write!(f, "an identifier"),
             Token::Int(_) => write!(f, "an integer"),
-            Token::Float(_) => write!(f, "a float"),
+            Token::Float(_) | Token::DotDigits(_) => write!(f, "a float"),
             Token::String(_) => write!(f, "a string"),
             Token::LBrace => write!(f, "'{{'"),
             Token::RBrace => write!(f, "'}}'"),
@@ -252,14 +252,22 @@ pub enum Token<'a> {
 
     // Three spellings of the same type: a decimal point, an exponent, or both.
     // The exponent form is what lets a constant like 6.02e23 be written at the
-    // scale it is quoted at.
-    #[regex(r"[0-9]*[.][0-9]+", read_float)]
+    // scale it is quoted at. A float with nothing before its point, `.5`, is
+    // read as [`Token::DotDigits`] instead; see there.
+    #[regex(r"[0-9]+[.][0-9]+", read_float)]
     #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?[0-9]+", read_float)]
     // An exponent marker with nothing after it. The rule exists so the number
     // is refused as a number, rather than read as a smaller one followed by a
     // name the file never declared.
     #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?", exponent_without_digits)]
     Float(f64),
+
+    /// A `.` followed by digits, `.5` or `.0`, kept as the text it was written
+    /// as. After a value it reads a tuple element, `t.0`, which is why it is
+    /// not a float: `t.10` is element ten, where the float would be `0.1`.
+    /// Anywhere else it is the float literal `.5` has always been.
+    #[regex(r"[.][0-9]+", |lex| lex.slice())]
+    DotDigits(&'a str),
 
     // `9223372036854775808` on its own is one past `int`, and is accepted
     // because the only way to write the smallest `int` is to negate it: the

@@ -348,6 +348,7 @@ module.exports = grammar({
         $.map_type,
         $.function_type,
         $.parenthesized_type,
+        $.tuple_type,
       ),
 
     // `fn(int, int) -> int`, the type of a position that holds a function. The
@@ -366,6 +367,11 @@ module.exports = grammar({
       ),
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
+
+    // `(int, string)`: a tuple type, two or more element types. With one type
+    // and no comma the parentheses only group it.
+    tuple_type: ($) =>
+      seq('(', $._type, repeat1(seq(',', $._type)), optional(','), ')'),
 
     // `Cell<int>`, and nested as deep as it goes: a type argument is an
     // ordinary type, so `Cell<Cell<int>>` and `Cell<int>[]` both spell out.
@@ -458,12 +464,24 @@ module.exports = grammar({
     let_declaration: ($) =>
       seq(
         'let',
-        field('name', $.identifier),
+        field('name', choice($.identifier, $.tuple_pattern)),
         optional(seq(':', field('type', $._type))),
         '=',
         field('value', $._expression),
         ';',
       ),
+
+    // `let (a, (b, _)) = t;`: each place is a name, `_`, or a nested pattern.
+    tuple_pattern: ($) =>
+      seq(
+        '(',
+        $._tuple_pattern_place,
+        repeat1(seq(',', $._tuple_pattern_place)),
+        optional(','),
+        ')',
+      ),
+
+    _tuple_pattern_place: ($) => choice($.identifier, $.tuple_pattern),
 
     assignment_statement: ($) =>
       seq(
@@ -582,6 +600,7 @@ module.exports = grammar({
         $.type_test_expression,
         $.cast_expression,
         $.parenthesized_expression,
+        $.tuple_expression,
         $.closure_expression,
         $.if_expression,
         $.match_expression,
@@ -589,6 +608,11 @@ module.exports = grammar({
       ),
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
+
+    // `(1, "a")`: a tuple, two or more values. In a match arm it is a tuple
+    // pattern, whose names bind and whose other values are compared.
+    tuple_expression: ($) =>
+      seq('(', $._expression, repeat1(seq(',', $._expression)), optional(','), ')'),
 
     unary_expression: ($) =>
       prec.right(
@@ -723,8 +747,16 @@ module.exports = grammar({
         ),
       ),
 
+    // `p.x` reads a field; `t.0` reads a tuple element by its position.
     field_expression: ($) =>
-      prec(PREC.postfix, seq(field('object', $._expression), '.', field('field', $.identifier))),
+      prec(
+        PREC.postfix,
+        seq(
+          field('object', $._expression),
+          '.',
+          field('field', choice($.identifier, alias($.integer_literal, $.tuple_index))),
+        ),
+      ),
 
     // `x?`: the value in a `Some` or an `Ok`, or an early return of the `None`
     // or the `Err`.

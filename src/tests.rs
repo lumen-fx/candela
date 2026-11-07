@@ -16283,3 +16283,214 @@ pub fn removed_collection_names_point_at_their_replacements() {
         assert!(d.message.contains(wanted), "{src}: {d:?}");
     }
 }
+
+/// A tuple is built with parentheses and a comma, read by position, and
+/// prints the way it is written.
+#[test]
+pub fn tuple_literal_reads_and_prints() {
+    let out = run_output(
+        r#"
+        fn main() {
+            let t = (1, "x", 2.5);
+            print(t, t.0, t.1, t.2);
+            print(string(t), type(t));
+            let nested = ((1, 2), [3, 4]);
+            print(nested.0.1, nested, type(nested));
+            print((t).0, (1, 2,).1, (1));
+            print(.5);
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "(1,\"x\",2.5)\n1\nx\n2.5\n(1,\"x\",2.5)\n(int, string, float)\n2\n((1,2),[3,4])\n((int, int), int[])\n1\n2\n1\n0.5\n"
+    );
+}
+
+/// A tuple type goes wherever a type goes: a parameter, a return type, a
+/// list, a map, a struct field, a generic argument, a `let`, `is` and `as`.
+#[test]
+pub fn tuple_types_go_wherever_a_type_goes() {
+    let out = run_output(
+        r#"
+        struct Cell<T> { value: T }
+        struct Edge { ends: (int, int) }
+
+        fn swap(t: (int, string)) -> (string, int) {
+            return (t.1, t.0);
+        }
+
+        fn first<A, B>(t: (A, B)) -> A {
+            return t.0;
+        }
+
+        fn main() {
+            print(swap((1, "a")));
+            print(first((1, "a")), first(("b", 2.5)));
+            let xs: (int, int)[] = [];
+            xs.push((1, 2));
+            let m: {string: (float, bool)} = {"k": (1.5, true)};
+            print(xs, m["k"].1);
+            let c = Cell<(int, string)>{ value: (3, "z") };
+            print(c.value.1, type(c), Edge { ends: (4, 5) }.ends.1);
+            let v: any = (1, 2);
+            print(v is (int, int), v is (int, string), (v as (int, int)).1);
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "(\"a\",1)\n1\nb\n[(1,2)]\ntrue\nz\nCell<(int, string)>\n5\ntrue\nfalse\n2\n"
+    );
+}
+
+/// Two tuples are equal when they are of one type and every element is
+/// equal; a tuple of another type is never equal, the way structs compare.
+#[test]
+pub fn tuples_compare_element_by_element() {
+    let out = run_output(
+        r#"
+        fn main() {
+            let t = (1, "x");
+            print(t == (1, "x"), t == (2, "x"), t != (1, "y"), t == (1, 2));
+            let u = t;
+            print(u == t, ((1, 2), 3) == ((1, 2), 3));
+        }
+        "#,
+    );
+    assert_eq!(out, "true\nfalse\ntrue\nfalse\ntrue\ntrue\n");
+}
+
+/// `let (a, b) = t;` declares one name per place, `_` skips a place, and a
+/// nested pattern reads a nested tuple.
+#[test]
+pub fn let_destructures_a_tuple() {
+    let out = run_output(
+        r#"
+        fn pair() -> (int, string) {
+            return (7, "seven");
+        }
+
+        fn main() {
+            let (n, word) = pair();
+            print(n, word);
+            let ((a, b), _, c) = ((1, 2), 3, "c");
+            print(a + b, c);
+            let (x, y): (int, int) = (4, 5);
+            print(x * y);
+            for p in [(1, "a"), (2, "b")] {
+                let (k, v) = p;
+                print(v + string(k));
+            }
+        }
+        "#,
+    );
+    assert_eq!(out, "7\nseven\n3\nc\n20\na1\nb2\n");
+}
+
+/// A tuple pattern in a `match` arm binds its names and compares the rest of
+/// its elements; `|` alternatives bind the same names, and a last arm of names
+/// alone covers every other case.
+#[test]
+pub fn match_takes_tuple_patterns() {
+    let out = run_output(
+        r#"
+        fn classify(p: (int, int)) -> string {
+            return match p {
+                (0, 0) => "origin",
+                (0, y) | (y, 0) => "axis " + string(y),
+                (x, y) => "point " + string(x + y),
+            };
+        }
+
+        fn main() {
+            print(classify((0, 0)), classify((0, 5)), classify((3, 0)), classify((2, 3)));
+            match (1, ("a", true)) {
+                (2, _) => { print("two"); }
+                (n, (s, true)) => { print(s + string(n)); }
+                _ => { print("other"); }
+            }
+            let origin = (0, 0);
+            let found = match (0, 0) {
+                origin => "same",
+                _ => "different",
+            };
+            print(found);
+        }
+        "#,
+    );
+    assert_eq!(out, "origin\naxis 5\naxis 3\npoint 5\na1\nsame\n");
+}
+
+/// A closure inside a tuple arm reads what the pattern bound.
+#[test]
+pub fn tuple_pattern_bindings_reach_a_closure() {
+    let out = run_output(
+        "
+        fn main() {
+            let y = 100;
+            match (1, 2) {
+                (x, y) => {
+                    let add = fn(z) => x + y + z;
+                    print(add(3));
+                }
+            }
+            print(y);
+        }
+        ",
+    );
+    assert_eq!(out, "6\n100\n");
+}
+
+/// What a tuple does not do is reported before the program runs.
+#[test]
+pub fn tuple_errors() {
+    for (src, code) in [
+        (
+            "fn main() { let t = (1, 2); print(t.2); }",
+            "tuple_index_out_of_range",
+        ),
+        (
+            "fn main() { let t = (1, 2); print(t.x); }",
+            "tuple_index_out_of_range",
+        ),
+        (
+            "fn main() { let t = (1, 2); t.0 = 5; }",
+            "tuple_element_assign",
+        ),
+        (
+            "fn main() { let (a, b) = (1, 2, 3); }",
+            "tuple_pattern_mismatch",
+        ),
+        ("fn main() { let (a, b) = 5; }", "tuple_pattern_mismatch"),
+        (
+            "fn main() { let ((a, b), c) = (1, 2); }",
+            "tuple_pattern_mismatch",
+        ),
+        (
+            "fn main() { match (1, 2) { (a, b, c) => print(a), _ => {} } }",
+            "tuple_pattern_mismatch",
+        ),
+        (
+            "fn main() { match (1, 2) { (0, a) | (b, 0) => print(1), _ => {} } }",
+            "pattern_bindings_differ",
+        ),
+        (
+            "fn main() { let r = match (1, 2) { (0, _) => 0 }; print(r); }",
+            "match_without_wildcard",
+        ),
+        ("fn main() { let t = (1,); }", "tuple_of_one"),
+        ("fn main() { let t: (int,) = 1; }", "tuple_of_one"),
+        ("fn main() { let (a) = 1; }", "tuple_of_one"),
+        (
+            "fn main() { let (a, 1) = (1, 2); }",
+            "tuple_pattern_element",
+        ),
+        ("fn main() { print((1, 2) < (1, 3)); }", "invalid_operation"),
+        ("fn main() { print((1, 2).len()); }", "no_such_method"),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}

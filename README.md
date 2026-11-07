@@ -57,9 +57,10 @@ Run `candela` with no arguments for a REPL.
 - **Types without ceremony.** Annotations are optional on locals and function
   parameters; the compiler infers the rest and reports mismatches before the
   program starts.
-- **Structs, enums and match.** Struct fields can declare defaults, and
-  `Opts { cwd: "a", .. }` writes only what differs. Enum
-  variants carry payloads, and `match` binds them by pattern.
+- **Structs, tuples, enums and match.** Struct fields can declare defaults,
+  and `Opts { cwd: "a", .. }` writes only what differs. A tuple `(1, "a")`
+  groups values by position. Enum variants carry payloads, and `match` binds
+  them and a tuple's elements by pattern.
 - **Methods.** An `impl` block attaches methods to a struct, an enum, or a
   built-in type, called as `value.method()`.
 - **Functions as values.** Pass a named function or an anonymous `fn(x) => x * 2`

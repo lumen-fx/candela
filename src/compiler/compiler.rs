@@ -69,6 +69,7 @@ use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::mangle_method;
+use expr::tuple_let_pattern;
 use functions::handle_functions;
 use functions::handle_value_call;
 use functions::user_functions::body_being_compiled;
@@ -91,6 +92,7 @@ use std::hash::BuildHasherDefault;
 use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use tuples::check_tuple_places;
 use type_system::DataType;
 use type_system::FnTypeExpr;
 use type_system::Generics;
@@ -193,6 +195,7 @@ mod fold;
 pub(crate) mod function_table;
 mod registers;
 mod scalar;
+mod tuples;
 pub(crate) mod type_test;
 
 pub trait UnwrapId {
@@ -1860,33 +1863,108 @@ fn equality_arm_test(scrutinee: &SmolStr, patterns: &[Expr], span: Span) -> Expr
     test
 }
 
+/// The test and the body one arm of an equality `match` runs. An arm with a
+/// tuple pattern among its alternatives tests the elements and declares what
+/// the pattern binds; see [`tuples::tuple_arm`].
+fn equality_arm(
+    scrutinee: &SmolStr,
+    patterns: &[Expr],
+    body: &[Expr],
+    span: Span,
+) -> (Expr, Box<[Expr]>) {
+    if tuples::arm_has_tuple_pattern(patterns) {
+        tuples::tuple_arm(scrutinee, patterns, body, span)
+    } else {
+        (
+            equality_arm_test(scrutinee, patterns, span),
+            Box::from(body),
+        )
+    }
+}
+
 /// The `if` chain an equality `match` runs: one branch per arm, testing the
 /// scrutinee held in `scrutinee`, then the wildcard as the `else`. The first
 /// arm's body comes first, the way a condition holds its own code ahead of
 /// its `else if` blocks.
+///
+/// A last arm whose tuple pattern always matches stands in for a missing
+/// wildcard.
 fn equality_match_chain(
     scrutinee: &SmolStr,
     arms: &[(Box<[Expr]>, Box<[Expr]>)],
     wildcard: Option<&[Expr]>,
     span: Span,
 ) -> (Expr, Box<[Expr]>) {
+    let mut arms = arms;
+    let mut catch_all: Option<Box<[Expr]>> = wildcard.map(Box::from);
+    if catch_all.is_none()
+        && let Some((patterns, body)) = arms.last()
+        && tuples::arm_is_irrefutable(patterns)
+    {
+        catch_all = Some(equality_arm(scrutinee, patterns, body, span).1);
+        if arms.len() > 1 {
+            arms = &arms[..arms.len() - 1];
+        }
+    }
     let (first_patterns, first_body) = &arms[0];
-    let mut code: Vec<Expr> = Vec::with_capacity(arms.len() + first_body.len());
-    code.extend(first_body.iter().cloned());
+    let (first_test, first_code) = equality_arm(scrutinee, first_patterns, first_body, span);
+    let mut code: Vec<Expr> = Vec::with_capacity(arms.len() + first_code.len());
+    code.extend(first_code);
     for (patterns, body) in &arms[1..] {
-        code.push(Expr::ElseIfBlock(
-            Box::new(equality_arm_test(scrutinee, patterns, span)),
-            body.clone(),
-            span,
-        ));
+        let (test, body) = equality_arm(scrutinee, patterns, body, span);
+        code.push(Expr::ElseIfBlock(Box::new(test), body, span));
     }
-    if let Some(w) = wildcard {
-        code.push(Expr::ElseBlock(Box::from(w)));
+    if let Some(w) = catch_all {
+        code.push(Expr::ElseBlock(w));
     }
-    (
-        equality_arm_test(scrutinee, first_patterns, span),
-        Box::from(code),
-    )
+    (first_test, Box::from(code))
+}
+
+/// Checks every tuple pattern of a non-enum `match` against the matched
+/// value's type, and that each arm's alternatives bind the same names.
+fn check_tuple_arms(
+    scrut_type: &DataType,
+    arms: &[(Box<[Expr]>, Box<[Expr]>)],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) {
+    for (patterns, _) in arms {
+        if tuples::arm_has_tuple_pattern(patterns) {
+            tuples::arm_bindings(patterns, scrut_type, span, ctx, state);
+        }
+    }
+}
+
+/// Whether a `match` without a wildcard still covers every case, because its
+/// last arm is a tuple pattern of names alone.
+pub(crate) fn match_ends_irrefutable(arms: &[(Box<[Expr]>, Box<[Expr]>)]) -> bool {
+    arms.last()
+        .is_some_and(|(patterns, _)| tuples::arm_is_irrefutable(patterns))
+}
+
+/// Declares, for the type walks that read an arm body without compiling it,
+/// the names a non-enum arm's tuple patterns bind.
+pub(crate) fn declare_tuple_arm_bindings(
+    scrut_type: &DataType,
+    patterns: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &State<'_>,
+) {
+    if !tuples::arm_has_tuple_pattern(patterns) {
+        return;
+    }
+    for (name, var_type) in tuples::arm_bindings(patterns, scrut_type, span, ctx, state) {
+        v.push(Variable {
+            declared: None,
+            name,
+            register_id: 0,
+            cell: false,
+            var_type,
+        });
+    }
 }
 
 /// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
@@ -1909,6 +1987,7 @@ fn compile_match(
         );
     } else {
         check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
+        check_tuple_arms(&scrut_type, arms, span, ctx, state);
         let obj_var = SmolStr::new_static("[MATCH TEMP]");
         let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
         let desugared = Expr::EvalBlock(Box::from([
@@ -1955,7 +2034,8 @@ fn compile_match_value(
         return result;
     }
     check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
-    if wildcard.is_none() {
+    check_tuple_arms(&scrut_type, arms, span, ctx, state);
+    if wildcard.is_none() && !match_ends_irrefutable(arms) {
         compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
     }
     let scrut_reg = scrutinee
@@ -3382,22 +3462,36 @@ fn compile_inline_condition_branch(
 ) {
     let regs_before = state.registers.len() as u16;
     let output_len = output.len();
-    output.extend(compile_expr(
-        &branch[..branch.len() - 1],
-        v,
-        ctx.advance_offset(output.len() as u16),
-        state,
-    ));
-    // The value compiles onto the end of `output` itself, whose start `ctx`
-    // already places, so its offset is not advanced the way the statements'
-    // separate buffer is.
-    let last = &branch[branch.len() - 1];
+    // The statements and the value share one scope, so a name a statement
+    // declares is in scope for the value: a `match` arm with a tuple pattern
+    // declares what the pattern binds ahead of the arm's value. Everything
+    // compiles onto the end of `output` itself, whose start `ctx` already
+    // places.
+    let v_len = v.len();
+    let symbols_len = state.scope(ctx.file_idx).symbols.len();
+    let (last, statements) = branch.split_last().unwrap();
+    for (idx, statement) in statements.iter().enumerate() {
+        if let Some(id) = statement.compile_with_code_context(
+            v,
+            ctx,
+            state,
+            output,
+            None,
+            false,
+            &branch[idx + 1..],
+            statement.is_value_only(),
+        ) {
+            state.free_reg(id, v);
+        }
+    }
     let val_id = if as_fn_value {
         compile_fn_value(last, v, ctx, state, output, Some(tgt_id))
     } else {
         last.compile(v, ctx, state, output, Some(tgt_id), false, true)
             .unwrap_id()
     };
+    v.truncate(v_len);
+    state.scope_mut(ctx.file_idx).symbols.truncate(symbols_len);
     state.free_scope_registers(regs_before, &output[output_len..], v);
     if val_id != tgt_id {
         output.push(Instr::Mov(val_id, tgt_id));
@@ -3655,6 +3749,14 @@ fn compile_struct_field_assignment(
         );
     };
     let field_struct = &state.structs[struct_id as usize];
+    if field_struct.is_tuple() {
+        compiler_errors::error_tuple_element_assign(
+            ctx.file_idx,
+            struct_span.extend(field_span),
+            &field_struct.name,
+            state.sources,
+        );
+    }
     let Some(field_index) = field_struct
         .fields
         .iter()
@@ -5874,6 +5976,13 @@ impl Expr {
             }
             Self::VarDeclare(name, value, annotation) => {
                 debug_assert!(!uses_id);
+                if let Some((places, pattern_span)) = tuple_let_pattern(name) {
+                    let found = match annotation {
+                        Some(a) => a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)),
+                        None => value.infer_type(v, ctx, state),
+                    };
+                    check_tuple_places(places, &found, pattern_span, ctx, state);
+                }
                 compile_var_declaration(
                     name,
                     value,

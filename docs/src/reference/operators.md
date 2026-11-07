@@ -164,7 +164,7 @@ fn main() {
 }
 ```
 
-There is no ordering on arrays, maps, structs or enums.
+There is no ordering on arrays, maps, tuples, structs or enums.
 
 ## Equality
 
@@ -180,6 +180,7 @@ the same type is the case worth writing.
 | `string` | by contents |
 | `T[]` | by length, then element by element |
 | struct | by type, then field by field |
+| tuple | by type, then element by element |
 | enum | by variant, then payload |
 | map | by length, then key by key |
 
@@ -340,7 +341,8 @@ See [error handling](../language/error-handling.md#passing-a-failure-on).
 
 ## Access and calls
 
-`.` reads a struct field or calls a method on a value. `::` separates the parts
+`.` reads a struct field, reads a tuple element by its position (`t.0`), or
+calls a method on a value. `::` separates the parts
 of a namespaced name: a module bound with `import ... as`, an enum variant, a
 `host` or `dylib` block, a `host` block's struct, or a function inside any of
 them.
