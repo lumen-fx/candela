@@ -64,9 +64,11 @@ are never embedded; the runtime re-opens the library by name and re-resolves the
 symbol when it loads the artifact, then rebuilds the calling interface from the
 recorded signature. This keeps artifacts small and lets a system library be
 upgraded underneath one, and it means the library has to be present wherever the
-artifact runs. A Rust host that ships its libraries in a directory of its own
-names it, and the load looks there before the loader's own paths. See [C
-libraries](../integration/c-libraries.md).
+artifact runs. `candela-vm` looks beside the artifact first, then through the
+loader's own paths, and never in the working directory. A Rust host that ships
+its libraries in a directory of its own names it, and the load looks there
+before the loader's own paths. See [C
+libraries](../integration/c-libraries.md#finding-the-library).
 
 The same applies to the standard library. A program that imports only
 pure-candela modules is self-contained. The `hash`, `math`, `random` and `time`
@@ -201,7 +203,7 @@ silent, so a stale artifact is reported rather than mis-run.
 - An artifact built for a different format version.
 - An artifact whose body does not decode.
 - An artifact whose dynamic library cannot be opened. The message names the
-  library as written and the filename it resolved to.
+  library as written, the filename it resolved to, and what the loader said.
 - An artifact whose library opened but does not export a symbol it needs.
 - An artifact that declares a `host` block. Host functions come from the program
   that embeds candela, and the standalone runtime registers none, so it names

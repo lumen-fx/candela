@@ -9,6 +9,9 @@
 //! but a searched directory can turn it up. Where no zlib file can be copied
 //! (macOS keeps it in the dyld cache rather than on disk) the tests skip.
 
+mod built;
+mod common;
+
 use candela::Engine;
 use candela::HostRegistry;
 use candela::LoadError;
@@ -19,6 +22,8 @@ use candela_vm::rt::TargetOs;
 use candela_vm::rt::resolve_library_filename;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::sync::OnceLock;
 
 /// Calls one zlib symbol through a logical `dylib` import. The name is
 /// `fixture`, so the OS loader's own search path can never satisfy it.
@@ -292,6 +297,138 @@ fn an_artifact_load_searches_the_named_directory() {
         Ok(_) => panic!("the library must not resolve with no directory named"),
     }
 
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The `candela-vm` binary, built for this run; see `built`.
+fn candela_vm() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            built::build(
+                &["-p", "candela-vm", "--bin", "candela-vm"],
+                &format!("candela-vm{}", std::env::consts::EXE_SUFFIX),
+            )
+        })
+        .clone()
+}
+
+/// `candela-vm` looks for a plainly named library beside the artifact, the way
+/// `candela run` looks beside the source, from whatever directory it is run
+/// in, and never in the working directory.
+#[test]
+fn candela_vm_finds_a_library_beside_the_artifact() {
+    let root = scratch_dir("beside");
+    let app = root.join("app");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    std::fs::create_dir_all(&elsewhere).expect("create working dir");
+    let Some(fixture) = install_fixture(&app) else {
+        std::fs::remove_dir_all(&root).ok();
+        return;
+    };
+    let script = app.join("app.cdl");
+    let bytes = build_bytecode(
+        PROGRAM.to_owned(),
+        script.to_str().expect("scratch path is utf-8"),
+        &candela::ImportResolver::new(),
+    )
+    .expect("builds to bytecode");
+    let artifact = app.join("app.cdlb");
+    std::fs::write(&artifact, bytes).expect("write the artifact");
+
+    let run = |cwd: &Path, artifact: &Path| {
+        common::output_with_deadline(
+            Command::new(candela_vm()).arg(artifact).current_dir(cwd),
+            "candela-vm",
+        )
+    };
+    let out = run(&elsewhere, &artifact);
+    assert!(
+        out.status.success(),
+        "the library beside the artifact must load: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.stdout.is_empty(), "the program prints zlib's version");
+
+    // The same library in the working directory and not beside the artifact
+    // is not found, and the report carries the loader's own reason.
+    std::fs::rename(&fixture, elsewhere.join(fixture_filename())).expect("move the library");
+    let out = run(&elsewhere, &artifact);
+    assert!(
+        !out.status.success(),
+        "the working directory is never searched"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot open dynamic library 'fixture'"),
+        "{stderr}"
+    );
+    if cfg!(unix) {
+        assert!(
+            stderr.contains(&fixture_filename()) && !stderr.trim_end().ends_with("dlopen failed"),
+            "the loader's message comes through: {stderr}"
+        );
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A relative path in a `dylib` block resolves against the directories an
+/// artifact load searches, never against the working directory.
+#[test]
+fn an_artifact_resolves_a_relative_path_beside_itself() {
+    let root = scratch_dir("relative");
+    let native = root.join("app").join("native");
+    std::fs::create_dir_all(&native).expect("create native dir");
+    let Some(_fixture) = install_fixture(&native) else {
+        std::fs::remove_dir_all(&root).ok();
+        return;
+    };
+    // A path form is bound under its file name up to the first dot.
+    let filename = fixture_filename();
+    let namespace = filename.split('.').next().expect("a file name");
+    let program = format!(
+        "dylib \"./native/{filename}\" {{\n    string zlibVersion();\n}}\n\nfn main() {{\n    print({namespace}::zlibVersion());\n}}\n"
+    );
+    let script = root.join("app").join("app.cdl");
+    let bytes = build_bytecode(
+        program,
+        script.to_str().expect("scratch path is utf-8"),
+        &candela::ImportResolver::new(),
+    )
+    .expect("builds to bytecode");
+    let artifact = root.join("app").join("app.cdlb");
+    std::fs::write(&artifact, &bytes).expect("write the artifact");
+
+    let out = common::output_with_deadline(
+        Command::new(candela_vm()).arg(&artifact).current_dir(&root),
+        "candela-vm",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The same artifact elsewhere, run from the directory that holds
+    // `native/`, does not resolve the path against the working directory.
+    let other = root.join("other");
+    std::fs::create_dir_all(&other).expect("create other dir");
+    let moved = other.join("app.cdlb");
+    std::fs::write(&moved, &bytes).expect("write the moved artifact");
+    let out = common::output_with_deadline(
+        Command::new(candela_vm())
+            .arg(&moved)
+            .current_dir(root.join("app")),
+        "candela-vm",
+    );
+    assert!(
+        !out.status.success(),
+        "the working directory is never searched"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no such file under"), "{stderr}");
     std::fs::remove_dir_all(&root).ok();
 }
 

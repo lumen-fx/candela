@@ -30,8 +30,8 @@ Two things are recorded as recipes rather than contents:
 
 - **Dynamic C libraries.** A `dylib` block stores the library name, the symbol,
   and its signature, never the library itself. The runtime resolves the library
-  through the OS loader when the artifact loads, so the shared library has to be
-  present on the machine that runs it. Built for WebAssembly, the runtime loads
+  when the artifact loads, beside the artifact first and then through the OS
+  loader, so the shared library has to be present on the machine that runs it. Built for WebAssembly, the runtime loads
   no library and binds the standard library's own recipes (`math`, `random`,
   `time`, `hash`) to built-in versions instead.
 - **Host functions.** A `host` block stores the namespace, name, signature, and

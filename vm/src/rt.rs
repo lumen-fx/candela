@@ -552,28 +552,59 @@ pub fn std_lib_dir() -> Option<PathBuf> {
 }
 
 /// Opens `filename` under each [`dylib_dirs`] directory in turn, then, for a
-/// standard-library file, under [`std_lib_dir`], and hands the name to the OS
-/// loader when it is under none of them.
+/// standard-library file, under [`std_lib_dir`], and hands a plain name or an
+/// absolute path to the OS loader when it is under none of them.
 ///
-/// The loader's own error comes back, so a caller reports the same message it
-/// did before a directory was ever set.
+/// A relative path (`./native/mylib.so`) is resolved against those
+/// directories only, never against the working directory, so an artifact
+/// finds the same file wherever it is run from. `candela-vm` names the
+/// artifact's own directory first, which is where `candela run` looks first
+/// too: beside the file that names the library.
+///
+/// The error is the loader's own message. When a file is there but will not
+/// open (a missing dependency, the wrong architecture), it is that file's
+/// error, not the "not found" of a later place tried.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn open_library(
-    filename: &str,
-    origin: LibraryOrigin,
-) -> Result<Library, libloading::Error> {
-    for dir in dylib_dirs() {
-        if let Ok(lib) = unsafe { Library::new(dir.join(filename)) } {
-            return Ok(lib);
-        }
-    }
+pub(crate) fn open_library(filename: &str, origin: LibraryOrigin) -> Result<Library, String> {
+    let mut dirs = dylib_dirs();
     if matches!(origin, LibraryOrigin::StandardLibrary)
         && let Some(dir) = std_lib_dir()
-        && let Ok(lib) = unsafe { Library::new(dir.join(filename)) }
     {
-        return Ok(lib);
+        dirs.push(dir);
     }
-    unsafe { Library::new(filename) }
+    for dir in &dirs {
+        let candidate = dir.join(filename);
+        match unsafe { Library::new(&candidate) } {
+            Ok(lib) => return Ok(lib),
+            Err(e) if candidate.exists() => return Err(loader_message(&e)),
+            Err(_) => {}
+        }
+    }
+    let path = Path::new(filename);
+    if path.is_relative() && path.components().count() > 1 {
+        return Err(format!(
+            "no such file under {}",
+            if dirs.is_empty() {
+                String::from("any library directory")
+            } else {
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ));
+    }
+    unsafe { Library::new(filename) }.map_err(|e| loader_message(&e))
+}
+
+/// The loader's report for a failed open: libloading's summary ("dlopen
+/// failed") followed by what the system said, which names the cause.
+#[cfg(not(target_arch = "wasm32"))]
+fn loader_message(e: &libloading::Error) -> String {
+    match std::error::Error::source(e) {
+        Some(cause) => format!("{e}: {cause}"),
+        None => e.to_string(),
+    }
 }
 
 #[cfg(test)]

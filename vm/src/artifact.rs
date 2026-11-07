@@ -970,7 +970,7 @@ fn resolve_dyn_lib_fns(
                 LoadError::LibraryOpen {
                     spec: recipe.library.clone(),
                     filename: filename.clone(),
-                    message: e.to_string(),
+                    message: e,
                 }
             })?);
             // A library that posts events gets the runtime's table before

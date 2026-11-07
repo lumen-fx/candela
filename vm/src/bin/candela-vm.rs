@@ -84,6 +84,16 @@ fn main() -> ExitCode {
         }
     };
 
+    // A library the artifact names by a plain name or a relative path is
+    // looked for beside the artifact first, the way `candela run` looks
+    // beside the source file, and never in the working directory.
+    if let Some(dir) = std::fs::canonicalize(&path)
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+    {
+        candela_vm::set_dylib_dirs(vec![dir]);
+    }
+
     // The standalone runtime is nobody's embedder, so it registers no host
     // functions: an artifact that declares a `host` block is one you run from
     // the program that supplies it.
