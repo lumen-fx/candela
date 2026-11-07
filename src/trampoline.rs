@@ -155,8 +155,8 @@ pub fn compile_checked_profile(
 ///
 /// Being checked and being exported are separate questions. The export table
 /// only lists the functions a host `Value` can be marshalled into, so a
-/// function with a struct- or enum-typed parameter is compiled here and gets no
-/// entry.
+/// function with an enum- or function-typed parameter is compiled here and gets
+/// no entry.
 pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
     // Register 0 is candela's void-return / null sink: a call whose result is
     // discarded writes `null` there. A normal program has register 0 occupied by

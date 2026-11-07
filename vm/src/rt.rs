@@ -646,6 +646,18 @@ pub struct Struct {
     pub name_span: Span,
 }
 
+impl Struct {
+    /// Whether this is a tuple type, `(int, string)`, rather than a declared
+    /// struct. A tuple is registered as a struct whose fields are named `0`,
+    /// `1`, and so on, under the name its type is written with, and no
+    /// declared struct's name starts with `(`.
+    #[inline]
+    #[must_use]
+    pub fn is_tuple(&self) -> bool {
+        self.name.starts_with('(')
+    }
+}
+
 /// A native tagged-union enum type. Its values are stored in the object pool
 /// like structs: element 0 of the pool entry is the variant tag (an int index
 /// into `variants`), and elements `1..` are the variant's payload in order.

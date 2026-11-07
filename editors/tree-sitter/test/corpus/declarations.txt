@@ -960,3 +960,62 @@ impl Rect {
                 (field_expression
                   (identifier)
                   (identifier))))))))))
+
+================================================================================
+Tuple types
+================================================================================
+
+fn swap(t: (int, string)) -> (string, int) {
+    return (t.1, t.0);
+}
+
+struct Edge {
+    ends: (int, int)[],
+    weights: {string: (float, Cell<(int, int)>)},
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (tuple_type
+          (type_identifier)
+          (type_identifier))))
+    (return_type
+      (tuple_type
+        (type_identifier)
+        (type_identifier)))
+    (block
+      (return_statement
+        (tuple_expression
+          (field_expression
+            (identifier)
+            (tuple_index))
+          (field_expression
+            (identifier)
+            (tuple_index))))))
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (array_type
+          (tuple_type
+            (type_identifier)
+            (type_identifier))))
+      (field_declaration
+        (identifier)
+        (map_type
+          (type_identifier)
+          (tuple_type
+            (type_identifier)
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (tuple_type
+                  (type_identifier)
+                  (type_identifier))))))))))

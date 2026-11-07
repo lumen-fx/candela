@@ -14,12 +14,15 @@ use crate::compiler::attributes::AttributeTargetKind;
 use crate::compiler::attributes::AttributeUse;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
+use crate::compiler::expr::tuple_let_temp;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::TypeParams;
+use crate::compiler::type_system::tuple_field;
+use crate::compiler::type_system::tuple_name;
 use crate::errors::BLUE;
 use crate::errors::blue;
 use crate::errors::crash;
@@ -96,6 +99,10 @@ struct Parser<'a> {
     /// parsed, which is where a `break` or a `continue` has a loop to leave.
     /// A function body starts again from none.
     loops: u32,
+    /// Statements one statement expanded to past the first, waiting to be
+    /// placed right after it: `let (a, b) = t;` is a declaration of the tuple
+    /// and then one of each name.
+    pending_statements: Vec<Expr>,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -181,6 +188,11 @@ enum ParserErr<'a> {
     /// A `break` or a `continue`, named here, with no loop around it in its
     /// function.
     OutsideLoop(&'static str),
+    /// `(a,)`: a tuple of one element, which candela does not have.
+    TupleOfOne,
+    /// A `let ( ... )` pattern with something other than a name, `_` or
+    /// another parenthesised pattern in it.
+    TuplePatternElement,
 }
 
 impl ParserErr<'_> {
@@ -227,6 +239,8 @@ impl ParserErr<'_> {
             ParserErr::AttributeWithoutItem => "attribute_without_item",
             ParserErr::ThrowCall => "throw_call",
             ParserErr::OutsideLoop(_) => "outside_loop",
+            ParserErr::TupleOfOne => "tuple_of_one",
+            ParserErr::TuplePatternElement => "tuple_pattern_element",
         }
     }
 }
@@ -359,6 +373,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         }
         ParserErr::OutsideLoop(keyword) => &format!(
             "{BLUE}{BOLD}{keyword}{RESET} belongs inside a {BLUE}{BOLD}for{RESET}, {BLUE}{BOLD}while{RESET} or {BLUE}{BOLD}loop{RESET} body, and this function has none around it. A loop in the function that calls this one does not count"
+        ),
+        ParserErr::TupleOfOne => &format!(
+            "A tuple holds at least two values. Drop the {BOLD}','{RESET} to group one value: {BLUE}{BOLD}(a){RESET}"
+        ),
+        ParserErr::TuplePatternElement => &format!(
+            "Each place in a {BLUE}{BOLD}let{RESET} pattern is a name, {BLUE}{BOLD}_{RESET}, or another pattern in parentheses: {BLUE}{BOLD}let (a, (b, _)) = t;{RESET}"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -742,6 +762,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         pending_gt: None,
         inactive: parser.inactive,
         loops: parser.loops,
+        pending_statements: Vec::new(),
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -799,6 +820,7 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
         }
         parser.inactive += 1;
         let _ = parse_statement(parser);
+        parser.pending_statements.clear();
         parser.inactive -= 1;
         token = parser.peek_token_opt()?;
     }
@@ -828,6 +850,9 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
 fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
     let (t, _) = parser.next_token();
     debug_assert_eq!(t, Token::Let);
+    if parser.peek_token() == Token::LParen {
+        return parse_tuple_let(parser);
+    }
     let (t, span) = parser.next_token();
     let var_name = if let Token::Identifier(id) = t {
         SmolStr::new(id)
@@ -869,6 +894,127 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
             })
         }),
     )
+}
+
+/// One place in a `let` pattern: a name to bind, `_`, or a nested pattern.
+enum LetPattern {
+    Name(SmolStr),
+    Ignore,
+    /// A nested pattern, with where it was written.
+    Tuple(Span, Vec<Self>),
+}
+
+/// Parses a parenthesised `let` pattern, `(a, (b, _))`, the `(` not yet read.
+fn parse_let_pattern(parser: &mut Parser<'_>) -> Vec<LetPattern> {
+    let open = parser.next_token().1;
+    parser.enter(open);
+    let mut places = Vec::with_capacity(2);
+    loop {
+        let place = match parser.peek_token() {
+            Token::LParen => {
+                let start = parser.peek_token_span().start;
+                let inner = parse_let_pattern(parser);
+                LetPattern::Tuple((start, parser.last_token_end as u32).into(), inner)
+            }
+            Token::Identifier("_") => {
+                parser.next_token();
+                LetPattern::Ignore
+            }
+            Token::Identifier(name) => {
+                parser.next_token();
+                LetPattern::Name(SmolStr::new(name))
+            }
+            _ => {
+                cold_path();
+                let span = parser.peek_token_span();
+                parser.error(span, ParserErr::TuplePatternElement);
+            }
+        };
+        places.push(place);
+        if parser.peek_token() != Token::Comma {
+            break;
+        }
+        let comma = parser.next_token().1;
+        if parser.peek_token() == Token::RParen {
+            if places.len() == 1 {
+                cold_path();
+                parser.error(comma, ParserErr::TupleOfOne);
+            }
+            break;
+        }
+    }
+    let close = parser.next_token_expect(Token::RParen, "Unmatched '(' in a let pattern");
+    if places.len() == 1 {
+        cold_path();
+        parser.error(open.extend(close), ParserErr::TupleOfOne);
+    }
+    parser.leave();
+    places
+}
+
+/// `let (a, b) = value;`: the value goes into a variable no program can name,
+/// and each name in the pattern is declared from the element in its place.
+/// The declarations after the first wait in `pending_statements`, which puts
+/// them right after it in the block. A nested pattern gets a variable of its
+/// own the same way.
+fn parse_tuple_let(parser: &mut Parser<'_>) -> Expr {
+    let pattern_start = parser.peek_token_span().start;
+    let pattern = parse_let_pattern(parser);
+    let pattern_span = Span::from((pattern_start, parser.last_token_end as u32));
+    let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
+        parser.next_token();
+        let start = parser.peek_token_span().start;
+        let ty = parse_type(parser);
+        Some((ty, Span::from((start, parser.last_token_end as u32))))
+    } else {
+        None
+    };
+    parser.next_token_expect(
+        Token::Equals,
+        "Variable declarations need a '=' to separate the pattern from the value.",
+    );
+    let value_start = parser.peek_token_span().start;
+    let value = parse_expr(parser);
+    let value_span = Span::from((value_start, parser.last_token_end as u32));
+    let temp = tuple_let_temp(pattern.len(), pattern_span);
+    let mut bindings = Vec::new();
+    declare_let_pattern(&pattern, &temp, pattern_span, &mut bindings);
+    parser.pending_statements.extend(bindings);
+    Expr::VarDeclare(
+        temp,
+        Box::new(value),
+        annotation.map(|(ty, span)| {
+            Box::new(LetAnnotation {
+                ty,
+                span,
+                value_span,
+            })
+        }),
+    )
+}
+
+/// The declarations of every name `pattern` binds, each reading its element
+/// out of the variable `tuple`.
+fn declare_let_pattern(pattern: &[LetPattern], tuple: &SmolStr, span: Span, out: &mut Vec<Expr>) {
+    for (i, place) in pattern.iter().enumerate() {
+        let element = Expr::GetStructField(
+            Box::new(Expr::Var(tuple.clone(), span)),
+            tuple_field(i),
+            span,
+            span,
+        );
+        match place {
+            LetPattern::Name(name) => {
+                out.push(Expr::VarDeclare(name.clone(), Box::new(element), None));
+            }
+            LetPattern::Ignore => {}
+            LetPattern::Tuple(inner_span, inner) => {
+                let temp = tuple_let_temp(inner.len(), *inner_span);
+                out.push(Expr::VarDeclare(temp.clone(), Box::new(element), None));
+                declare_let_pattern(inner, &temp, span, out);
+            }
+        }
+    }
 }
 
 fn parse_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32) -> Expr {
@@ -1103,6 +1249,7 @@ fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {
     let mut output: Vec<Expr> = Vec::with_capacity(4);
     while let Some(e) = parse_statement(input) {
         output.push(e);
+        output.append(&mut input.pending_statements);
     }
     output
 }
@@ -1332,10 +1479,34 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
         }))
     } else if next_token == Token::LParen {
         // A parenthesised type, which is what puts a function type under a
-        // list suffix: `(fn(int) -> int)[]`.
+        // list suffix: `(fn(int) -> int)[]`. With a comma it is a tuple type,
+        // `(int, string)`, the generic struct every tuple of that size
+        // instantiates.
         let inner = parse_type(parser);
-        parser.next_token_expect(Token::RParen, "Unmatched '(' in a type");
-        inner
+        if parser.peek_token() == Token::Comma {
+            let mut args = vec![inner];
+            while parser.peek_token() == Token::Comma {
+                let comma = parser.next_token().1;
+                if parser.peek_token() == Token::RParen {
+                    if args.len() == 1 {
+                        cold_path();
+                        parser.error(comma, ParserErr::TupleOfOne);
+                    }
+                    break;
+                }
+                args.push(parse_type(parser));
+            }
+            parser.next_token_expect(Token::RParen, "Unmatched '(' in a type");
+            TypeExpr::Generic(Box::new(GenericType {
+                namespace: Box::from([]),
+                name: tuple_name(args.len()),
+                args: args.into_boxed_slice(),
+                span: (span.start, parser.last_token_end as u32).into(),
+            }))
+        } else {
+            parser.next_token_expect(Token::RParen, "Unmatched '(' in a type");
+            inner
+        }
     } else if next_token == Token::LBrace {
         let key_t = parse_type(parser);
         parser.next_token_expect(
@@ -1492,6 +1663,25 @@ impl<'a> TypeArgScan<'a> {
                 return false;
             }
             if !self.eat(Token::RBrace) {
+                return false;
+            }
+        } else if self.eat(Token::LParen) {
+            // A tuple type, `(int, string)`. Only the form with a comma counts:
+            // a parenthesised single type is also a parenthesised expression,
+            // so `f(a < (b) > (c))` stays the two comparisons it has always
+            // been, while `(b, c)` was never an expression before tuples.
+            if !self.type_expr() || !self.eat(Token::Comma) || !self.type_expr() {
+                return false;
+            }
+            while self.eat(Token::Comma) {
+                if self.peek() == Some(Token::RParen) {
+                    break;
+                }
+                if !self.type_expr() {
+                    return false;
+                }
+            }
+            if !self.eat(Token::RParen) {
                 return false;
             }
         } else {
@@ -2252,6 +2442,7 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             pending_gt: None,
             inactive: 0,
             loops: 0,
+            pending_statements: Vec::new(),
         },
         &mut impls,
         &mut attributes,

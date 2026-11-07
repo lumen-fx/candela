@@ -44,6 +44,24 @@ variable hold either type (`let id: int | string = 7;`), and `any` lets it hold
 anything. A dynamic value, such as what `json::parse` returns, goes into a
 declared variable through a downcast: `let n: int = v as int;`.
 
+## Taking a tuple apart
+
+A `let` with a pattern in parentheses declares one variable for each element of
+a [tuple](types.md#tuples), in order. `_` skips an element, and a pattern in
+parentheses takes apart a tuple inside the tuple.
+
+```rust
+fn main() {
+    let (name, age) = ("Ada", 36);
+    let ((x, y), _) = ((3, 4), "label");
+    print(name, age, x + y);
+}
+```
+
+The pattern has to have one place for each element of the value: a pair goes
+into `(a, b)`, not into `(a, b, c)` or `(a, (b, c))`. Write `: Type` after the
+pattern to declare the tuple's type, as in `let (x, y): (int, int) = p;`.
+
 ## Variables live inside functions
 
 The top level of a file holds declarations only: functions, structs, enums,

@@ -97,6 +97,41 @@ pub type ReturnAnnotation = Option<Box<(TypeExpr, Span)>>;
 /// order they were written. Empty for a declaration that takes none.
 pub type TypeParams = Box<[SmolStr]>;
 
+/// The name of the generic declaration every tuple of `arity` elements is an
+/// instantiation of: `(,)` for a pair, `(,,)` for a triple.
+///
+/// A tuple is a struct the compiler declares, generic over one parameter per
+/// element, with its fields named `0`, `1`, and so on. A tuple literal and a
+/// tuple type name that declaration the way `Pair { .. }` and `Pair<A, B>`
+/// name a user's, so inference, `is`, `as` and equality treat a tuple like
+/// any other generic struct. No identifier starts with `(`, so the name can
+/// never collide with one a program declares.
+#[must_use]
+pub fn tuple_name(arity: usize) -> SmolStr {
+    let mut name = String::with_capacity(arity + 1);
+    name.push('(');
+    for _ in 1..arity {
+        name.push(',');
+    }
+    name.push(')');
+    SmolStr::from(name)
+}
+
+/// How many elements the tuple declaration `name` takes, `None` when `name`
+/// is not one.
+#[must_use]
+pub fn tuple_arity(name: &str) -> Option<usize> {
+    let commas = name.strip_prefix('(')?.strip_suffix(')')?;
+    (!commas.is_empty() && commas.bytes().all(|b| b == b',')).then_some(commas.len() + 1)
+}
+
+/// The field a tuple's element `index` is stored under, which is what `t.0`
+/// reads.
+#[must_use]
+pub fn tuple_field(index: usize) -> SmolStr {
+    index.to_smolstr()
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TypeExpr {
     Identifier(SmolStr, Span),
@@ -255,6 +290,7 @@ impl TypeExpr {
                     );
                 }
                 let args: Vec<DataType> = generic.args.iter().map(|a| a.to_datatype(ctx)).collect();
+                register_tuple(&generic.namespace, &generic.name, ctx.generics);
                 instantiate(&generic.namespace, &generic.name, &args, generic.span, ctx)
             }
             Self::Array(inner_t) => DataType::Array(Some(Box::new(inner_t.to_datatype(ctx)))),
@@ -661,6 +697,38 @@ impl Generics {
         (self.templates.len() - 1) as u32
     }
 
+    /// The declaration tuples of `arity` elements instantiate, registered the
+    /// first time a tuple of that size is written. See [`tuple_name`].
+    pub fn tuple_template(&mut self, arity: usize) -> usize {
+        let name = tuple_name(arity);
+        if let Some(idx) = self.templates.iter().position(|t| t.name == name) {
+            return idx;
+        }
+        let params: TypeParams = (0..arity)
+            .map(|i| format_args!("T{i}").to_smolstr())
+            .collect();
+        let span = Span { start: 0, end: 0 };
+        let fields = params
+            .iter()
+            .enumerate()
+            .map(|(i, param)| {
+                (
+                    tuple_field(i),
+                    TypeExpr::Identifier(param.clone(), span),
+                    span,
+                )
+            })
+            .collect();
+        self.templates.push(TypeTemplate {
+            name,
+            params,
+            file_idx: 0,
+            body: TemplateBody::Struct(fields),
+            defaults: Box::from([]),
+        });
+        self.templates.len() - 1
+    }
+
     /// Records a generic `enum` declaration. Returns its index, as
     /// [`Generics::add_struct_template`] does.
     pub fn add_enum_template(
@@ -879,6 +947,10 @@ fn render_instantiation(
         .map(|a| render_type(a, structs, enums))
         .collect::<Vec<SmolStr>>()
         .join(", ");
+    // A tuple is named the way its type is written, `(int, string)`.
+    if tuple_arity(base).is_some() {
+        return format_args!("({rendered})").to_smolstr();
+    }
     match qualifier {
         Some(module) => format_args!("{module}::{base}<{rendered}>").to_smolstr(),
         None => format_args!("{base}<{rendered}>").to_smolstr(),
@@ -1056,12 +1128,28 @@ pub fn find_template(
     scope: &Namespace,
     generics: &Generics,
 ) -> Option<usize> {
+    // A tuple's declaration belongs to no module and is reachable from every
+    // one. It exists once a tuple of its size has been written; see
+    // `Generics::tuple_template`.
+    if namespace.is_empty() && tuple_arity(name).is_some() {
+        return generics.templates.iter().position(|t| t.name == name);
+    }
     scope.find_template(namespace, name).or_else(|| {
         namespace
             .is_empty()
             .then(|| generics.last_template_named(name))
             .flatten()
     })
+}
+
+/// Registers the tuple declaration a literal or a type names, when `name` is
+/// one, so the lookups after it find it. Every other name is left alone.
+pub fn register_tuple(namespace: &[SmolStr], name: &str, generics: &mut Generics) {
+    if namespace.is_empty()
+        && let Some(arity) = tuple_arity(name)
+    {
+        generics.tuple_template(arity);
+    }
 }
 
 /// Resolves `base<args>` to an ordinary struct or enum, registering it the
@@ -1578,6 +1666,7 @@ pub fn struct_literal_id(
 ) -> u16 {
     let name = namespace[namespace.len() - 1].clone();
     let path = &namespace[..namespace.len() - 1];
+    register_tuple(path, &name, state.generics);
     if !type_args.is_empty() {
         let args = resolve_type_args(type_args, ctx, state);
         return instantiated_struct_id(path, &name, &args, span, ctx, state);
@@ -1634,6 +1723,9 @@ pub fn literal_struct_id(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> u16 {
+    if let Some((name, path)) = namespace.split_last() {
+        register_tuple(path, name, state.generics);
+    }
     if type_args.is_empty()
         && let Some(base) = base
         && let Some((name, path)) = namespace.split_last()
@@ -3254,6 +3346,15 @@ fn track_return_flow(
                         crate::compiler::declare_arm_bindings(
                             enum_id, patterns, *span, v, ctx, state,
                         );
+                    } else {
+                        crate::compiler::declare_tuple_arm_bindings(
+                            &scrut_type,
+                            patterns,
+                            *span,
+                            v,
+                            ctx,
+                            state,
+                        );
                     }
                     let flow = track_return_flow(body, v, ctx, state, fn_name);
                     v.truncate(v_len);
@@ -3268,8 +3369,9 @@ fn track_return_flow(
                     }
                     true
                 } else {
-                    // An enum match with no wildcard is compile-time exhaustive.
-                    is_enum
+                    // An enum match with no wildcard is compile-time exhaustive,
+                    // and so is one whose last arm is a tuple pattern of names.
+                    is_enum || crate::compiler::match_ends_irrefutable(arms)
                 };
                 if exhaustive && all_return {
                     return FnReturnFlow {
@@ -4554,6 +4656,15 @@ impl Expr {
                         crate::compiler::declare_arm_bindings(
                             enum_id, patterns, *span, v, ctx, state,
                         );
+                    } else {
+                        crate::compiler::declare_tuple_arm_bindings(
+                            &scrut_type,
+                            patterns,
+                            *span,
+                            v,
+                            ctx,
+                            state,
+                        );
                     }
                     types.push(body[body.len() - 1].infer_type(v, ctx, state));
                     v.truncate(v_len);
@@ -4568,17 +4679,22 @@ impl Expr {
                 let mut types: Vec<DataType> = Vec::with_capacity(code.len());
                 let v_len = v.len();
                 crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
-                types.push(code[0].infer_type(v, ctx, state));
+                let main_len = code
+                    .iter()
+                    .position(|x| matches!(x, Self::ElseIfBlock(..) | Self::ElseBlock(_)))
+                    .unwrap_or(code.len());
+                types.push(inline_branch_type(&code[..main_len], v, ctx, state));
                 v.truncate(v_len);
-                for t in &code[0..] {
+                for t in &code[main_len..] {
                     if let Self::ElseIfBlock(condition, code, _) = t {
                         crate::compiler::type_test::declare_condition_facts(
                             condition, v, ctx, state,
                         );
-                        types.push(code[0].infer_type(v, ctx, state));
+                        types.push(inline_branch_type(code, v, ctx, state));
                         v.truncate(v_len);
                     } else if let Self::ElseBlock(code) = t {
-                        types.push(code[0].infer_type(v, ctx, state));
+                        types.push(inline_branch_type(code, v, ctx, state));
+                        v.truncate(v_len);
                     }
                 }
                 branch_value_type(types, ctx, state)
@@ -4664,6 +4780,33 @@ impl Expr {
             _ => unsafe { unreachable_unchecked() },
         }
     }
+}
+
+/// The type of one branch of an `if` used as a value: its last expression.
+///
+/// A branch the parser reads is that expression alone. One a `match` arm with
+/// a tuple pattern lowers to declares the names the pattern binds first, and
+/// those are in scope for the expression.
+fn inline_branch_type(
+    branch: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> DataType {
+    let (last, declarations) = branch.split_last().unwrap();
+    for declaration in declarations {
+        if let Expr::VarDeclare(name, value, None) = declaration {
+            let var_type = value.infer_type(v, ctx, state);
+            v.push(Variable {
+                declared: None,
+                name: name.clone(),
+                register_id: 0,
+                cell: false,
+                var_type,
+            });
+        }
+    }
+    last.infer_type(v, ctx, state)
 }
 
 /// The type of a construct used as a value, an `if` or a `match`, from the

@@ -37,6 +37,7 @@ use candela::compiler::expr::METHOD_SEP;
 use candela::compiler::expr::{Expr, IsTarget, Span};
 use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::ANON_FN_PREFIX;
+use candela::compiler::type_system::tuple_arity;
 use candela::compiler::{Namespace, SymbolKind};
 use candela::macros::MacroEnv;
 use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
@@ -402,7 +403,11 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
             if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
                 visit_expr(base, src_file, out);
             }
-            if let Some(name) = path.last() {
+            // A tuple literal names the struct the compiler declares for
+            // tuples, which has no declaration to go to.
+            if let Some(name) = path.last()
+                && tuple_arity(name).is_none()
+            {
                 out.push(RefSite {
                     span: *span,
                     kind: RefKind::StructLiteral,
@@ -591,7 +596,12 @@ impl ProgramSummary {
             .filter(|f| f.src_file == 0 && is_a_written_name(&f.name))
     }
     pub fn own_structs(&self) -> impl Iterator<Item = &StructSymbol> {
-        self.structs.iter().filter(|s| s.src_file == Some(0))
+        // A tuple type is a struct the compiler declares, named the way the
+        // type is written, so its name can match the buffer's text without
+        // being a declaration.
+        self.structs
+            .iter()
+            .filter(|s| s.src_file == Some(0) && !s.name.starts_with('('))
     }
 
     /// The innermost call/struct-literal reference whose span contains
@@ -691,6 +701,23 @@ mod tests {
         let outcome = analyze(source, "buffer.cdl");
         let diagnostic = outcome.diagnostic.expect("movment is no function");
         assert_eq!(diagnostic.code, "attribute_bad_argument");
+    }
+
+    /// A tuple program analyses clean, and the structs the compiler declares
+    /// for its tuple types stay out of the outline even where the buffer
+    /// spells the type the way the struct is named.
+    #[test]
+    fn tuples_analyse_and_stay_out_of_the_outline() {
+        let source = "fn swap(t: (int, int)) -> (int, int) {\n    let (a, b) = t;\n    return (b, a);\n}\n\nfn main() {\n    print(swap((1, 2)).0);\n}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        assert!(summary.structs.iter().any(|s| s.name == "(int, int)"));
+        assert_eq!(summary.own_structs().count(), 0);
     }
 
     /// The macro is skipped, not the errors around it.

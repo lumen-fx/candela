@@ -1259,6 +1259,34 @@ fn a_struct_parameter_is_callable_from_an_artifact() {
     );
 }
 
+/// A function that takes a tuple gets an export like one taking any other
+/// struct, and the tuple crosses as a struct named by its type.
+#[test]
+fn a_tuple_parameter_is_callable_from_an_artifact() {
+    let src =
+        "fn swap(t: (int, string)) -> (string, int) {\n    return (t.1, t.0);\n}\n\nfn main() {}\n";
+    let mut program = load(src, "tuples.cdl", &HostRegistry::new());
+    program.run();
+    assert!(program.exports().any(|name| name == "swap"));
+    let pair = Value::Struct {
+        name: String::from("(int, string)"),
+        fields: vec![
+            (String::from("0"), Value::Int(7)),
+            (String::from("1"), "x".into()),
+        ],
+    };
+    assert_eq!(
+        program.call("swap", &[pair]).unwrap(),
+        Value::Struct {
+            name: String::from("(string, int)"),
+            fields: vec![
+                (String::from("0"), "x".into()),
+                (String::from("1"), Value::Int(7)),
+            ],
+        }
+    );
+}
+
 /// A struct argument that disagrees with the declaration is refused before
 /// anything runs.
 #[test]

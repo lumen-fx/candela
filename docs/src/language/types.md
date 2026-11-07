@@ -15,6 +15,7 @@ up before it runs.
 | Absent value | `null` | `null` |
 | List | `T[]` | `[1, 2, 3]` |
 | Map | `{K: V}` | `{"a": 1}` |
+| Tuple | `(A, B)` | `(1, "a")` |
 | Function | `fn(A) -> R` | `fn(x) => x` |
 
 `int` is a signed 64-bit integer and `float` is double precision. A numeric
@@ -37,8 +38,8 @@ characters. Any other character, accented letters and emoji included, is
 written as itself.
 
 Lists and maps are covered in [Collections](collections.md), functions in
-[Functions](functions.md), and your own types in [Enums](enums.md) and in
-[Structs](#structs) below. A function's type is inferred wherever the value
+[Functions](functions.md), tuples in [Tuples](#tuples) below, and your own types
+in [Enums](enums.md) and in [Structs](#structs) below. A function's type is inferred wherever the value
 says it; write `fn(A) -> R` where a declaration has to say what it accepts,
 such as a struct field or a parameter.
 
@@ -225,7 +226,10 @@ all of them.
 - `A|B`: a union, a value that is either an `A` or a `B`.
 - `fn(A, B) -> R`: a function taking an `A` and a `B` and returning an `R`.
   Leave the arrow off for one that returns nothing.
-- `(T)`: parentheses, which group a type the way they group an expression.
+- `(A, B)`: a tuple of an `A` and a `B`, with two or more element types, for
+  example `(int, string)` or `(float, float)[]`.
+- `(T)`: parentheses around one type, which group it the way they group an
+  expression.
 - `any`: a slot whose type is decided by the value, written on a struct
   field, a parameter, a return type, a `let`, or an enum payload.
 
@@ -245,6 +249,54 @@ decides what the local holds. An annotation never overrides a type the value
 does have, so passing `[1, 2]` to a `Value[]` parameter is still an error. An
 empty collection in a `let` without an annotation takes its element types from
 the first value put into it instead.
+
+## Tuples
+
+A tuple holds a fixed number of values side by side, each of its own type, read
+by position. It suits a value that is only a pair or a triple, such as two
+results handed back from one function, where naming a struct would add nothing.
+
+Write the values in parentheses, separated by commas, and read an element with a
+dot and its position, counted from zero.
+
+```rust
+fn min_max(xs: int[]) -> (int, int) {
+    let lo = xs[0];
+    let hi = xs[0];
+    for x in xs {
+        if x < lo { lo = x; }
+        if x > hi { hi = x; }
+    }
+    return (lo, hi);
+}
+
+fn main() {
+    let range = min_max([4, 1, 7]);
+    print(range.0, range.1);
+    print(range, type(range));
+}
+```
+
+A tuple has two or more elements. One value in parentheses is that value,
+grouped, and `(a,)` is a parse error. A tuple's type is its element types in
+parentheses, `(int, string)`, and it goes anywhere a type goes: a parameter, a
+return type, a struct field, a list `(int, int)[]`, a map value, a generic
+argument `Cell<(int, int)>`, and after `is` and `as`. Reading an element past the
+last one is a compile error, and so is a name after the dot: a tuple has no named
+fields and no methods. Give a value that needs either a struct.
+
+Two tuples are equal when they are of the same type and every element is equal;
+tuples are not ordered. See [operators](../reference/operators.md#equality).
+`print` and `string` write a tuple the way it is built, `(1,"a")`.
+
+An element is read, never assigned: `t.0 = x` is a compile error. Build a new
+tuple instead, `t = (x, t.1);`. A list or a map inside a tuple is still the
+list or the map itself, and changing it through the tuple changes it everywhere
+it is held.
+
+`let (lo, hi) = range;` takes a tuple apart into one variable per element; see
+[Variables](variables.md#taking-a-tuple-apart). A `match` arm takes a tuple
+pattern too; see [Control flow](control-flow.md#tuple-patterns).
 
 ## Structs
 

@@ -175,6 +175,9 @@
 (field_expression
   field: (identifier) @variable.member)
 
+(field_expression
+  field: (tuple_index) @variable.member)
+
 (qualified_identifier
   module: (identifier) @module)
 

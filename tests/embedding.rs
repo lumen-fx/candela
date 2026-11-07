@@ -2484,6 +2484,106 @@ fn a_host_struct_crosses_as_a_struct_naming_its_fields() {
     );
 }
 
+/// A tuple in a host signature crosses the way a struct does: as a
+/// `Value::Struct` named by its type, whose fields are the element positions.
+#[test]
+fn a_tuple_crosses_into_the_host_as_a_struct_of_its_elements() {
+    let seen: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    let mut engine = Engine::new();
+    engine.register_host_fn_typed(
+        "geo",
+        "area",
+        vec![HostType::Struct(vec![
+            (String::from("0"), HostType::Int),
+            (String::from("1"), HostType::String),
+        ])],
+        HostType::Int,
+        move |args: &[Value]| {
+            sink.borrow_mut().push(args[0].clone());
+            Ok(Value::Int(6))
+        },
+    );
+    let mut program = engine
+        .compile(
+            "host \"geo\" { int area((int, string)); }\nfn run() -> int { return geo::area((2, \"m\")); }\nfn main() {}\n",
+            "geo.cdl",
+        )
+        .expect("compiles");
+    assert_eq!(program.call("run", &[]).unwrap(), Value::Int(6));
+    assert_eq!(*seen.borrow(), vec![pair(Value::Int(2), "m".into())]);
+}
+
+/// An `(int, string)` as a host builds one and a script returns one.
+fn pair(first: Value, second: Value) -> Value {
+    Value::Struct {
+        name: String::from("(int, string)"),
+        fields: vec![(String::from("0"), first), (String::from("1"), second)],
+    }
+}
+
+const TUPLE_CALLS: &str = "
+fn swap(t: (int, string)) -> (string, int) {
+    return (t.1, t.0);
+}
+
+fn first(t: (int, string)) -> int {
+    return t.0;
+}
+
+fn sum(pairs: (int, string)[]) -> int {
+    let total = 0;
+    for p in pairs {
+        total += p.0;
+    }
+    return total;
+}
+
+fn main() {}
+";
+
+/// A host passes a tuple into a script function by naming its type, gets one
+/// back the same way, and a tuple of the wrong type is refused.
+#[test]
+fn tuples_cross_both_ways_as_structs_named_by_their_type() {
+    let mut program = Engine::new()
+        .compile(TUPLE_CALLS, "tuples.cdl")
+        .expect("compiles");
+    assert_eq!(
+        program
+            .call("first", &[pair(Value::Int(7), "x".into())])
+            .unwrap(),
+        Value::Int(7)
+    );
+    assert_eq!(
+        program
+            .call("swap", &[pair(Value::Int(7), "x".into())])
+            .unwrap(),
+        Value::Struct {
+            name: String::from("(string, int)"),
+            fields: vec![
+                (String::from("0"), "x".into()),
+                (String::from("1"), Value::Int(7)),
+            ],
+        }
+    );
+    assert_eq!(
+        program
+            .call(
+                "sum",
+                &[Value::Array(vec![
+                    pair(Value::Int(1), "a".into()),
+                    pair(Value::Int(2), "b".into()),
+                ])]
+            )
+            .unwrap(),
+        Value::Int(3)
+    );
+    let wrong = pair("x".into(), Value::Int(7));
+    let err = program.call("first", &[wrong]).unwrap_err();
+    assert_eq!(err.code, "argument_type_mismatch");
+}
+
 /// The registration is held to the fields the block declares.
 #[test]
 fn a_host_struct_whose_fields_disagree_is_a_diagnostic() {

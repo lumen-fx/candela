@@ -618,6 +618,19 @@ impl Data {
             SmolStr::new_static("null")
         } else if self.is_struct() {
             let declared = structs.get(self.struct_type_id() as usize);
+            // A tuple reads the way it is written: its elements in order,
+            // inside parentheses.
+            if declared.is_some_and(Struct::is_tuple) {
+                return format_args!(
+                    "({})",
+                    obj_pool[self.as_struct()]
+                        .iter()
+                        .map(|x| x.format(obj_pool, string_pool, map_pool, structs, enums, false))
+                        .collect::<Vec<SmolStr>>()
+                        .join(",")
+                )
+                .to_smolstr();
+            }
             let s_name = declared.map_or("struct", |s| s.name.as_str());
             format_args!(
                 "{} {{{}}}",

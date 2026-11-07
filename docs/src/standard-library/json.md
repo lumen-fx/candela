@@ -79,8 +79,8 @@ Ints, floats, bools, strings, null, lists, and maps serialise to their json
 counterparts. A float keeps a decimal point so it parses back as a float, and a
 float that is infinite or not a number serialises as `null`. A map key that is
 not a string is rendered to its text form and quoted, because json object keys
-are strings. A struct or enum value has no json shape, so it serialises as a
-quoted string of its literal form. A map serialises in the order its keys went
+are strings. A struct, tuple or enum value has no json shape, so it serialises
+as a quoted string of its literal form. A map serialises in the order its keys went
 in, so a document parsed with `parse` and handed straight back to `stringify`
 keeps the key order it was written with.
 

@@ -172,11 +172,38 @@ fn main() {
 Matching an enum matches on the variant instead, and binds the payload; see
 [Enums](enums.md).
 
+### Tuple patterns
+
+An arm written as a [tuple](types.md#tuples) matches a tuple element by element.
+A name in the pattern binds that element for the arm's body, `_` accepts any
+element, and any other value has to be equal to the element. A pattern in
+parentheses matches a tuple inside the tuple.
+
+```rust
+fn describe(p: (int, int)) -> string {
+    return match p {
+        (0, 0) => "origin",
+        (0, y) | (y, 0) => "on an axis at " + string(y),
+        (x, y) => "at " + string(x) + ", " + string(y),
+    };
+}
+
+fn main() {
+    print(describe((0, 0)), describe((0, 4)), describe((2, 3)));
+}
+```
+
+Every `|` alternative of an arm binds the same names at the same types, since
+the body runs whichever of them matched. A pattern needs as many places as the
+matched tuple has elements. An arm whose pattern holds only names and `_` matches
+every tuple, so written last it stands in for the `_` arm.
+
 ### match as an expression
 
 A `match` written where a value is expected produces a value: the value of the
 arm that fits. Like an `if` used as a value, it has to give one on every path,
-so it needs a `_` arm unless it matches an enum and lists every variant. A
+so it needs a `_` arm unless it matches an enum and lists every variant, or
+ends in a [tuple pattern](#tuple-patterns) of names alone. A
 braced arm holds one expression, as the branches of an `if` used as a value do.
 
 ```rust

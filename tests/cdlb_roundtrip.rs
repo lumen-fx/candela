@@ -494,6 +494,37 @@ fn wide_ints_agree_across_source_and_artifact() {
     );
 }
 
+const TUPLE_PROGRAM: &str = r#"
+fn swap(t: (int, string)) -> (string, int) {
+    return (t.1, t.0);
+}
+
+fn main() {
+    let t = (1, "x");
+    print(swap(t), t == (1, "x"));
+    let (n, s) = t;
+    print(s + string(n));
+    let label = match (0, 4) {
+        (0, y) => "axis " + string(y),
+        _ => "point",
+    };
+    print(label, type(t));
+}
+"#;
+
+/// A tuple prints, compares, destructures and matches the same once built
+/// into an artifact and run on `candela-vm`, which knows a tuple only by the
+/// name the compiler gave its struct.
+#[test]
+fn tuple_program_agrees_across_source_and_artifact() {
+    agrees_across_source_and_artifact(
+        "tuples",
+        TUPLE_PROGRAM,
+        "(\"x\",1)\ntrue\nx1\naxis 4\n(int, string)\n",
+        "a tuple program",
+    );
+}
+
 /// A recursive function followed by one that lives in more registers runs to
 /// the same answers through `candela <file>` and through `candela build` plus
 /// `candela-vm`. The saved-register table a recursive call site writes is what

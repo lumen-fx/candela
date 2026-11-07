@@ -457,13 +457,34 @@ fn resource(name: &str, field: &str, value: Value) -> Value {
     }
 }
 
-/// A directory holding the engine's package and the game, unique to `label`.
-fn project(label: &str) -> PathBuf {
+/// A directory holding the engine's package and `game`, unique to `label`.
+fn project(label: &str, game: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("candela_ecs_{label}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("ecs.cdl"), ECS_PACKAGE).unwrap();
-    std::fs::write(dir.join("game.cdl"), GAME).unwrap();
+    std::fs::write(dir.join("game.cdl"), game).unwrap();
     dir
+}
+
+/// Builds `game.cdl` in `dir` with `candela build` and returns the artifact.
+fn build(dir: &std::path::Path) -> Vec<u8> {
+    let out = dir.join("game.cdlb");
+    let status = Command::new(env!("CARGO_BIN_EXE_candela"))
+        .arg("build")
+        .arg(dir.join("game.cdl"))
+        .arg("-o")
+        .arg(&out)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::read(&out).unwrap()
+}
+
+/// Loads an artifact and runs its top level.
+fn load(bytes: &[u8]) -> RuntimeProgram {
+    let mut program = load_program(bytes, &HostRegistry::new()).unwrap();
+    program.run();
+    program
 }
 
 /// Loads the game's systems, runs the startup schedule and two update frames,
@@ -569,7 +590,7 @@ fn drive(script: &mut dyn Script) {
 /// The binding drives a script the compiler holds.
 #[test]
 fn systems_run_on_a_compiled_program() {
-    let dir = project("compiled");
+    let dir = project("compiled", GAME);
     let path = dir.join("game.cdl");
     let mut program = Engine::new()
         .compile(GAME, path.to_str().unwrap())
@@ -581,17 +602,8 @@ fn systems_run_on_a_compiled_program() {
 /// VM alone, and lists the systems from the file before loading it.
 #[test]
 fn systems_run_on_a_built_artifact() {
-    let dir = project("built");
-    let out = dir.join("game.cdlb");
-    let status = Command::new(env!("CARGO_BIN_EXE_candela"))
-        .arg("build")
-        .arg(dir.join("game.cdl"))
-        .arg("-o")
-        .arg(&out)
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let bytes = std::fs::read(&out).unwrap();
+    let dir = project("built", GAME);
+    let bytes = build(&dir);
 
     let listed = read_attributes(&bytes).unwrap();
     let systems: Vec<String> = listed
@@ -605,8 +617,79 @@ fn systems_run_on_a_built_artifact() {
         systems,
         ["movement", "spawn_on_hit", "count_hits", "drag", "setup"]
     );
-
-    let mut program = load_program(&bytes, &HostRegistry::new()).unwrap();
-    program.run();
+    let mut program = load(&bytes);
     drive(&mut program);
+}
+
+/// A query written as a tuple of components instead of a row struct.
+const TUPLE_GAME: &str = r#"
+import "ecs.cdl";
+
+@ecs::component struct Position { x: float, y: float }
+@ecs::component struct Velocity { x: float, y: float }
+@ecs::resource struct Time { dt: float }
+
+@ecs::system(writes: [Position])
+fn movement(bodies: (Position, Velocity)[], time: Time) {
+    for body in bodies {
+        let (pos, vel) = body;
+        pos.x += vel.x * time.dt;
+        pos.y += vel.y * time.dt;
+    }
+}
+
+fn main() {}
+"#;
+
+/// Runs [`TUPLE_GAME`]'s one system for a frame and checks that the tuple
+/// query read both components and wrote back the declared one.
+fn drive_tuple_query(script: &mut dyn Script) {
+    let table = script.attributes();
+    let binding = Binding::load(&table);
+    assert!(matches!(
+        &binding.systems[0].params[0],
+        Param::Query { row, fields, .. }
+            if row == "(Position, Velocity)"
+                && fields == &[
+                    (String::from("0"), String::from("Position")),
+                    (String::from("1"), String::from("Velocity")),
+                ]
+    ));
+
+    let mut world = World::default();
+    world.resources.insert(
+        String::from("Time"),
+        resource("Time", "dt", Value::Float(0.5)),
+    );
+    let body = world.spawn(vec![
+        point("Position", 0.0, 0.0),
+        point("Velocity", 2.0, 4.0),
+    ]);
+    let alone = world.spawn(vec![point("Position", 5.0, 5.0)]);
+    world.frame = 1;
+    binding.run("Update", script, &mut world);
+    assert_eq!(
+        world.get("Position", body),
+        Some(&point("Position", 1.0, 2.0))
+    );
+    assert_eq!(world.changed[&(String::from("Position"), body)], 1);
+    // No velocity, so not in the query.
+    assert_eq!(
+        world.get("Position", alone),
+        Some(&point("Position", 5.0, 5.0))
+    );
+    assert_eq!(world.changed[&(String::from("Position"), alone)], 0);
+}
+
+/// A `(A, B)[]` parameter is a query under the binding's rule, run the same
+/// on a compiled program and on a built artifact.
+#[test]
+fn a_tuple_query_runs_like_a_row_struct() {
+    let dir = project("tuple", TUPLE_GAME);
+    let mut program = Engine::new()
+        .compile(TUPLE_GAME, dir.join("game.cdl").to_str().unwrap())
+        .unwrap_or_else(|d| panic!("{}", d.message));
+    drive_tuple_query(&mut program);
+    let mut artifact = load(&build(&dir));
+    drive_tuple_query(&mut artifact);
 }

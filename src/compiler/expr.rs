@@ -30,6 +30,77 @@ pub fn mangle_method(type_name: &str, method_name: &str) -> SmolStr {
     format_args!("{type_name}{METHOD_SEP}{method_name}").to_smolstr()
 }
 
+/// A tuple literal, `(a, b)`: a literal of the struct the compiler declares
+/// for tuples of that size, with element `i` in the field named `i`. See
+/// [`crate::compiler::type_system::tuple_name`].
+#[must_use]
+pub fn tuple_literal(elements: Vec<(Expr, Span)>, span: Span) -> Expr {
+    let name = crate::compiler::type_system::tuple_name(elements.len());
+    let fields = elements
+        .into_iter()
+        .enumerate()
+        .map(|(i, (value, value_span))| {
+            (
+                crate::compiler::type_system::tuple_field(i),
+                value,
+                value_span,
+                value_span,
+            )
+        })
+        .collect();
+    Expr::Struct(Box::from([name]), fields, span, Box::from([]), None)
+}
+
+/// How the variable a `let (a, b) = value;` keeps its tuple in starts.
+///
+/// The rest of the name is the number of places in the pattern, the start and
+/// the end of the pattern in the file, all three separated by spaces, and `]`.
+/// No identifier can start with `[`.
+pub const TUPLE_LET_PREFIX: &str = "[TUPLE ";
+
+/// The variable a `let` pattern of `places` places written at `span` holds
+/// its tuple in. See [`TUPLE_LET_PREFIX`].
+#[must_use]
+pub fn tuple_let_temp(places: usize, span: Span) -> SmolStr {
+    format_args!("{TUPLE_LET_PREFIX}{places} {} {}]", span.start, span.end).to_smolstr()
+}
+
+/// The number of places the `let` pattern behind variable `name` has and
+/// where the pattern was written, `None` for a variable a program declared.
+#[must_use]
+pub fn tuple_let_pattern(name: &str) -> Option<(usize, Span)> {
+    let mut parts = name
+        .strip_prefix(TUPLE_LET_PREFIX)?
+        .strip_suffix(']')?
+        .split(' ');
+    let places = parts.next()?.parse().ok()?;
+    let start = parts.next()?.parse().ok()?;
+    let end = parts.next()?.parse().ok()?;
+    Some((places, Span { start, end }))
+}
+
+/// The elements of a tuple literal and where each was written, `None` for any
+/// other expression. A `match` arm written as a tuple literal is a tuple
+/// pattern.
+#[must_use]
+pub fn tuple_elements(expr: &Expr) -> Option<Vec<(&Expr, Span)>> {
+    match expr {
+        Expr::Struct(path, fields, _, type_args, None)
+            if type_args.is_empty()
+                && path.len() == 1
+                && crate::compiler::type_system::tuple_arity(&path[0]).is_some() =>
+        {
+            Some(
+                fields
+                    .iter()
+                    .map(|(_, value, span, _)| (value, *span))
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
 /// What an import adds to the scope of the file that writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportBinding {
@@ -635,6 +706,30 @@ fn scan_block_free_names(
     bound.truncate(bound_len);
 }
 
+/// What a tuple pattern adds to a free-name scan: each name it binds is
+/// bound for the arm body, and each value it compares an element with is
+/// read where the pattern is.
+fn scan_tuple_pattern(
+    pattern: &Expr,
+    depth: u32,
+    bound: &mut Vec<SmolStr>,
+    out: &mut Vec<SmolStr>,
+) {
+    let Some(elements) = tuple_elements(pattern) else {
+        scan_free_names(pattern, depth, bound, out);
+        return;
+    };
+    for (element, _) in elements {
+        match element {
+            Expr::Var(name, _) => bound.push(name.clone()),
+            nested if tuple_elements(nested).is_some() => {
+                scan_tuple_pattern(nested, depth, bound, out);
+            }
+            value => scan_free_names(value, depth, bound, out),
+        }
+    }
+}
+
 /// Collects, in the order they first appear, the names the anonymous
 /// functions in `expr` read or write from the scope around them.
 ///
@@ -710,7 +805,9 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 // An enum pattern binds its payload for the arm body; any
                 // other pattern is a value the scrutinee is compared against.
                 for pattern in patterns {
-                    if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
+                    if tuple_elements(pattern).is_some() {
+                        scan_tuple_pattern(pattern, depth, bound, out);
+                    } else if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
                         for binder in binders {
                             if let Expr::Var(name, _) = binder {
                                 bound.push(name.clone());

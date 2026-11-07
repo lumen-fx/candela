@@ -254,7 +254,10 @@ in the declaration: the script builds the whole value before the call, and the
 closure always receives every field.
 
 A host function cannot return a struct; a declaration that does is refused
-when it binds. A `.cdlb` built from the script records the struct with the program's
+when it binds. A tuple crosses the same way, as a struct whose fields are named
+by position: `int area((int, string));` registers its parameter as
+`HostType::Struct` with the fields `"0"` and `"1"`, and the closure receives a
+`Value::Struct` named `(int, string)` and reads `args[0].field("0")`. A `.cdlb` built from the script records the struct with the program's
 own, so `RuntimeProgram` binds and passes it the same way.
 
 ### register_macro
@@ -830,8 +833,9 @@ generic struct by its instantiation (`Cell<int>`), and when two modules declare
 a struct of one name, each is named behind its module. A struct argument must
 carry exactly the fields the struct declares, each a value of its type, or the
 call is refused before it runs, the same way a wrong scalar is. A
-[tuple](../language/types.md) is a struct whose fields are named `0`, `1`, and
-so on, so it crosses the same way. A function that takes a struct, or a list of
+[tuple](../language/types.md#tuples) is a struct named by its type,
+`(int, string)`, whose fields are named `0`, `1`, and so on, so it crosses the
+same way. A function that takes a struct, or a list of
 structs, is exported from an artifact like any other.
 
 A list or map argument is built in the program's heap the way one the script

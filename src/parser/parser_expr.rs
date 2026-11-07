@@ -343,11 +343,38 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                 base_span.end = end;
                 base = call;
             }
+            // A tuple element, `t.0`. The lexer reads `.0` as one token, so
+            // `t.0.1` is two of them.
+            Some(Token::DotDigits(digits)) => {
+                let (_, span) = parser.next_token();
+                let index_span = Span::from((span.start + 1, span.end));
+                let get_element = Expr::GetStructField(
+                    Box::new(base),
+                    SmolStr::new(&digits[1..]),
+                    base_span,
+                    index_span,
+                );
+                base_span.end = span.end;
+                base = get_element;
+            }
             // Struct field access or ObjfunctionCall
             Some(Token::Dot) => {
                 parser.next_token();
 
                 let (id_token, id_span) = parser.next_token();
+                // `t. 0`, with the index apart from the dot, reads the same
+                // element `t.0` does.
+                if let Token::Int(index) = id_token {
+                    let get_element = Expr::GetStructField(
+                        Box::new(base),
+                        index.to_smolstr(),
+                        base_span,
+                        id_span,
+                    );
+                    base_span.end = id_span.end;
+                    base = get_element;
+                    continue;
+                }
                 let Token::Identifier(id) = id_token else {
                     cold_path();
                     parser.error(

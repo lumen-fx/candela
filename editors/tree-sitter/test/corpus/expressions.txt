@@ -1246,3 +1246,67 @@ fn port(cfg: {string: any}) -> int {
                 (type_identifier))))))
       (return_statement
         (integer_literal)))))
+
+================================================================================
+Tuples, tuple elements and tuple patterns in a match
+================================================================================
+
+fn main() {
+    let t = (1, "a", (2.5, true),);
+    print(t.0, t.2.1, (t).1);
+    let r = match t.2 {
+        (0.0, _) => 0,
+        (x, flag) => 1,
+    };
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (tuple_expression
+          (integer_literal)
+          (string_literal)
+          (tuple_expression
+            (float_literal)
+            (boolean_literal))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (field_expression
+              (identifier)
+              (tuple_index))
+            (field_expression
+              (field_expression
+                (identifier)
+                (tuple_index))
+              (tuple_index))
+            (field_expression
+              (parenthesized_expression
+                (identifier))
+              (tuple_index)))))
+      (let_declaration
+        (identifier)
+        (match_expression
+          (field_expression
+            (identifier)
+            (tuple_index))
+          (match_arm_list
+            (match_arm
+              (match_pattern
+                (tuple_expression
+                  (float_literal)
+                  (identifier)))
+              (integer_literal))
+            (match_arm
+              (match_pattern
+                (tuple_expression
+                  (identifier)
+                  (identifier)))
+              (integer_literal))))))))

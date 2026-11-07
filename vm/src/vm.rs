@@ -2166,6 +2166,14 @@ fn print_value(
         outln!(*handle, "]");
     } else if tgt.is_struct() {
         let s = unsafe { structs.get_unchecked(tgt.struct_type_id() as usize) };
+        if s.is_tuple() {
+            outln!(
+                *handle,
+                "{}",
+                tgt.format(obj_pool, str_pool, map_pool, structs, enums, true)
+            );
+            return;
+        }
         let s_name = &s.name;
         let s_fields = &s.fields;
         out!(*handle, "{s_name} {{");

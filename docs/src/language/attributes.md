@@ -49,7 +49,7 @@ parameters all have defaults may be written with no parentheses at all.
 | Parameter type | A value is written as |
 | --- | --- |
 | `int`, `float`, `bool`, `string` | a literal: `3`, `-1`, `0.5`, `true`, `"move"` |
-| `type` | a type: `Position`, `int[]`, `shapes::Circle` |
+| `type` | a type: `Position`, `int[]`, `(int, string)`, `shapes::Circle` |
 | `fn` | the name of a function: `movement`, `other::step` |
 | an enum | one of its variants without a payload: `ecs::Schedule::Startup` |
 | a list of one of these, `T[]` | the values in brackets: `[Position, Velocity]` |
