@@ -76,6 +76,32 @@ pub fn impl_method_on_builtin(
     state: &mut State<'_>,
 ) -> Option<usize> {
     let type_name = builtin_receiver_name(obj_type)?;
+    // A list of structs or enums sorts by the `<` the element type defines,
+    // through the prelude's `sort` written in candela; the built-in one orders
+    // ints, floats and strings only.
+    if name == "sort"
+        && let DataType::Array(Some(element)) = obj_type
+        && let DataType::Struct(_) | DataType::Enum(_) = **element
+    {
+        let element_name = match **element {
+            DataType::Struct(id) => state.structs[id as usize].name.clone(),
+            DataType::Enum(id) => state.enums[id as usize].name.clone(),
+            _ => unreachable!(),
+        };
+        let less = mangle_method(&element_name, "<");
+        if !state.fns.iter().any(|f| f.name == less) {
+            cold_path();
+            crate::compiler::compiler_errors::error_sort_without_order(
+                element,
+                fn_span,
+                ctx.file_idx,
+                state.sources,
+                state.type_names(),
+            );
+        }
+        let mangled = mangle_method(type_name, name);
+        return state.fns.iter().position(|f| f.name == mangled);
+    }
     if is_builtin_method(name, type_name) {
         return None;
     }

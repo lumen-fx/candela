@@ -202,6 +202,10 @@ number with. Only the left operand decides which method an operator reaches:
 `2.0 * v` is a type error however `Vec2` defines `*`, because there is one
 spelling of an operator method and it belongs to the type on the left.
 
+A type that defines `<` can be sorted: `xs.sort()` on a list of it orders the
+list by that method. A type with no `<` has no order, and sorting a list of it
+is a compile error.
+
 A compound assignment applies the matching operator, so `a += b` reaches `+`
 and needs nothing of its own. There is no method-call spelling of an operator:
 `a + b` is how the method is called.

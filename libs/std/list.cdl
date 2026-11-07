@@ -204,6 +204,50 @@ impl list {
         return true;
     }
 
+    /// Sorts the list in place by the `<` its element type defines, a stable
+    /// merge sort. `xs.sort()` reaches this for a list of structs or enums;
+    /// ints, floats and strings sort natively.
+    fn sort(self) {
+        let n = self.len();
+        if n < 2 {
+            return;
+        }
+        let buf = [];
+        for x in self {
+            buf.push(x);
+        }
+        let width = 1;
+        while width < n {
+            let lo = 0;
+            while lo < n {
+                let mid = lo + width;
+                if mid > n {
+                    mid = n;
+                }
+                let hi = lo + 2 * width;
+                if hi > n {
+                    hi = n;
+                }
+                let a = lo;
+                let b = mid;
+                for k in lo..hi {
+                    if a < mid && (b >= hi || !(self[b] < self[a])) {
+                        buf[k] = self[a];
+                        a += 1;
+                    } else {
+                        buf[k] = self[b];
+                        b += 1;
+                    }
+                }
+                lo = hi;
+            }
+            for k in 0..n {
+                self[k] = buf[k];
+            }
+            width = width * 2;
+        }
+    }
+
     /// A new list sorted so that `less(a, b)` is true when `a` comes before
     /// `b`. A stable insertion sort; `less` is a two-argument predicate
     /// returning a bool.

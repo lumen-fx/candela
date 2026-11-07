@@ -3830,3 +3830,61 @@ fn group_digits(n: usize) -> String {
     }
     out
 }
+
+/// Reports `sort` on a list whose element type has no order to sort by: a
+/// struct or an enum that defines no `<`, a tuple, or a bool, a list, a map or
+/// a function.
+#[cold]
+#[inline(never)]
+pub fn error_sort_without_order(
+    element: &DataType,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let element_name = types.of(element).to_string();
+    // A tuple is a struct the compiler declares, and it takes no methods.
+    let user_type = matches!(element, DataType::Struct(_) | DataType::Enum(_))
+        && !element_name.starts_with('(');
+    let help = |paint: fn(&str) -> String| {
+        if user_type {
+            format!(
+                "Define the order with {} or sort with {}",
+                paint(&format!(
+                    "impl {element_name} {{ fn <(self, other: {element_name}) -> bool {{ ... }} }}"
+                )),
+                paint("xs.sort_by(fn(a, b) => ...)")
+            )
+        } else {
+            format!("Sort with {}", paint("xs.sort_by(fn(a, b) => ...)"))
+        }
+    };
+    let plain_help = help(|t| t.to_owned());
+    let help = help(|t| blue(t));
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("List cannot be sorted")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format!(
+                        "A {} has no order: sort needs ints, floats, strings, or a type that defines <",
+                        red(&element_name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_help(&help)
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("A {element_name} has no order to sort by. {plain_help}"),
+        "sort_without_order",
+    )
+}

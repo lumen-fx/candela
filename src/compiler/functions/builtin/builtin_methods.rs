@@ -5,6 +5,7 @@ use super::super::expr::Expr;
 use super::super::expr::Span;
 use super::super::type_system::DataType;
 use super::super::type_system::pin_pushed_element;
+use crate::cold_path;
 use crate::compiler::UnwrapId;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
@@ -580,7 +581,28 @@ pub fn builtin_methods(
         }
         "sort" => {
             check!(DataType::Array(_), &[DataType::Array(None)], name, 0);
-            output.push(Instr::CallLibFuncVoid(LibFuncVoid::Sort, id, 0));
+            // Ints, floats and strings have an order; a list typed `any[]`
+            // is checked when it sorts. A struct or an enum that defines `<`
+            // went to the prelude's `sort` before this; every other element
+            // type has no order to sort by.
+            let checked = match &obj_type {
+                DataType::Array(Some(element)) => match **element {
+                    DataType::Int | DataType::Float | DataType::String => 0,
+                    DataType::Unknown => 1,
+                    ref other => {
+                        cold_path();
+                        crate::compiler::compiler_errors::error_sort_without_order(
+                            other,
+                            fn_span,
+                            ctx.file_idx,
+                            state.sources,
+                            state.type_names(),
+                        );
+                    }
+                },
+                _ => 1,
+            };
+            output.push(Instr::CallLibFuncVoid(LibFuncVoid::Sort, id, checked));
             None
         }
         fn_name => error_unknown_builtin_method(

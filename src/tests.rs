@@ -16637,3 +16637,56 @@ pub fn a_long_chain_evaluates_in_order_and_short_circuits() {
     );
     assert_eq!(run_output(&src), "4\ntrue\n");
 }
+
+/// `sort` orders a list of structs or enums by the `<` the type defines,
+/// keeping equal elements in order; an element type with no order is a
+/// compile error, and an `any[]` holding values sort has no order for raises.
+#[test]
+pub fn sort_uses_the_order_a_type_defines() {
+    let src = r#"
+        struct P { x: int, tag: string }
+        impl P { fn <(self, other: P) -> bool => self.x < other.x; }
+        enum Size { Small, Big }
+        impl Size {
+            fn rank(self) -> int => match self { Small => 0, Big => 1 };
+            fn <(self, other: Size) -> bool => self.rank() < other.rank();
+        }
+        fn main() {
+            let ps = [P { x: 3, tag: "a" }, P { x: 1, tag: "b" }, P { x: 3, tag: "c" }, P { x: 1, tag: "d" }, P { x: 2, tag: "e" }];
+            ps.sort();
+            let tags = "";
+            for p in ps { tags = tags + p.tag; }
+            print(tags);
+            let ss = [Size::Big, Size::Small, Size::Big, Size::Small];
+            ss.sort();
+            print(ss);
+            let one = [P { x: 1, tag: "z" }];
+            one.sort();
+            print(one.len());
+            let xs: any[] = [3, 1, 2];
+            xs.sort();
+            print(xs);
+            let ys: any[] = [];
+            ys.push(3);
+            ys.push("a");
+            try { ys.sort(); } catch "sort_without_order" { print("mixed"); }
+            let zs: any[] = [true, false];
+            try { zs.sort(); } catch "sort_without_order" { print("bools"); }
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "bdeac\n[Small,Small,Big,Big]\n1\n[1,2,3]\nmixed\nbools\n"
+    );
+    for src in [
+        "struct Q { x: int }\nfn main() { let qs = [Q { x: 2 }]; qs.sort(); }",
+        "enum E { A, B }\nfn main() { let es = [E::B, E::A]; es.sort(); }",
+        "fn main() { let bs = [true, false]; bs.sort(); }",
+        "fn main() { let ls = [[2], [1]]; ls.sort(); }",
+        "fn main() { let ts = [(2, \"b\"), (1, \"a\")]; ts.sort(); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "sort_without_order", "{src}: {d:?}");
+    }
+}

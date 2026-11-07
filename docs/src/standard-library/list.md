@@ -241,8 +241,8 @@ arr.sort_by(less)
 - Returns: a new sorted list; `arr` is left unchanged.
 
 A stable insertion sort. Use it when you need a custom order or an untouched
-input; the built-in `arr.sort()` sorts ints, floats, and strings ascending in
-place.
+input; the built-in `arr.sort()` sorts in place, ints, floats and strings
+ascending and a struct or an enum by the `<` it defines.
 
 ```rust
 fn main() {

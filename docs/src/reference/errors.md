@@ -219,6 +219,11 @@ an embedded compile all report a file that declares none. `candela check` does
 not: compiling a file without a `main` is how a library entry checks. See
 [functions](../language/functions.md).
 
+**Sorting a list without an order.** `xs.sort()` on a list whose element type
+has no order is `sort_without_order`: a struct or an enum that defines no `<`,
+or a bool, a list, a map or a function. The help names the `<` method to define
+and `sort_by`. See [builtins](../standard-library/builtins.md).
+
 **Program too large.** Bytecode numbers registers, instructions, functions,
 structs and enums with 16-bit ids, so one program holds at most 65,535 of each.
 Every variable, temporary value and constant takes a register, and every
@@ -304,6 +309,12 @@ Two kinds come from what the call was given rather than from the system:
 | --- | --- |
 | `fs_not_a_byte` | `fs::write_bytes` with an element outside 0 to 255 |
 | `fs_unknown_digest` | `fs::digest` with an algorithm other than md5, sha1 and sha256 |
+
+### Sorting
+
+| Kind | Raised by |
+| --- | --- |
+| `sort_without_order` | `sort` on a list typed `any[]` whose elements are not all ints, all floats or all strings. A typed list is checked when it compiles instead |
 
 ### Random numbers
 
