@@ -61,6 +61,14 @@ straight to the loader, resolved relative to the importing file. This makes a
 bare name behave the same way everywhere, since the loaders differ on whether
 they consider the application directory at all.
 
+A `.cdlb` artifact has no importing file, so `candela-vm` looks beside the
+artifact instead: a plain name there first and then through the operating
+system's search path, a path form relative to the artifact's directory. It
+never looks in the working directory, so an artifact finds the same library
+from wherever it is run. When the library is not found, or a file is there but
+will not load, the report repeats the loader's own message, which names the
+cause.
+
 A Rust host that embeds candela can name directories to look in ahead of all
 that, which is what an application whose sources and libraries sit apart (`src/`
 beside `lib/`) uses. Both forms honor them: a plain name is looked for there

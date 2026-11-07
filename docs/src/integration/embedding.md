@@ -720,7 +720,9 @@ first, in order, by a compile and by an artifact load alike, so `dylib "md"` in
 
 A library the standard library owns is looked for under the toolchain's `libs`
 directory as well, after the directories named here, so an artifact that imports
-`std/math` loads wherever it runs.
+`std/math` loads wherever it runs. An artifact load resolves a relative path
+against these directories only, never the working directory; `candela-vm` names
+the artifact's own directory here.
 
 The call returns the list that was in effect, so a host that changes it for one
 script can put the previous one back, and an empty list goes back to looking
