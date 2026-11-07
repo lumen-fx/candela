@@ -51,7 +51,7 @@ Raised while the file is read, before any type is known.
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
-| Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |
+| Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function. A flat chain of operators, `a + b + c + ...`, is not nesting and compiles at any length |
 | Attribute | An attribute with nothing after it to apply to (`attribute_without_item`), an attribute other than `@cfg` in front of anything but a top-level `fn` or `struct` (`attribute_wrong_target`), or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [attributes](../language/attributes.md) and [conditional compilation](../language/conditional-compilation.md) |
 | Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
 

@@ -525,29 +525,30 @@ fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
                 visit_expr(b, src_file, out);
             }
         }
-        Expr::Mul(a, b, _, _)
-        | Expr::Div(a, b, _, _)
-        | Expr::Add(a, b, _, _)
-        | Expr::Sub(a, b, _, _)
-        | Expr::Mod(a, b, _, _)
-        | Expr::Pow(a, b, _, _)
-        | Expr::BitAnd(a, b, _, _)
-        | Expr::BitOr(a, b, _, _)
-        | Expr::BitXor(a, b, _, _)
-        | Expr::Shl(a, b, _, _)
-        | Expr::Shr(a, b, _, _)
-        | Expr::Sup(a, b, _, _)
-        | Expr::SupEq(a, b, _, _)
-        | Expr::Inf(a, b, _, _)
-        | Expr::InfEq(a, b, _, _)
-        | Expr::BoolAnd(a, b, _, _)
-        | Expr::BoolOr(a, b, _, _) => {
-            visit_expr(a, src_file, out);
-            visit_expr(b, src_file, out);
-        }
-        Expr::Eq(a, b, _, _) | Expr::NotEq(a, b, _, _) => {
-            visit_expr(a, src_file, out);
-            visit_expr(b, src_file, out);
+        // A chain's operands in order, walked with a loop: a long chain
+        // nests as deep as it is long.
+        Expr::Mul(..)
+        | Expr::Div(..)
+        | Expr::Add(..)
+        | Expr::Sub(..)
+        | Expr::Mod(..)
+        | Expr::Pow(..)
+        | Expr::BitAnd(..)
+        | Expr::BitOr(..)
+        | Expr::BitXor(..)
+        | Expr::Shl(..)
+        | Expr::Shr(..)
+        | Expr::Eq(..)
+        | Expr::NotEq(..)
+        | Expr::Sup(..)
+        | Expr::SupEq(..)
+        | Expr::Inf(..)
+        | Expr::InfEq(..)
+        | Expr::BoolAnd(..)
+        | Expr::BoolOr(..) => {
+            for operand in e.chain_operands() {
+                visit_expr(operand, src_file, out);
+            }
         }
         Expr::BoolNeg(a, _, _)
         | Expr::Neg(a, _, _)
@@ -666,6 +667,22 @@ mod tests {
     /// A buffer using a macro of the host it is written for still analyzes:
     /// the server has no expanders, so the macro compiles as `null` and the
     /// rest of the file is checked as usual.
+    #[test]
+    fn a_long_operator_chain_is_analyzed() {
+        // Generated code can hold a chain far longer than anyone writes; the
+        // server walks it without recursing down it and stays up.
+        let chain = vec!["a"; 20_000].join(" + ");
+        let source = format!("fn main() {{\n    let a = 1;\n    print({chain});\n}}\n");
+        let outcome = analyze(&source, "buffer.cdl");
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        assert!(summary.functions.iter().any(|f| f.name == "main"));
+    }
+
     #[test]
     fn an_unknown_macro_is_not_a_diagnostic() {
         let source = "fn main() {\n    let markup = lmn!(<p>hi</p>);\n}\n";

@@ -156,6 +156,74 @@ pub struct LetAnnotation {
     pub value_span: Span,
 }
 
+/// An operand of a binary operator.
+///
+/// A chain of left-associative operators, `a + b + c + ...`, nests down its
+/// left operand one level per operator. A box that cloned and dropped by
+/// recursion would recurse as deep as the chain is long; this one walks the
+/// chain with a loop, so a generated expression of any length is copied and
+/// freed without running out of stack.
+#[derive(Debug, PartialEq)]
+pub struct Operand(Box<Expr>);
+
+impl Operand {
+    #[must_use]
+    pub fn new(expr: Expr) -> Self {
+        Self(Box::new(expr))
+    }
+}
+
+impl std::ops::Deref for Operand {
+    type Target = Expr;
+    fn deref(&self) -> &Expr {
+        &self.0
+    }
+}
+
+impl AsRef<Expr> for Operand {
+    fn as_ref(&self) -> &Expr {
+        &self.0
+    }
+}
+
+impl Clone for Operand {
+    fn clone(&self) -> Self {
+        let mut spine: Vec<&Expr> = Vec::new();
+        let mut e: &Expr = &self.0;
+        while let Some((left, _)) = e.binary_operands() {
+            spine.push(e);
+            e = left;
+        }
+        let mut copy = e.clone();
+        for node in spine.into_iter().rev() {
+            copy = node.with_left(copy);
+        }
+        Self::new(copy)
+    }
+}
+
+impl Drop for Operand {
+    fn drop(&mut self) {
+        if self.0.binary_operands().is_none() {
+            return;
+        }
+        // Each operator is taken out of its box and freed with its operands
+        // emptied, so no drop reaches further than one level.
+        let mut pending = vec![std::mem::replace(&mut *self.0, Expr::Null)];
+        while let Some(mut node) = pending.pop() {
+            if let Some((l, r)) = node.binary_operands_mut() {
+                let mut take = |operand: &mut Self| {
+                    if operand.0.binary_operands().is_some() {
+                        pending.push(std::mem::replace(&mut *operand.0, Expr::Null));
+                    }
+                };
+                take(l);
+                take(r);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Float(f64),
@@ -387,26 +455,26 @@ pub enum Expr {
     /// TryCatchBlock(try_code, err_var, catch_code)
     TryCatchBlock(Box<[Self]>, SmolStr, Box<[Self]>),
 
-    Mul(Box<Self>, Box<Self>, Span, Span),
-    Div(Box<Self>, Box<Self>, Span, Span),
-    Add(Box<Self>, Box<Self>, Span, Span),
-    Sub(Box<Self>, Box<Self>, Span, Span),
-    Mod(Box<Self>, Box<Self>, Span, Span),
-    Pow(Box<Self>, Box<Self>, Span, Span),
-    BitAnd(Box<Self>, Box<Self>, Span, Span),
-    BitOr(Box<Self>, Box<Self>, Span, Span),
-    BitXor(Box<Self>, Box<Self>, Span, Span),
-    Shl(Box<Self>, Box<Self>, Span, Span),
-    Shr(Box<Self>, Box<Self>, Span, Span),
+    Mul(Operand, Operand, Span, Span),
+    Div(Operand, Operand, Span, Span),
+    Add(Operand, Operand, Span, Span),
+    Sub(Operand, Operand, Span, Span),
+    Mod(Operand, Operand, Span, Span),
+    Pow(Operand, Operand, Span, Span),
+    BitAnd(Operand, Operand, Span, Span),
+    BitOr(Operand, Operand, Span, Span),
+    BitXor(Operand, Operand, Span, Span),
+    Shl(Operand, Operand, Span, Span),
+    Shr(Operand, Operand, Span, Span),
     BitNot(Box<Self>, Span, Span),
-    Eq(Box<Self>, Box<Self>, Span, Span),
-    NotEq(Box<Self>, Box<Self>, Span, Span),
-    Sup(Box<Self>, Box<Self>, Span, Span),
-    SupEq(Box<Self>, Box<Self>, Span, Span),
-    Inf(Box<Self>, Box<Self>, Span, Span),
-    InfEq(Box<Self>, Box<Self>, Span, Span),
-    BoolAnd(Box<Self>, Box<Self>, Span, Span),
-    BoolOr(Box<Self>, Box<Self>, Span, Span),
+    Eq(Operand, Operand, Span, Span),
+    NotEq(Operand, Operand, Span, Span),
+    Sup(Operand, Operand, Span, Span),
+    SupEq(Operand, Operand, Span, Span),
+    Inf(Operand, Operand, Span, Span),
+    InfEq(Operand, Operand, Span, Span),
+    BoolAnd(Operand, Operand, Span, Span),
+    BoolOr(Operand, Operand, Span, Span),
     BoolNeg(Box<Self>, Span, Span),
     Neg(Box<Self>, Span, Span),
 }
@@ -476,6 +544,111 @@ impl Expr {
                 | Self::BoolNeg(_, _, _)
                 | Self::Neg(_, _, _)
         )
+    }
+}
+
+impl Expr {
+    /// The two operands of a binary operator, `None` for any other form.
+    ///
+    /// A chain of left-associative operators, `a + b + c + ...`, nests down
+    /// its left operand one level per operator, so a walk that recurses into
+    /// the left operand recurses as deep as the chain is long. The walks that
+    /// can meet a generated chain follow the left side with a loop instead.
+    #[must_use]
+    pub fn binary_operands(&self) -> Option<(&Self, &Self)> {
+        match self {
+            Self::Mul(l, r, _, _)
+            | Self::Div(l, r, _, _)
+            | Self::Add(l, r, _, _)
+            | Self::Sub(l, r, _, _)
+            | Self::Mod(l, r, _, _)
+            | Self::Pow(l, r, _, _)
+            | Self::BitAnd(l, r, _, _)
+            | Self::BitOr(l, r, _, _)
+            | Self::BitXor(l, r, _, _)
+            | Self::Shl(l, r, _, _)
+            | Self::Shr(l, r, _, _)
+            | Self::Eq(l, r, _, _)
+            | Self::NotEq(l, r, _, _)
+            | Self::Sup(l, r, _, _)
+            | Self::SupEq(l, r, _, _)
+            | Self::Inf(l, r, _, _)
+            | Self::InfEq(l, r, _, _)
+            | Self::BoolAnd(l, r, _, _)
+            | Self::BoolOr(l, r, _, _) => Some((l, r)),
+            _ => None,
+        }
+    }
+
+    /// [`Self::binary_operands`], to change.
+    const fn binary_operands_mut(&mut self) -> Option<(&mut Operand, &mut Operand)> {
+        match self {
+            Self::Mul(l, r, _, _)
+            | Self::Div(l, r, _, _)
+            | Self::Add(l, r, _, _)
+            | Self::Sub(l, r, _, _)
+            | Self::Mod(l, r, _, _)
+            | Self::Pow(l, r, _, _)
+            | Self::BitAnd(l, r, _, _)
+            | Self::BitOr(l, r, _, _)
+            | Self::BitXor(l, r, _, _)
+            | Self::Shl(l, r, _, _)
+            | Self::Shr(l, r, _, _)
+            | Self::Eq(l, r, _, _)
+            | Self::NotEq(l, r, _, _)
+            | Self::Sup(l, r, _, _)
+            | Self::SupEq(l, r, _, _)
+            | Self::Inf(l, r, _, _)
+            | Self::InfEq(l, r, _, _)
+            | Self::BoolAnd(l, r, _, _)
+            | Self::BoolOr(l, r, _, _) => Some((l, r)),
+            _ => None,
+        }
+    }
+
+    /// This binary operator with `left` for its left operand and a copy of
+    /// its own right one.
+    fn with_left(&self, left: Self) -> Self {
+        let left = Operand::new(left);
+        match self {
+            Self::Mul(_, r, a, b) => Self::Mul(left, r.clone(), *a, *b),
+            Self::Div(_, r, a, b) => Self::Div(left, r.clone(), *a, *b),
+            Self::Add(_, r, a, b) => Self::Add(left, r.clone(), *a, *b),
+            Self::Sub(_, r, a, b) => Self::Sub(left, r.clone(), *a, *b),
+            Self::Mod(_, r, a, b) => Self::Mod(left, r.clone(), *a, *b),
+            Self::Pow(_, r, a, b) => Self::Pow(left, r.clone(), *a, *b),
+            Self::BitAnd(_, r, a, b) => Self::BitAnd(left, r.clone(), *a, *b),
+            Self::BitOr(_, r, a, b) => Self::BitOr(left, r.clone(), *a, *b),
+            Self::BitXor(_, r, a, b) => Self::BitXor(left, r.clone(), *a, *b),
+            Self::Shl(_, r, a, b) => Self::Shl(left, r.clone(), *a, *b),
+            Self::Shr(_, r, a, b) => Self::Shr(left, r.clone(), *a, *b),
+            Self::Eq(_, r, a, b) => Self::Eq(left, r.clone(), *a, *b),
+            Self::NotEq(_, r, a, b) => Self::NotEq(left, r.clone(), *a, *b),
+            Self::Sup(_, r, a, b) => Self::Sup(left, r.clone(), *a, *b),
+            Self::SupEq(_, r, a, b) => Self::SupEq(left, r.clone(), *a, *b),
+            Self::Inf(_, r, a, b) => Self::Inf(left, r.clone(), *a, *b),
+            Self::InfEq(_, r, a, b) => Self::InfEq(left, r.clone(), *a, *b),
+            Self::BoolAnd(_, r, a, b) => Self::BoolAnd(left, r.clone(), *a, *b),
+            Self::BoolOr(_, r, a, b) => Self::BoolOr(left, r.clone(), *a, *b),
+            other => other.clone(),
+        }
+    }
+
+    /// The operands of the chain of binary operators rooted here, in source
+    /// order: `a + b * c - d` gives `a`, `b * c`, `d`. Only the left side is
+    /// followed, the way the chain nests; a node that is no binary operator
+    /// is its own one operand.
+    #[must_use]
+    pub fn chain_operands(&self) -> Vec<&Self> {
+        let mut rights = Vec::new();
+        let mut e = self;
+        while let Some((l, r)) = e.binary_operands() {
+            rights.push(r);
+            e = l;
+        }
+        rights.push(e);
+        rights.reverse();
+        rights
     }
 }
 
@@ -903,27 +1076,29 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             scan_free_names(start, depth, bound, out);
             scan_free_names(end, depth, bound, out);
         }
-        Expr::Mul(l, r, _, _)
-        | Expr::Div(l, r, _, _)
-        | Expr::Add(l, r, _, _)
-        | Expr::Sub(l, r, _, _)
-        | Expr::Mod(l, r, _, _)
-        | Expr::Pow(l, r, _, _)
-        | Expr::BitAnd(l, r, _, _)
-        | Expr::BitOr(l, r, _, _)
-        | Expr::BitXor(l, r, _, _)
-        | Expr::Shl(l, r, _, _)
-        | Expr::Shr(l, r, _, _)
-        | Expr::Eq(l, r, _, _)
-        | Expr::NotEq(l, r, _, _)
-        | Expr::Sup(l, r, _, _)
-        | Expr::SupEq(l, r, _, _)
-        | Expr::Inf(l, r, _, _)
-        | Expr::InfEq(l, r, _, _)
-        | Expr::BoolAnd(l, r, _, _)
-        | Expr::BoolOr(l, r, _, _) => {
-            scan_free_names(l, depth, bound, out);
-            scan_free_names(r, depth, bound, out);
+        Expr::Mul(_, _, _, _)
+        | Expr::Div(_, _, _, _)
+        | Expr::Add(_, _, _, _)
+        | Expr::Sub(_, _, _, _)
+        | Expr::Mod(_, _, _, _)
+        | Expr::Pow(_, _, _, _)
+        | Expr::BitAnd(_, _, _, _)
+        | Expr::BitOr(_, _, _, _)
+        | Expr::BitXor(_, _, _, _)
+        | Expr::Shl(_, _, _, _)
+        | Expr::Shr(_, _, _, _)
+        | Expr::Eq(_, _, _, _)
+        | Expr::NotEq(_, _, _, _)
+        | Expr::Sup(_, _, _, _)
+        | Expr::SupEq(_, _, _, _)
+        | Expr::Inf(_, _, _, _)
+        | Expr::InfEq(_, _, _, _)
+        | Expr::BoolAnd(_, _, _, _)
+        | Expr::BoolOr(_, _, _, _) => {
+            // The chain's operands in order, without recursing down it.
+            for operand in expr.chain_operands() {
+                scan_free_names(operand, depth, bound, out);
+            }
         }
         // A literal, a type declaration, an import and a nested function
         // declaration read nothing from the scope around them.

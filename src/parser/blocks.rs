@@ -10,6 +10,7 @@ use super::parser_expr::parse_expr_no_struct;
 use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
+use crate::compiler::expr::Operand;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::UNARY_MINUS_METHOD;
 use crate::compiler::expr::mangle_method;
@@ -359,8 +360,8 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
         if first {
             first = false;
             main_condition = Expr::Eq(
-                Box::new(Expr::String(e)),
-                Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
+                Operand::new(Expr::String(e)),
+                Operand::new(Expr::Var(catch_all_var.clone(), catch_span)),
                 catch_span,
                 catch_span,
             );
@@ -368,8 +369,8 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
         } else {
             output_code.push(Expr::ElseIfBlock(
                 Box::new(Expr::Eq(
-                    Box::new(Expr::String(e)),
-                    Box::new(Expr::Var(catch_all_var.clone(), catch_span)),
+                    Operand::new(Expr::String(e)),
+                    Operand::new(Expr::Var(catch_all_var.clone(), catch_span)),
                     catch_span,
                     catch_span,
                 )),

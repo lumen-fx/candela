@@ -669,10 +669,28 @@ pub fn declare_condition_facts(
     ctx: Ctx,
     state: &mut State<'_>,
 ) {
+    // A chain of `&&` nests down its left side as deep as it is long, so the
+    // conjuncts are taken off a stack, in source order, rather than reached
+    // by recursion.
+    let mut pending = vec![condition];
+    while let Some(condition) = pending.pop() {
+        declare_conjunct_facts(condition, &mut pending, v, ctx, state);
+    }
+}
+
+/// The facts one operand of an `&&` chain proves, or its two operands queued
+/// on `pending` when it is itself an `&&`.
+fn declare_conjunct_facts<'e>(
+    condition: &'e Expr,
+    pending: &mut Vec<&'e Expr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
     match condition {
         Expr::BoolAnd(l, r, _, _) => {
-            declare_condition_facts(l, v, ctx, state);
-            declare_condition_facts(r, v, ctx, state);
+            pending.push(r);
+            pending.push(l);
         }
         Expr::Is(operand, target, operand_span, target_span) => {
             for (name, var_type) in
@@ -733,10 +751,15 @@ pub fn captured_binders(condition: &Expr, scope: &[Expr]) -> Vec<SmolStr> {
 }
 
 fn flatten_and<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-    if let Expr::BoolAnd(l, r, _, _) = expr {
-        flatten_and(l, out);
-        flatten_and(r, out);
-    } else {
-        out.push(expr);
+    // With a stack rather than recursion: a long chain nests as deep as it
+    // is long.
+    let mut pending = vec![expr];
+    while let Some(expr) = pending.pop() {
+        if let Expr::BoolAnd(l, r, _, _) = expr {
+            pending.push(r);
+            pending.push(l);
+        } else {
+            out.push(expr);
+        }
     }
 }

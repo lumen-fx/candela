@@ -12,6 +12,7 @@ use super::compiler_data::Ctx;
 use super::compiler_data::State;
 use super::compiler_errors;
 use super::expr::Expr;
+use super::expr::Operand;
 use super::expr::Span;
 use super::expr::tuple_elements;
 use super::type_system::DataType;
@@ -164,8 +165,8 @@ fn lower_pattern(
             Place::Ignore => {}
             Place::Nested(inner) => lower_pattern(&element_path, &inner, span, tests, binds),
             Place::Compare(value) => tests.push(Expr::Eq(
-                Box::new(element_path),
-                Box::new(value.clone()),
+                Operand::new(element_path),
+                Operand::new(value.clone()),
                 span,
                 *element_span,
             )),
@@ -177,7 +178,7 @@ fn lower_pattern(
 fn all_of(tests: Vec<Expr>, span: Span) -> Expr {
     tests
         .into_iter()
-        .reduce(|acc, test| Expr::BoolAnd(Box::new(acc), Box::new(test), span, span))
+        .reduce(|acc, test| Expr::BoolAnd(Operand::new(acc), Operand::new(test), span, span))
         .unwrap_or(Expr::Bool(true))
 }
 
@@ -205,8 +206,8 @@ pub fn tuple_arm(
             lower_pattern(&path, &elements, span, &mut tests, &mut binds);
         } else {
             tests.push(Expr::Eq(
-                Box::new(path.clone()),
-                Box::new(pattern.clone()),
+                Operand::new(path.clone()),
+                Operand::new(pattern.clone()),
                 span,
                 span,
             ));
@@ -216,7 +217,7 @@ pub fn tuple_arm(
     let test = alternatives
         .iter()
         .map(|(test, _)| test.clone())
-        .reduce(|acc, test| Expr::BoolOr(Box::new(acc), Box::new(test), span, span))
+        .reduce(|acc, test| Expr::BoolOr(Operand::new(acc), Operand::new(test), span, span))
         .unwrap_or(Expr::Bool(false));
 
     let mut code: Vec<Expr> = Vec::with_capacity(body.len() + alternatives[0].1.len());

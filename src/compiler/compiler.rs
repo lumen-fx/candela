@@ -44,6 +44,7 @@ use attributes::UseTarget;
 use attributes::resolve_attributes;
 use candela_vm::artifact::ExportImage;
 use candela_vm::attributes::Attribute;
+use compiler_data::ChainValue;
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
@@ -64,6 +65,7 @@ use expr::Expr;
 use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
+use expr::Operand;
 use expr::Span;
 use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
@@ -355,6 +357,65 @@ fn compile_short_circuit_condition(
     // scope leave with it; under a chain of `&&` it is the rest of the chain
     // and the body, and the caller takes them out of scope after the body.
     let v_len = v.len();
+    // A run of `&&`, or of `||`, nests down its left side as deep as it is
+    // long, so it is compiled with a loop over its operands. The jumps come
+    // out as the recursion below would make them.
+    if !bool_or_mode
+        && let Expr::BoolAnd(left, ..) = expr
+        && matches!(**left, Expr::BoolAnd(..))
+    {
+        let mut rights = Vec::new();
+        let mut e = expr;
+        let mut leaf_span = condition_span;
+        while let Expr::BoolAnd(left, right, left_span, right_span) = e {
+            rights.push((&**right, *right_span));
+            leaf_span = *left_span;
+            e = left;
+        }
+        let (mut true_jumps, mut false_jumps) =
+            compile_short_circuit_condition(e, leaf_span, v, ctx, state, output, false);
+        for (right, right_span) in rights.into_iter().rev() {
+            let right_start = output.len();
+            for j in true_jumps {
+                set_jmp_size(&mut output[j], (right_start - j) as u16);
+            }
+            let (right_true, right_false) =
+                compile_short_circuit_condition(right, right_span, v, ctx, state, output, false);
+            false_jumps.extend(right_false);
+            true_jumps = right_true;
+        }
+        return (true_jumps, false_jumps);
+    }
+    if let Expr::BoolOr(left, ..) = expr
+        && matches!(**left, Expr::BoolOr(..))
+    {
+        let mut rights = Vec::new();
+        let mut e = expr;
+        let mut leaf_span = condition_span;
+        while let Expr::BoolOr(left, right, left_span, right_span) = e {
+            rights.push((&**right, *right_span));
+            leaf_span = *left_span;
+            e = left;
+        }
+        let (mut true_jumps, mut left_false) =
+            compile_short_circuit_condition(e, leaf_span, v, ctx, state, output, true);
+        v.truncate(v_len);
+        for (i, (right, right_span)) in rights.into_iter().enumerate().rev() {
+            let right_start = output.len();
+            for j in left_false {
+                set_jmp_size(&mut output[j], (right_start - j) as u16);
+            }
+            // Every `||` but the outermost is the left of another, which
+            // wants the jumps taken when it is true.
+            let mode = if i == 0 { bool_or_mode } else { true };
+            let (right_true, right_false) =
+                compile_short_circuit_condition(right, right_span, v, ctx, state, output, mode);
+            true_jumps.extend(right_true);
+            v.truncate(v_len);
+            left_false = right_false;
+        }
+        return (true_jumps, left_false);
+    }
     match expr {
         Expr::BoolOr(left, right, left_span, right_span) => {
             // left side of || always uses true jump mode
@@ -1845,15 +1906,20 @@ pub(crate) fn check_match_scrutinee_is_enum(
 fn equality_arm_test(scrutinee: &SmolStr, patterns: &[Expr], span: Span) -> Expr {
     let equals = |pattern: &Expr| {
         Expr::Eq(
-            Box::new(Expr::Var(scrutinee.clone(), span)),
-            Box::new(pattern.clone()),
+            Operand::new(Expr::Var(scrutinee.clone(), span)),
+            Operand::new(pattern.clone()),
             span,
             span,
         )
     };
     let mut test = equals(&patterns[0]);
     for pattern in &patterns[1..] {
-        test = Expr::BoolOr(Box::new(test), Box::new(equals(pattern)), span, span);
+        test = Expr::BoolOr(
+            Operand::new(test),
+            Operand::new(equals(pattern)),
+            span,
+            span,
+        );
     }
     test
 }
@@ -2999,7 +3065,9 @@ fn compile_short_circuit_value(
     let and = symbol == "&&";
     let v_len = v.len();
     let t_l = l.infer_type(v, ctx, state);
-    if and {
+    // An operand the chain loop compiled ahead holds no `is`; see
+    // `Expr::compile_chain`.
+    if and && state.chain_value(l).is_none() {
         type_test::declare_condition_facts(l, v, ctx, state);
     }
     let t_r = r.infer_type(v, ctx, state);
@@ -3044,8 +3112,9 @@ fn compile_short_circuit_value(
             (compiled.0, Some(compiled.1))
         }
         // A chain of `&&` keeps what its operands proved for the operand
-        // after it.
-        Expr::BoolAnd(ll, lr, span_ll, span_lr) if and => (
+        // after it. One the chain loop compiled already is read from its
+        // register.
+        Expr::BoolAnd(ll, lr, span_ll, span_lr) if and && state.chain_value(l).is_none() => (
             compile_short_circuit_value(
                 ll,
                 lr,
@@ -3814,13 +3883,23 @@ fn calls_nothing(expr: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State
     match expr {
         Expr::Var(..) | Expr::Float(_) | Expr::Int(_) => true,
         Expr::GetStructField(inner, _, _, _) => calls_nothing(inner, v, ctx, state),
-        Expr::Add(l, r, _, _)
-        | Expr::Sub(l, r, _, _)
-        | Expr::Mul(l, r, _, _)
-        | Expr::Div(l, r, _, _) => {
+        Expr::Add(..) | Expr::Sub(..) | Expr::Mul(..) | Expr::Div(..) => {
             // An operator on anything but numbers can be a method written in
-            // candela.
-            [l, r].into_iter().all(|side| {
+            // candela. The chain's left side is walked with a loop, since it
+            // nests as deep as it is long; an operator on numbers answers a
+            // number, so only the operands need a look.
+            let mut operands = Vec::new();
+            let mut e = expr;
+            while let Expr::Add(l, r, _, _)
+            | Expr::Sub(l, r, _, _)
+            | Expr::Mul(l, r, _, _)
+            | Expr::Div(l, r, _, _) = e
+            {
+                operands.push(&**r);
+                e = l;
+            }
+            operands.push(e);
+            operands.into_iter().rev().all(|side| {
                 matches!(
                     side.infer_type(v, ctx, state),
                     DataType::Float | DataType::Int
@@ -4209,29 +4288,15 @@ fn changes_only_pushed_lists(
         | Expr::BoolNeg(inner, _, _)
         | Expr::Neg(inner, _, _)
         | Expr::BitNot(inner, _, _) => changes_only_pushed_lists(inner, receivers, declared),
-        Expr::ArrayGetIndex(l, r, _)
-        | Expr::Mul(l, r, _, _)
-        | Expr::Div(l, r, _, _)
-        | Expr::Add(l, r, _, _)
-        | Expr::Sub(l, r, _, _)
-        | Expr::Mod(l, r, _, _)
-        | Expr::Pow(l, r, _, _)
-        | Expr::BitAnd(l, r, _, _)
-        | Expr::BitOr(l, r, _, _)
-        | Expr::BitXor(l, r, _, _)
-        | Expr::Shl(l, r, _, _)
-        | Expr::Shr(l, r, _, _)
-        | Expr::Eq(l, r, _, _)
-        | Expr::NotEq(l, r, _, _)
-        | Expr::Sup(l, r, _, _)
-        | Expr::SupEq(l, r, _, _)
-        | Expr::Inf(l, r, _, _)
-        | Expr::InfEq(l, r, _, _)
-        | Expr::BoolAnd(l, r, _, _)
-        | Expr::BoolOr(l, r, _, _) => {
+        Expr::ArrayGetIndex(l, r, _) => {
             changes_only_pushed_lists(l, receivers, declared)
                 && changes_only_pushed_lists(r, receivers, declared)
         }
+        // A chain's operands in order, without recursing down it.
+        _ if expr.binary_operands().is_some() => expr
+            .chain_operands()
+            .into_iter()
+            .all(|operand| changes_only_pushed_lists(operand, receivers, declared)),
         Expr::VarDeclare(name, value, _) => {
             declared.push(name.clone());
             changes_only_pushed_lists(value, receivers, declared)
@@ -5268,7 +5333,116 @@ pub fn compile_expr(
     output
 }
 
+/// How deep a chain of binary operators may nest down its left side before
+/// the compiler stops recursing into it and compiles it with a loop; see
+/// [`ChainValue`]. Code a person writes stays under it and compiles the way it
+/// always has.
+const CHAIN_LOOP_DEPTH: usize = 32;
+
+/// Whether `expr` nests binary operators down its left side more than `depth`
+/// levels.
+fn left_chain_deeper_than(expr: &Expr, depth: usize) -> bool {
+    let mut e = expr;
+    for _ in 0..=depth {
+        match e.binary_operands() {
+            Some((left, _)) => e = left,
+            None => return false,
+        }
+    }
+    true
+}
+
 impl Expr {
+    /// Compiles a long chain of binary operators bottom up, one operator at a
+    /// time, each reading the one below it from the register the previous
+    /// turn left it in. The operators compile through their usual arms, so
+    /// the code is what recursion would give.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_chain(
+        &self,
+        v: &mut Vec<Variable>,
+        ctx: Ctx,
+        state: &mut State<'_>,
+        output: &mut Vec<Instr>,
+        tgt_id: Option<u16>,
+        var_assignment: bool,
+        remaining_code: &[Self],
+        uses_id: bool,
+    ) -> Option<u16> {
+        let mut spine: Vec<&Self> = Vec::new();
+        let mut e = self;
+        while let Some((left, _)) = e.binary_operands() {
+            spine.push(e);
+            e = left;
+        }
+        // An `is` in a chain of `&&` binds names the operands after it read,
+        // which only the recursive form carries from one operand to the next.
+        if spine
+            .iter()
+            .any(|node| matches!(node, Self::BoolAnd(_, r, _, _) if matches!(**r, Self::Is(..))))
+            || (matches!(e, Self::Is(..))
+                && spine.iter().any(|node| matches!(node, Self::BoolAnd(..))))
+        {
+            return self.compile_form(
+                v,
+                ctx,
+                state,
+                output,
+                tgt_id,
+                var_assignment,
+                remaining_code,
+                uses_id,
+            );
+        }
+        // An `&&` or `||` compiles its left operand straight into the
+        // register it answers in, so a run of them shares one register. Those
+        // are handed out top down, as recursion would hand them out, before
+        // the loop compiles bottom up.
+        let short_circuit = |node: &Self| matches!(node, Self::BoolAnd(..) | Self::BoolOr(..));
+        let mut targets: Vec<Option<u16>> = Vec::with_capacity(spine.len());
+        let mut answers_in: Option<u16> = None;
+        for (i, node) in spine.iter().enumerate() {
+            let target = if i == 0 { tgt_id } else { answers_in };
+            answers_in = short_circuit(node).then(|| state.alloc_reg_tgt(target));
+            targets.push(answers_in.or(target));
+        }
+        let base = state.chain_values.len();
+        let v_len = v.len();
+        let mut result = None;
+        for (i, node) in spine.iter().enumerate().rev() {
+            if i == 0 {
+                result = node.compile_with_code_context(
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    targets[0],
+                    var_assignment,
+                    remaining_code,
+                    uses_id,
+                );
+            } else {
+                let register = node
+                    .compile(v, ctx, state, output, targets[i], false, true)
+                    .unwrap_id();
+                let ty = node.infer_type(v, ctx, state);
+                // The operand below this one has been read; this one is the
+                // next operator's left. A name an operator method bound to
+                // the operand goes out of scope with it.
+                v.truncate(v_len);
+                state.chain_values.truncate(base);
+                state.chain_values.push(ChainValue {
+                    expr: std::ptr::from_ref(*node),
+                    register,
+                    ty,
+                });
+            }
+        }
+        v.truncate(v_len);
+        state.chain_values.truncate(base);
+        result
+    }
+
     #[must_use]
     pub const fn is_constant_literal(&self) -> bool {
         matches!(
@@ -5290,6 +5464,56 @@ impl Expr {
         self.compile_with_code_context(v, ctx, state, output, tgt_id, var_assignment, &[], uses_id)
     }
     pub fn compile_with_code_context(
+        &self,
+        v: &mut Vec<Variable>,
+        ctx: Ctx,
+        state: &mut State<'_>,
+        output: &mut Vec<Instr>,
+        tgt_id: Option<u16>,
+        var_assignment: bool,
+        remaining_code: &[Self],
+        uses_id: bool,
+    ) -> Option<u16> {
+        if let Some((register, _)) = state.chain_value(self) {
+            return Some(match tgt_id {
+                Some(tgt) if tgt != register => {
+                    output.push(Instr::Mov(register, tgt));
+                    tgt
+                }
+                _ => register,
+            });
+        }
+        if let Some((left, _)) = self.binary_operands()
+            && state.chain_value(left).is_none()
+            && left_chain_deeper_than(self, CHAIN_LOOP_DEPTH)
+        {
+            return self.compile_chain(
+                v,
+                ctx,
+                state,
+                output,
+                tgt_id,
+                var_assignment,
+                remaining_code,
+                uses_id,
+            );
+        }
+        self.compile_form(
+            v,
+            ctx,
+            state,
+            output,
+            tgt_id,
+            var_assignment,
+            remaining_code,
+            uses_id,
+        )
+    }
+
+    /// [`Self::compile_with_code_context`] for this node itself, with no
+    /// look at whether it heads a long operator chain.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_form(
         &self,
         v: &mut Vec<Variable>,
         ctx: Ctx,
@@ -8230,6 +8454,7 @@ pub fn compile_profile(
         fn_returns: Vec::new(),
         captured_binders: Vec::new(),
         string_slots: StringSlots::default(),
+        chain_values: Vec::new(),
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are

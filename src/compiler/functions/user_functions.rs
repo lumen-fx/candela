@@ -1603,30 +1603,12 @@ fn expr_may_call(expr: &Expr, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State
         Expr::Neg(x, _, _) | Expr::BoolNeg(x, _, _) | Expr::BitNot(x, _, _) => {
             expr_may_call(x, v, ctx, state) || !primitive(x, v, ctx, state)
         }
-        Expr::Mul(l, r, _, _)
-        | Expr::Div(l, r, _, _)
-        | Expr::Add(l, r, _, _)
-        | Expr::Sub(l, r, _, _)
-        | Expr::Mod(l, r, _, _)
-        | Expr::Pow(l, r, _, _)
-        | Expr::BitAnd(l, r, _, _)
-        | Expr::BitOr(l, r, _, _)
-        | Expr::BitXor(l, r, _, _)
-        | Expr::Shl(l, r, _, _)
-        | Expr::Shr(l, r, _, _)
-        | Expr::Eq(l, r, _, _)
-        | Expr::NotEq(l, r, _, _)
-        | Expr::Sup(l, r, _, _)
-        | Expr::SupEq(l, r, _, _)
-        | Expr::Inf(l, r, _, _)
-        | Expr::InfEq(l, r, _, _)
-        | Expr::BoolAnd(l, r, _, _)
-        | Expr::BoolOr(l, r, _, _) => {
-            expr_may_call(l, v, ctx, state)
-                || expr_may_call(r, v, ctx, state)
-                || !primitive(l, v, ctx, state)
-                || !primitive(r, v, ctx, state)
-        }
+        // The operands of a chain, walked with a loop: a long chain nests as
+        // deep as it is long. An operator on primitive operands answers a
+        // primitive, so the operators in between need no look of their own.
+        _ if expr.binary_operands().is_some() => expr.chain_operands().into_iter().any(|operand| {
+            expr_may_call(operand, v, ctx, state) || !primitive(operand, v, ctx, state)
+        }),
         _ => true,
     }
 }

@@ -401,6 +401,24 @@ pub struct State<'a> {
     pub captured_binders: Vec<SmolStr>,
     /// Where each string constant this compile made sits in the pool.
     pub string_slots: StringSlots,
+    /// The left operands of a long operator chain the compiler has already
+    /// compiled, innermost last; see [`ChainValue`].
+    pub chain_values: Vec<ChainValue>,
+}
+
+/// A left operand of a long chain of binary operators, `a + b + ... + z`,
+/// compiled ahead of the operator that reads it.
+///
+/// The chain nests one operator deep per term, down its left side. The
+/// compiler compiles it bottom up with a loop instead of recursing down that
+/// side: each operator's left operand is compiled first and recorded here, so
+/// the operator finds the register and the type where it would otherwise
+/// compile and type the whole chain below it again.
+pub struct ChainValue {
+    /// The operand, by address: the tree is not moved while it compiles.
+    pub expr: *const Expr,
+    pub register: u16,
+    pub ty: DataType,
 }
 
 /// A checkpoint of the tables a compile attempt grows as it goes, taken by
@@ -595,6 +613,20 @@ impl State<'_> {
         slots.ids.insert(s.to_owned(), slots.indexed as u32);
         slots.indexed = pool.len();
         data
+    }
+    /// The register and type of `expr` when it is a chain operand compiled
+    /// ahead of its operator; see [`ChainValue`].
+    #[inline(always)]
+    #[must_use]
+    pub fn chain_value(&self, expr: &Expr) -> Option<(u16, &DataType)> {
+        if self.chain_values.is_empty() {
+            return None;
+        }
+        self.chain_values
+            .iter()
+            .rev()
+            .find(|value| std::ptr::eq(value.expr, expr))
+            .map(|value| (value.register, &value.ty))
     }
     /// Adds a register holding `data`. A program past the register limit is a
     /// compile error here, before any id wraps round to one already in use.

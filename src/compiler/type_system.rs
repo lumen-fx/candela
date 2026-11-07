@@ -2781,8 +2781,11 @@ pub fn collect_direct_fn_calls(
                     expr_stack.extend(w.iter());
                 }
             }
-            Expr::ArrayGetIndex(x, y, _)
-            | Expr::Mul(x, y, _, _)
+            Expr::ArrayGetIndex(x, y, _) => {
+                expr_stack.push(x);
+                expr_stack.push(y);
+            }
+            Expr::Mul(x, y, _, _)
             | Expr::Div(x, y, _, _)
             | Expr::Add(x, y, _, _)
             | Expr::Sub(x, y, _, _)
@@ -3846,6 +3849,68 @@ impl Expr {
     /// Panics when a call node carries an empty namespace path, which the
     /// parser never produces.
     pub fn infer_type(&self, v: &mut Vec<Variable>, ctx: Ctx, state: &mut State<'_>) -> DataType {
+        // A chain `a + b + c + ...` nests down its left side, one level per
+        // operator. The left spine is walked with a loop and each operator is
+        // typed from the type of the one below it, so the length of a chain
+        // costs no stack. The operands are typed in the order the recursion
+        // would type them: the innermost left operand, then each right one.
+        if let Some((_, ty)) = state.chain_value(self) {
+            return ty.clone();
+        }
+        if let Some(mut below) = self.typed_left()
+            && below.typed_left().is_some()
+        {
+            let mut spine = vec![self];
+            // An operand the chain compiler has typed already ends the walk.
+            while let Some(next) = below.typed_left()
+                && state.chain_value(below).is_none()
+            {
+                spine.push(below);
+                below = next;
+            }
+            let mut ty = below.infer_type(v, ctx, state);
+            for node in spine.into_iter().rev() {
+                ty = node.infer_type_from(Some(ty), v, ctx, state);
+            }
+            return ty;
+        }
+        self.infer_type_from(None, v, ctx, state)
+    }
+
+    /// The left operand of a binary operator whose type is worked out from
+    /// both operands, left first.
+    fn typed_left(&self) -> Option<&Self> {
+        match self {
+            Self::Add(x, ..)
+            | Self::Mul(x, ..)
+            | Self::Div(x, ..)
+            | Self::Sub(x, ..)
+            | Self::Mod(x, ..)
+            | Self::Pow(x, ..)
+            | Self::BitAnd(x, ..)
+            | Self::BitOr(x, ..)
+            | Self::BitXor(x, ..)
+            | Self::Shl(x, ..)
+            | Self::Shr(x, ..)
+            | Self::Sup(x, ..)
+            | Self::SupEq(x, ..)
+            | Self::Inf(x, ..)
+            | Self::InfEq(x, ..)
+            | Self::BoolAnd(x, ..)
+            | Self::BoolOr(x, ..) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// [`Self::infer_type`] for one node, with the type of its left operand
+    /// already known when `left` holds it.
+    fn infer_type_from(
+        &self,
+        left: Option<DataType>,
+        v: &mut Vec<Variable>,
+        ctx: Ctx,
+        state: &mut State<'_>,
+    ) -> DataType {
         match self {
             Self::Var(name, span) => {
                 if let Some(var) = v.iter().rfind(|x| &x.name == name) {
@@ -3923,7 +3988,10 @@ impl Expr {
                 }
             }
             Self::Add(x, y, span_l, span_r) => {
-                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                match (
+                    left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
+                    y.infer_type(v, ctx, state),
+                ) {
                     (DataType::Unknown, t) | (t, DataType::Unknown) => t,
                     (DataType::Float, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
@@ -3948,7 +4016,10 @@ impl Expr {
             | Self::Sub(x, y, span_l, span_r)
             | Self::Mod(x, y, span_l, span_r)
             | Self::Pow(x, y, span_l, span_r) => {
-                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                match (
+                    left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
+                    y.infer_type(v, ctx, state),
+                ) {
                     (DataType::Unknown, t) | (t, DataType::Unknown)
                         if matches!(t, DataType::Float | DataType::Int | DataType::Unknown) =>
                     {
@@ -3975,7 +4046,10 @@ impl Expr {
             | Self::BitXor(x, y, span_l, span_r)
             | Self::Shl(x, y, span_l, span_r)
             | Self::Shr(x, y, span_l, span_r) => {
-                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                match (
+                    left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
+                    y.infer_type(v, ctx, state),
+                ) {
                     (DataType::Unknown, t) | (t, DataType::Unknown)
                         if matches!(t, DataType::Int | DataType::Unknown) =>
                     {
@@ -4000,7 +4074,10 @@ impl Expr {
             | Self::SupEq(x, y, span_l, span_r)
             | Self::Inf(x, y, span_l, span_r)
             | Self::InfEq(x, y, span_l, span_r) => {
-                match (x.infer_type(v, ctx, state), y.infer_type(v, ctx, state)) {
+                match (
+                    left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
+                    y.infer_type(v, ctx, state),
+                ) {
                     (DataType::Unknown, DataType::Float | DataType::Int)
                     | (DataType::Float | DataType::Int, DataType::Unknown)
                     | (DataType::Float, DataType::Float)
@@ -4041,9 +4118,10 @@ impl Expr {
             Self::BoolAnd(x, y, span_l, span_r) | Self::BoolOr(x, y, span_l, span_r) => {
                 // The right of an `&&` runs only where the left held, so it
                 // sees what an `is` on the left proved.
-                let x_type = x.infer_type(v, ctx, state);
+                let x_type = left.unwrap_or_else(|| x.infer_type(v, ctx, state));
                 let v_len = v.len();
-                if matches!(self, Self::BoolAnd(..)) {
+                // An operand the chain loop compiled ahead holds no `is`.
+                if matches!(self, Self::BoolAnd(..)) && state.chain_value(x).is_none() {
                     crate::compiler::type_test::declare_condition_facts(x, v, ctx, state);
                 }
                 let y_type = y.infer_type(v, ctx, state);
