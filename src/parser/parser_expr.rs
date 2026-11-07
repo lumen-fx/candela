@@ -7,6 +7,7 @@ use super::term::parse_term;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::IsTarget;
+use crate::compiler::expr::Operand;
 use crate::compiler::expr::Span;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
@@ -100,49 +101,49 @@ pub fn add_op(
         // away would drop the check on `x` entirely.
         Token::OpOr => match (lhs, rhs) {
             (Expr::Bool(x), Expr::Bool(y)) => Expr::Bool(x || y),
-            (lhs, rhs) => Expr::BoolOr(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::BoolOr(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpAnd => match (lhs, rhs) {
             (Expr::Bool(x), Expr::Bool(y)) => Expr::Bool(x && y),
-            (lhs, rhs) => Expr::BoolAnd(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::BoolAnd(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
-        Token::OpEq => Expr::Eq(Box::new(lhs), Box::new(rhs), span_l, span_r),
-        Token::OpNEq => Expr::NotEq(Box::new(lhs), Box::new(rhs), span_l, span_r),
+        Token::OpEq => Expr::Eq(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
+        Token::OpNEq => Expr::NotEq(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         Token::OpInf => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Bool(x < y),
             (Expr::Float(x), Expr::Float(y)) => Expr::Bool(x < y),
-            (lhs, rhs) => Expr::Inf(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Inf(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpInfEq => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Bool(x <= y),
             (Expr::Float(x), Expr::Float(y)) => Expr::Bool(x <= y),
-            (lhs, rhs) => Expr::InfEq(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::InfEq(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpSup => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Bool(x > y),
             (Expr::Float(x), Expr::Float(y)) => Expr::Bool(x > y),
-            (lhs, rhs) => Expr::Sup(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Sup(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpSupEq => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Bool(x >= y),
             (Expr::Float(x), Expr::Float(y)) => Expr::Bool(x >= y),
-            (lhs, rhs) => Expr::SupEq(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::SupEq(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpAdd => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_add(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x + y),
             (Expr::String(x), Expr::String(y)) => Expr::String(format_args!("{x}{y}").to_smolstr()),
-            (lhs, rhs) => Expr::Add(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Add(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpSub => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_sub(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x - y),
-            (lhs, rhs) => Expr::Sub(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Sub(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpMul => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_mul(y)),
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x * y),
-            (lhs, rhs) => Expr::Mul(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Mul(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpDiv => match (lhs, rhs) {
             // Float division follows IEEE 754 and yields an infinity rather
@@ -153,7 +154,7 @@ pub fn add_op(
                 parser.error(span_l.extend(span_r), ParserErr::DivisionByZero);
             }
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_div(y)),
-            (lhs, rhs) => Expr::Div(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Div(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpMod => match (lhs, rhs) {
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x % y),
@@ -162,7 +163,7 @@ pub fn add_op(
                 parser.error(span_l.extend(span_r), ParserErr::ModuloByZero);
             }
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x.wrapping_rem(y)),
-            (lhs, rhs) => Expr::Mod(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Mod(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpPow => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => {
@@ -174,31 +175,31 @@ pub fn add_op(
                 }
             }
             (Expr::Float(x), Expr::Float(y)) => Expr::Float(x.powf(y)),
-            (lhs, rhs) => Expr::Pow(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Pow(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpBitAnd => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x & y),
-            (lhs, rhs) => Expr::BitAnd(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::BitAnd(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::Pipe => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x | y),
-            (lhs, rhs) => Expr::BitOr(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::BitOr(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpBitXor => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => Expr::Int(x ^ y),
-            (lhs, rhs) => Expr::BitXor(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::BitXor(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpShl => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => {
                 Expr::Int(x << shift_count(parser, y, span_l.extend(span_r)))
             }
-            (lhs, rhs) => Expr::Shl(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Shl(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         Token::OpShr => match (lhs, rhs) {
             (Expr::Int(x), Expr::Int(y)) => {
                 Expr::Int(x >> shift_count(parser, y, span_l.extend(span_r)))
             }
-            (lhs, rhs) => Expr::Shr(Box::new(lhs), Box::new(rhs), span_l, span_r),
+            (lhs, rhs) => Expr::Shr(Operand::new(lhs), Operand::new(rhs), span_l, span_r),
         },
         _ => unsafe { unreachable_unchecked() },
     }

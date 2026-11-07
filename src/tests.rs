@@ -16559,3 +16559,81 @@ pub fn a_program_just_under_the_register_limit_runs() {
         assert_eq!(printed, "0\nconstant-string-number-59999\n");
     }
 }
+
+/// A chain of binary operators nests one level per operator, down its left
+/// side. The compiler, the type checker and the walks over the tree follow
+/// that side with a loop, so a generated chain of any length compiles in a
+/// test thread's small stack.
+#[test]
+pub fn a_long_operator_chain_compiles() {
+    let chain = |term: &str, op: &str, n: usize| vec![term; n].join(&format!(" {op} "));
+    let src = format!(
+        "fn main() {{ let a = 1; print({}); }}",
+        chain("a", "+", 10_000)
+    );
+    assert_eq!(run_output(&src), "10000\n");
+    let src = format!(
+        "fn main() {{ let s = \"x\"; let t = {}; print(t.len()); }}",
+        chain("s", "+", 10_000)
+    );
+    assert_eq!(run_output(&src), "10000\n");
+    let src = format!(
+        "fn main() {{ let t = true; let f = false; print({}); print({}); if {} {{ print(\"and\"); }} if {} {{ print(\"or\"); }} }}",
+        chain("t", "&&", 10_000),
+        chain("f", "||", 10_000),
+        chain("t", "&&", 10_000),
+        chain("f", "||", 10_000),
+    );
+    assert_eq!(run_output(&src), "true\nfalse\nand\n");
+    // A closure body is copied when the closure is compiled, and the copy
+    // walks the chain with a loop too.
+    let src = format!(
+        "fn main() {{ let b = 1; let g = fn(a) => {} + b; print(g(1)); }}",
+        chain("a", "-", 10_000)
+    );
+    assert_eq!(run_output(&src), "-9997\n");
+}
+
+/// A chain long enough for the compiler's loop still evaluates left to right
+/// and stops at the operand that settles an `&&` or an `||`.
+#[test]
+pub fn a_long_chain_evaluates_in_order_and_short_circuits() {
+    let calls = |name: &str, op: &str| {
+        (1..=40)
+            .map(|n| format!("{name}({n})"))
+            .collect::<Vec<_>>()
+            .join(&format!(" {op} "))
+    };
+    let src = format!(
+        "fn hit(n: int) -> bool {{ print(n); return n == 20; }}\nfn miss(n: int) -> bool {{ print(n); return n < 20; }}\nfn add(n: int) -> int {{ print(n); return n; }}\nfn main() {{ print({}); print({}); print({}); }}",
+        calls("hit", "||"),
+        calls("miss", "&&"),
+        calls("add", "+"),
+    );
+    use std::fmt::Write as _;
+    let mut want = String::new();
+    for _ in 0..2 {
+        for n in 1..=20 {
+            writeln!(want, "{n}").unwrap();
+        }
+        want.push_str(if want.len() < 60 { "true\n" } else { "false\n" });
+    }
+    for n in 1..=40 {
+        writeln!(want, "{n}").unwrap();
+    }
+    want.push_str("820\n");
+    assert_eq!(run_output(&src), want);
+
+    // An operator a struct defines, and an `is` whose narrowing the rest of
+    // the chain reads, keep working past the loop's depth.
+    let terms = vec!["v"; 40].join(" + ");
+    let src = format!(
+        "struct V {{ x: int }}\nimpl V {{ fn +(self, o: V) -> V => V {{ x: self.x + o.x }}; }}\nfn main() {{ let v = V {{ x: 1 }}; print(({terms}).x); }}"
+    );
+    assert_eq!(run_output(&src), "40\n");
+    let tests = vec!["o > 0"; 40].join(" && ");
+    let src = format!(
+        "fn main() {{ let o: any = 3; if o is int && {tests} {{ print(o + 1); }} print(o is int && {tests}); }}"
+    );
+    assert_eq!(run_output(&src), "4\ntrue\n");
+}

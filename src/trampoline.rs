@@ -473,5 +473,6 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         fn_returns: Vec::new(),
         captured_binders: Vec::new(),
         string_slots: StringSlots::default(),
+        chain_values: Vec::new(),
     }
 }

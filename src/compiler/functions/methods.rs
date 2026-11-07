@@ -12,6 +12,7 @@ use crate::compiler::compiler_errors::error_no_such_method;
 use crate::compiler::compiler_errors::error_operator_method;
 use crate::compiler::compiler_errors::error_type_args_on_builtin_method;
 use crate::compiler::expr::METHOD_SEP;
+use crate::compiler::expr::Operand;
 use crate::compiler::expr::OperatorForm;
 use crate::compiler::expr::mangle_method;
 use crate::compiler::expr::operator_method;
@@ -108,8 +109,8 @@ pub fn index_of_value(span: Span) -> Expr {
     let found = || Expr::Var(SmolStr::new_static(INDEX_FOUND), span);
     Expr::InlineCondition(
         Box::new(Expr::Inf(
-            Box::new(found()),
-            Box::new(Expr::Int(0)),
+            Operand::new(found()),
+            Operand::new(Expr::Int(0)),
             span,
             span,
         )),
@@ -199,8 +200,8 @@ pub fn parse_call(
         ),
         Some(DataType::Float) => branch(
             Expr::BoolOr(
-                Box::new(call("[int text]", vec![text()])),
-                Box::new(call("[float text]", vec![text()])),
+                Operand::new(call("[int text]", vec![text()])),
+                Operand::new(call("[float text]", vec![text()])),
                 span,
                 span,
             ),
@@ -210,8 +211,8 @@ pub fn parse_call(
         Some(DataType::Bool) => {
             let equals = |word: &'static str| {
                 Expr::Eq(
-                    Box::new(text()),
-                    Box::new(Expr::String(SmolStr::new_static(word))),
+                    Operand::new(text()),
+                    Operand::new(Expr::String(SmolStr::new_static(word))),
                     span,
                     span,
                 )
@@ -548,10 +549,31 @@ pub fn resolve_operator_method(
     let mangled = mangle_method(&type_name, method);
     let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
 
+    // An operand the chain loop compiled ahead is passed by the register it
+    // sits in, through a name bound to it, rather than as a copy of the
+    // chain below it, which would be compiled and evaluated a second time.
+    // The chain loop takes the name out of scope once the operator is done.
+    let operand = |e: &Expr, span: Span, v: &mut Vec<Variable>, state: &State<'_>| {
+        state.chain_value(e).map_or_else(
+            || e.clone(),
+            |(register, ty)| {
+                let name = SmolStr::from(format!("[chain operand {register}]"));
+                v.push(Variable {
+                    declared: None,
+                    name: name.clone(),
+                    register_id: register,
+                    cell: false,
+                    var_type: ty.clone(),
+                });
+                Expr::Var(name, span)
+            },
+        )
+    };
+    let l_arg = operand(l, span_l, v, state);
     let (args, arg_spans) = match (r, form) {
         // A unary operator names its operand with the second span, the way
         // its report does: the first covers the operator itself.
-        (None, _) => (vec![l.clone()], vec![span_r]),
+        (None, _) => (vec![l_arg], vec![span_r]),
         // A derived operator is the method applied to the same two types, so
         // both operands have to be of the receiver's type whatever the
         // method's second parameter says.
@@ -560,9 +582,9 @@ pub fn resolve_operator_method(
                 return None;
             }
             if form == OperatorForm::Swapped {
-                (vec![r.clone(), l.clone()], vec![span_r, span_l])
+                (vec![r.clone(), l_arg], vec![span_r, span_l])
             } else {
-                (vec![l.clone(), r.clone()], vec![span_l, span_r])
+                (vec![l_arg, r.clone()], vec![span_l, span_r])
             }
         }
         (Some(r), OperatorForm::Direct) => {
@@ -573,7 +595,7 @@ pub fn resolve_operator_method(
             if declared.is_none() && t_l != t_r {
                 return None;
             }
-            (vec![l.clone(), r.clone()], vec![span_l, span_r])
+            (vec![l_arg, r.clone()], vec![span_l, span_r])
         }
     };
 
@@ -593,7 +615,13 @@ pub fn resolve_operator_method(
         );
     }
 
-    let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
+    // The operands' types are known already. Typing the operands again would
+    // type everything under them again too, once per operator of a chain.
+    let arg_types: Vec<DataType> = match (r, form) {
+        (None, _) => vec![t_l.clone()],
+        (Some(_), OperatorForm::Swapped) => vec![t_r.clone(), t_l.clone()],
+        (Some(_), _) => vec![t_l.clone(), t_r.clone()],
+    };
     let return_type = infer_user_fn_return_type(fn_id, &arg_types, &[], &mangled, v, ctx, state);
     if operator_method_answers_bool(method) && return_type != DataType::Bool {
         cold_path();
