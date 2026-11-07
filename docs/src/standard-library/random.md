@@ -55,6 +55,7 @@ random::int_range(min, max)
 
 - `min`, `max`: ints.
 - Returns: an int between `min` and `max`, with both ends included.
+- Raises: `random_min_above_max` when `min` is greater than `max`.
 
 ```rust
 import "std/random";

@@ -106,6 +106,24 @@ fn main() {
     assert_eq!(lines[2], "true");
 }
 
+/// A range whose lower bound is above its upper one holds no int, so
+/// `int_range` raises a kind the program can catch instead of drawing one.
+#[wasm_bindgen_test]
+fn int_range_with_min_above_max_raises() {
+    let out = run(r#"
+import "std/random";
+fn main() {
+    try {
+        print(random::int_range(5, 3));
+    } catch "random_min_above_max" {
+        print("caught");
+    }
+    print(random::int_range(4, 4));
+}
+"#);
+    assert_eq!(out.lines().collect::<Vec<_>>(), ["caught", "4"]);
+}
+
 /// What the desktop's C library draws for seed 42, recorded from it: a seeded
 /// run draws the same sequence on every target.
 #[wasm_bindgen_test]
