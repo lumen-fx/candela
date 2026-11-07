@@ -7199,6 +7199,27 @@ fn qualify_host_type(t: &TypeExpr, host_namespace: &SmolStr, local: &[SmolStr]) 
     }
 }
 
+/// What a module shows the files that import it: its own declarations, with
+/// the structs its `host` blocks declare among them.
+///
+/// Inside the module a host struct is named behind its block's namespace,
+/// `ecs::Entity` for `host "ecs"`, the way the block's functions are called.
+/// An importer reaches the module through a name of its own, so the struct
+/// sits beside the module's other types: `import "ecs.cdl";` gives
+/// `ecs::Entity`, and `import "ecs.cdl" { Entity };` brings it in by name. A
+/// type of the module's own of the same name keeps the name.
+fn module_exports(namespace: &Namespace) -> Namespace {
+    let mut exports = namespace.clone();
+    for (_, block) in std::mem::take(&mut exports.children) {
+        for (name, kind) in block.symbols {
+            if !exports.symbols.iter().any(|(own, _)| *own == name) {
+                exports.symbols.push((name, kind));
+            }
+        }
+    }
+    exports
+}
+
 /// Adds what one import brings in to the scope of the file that writes it.
 ///
 /// `exports` is what the module declares. A namespace binding puts it behind
@@ -7559,7 +7580,7 @@ fn parse_toplevel(
         }
     }
 
-    files.insert(file_path.to_path_buf(), namespace.clone());
+    files.insert(file_path.to_path_buf(), module_exports(namespace));
 
     // Names merged into this file's scope by bare imports, with the module
     // each came from; consulted to report both sources on a collision.

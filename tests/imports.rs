@@ -1222,3 +1222,61 @@ fn an_import_takes_a_name_or_items_not_both() {
         assert!(!output.status.success(), "{name} compiled");
     }
 }
+
+/// A struct a `host` block declares is named behind the block's namespace in
+/// the module that declares it, and beside the module's other types in a file
+/// that imports it: `ecs::Entity` through the module's name, `Entity` when
+/// imported by name. The block's namespace is not repeated.
+#[test]
+fn a_host_struct_is_reached_through_the_module_name() {
+    const ECS: &str = "host \"ecs\" {\n    struct Entity { id: int }\n    bool despawn(Entity);\n}\n\
+                       fn make(id: int) -> ecs::Entity => ecs::Entity { id: id };\n";
+    let output = run_program(
+        "host_struct_by_module",
+        &[
+            ("ecs.cdl", ECS),
+            (
+                "prog.cdl",
+                "import \"ecs.cdl\";\nfn id(e: ecs::Entity) -> int => e.id;\nfn main() {\n    let e = ecs::Entity { id: 7 };\n    print(id(e) + ecs::make(1).id);\n    print(e);\n}\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[0], "8", "{stdout}");
+    assert!(lines[1].starts_with("ecs::Entity "), "{stdout}");
+
+    let output = run_program(
+        "host_struct_by_item",
+        &[
+            ("ecs.cdl", ECS),
+            (
+                "prog.cdl",
+                "import \"ecs.cdl\" { Entity };\nfn main() { print(Entity { id: 3 }.id); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+
+    let output = run_program(
+        "host_struct_doubled",
+        &[
+            ("ecs.cdl", ECS),
+            (
+                "prog.cdl",
+                "import \"ecs.cdl\";\nfn main() { print(ecs::ecs::Entity { id: 1 }.id); }\n",
+            ),
+        ],
+    );
+    assert!(!output.status.success(), "the namespace is not repeated");
+}

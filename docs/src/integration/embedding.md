@@ -219,6 +219,12 @@ fn launch() -> bool {
 `process::StartOptions::default()` works as well; see
 [default values](../language/types.md#default-values).
 
+A file that imports the module holding the block names the struct like any
+other type the module declares: `import "process.cdl";` gives
+`process::StartOptions`, and `import "process.cdl" { StartOptions };` brings it
+in by name. Its type name stays `process::StartOptions` either way, which is
+the name the host sees.
+
 The closure is registered with `register_host_fn_typed`, naming the struct's
 fields in the order the block declares them, and receives the value as a
 `Value::Struct` naming the struct and its fields:
