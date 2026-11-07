@@ -219,6 +219,15 @@ an embedded compile all report a file that declares none. `candela check` does
 not: compiling a file without a `main` is how a library entry checks. See
 [functions](../language/functions.md).
 
+**Program too large.** Bytecode numbers registers, instructions, functions,
+structs and enums with 16-bit ids, so one program holds at most 65,535 of each.
+Every variable, temporary value and constant takes a register, and every
+function compiles into one instruction stream, so both limits count the whole
+program, not one function. A program past one is `program_too_large`, and the
+message names which limit it crossed. Generated code meets these first: a table
+of tens of thousands of literals, or thousands of functions. Keep such data in a
+file the program reads instead.
+
 ## Warnings
 
 A warning reports something the compile could not check, without stopping it.

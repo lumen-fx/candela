@@ -88,7 +88,10 @@ impl Program<'_> {
         {
             return Some(reg);
         }
-        let reg = u16::try_from(self.registers.len()).ok()?;
+        if self.registers.len() >= usize::from(u16::MAX) {
+            return None;
+        }
+        let reg = self.registers.len() as u16;
         self.registers.push(value);
         self.const_registers.insert(value, reg);
         Some(reg)

@@ -23,8 +23,12 @@ use crate::compiler::SymbolKind;
 use crate::compiler::check_only_scope;
 use crate::compiler::compile_profile;
 use crate::compiler::compiler_data::Ctx;
+use crate::compiler::compiler_data::PROGRAM_LIMIT;
+use crate::compiler::compiler_data::ProgramLimit;
 use crate::compiler::compiler_data::State;
+use crate::compiler::compiler_data::StringSlots;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_data::program_too_large;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::METHOD_SEP;
 use crate::compiler::imports::ImportResolver;
@@ -358,6 +362,9 @@ fn compile_entry_point(
     let mut seed_vars: Vec<Variable> = Vec::with_capacity(arg_types.len());
     let mut arg_exprs: Vec<Expr> = Vec::with_capacity(arg_types.len());
     for (idx, var_type) in arg_types.iter().enumerate() {
+        if out.registers.len() >= PROGRAM_LIMIT {
+            program_too_large(ProgramLimit::Registers, &out.functions, &out.sources);
+        }
         let register_id = out.registers.len() as u16;
         out.registers.push(NULL);
         arg_registers.push(register_id);
@@ -387,6 +394,9 @@ fn compile_entry_point(
     };
 
     trampoline.push(Instr::Halt(0));
+    if out.instructions.len() + trampoline.len() > PROGRAM_LIMIT {
+        program_too_large(ProgramLimit::Instructions, &out.functions, &out.sources);
+    }
     use_immediates(
         &mut trampoline,
         &out.instructions,
@@ -462,5 +472,6 @@ fn compiler_state(out: &mut CompileOutput) -> State<'_> {
         propagations: Vec::new(),
         fn_returns: Vec::new(),
         captured_binders: Vec::new(),
+        string_slots: StringSlots::default(),
     }
 }

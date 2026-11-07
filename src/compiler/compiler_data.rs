@@ -1,6 +1,9 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+pub use super::compiler_errors::PROGRAM_LIMIT;
+pub use super::compiler_errors::ProgramLimit;
+use super::compiler_errors::error_program_too_large;
 use super::expr::Expr;
 use super::expr::Span;
 use super::registers::get_tgt_ids;
@@ -295,9 +298,13 @@ impl Ctx {
     }
     #[inline(always)]
     #[must_use]
-    pub const fn advance_offset(self, output_len: u16) -> Self {
+    pub fn advance_offset(self, output_len: usize) -> Self {
+        // Past the instruction limit the offset stays at it: the statement
+        // that crossed it is reported once it is compiled, by
+        // [`State::check_instructions`].
+        let offset = usize::from(self.offset).saturating_add(output_len);
         Self {
-            offset: self.offset + output_len,
+            offset: u16::try_from(offset).unwrap_or(u16::MAX),
             ..self
         }
     }
@@ -341,6 +348,18 @@ pub struct FnValueSet {
     pub used_at: Vec<Box<[DataType]>>,
 }
 
+/// The pool slot holding each string text a compile has seen, by text.
+///
+/// The compiler adds strings to the pool and never changes one, so an index
+/// built as it goes stays true for one compile. Each compile builds its own:
+/// between two, a running program can rewrite and free slots.
+#[derive(Default)]
+pub struct StringSlots {
+    ids: FxHashMap<String, u32>,
+    /// How many pool slots `ids` covers.
+    indexed: usize,
+}
+
 pub struct State<'a> {
     pub registers: &'a mut Vec<Data>,
     pub fns: &'a mut Vec<Function>,
@@ -380,6 +399,8 @@ pub struct State<'a> {
     /// captures, so each is bound in a cell. Set by whatever compiles the
     /// condition, which is what knows the scope.
     pub captured_binders: Vec<SmolStr>,
+    /// Where each string constant this compile made sits in the pool.
+    pub string_slots: StringSlots,
 }
 
 /// A checkpoint of the tables a compile attempt grows as it goes, taken by
@@ -549,12 +570,56 @@ impl State<'_> {
             self.free_registers.push(id);
         }
     }
+    /// `s` as a constant value: inline when it is short, else the pool slot
+    /// an equal string already has, else a new one.
+    ///
+    /// The same answer [`Data::p_str`] gives, found through
+    /// [`Self::string_slots`] instead of a scan of the pool, which made a
+    /// program with many string literals compile in quadratic time.
+    pub fn intern_str(&mut self, s: &str) -> Data {
+        if Data::fits_inline(s) {
+            return Data::small_str(s);
+        }
+        let pool = &mut self.pools.strings;
+        let slots = &mut self.string_slots;
+        // Slots another path added since the last call; the first slot with
+        // a text is the one a scan would find.
+        for (id, text) in pool.iter().enumerate().skip(slots.indexed) {
+            slots.ids.entry(text.clone()).or_insert(id as u32);
+        }
+        slots.indexed = pool.len();
+        if let Some(&id) = slots.ids.get(s) {
+            return Data::pooled(id as usize, pool);
+        }
+        let data = Data::new_pooled(s, pool);
+        slots.ids.insert(s.to_owned(), slots.indexed as u32);
+        slots.indexed = pool.len();
+        data
+    }
+    /// Adds a register holding `data`. A program past the register limit is a
+    /// compile error here, before any id wraps round to one already in use.
+    #[inline(always)]
+    pub fn push_reg(&mut self, data: Data) {
+        if self.registers.len() >= PROGRAM_LIMIT {
+            program_too_large(ProgramLimit::Registers, self.fns, self.sources);
+        }
+        self.registers.push(data);
+    }
+    /// Ends the compile when code written at instruction `end` would sit past
+    /// the instruction limit, where a location or a jump no longer fits its
+    /// 16 bits.
+    #[inline(always)]
+    pub fn check_instructions(&self, end: usize) {
+        if end > PROGRAM_LIMIT {
+            program_too_large(ProgramLimit::Instructions, self.fns, self.sources);
+        }
+    }
     /// Allocates a register. It `free_registers` isn't empty, it will reuse the latest one. Else, it will allocate a new one.
     pub fn alloc_reg(&mut self) -> u16 {
         if let Some(reg) = self.free_registers.pop() {
             reg
         } else {
-            self.registers.push(NULL);
+            self.push_reg(NULL);
             (self.registers.len() - 1) as u16
         }
     }
@@ -574,7 +639,7 @@ impl State<'_> {
     /// another call of its function or another turn of an enclosing loop, so
     /// the register stays out of the allocator for good.
     pub fn template_register(&mut self, data: Data) -> u16 {
-        self.registers.push(data);
+        self.push_reg(data);
         let id = (self.registers.len() - 1) as u16;
         self.reserve_register(id)
     }
@@ -599,7 +664,7 @@ impl State<'_> {
         }
         let id = self.registers.len() as u16;
         self.const_registers.insert(data, id);
-        self.registers.push(data);
+        self.push_reg(data);
         id
     }
     /// Reserves `id` so the allocator never hands it out again, and answers it.
@@ -615,7 +680,7 @@ impl State<'_> {
     /// two never meet at compile time.
     pub fn indirect_arg_register(&mut self, idx: usize) -> u16 {
         while self.indirect_registers.args.len() <= idx {
-            self.registers.push(NULL);
+            self.push_reg(NULL);
             let id = (self.registers.len() - 1) as u16;
             self.indirect_registers.args.push(id);
         }
@@ -650,7 +715,7 @@ impl State<'_> {
         if let Some(id) = self.indirect_registers.env {
             return self.reserve_register(id);
         }
-        self.registers.push(NULL);
+        self.push_reg(NULL);
         let id = (self.registers.len() - 1) as u16;
         self.indirect_registers.env = Some(id);
         self.reserve_register(id)
@@ -663,7 +728,7 @@ impl State<'_> {
         if let Some(id) = self.fns[fn_id].entry_register {
             return self.reserve_register(id);
         }
-        self.registers.push(NULL);
+        self.push_reg(NULL);
         let id = (self.registers.len() - 1) as u16;
         self.fns[fn_id].entry_register = Some(id);
         self.reserve_register(id)
@@ -724,4 +789,19 @@ pub struct Variable {
     /// without one. A declared variable keeps this type: every value written
     /// into it has to fit, and its reads are typed by it.
     pub declared: Option<DataType>,
+}
+
+/// Reports a program past `limit`, at the function whose compile crossed it:
+/// the innermost body being compiled, else `main`, else the top of the entry
+/// file.
+#[cold]
+#[inline(never)]
+pub fn program_too_large(limit: ProgramLimit, fns: &[Function], sources: &[Source]) -> ! {
+    let site = crate::compiler::functions::user_functions::body_being_compiled()
+        .and_then(|id| fns.get(id))
+        .or_else(|| fns.iter().find(|f| f.name == "main" && f.src_file == 0))
+        .map_or((Span { start: 0, end: 0 }, 0), |f| {
+            (f.name_span, f.src_file)
+        });
+    error_program_too_large(limit, site.0, site.1, sources)
 }

@@ -57,6 +57,7 @@ use compiler_data::IndirectRegisters;
 use compiler_data::Pools;
 use compiler_data::ReturnCheck;
 use compiler_data::State;
+use compiler_data::StringSlots;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
@@ -620,7 +621,7 @@ fn compile_array_literal(
     };
     if array_items.is_empty() && !ctx.single_run {
         let array_reg = {
-            state.registers.push(Data::array(array_id as u32));
+            state.push_reg(Data::array(array_id as u32));
             state.registers.len() - 1
         } as u16;
         output.push(Instr::EmptyArray(array_reg));
@@ -644,7 +645,7 @@ fn compile_array_literal(
                 state.pools.objs.get_mut(array_id).push(NULL);
             }
         }
-        state.registers.push(Data::array(array_id as u32));
+        state.push_reg(Data::array(array_id as u32));
         (state.registers.len() - 1) as u16
     } else {
         // Check if all elements are constant (no instructions emitted)
@@ -678,7 +679,7 @@ fn compile_array_literal(
             // to hold this array, and keeps slot 0 reachable from the register
             // file for as long as the register is unwritten.
             let dest_reg = {
-                state.registers.push(Data::array(array_id as u32));
+                state.push_reg(Data::array(array_id as u32));
                 (state.registers.len() - 1) as u16
             };
             output.push(Instr::CloneArray(
@@ -695,7 +696,7 @@ fn compile_array_literal(
             // dynamic one: the closest value of the right shape it has, and no
             // root the literal was not already holding.
             let dest_reg = {
-                state.registers.push(Data::array(array_id as u32));
+                state.push_reg(Data::array(array_id as u32));
                 (state.registers.len() - 1) as u16
             };
             output.push(Instr::EmptyArray(dest_reg));
@@ -1151,9 +1152,7 @@ fn build_struct(
     }
 
     let dest_reg = if ctx.single_run {
-        state
-            .registers
-            .push(Data::struct_instance(type_id, pool_idx as u32));
+        state.push_reg(Data::struct_instance(type_id, pool_idx as u32));
         (state.registers.len() - 1) as u16
     } else {
         let template_reg = state.template_register(Data::struct_instance(type_id, pool_idx as u32));
@@ -1163,9 +1162,7 @@ fn build_struct(
         // execution sees this struct's fields instead of the first object the
         // program built dressed up as one.
         let dest_reg = {
-            state
-                .registers
-                .push(Data::struct_instance(type_id, pool_idx as u32));
+            state.push_reg(Data::struct_instance(type_id, pool_idx as u32));
             (state.registers.len() - 1) as u16
         };
         output.push(Instr::CloneStruct(template_reg, dest_reg));
@@ -1315,9 +1312,7 @@ pub(crate) fn compile_enum_construction(
     // anything that reads the register file before execution sees the variant
     // the register is about to hold.
     let dest_reg = {
-        state
-            .registers
-            .push(Data::enum_instance(enum_id, pool_idx as u32));
+        state.push_reg(Data::enum_instance(enum_id, pool_idx as u32));
         (state.registers.len() - 1) as u16
     };
     output.push(Instr::CloneEnum(template_reg, dest_reg));
@@ -1616,7 +1611,7 @@ fn compile_arm_body(
     if let Some((result, as_fn_value)) = result {
         compile_inline_condition_branch(body, v, ctx, state, output, result, as_fn_value);
     } else {
-        let code = compile_expr(body, v, ctx.advance_offset(output.len() as u16), state);
+        let code = compile_expr(body, v, ctx.advance_offset(output.len()), state);
         output.extend(code);
     }
 }
@@ -2164,11 +2159,11 @@ fn compile_map_literal(
                     state.registers.len() as u16,
                     id,
                 ));
-                state.registers.push(key_val);
+                state.push_reg(key_val);
             }
         }
         let dest_id = state.registers.len();
-        state.registers.push(Data::map(map_id as u32));
+        state.push_reg(Data::map(map_id as u32));
         dest_id as u16
     } else {
         let mut dynamic: Vec<(Data, u16)> = Vec::with_capacity(kv_pairs.len());
@@ -2248,7 +2243,7 @@ fn compile_map_literal(
         // entry, not map-pool slot 0, which belongs to the first map the
         // program built.
         let dest_reg = {
-            state.registers.push(Data::map(map_id as u32));
+            state.push_reg(Data::map(map_id as u32));
             (state.registers.len() - 1) as u16
         };
         output.push(Instr::CloneMap(template_reg, dest_reg));
@@ -2258,7 +2253,7 @@ fn compile_map_literal(
             } else {
                 let id = state.registers.len() as u16;
                 state.const_registers.insert(key_val, id);
-                state.registers.push(key_val);
+                state.push_reg(key_val);
                 id
             };
             output.push(Instr::MapInsertReg(dest_reg, key_reg, val_id));
@@ -3903,7 +3898,7 @@ fn compile_condition(
     let cond_code = compile_expr(
         &code[0..main_code_limit],
         v,
-        ctx.advance_offset(output.len() as u16),
+        ctx.advance_offset(output.len()),
         state,
     );
     output.extend(cond_code);
@@ -3919,14 +3914,14 @@ fn compile_condition(
             let false_jump_idxs =
                 compile_guard(condition, *condition_span, code, v, ctx, state, output);
             conditional_false_jmp_idxs.push(false_jump_idxs);
-            let cond_code = compile_expr(code, v, ctx.advance_offset(output.len() as u16), state);
+            let cond_code = compile_expr(code, v, ctx.advance_offset(output.len()), state);
             output.extend(cond_code);
             v.truncate(v_len);
             output.push(Instr::Jmp(0));
             jmp_instr_idx.push(output.len() - 1);
         } else if let Expr::ElseBlock(code) = elem {
             condition_markers.push(output.len());
-            let cond_code = compile_expr(code, v, ctx.advance_offset(output.len() as u16), state);
+            let cond_code = compile_expr(code, v, ctx.advance_offset(output.len()), state);
             output.extend(cond_code);
         }
     }
@@ -3968,7 +3963,7 @@ fn compile_while_loop(
     let mut cond_code = compile_expr(
         code,
         v,
-        ctx.no_single_run().advance_offset(output.len() as u16),
+        ctx.no_single_run().advance_offset(output.len()),
         state,
     );
     v.truncate(v_len);
@@ -3980,9 +3975,17 @@ fn compile_while_loop(
 
     let cond_len = (output.len() - output_len_before) as u16;
     let body_len = cond_code.len() as u16;
-    let len = cond_len + body_len; // full span used by JmpBack
+    // A loop past the instruction limit wraps here and is reported by the
+    // check that follows its statement; it never runs.
+    let len = cond_len.wrapping_add(body_len); // full span used by JmpBack
     // Break/Continue offsets are relative to cond_code, so pass body_len+1 (body remaining + JmpBack)
-    parse_loop_flow_control(&mut cond_code, loop_id, body_len + 1, false, false);
+    parse_loop_flow_control(
+        &mut cond_code,
+        loop_id,
+        body_len.wrapping_add(1),
+        false,
+        false,
+    );
     output.extend(cond_code);
     output.push(Instr::JmpBack(len));
 }
@@ -4022,7 +4025,7 @@ fn compile_for_loop(
 
     // set up the id of the index variable (0..len)
     let index_id = if ctx.single_run {
-        state.registers.push(0.into());
+        state.push_reg(0.into());
         (state.registers.len() - 1) as u16
     } else {
         let id = state.alloc_reg();
@@ -4349,7 +4352,7 @@ fn compile_walk(
         code,
         v,
         ctx.no_single_run()
-            .advance_offset(output.len() as u16 + pending),
+            .advance_offset(output.len() + usize::from(pending)),
         state,
     );
     // Clean up variables
@@ -4377,7 +4380,7 @@ fn compile_walk(
     output.push(Instr::StepIntJmpBack(
         index_id,
         array_len_id,
-        body_len + pending,
+        body_len.wrapping_add(pending),
     ));
 
     let exit_size = (output.len() - jmp_idx) as u16;
@@ -4471,7 +4474,7 @@ fn compile_int_for_loop(
     let compiled_loop_code = compile_expr(
         code,
         v,
-        ctx.no_single_run().advance_offset(output.len() as u16),
+        ctx.no_single_run().advance_offset(output.len()),
         state,
     );
     state.free_scope_registers(regs_before, &compiled_loop_code, v);
@@ -4485,7 +4488,7 @@ fn compile_int_for_loop(
     output.push(Instr::StepIntJmpBack(
         elem_id,
         end_elem_id,
-        compiled_loop_code_len + u16::from(captured),
+        compiled_loop_code_len.wrapping_add(u16::from(captured)),
     ));
 
     let exit_size = (output.len() - jmp_idx) as u16;
@@ -4512,7 +4515,7 @@ fn compile_loop_block(
     let mut compiled = compile_expr(
         code,
         v,
-        ctx.no_single_run().advance_offset(output.len() as u16),
+        ctx.no_single_run().advance_offset(output.len()),
         state,
     );
     state.free_scope_registers(regs_before, &compiled, v);
@@ -4538,7 +4541,7 @@ fn compile_try_catch_block(
     // compiled at the offset they occupy. Compiling them at the
     // enclosing offset makes every call inside a `try` jump short by the length
     // of the code already emitted before it.
-    let main_code = compile_expr(e, v, ctx.advance_offset(output.len() as u16), state);
+    let main_code = compile_expr(e, v, ctx.advance_offset(output.len()), state);
     output.extend(main_code);
     output.push(Instr::StopErrorCatch);
     output.push(Instr::Jmp(0)); // jumps over the catch handler if no error arises
@@ -4562,12 +4565,7 @@ fn compile_try_catch_block(
     if captured {
         output.push(Instr::NewCell(err_reg_id, err_cell_id));
     }
-    let catch_code = compile_expr(
-        catch_code,
-        v,
-        ctx.advance_offset(output.len() as u16),
-        state,
-    );
+    let catch_code = compile_expr(catch_code, v, ctx.advance_offset(output.len()), state);
     v.truncate(v_len);
     output.extend(catch_code);
     output[jmp_catch_instr] = Instr::Jmp((output.len() - jmp_catch_instr) as u16);
@@ -5217,7 +5215,7 @@ fn compile_eval_block(
     output.extend(compile_expr(
         code,
         v,
-        ctx.set_offset(output.len() as u16),
+        ctx.set_offset(u16::try_from(output.len()).unwrap_or(u16::MAX)),
         state,
     ));
 }
@@ -5256,6 +5254,7 @@ pub fn compile_expr(
         ) {
             state.free_reg(id, v);
         }
+        state.check_instructions(usize::from(ctx.offset) + output.len());
     }
     v.truncate(v_len);
     // The block's variables and the names it declared go out of scope with it.
@@ -5305,7 +5304,7 @@ impl Expr {
             Self::Int(num) => {
                 debug_assert!(uses_id);
                 if var_assignment {
-                    state.registers.push((*num).into());
+                    state.push_reg((*num).into());
                     return Some((state.registers.len() - 1) as u16);
                 }
                 let data = (*num).into();
@@ -5314,21 +5313,21 @@ impl Expr {
                 } else {
                     let id = state.registers.len() as u16;
                     state.const_registers.insert(data, id);
-                    state.registers.push(data);
+                    state.push_reg(data);
                     Some(id)
                 }
             }
             Self::Float(num) => {
                 debug_assert!(uses_id);
                 if var_assignment {
-                    state.registers.push((*num).into());
+                    state.push_reg((*num).into());
                     return Some((state.registers.len() - 1) as u16);
                 }
                 let data = (*num).into();
                 if let Some(&id) = state.const_registers.get(&data) {
                     Some(id)
                 } else {
-                    state.registers.push(data);
+                    state.push_reg(data);
                     let id = (state.registers.len() - 1) as u16;
                     state.const_registers.insert(data, id);
                     Some(id)
@@ -5337,25 +5336,24 @@ impl Expr {
             Self::String(str) => {
                 debug_assert!(uses_id);
                 if var_assignment {
-                    state
-                        .registers
-                        .push(Data::p_str(str, &mut state.pools.strings));
+                    let data = state.intern_str(str);
+                    state.push_reg(data);
                     return Some((state.registers.len() - 1) as u16);
                 }
-                let data = Data::p_str(str, &mut state.pools.strings);
+                let data = state.intern_str(str);
                 if let Some(&id) = state.const_registers.get(&data) {
                     Some(id)
                 } else {
                     let id = state.registers.len() as u16;
                     state.const_registers.insert(data, id);
-                    state.registers.push(data);
+                    state.push_reg(data);
                     Some(id)
                 }
             }
             Self::Null => {
                 debug_assert!(uses_id);
                 if var_assignment {
-                    state.registers.push(NULL);
+                    state.push_reg(NULL);
                     return Some((state.registers.len() - 1) as u16);
                 }
                 if let Some(&id) = state.const_registers.get(&NULL) {
@@ -5363,14 +5361,14 @@ impl Expr {
                 } else {
                     let id = state.registers.len() as u16;
                     state.const_registers.insert(NULL, id);
-                    state.registers.push(NULL);
+                    state.push_reg(NULL);
                     Some(id)
                 }
             }
             Self::Bool(bool) => {
                 debug_assert!(uses_id);
                 if var_assignment {
-                    state.registers.push((*bool).into());
+                    state.push_reg((*bool).into());
                     return Some((state.registers.len() - 1) as u16);
                 }
                 let data: Data = (*bool).into();
@@ -5379,7 +5377,7 @@ impl Expr {
                 } else {
                     let id = state.registers.len() as u16;
                     state.const_registers.insert(data, id);
-                    state.registers.push(data);
+                    state.push_reg(data);
                     Some(id)
                 }
             }
@@ -5838,7 +5836,7 @@ impl Expr {
                         } else {
                             let id = state.registers.len() as u16;
                             state.const_registers.insert(NULL, id);
-                            state.registers.push(NULL);
+                            state.push_reg(NULL);
                             id
                         }
                     }),
@@ -5862,7 +5860,7 @@ impl Expr {
                     } else {
                         let id = state.registers.len() as u16;
                         state.const_registers.insert(NULL, id);
-                        state.registers.push(NULL);
+                        state.push_reg(NULL);
                         id
                     }
                 }),
@@ -6178,7 +6176,7 @@ impl Expr {
                     } else {
                         let id = state.registers.len() as u16;
                         state.const_registers.insert(NULL, id);
-                        state.registers.push(NULL);
+                        state.push_reg(NULL);
                         id
                     }
                 }),
@@ -7934,6 +7932,45 @@ fn resolve_types(
     }
 }
 
+/// Ends the compile when the program declares more functions, structs or
+/// enums than a 16-bit id can name, at the first function past the limit.
+/// The ids were handed out as the declarations were read; nothing has used
+/// one yet.
+fn check_declaration_counts(
+    functions: &[Function],
+    structs: &[Struct],
+    enums: &[EnumType],
+    sources: &[Source],
+) {
+    if let Some(f) = functions.get(compiler_errors::PROGRAM_LIMIT) {
+        compiler_errors::error_program_too_large(
+            compiler_errors::ProgramLimit::Functions,
+            f.name_span,
+            f.src_file,
+            sources,
+        );
+    }
+    // A struct or an enum does not record its file, so the report points at
+    // the top of the entry file.
+    let top = Span { start: 0, end: 0 };
+    if structs.len() > compiler_errors::PROGRAM_LIMIT {
+        compiler_errors::error_program_too_large(
+            compiler_errors::ProgramLimit::Structs,
+            top,
+            0,
+            sources,
+        );
+    }
+    if enums.len() > compiler_errors::PROGRAM_LIMIT {
+        compiler_errors::error_program_too_large(
+            compiler_errors::ProgramLimit::Enums,
+            top,
+            0,
+            sources,
+        );
+    }
+}
+
 /// The complete result of compiling a candela program.
 ///
 /// In addition to the fields the CLI/VM needs to run `main`, this carries the
@@ -8113,6 +8150,7 @@ pub fn compile_profile(
         resolver,
     );
     file_namespaces.insert(0, namespace);
+    check_declaration_counts(&functions, &structs, &enums, &sources);
     // Before any type is resolved: a name two modules both declare is renamed
     // here, and everything downstream reads the name it ended up with.
     qualify_duplicate_type_names(
@@ -8191,6 +8229,7 @@ pub fn compile_profile(
         propagations: Vec::new(),
         fn_returns: Vec::new(),
         captured_binders: Vec::new(),
+        string_slots: StringSlots::default(),
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are
@@ -8208,6 +8247,7 @@ pub fn compile_profile(
         Vec::new()
     };
     instructions.push(Instr::Halt(0));
+    state.check_instructions(instructions.len());
     if optimize {
         let mut program = flow::Program {
             instructions: &mut instructions,
