@@ -5589,11 +5589,11 @@ pub fn diagnostics_calling_a_variable_that_is_not_a_function() {
 /// rather than that it names no enum variant.
 #[test]
 pub fn diagnostics_a_module_function_without_its_call() {
-    let src = "import \"std/math\";\nfn main() { print(math::pi); }";
+    let src = "import \"std/json\";\nfn main() { print(json::parse); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
-    assert!(d.message.contains("math::pi(...)"), "{}", d.message);
-    let src = "import \"std/math\";\nfn main() { print(math::nope); }";
+    assert!(d.message.contains("json::parse(...)"), "{}", d.message);
+    let src = "import \"std/json\";\nfn main() { print(json::nope); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert!(
         d.message.contains("does not name an enum variant"),
