@@ -9,6 +9,9 @@ dylib "../std_src/random/random" {
 fn seed(s) { random::candela_seed(s); }
 fn int() { return random::candela_random_int(); }
 fn int_range(min, max) {
+    if min > max {
+        throw "random_min_above_max";
+    }
     return random::candela_random_int_range(min, max);
 }
 fn float() { return random::candela_random(); }
