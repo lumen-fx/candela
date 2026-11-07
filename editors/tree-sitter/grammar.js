@@ -108,13 +108,41 @@ module.exports = grammar({
     // Declarations
     // ------------------------------------------------------------------
 
-    // `@cfg(...)` in front of a declaration, a method or a statement. The
-    // parser reads it as a prefix of what follows; here it is a sibling node,
-    // which is all highlighting needs.
+    // `@cfg(...)` in front of a declaration, a method or a statement, or an
+    // attribute a `host` block declares, named behind its module
+    // (`@ecs::system(writes: [Position])`). The parser reads it as a prefix of
+    // what follows; here it is a sibling node, which is all highlighting needs.
     attribute: ($) =>
-      seq('@', field('name', $.identifier), field('arguments', $.attribute_arguments)),
+      prec.right(
+        seq(
+          '@',
+          field('name', $.identifier),
+          repeat(seq('::', field('name', $.identifier))),
+          optional(field('arguments', $.attribute_arguments)),
+        ),
+      ),
 
-    attribute_arguments: ($) => seq('(', sepByTrailing(',', $.cfg_predicate), ')'),
+    attribute_arguments: ($) =>
+      seq('(', sepByTrailing(',', choice($.attribute_argument, $.cfg_predicate)), ')'),
+
+    // `writes: [Position]`: a parameter's name and its value.
+    attribute_argument: ($) =>
+      seq(field('name', $.identifier), ':', field('value', $._attribute_value)),
+
+    _attribute_value: ($) =>
+      choice(
+        $.integer_literal,
+        $.float_literal,
+        $.negative_literal,
+        $.string_literal,
+        $.boolean_literal,
+        $.attribute_list,
+        $._type,
+      ),
+
+    negative_literal: ($) => seq('-', choice($.integer_literal, $.float_literal)),
+
+    attribute_list: ($) => seq('[', sepByTrailing(',', $._attribute_value), ']'),
 
     // A flag, `key = "value"`, or `not`/`any`/`all` around further conditions.
     cfg_predicate: ($) =>
@@ -258,9 +286,38 @@ module.exports = grammar({
     host_block: ($) =>
       seq('host', field('namespace', $.string_literal), field('body', $.signature_list)),
 
-    // A `host` block also declares the structs its functions take.
+    // A `host` block also declares the structs its functions take and the
+    // attributes a script may write.
     signature_list: ($) =>
-      seq('{', repeat(choice($.function_signature, $.struct_declaration)), '}'),
+      seq(
+        '{',
+        repeat(choice($.function_signature, $.struct_declaration, $.attribute_declaration)),
+        '}',
+      ),
+
+    // `attribute system(writes: type[] = []) on fn;`
+    attribute_declaration: ($) =>
+      seq(
+        'attribute',
+        field('name', $.identifier),
+        optional(
+          seq('(', sepByTrailing(',', $.attribute_parameter), ')'),
+        ),
+        'on',
+        field('target', choice('fn', 'struct')),
+        ';',
+      ),
+
+    attribute_parameter: ($) =>
+      seq(
+        field('name', $.identifier),
+        ':',
+        field('type', choice($._type, $.function_reference_type)),
+        optional(seq('=', field('default', $._attribute_value))),
+      ),
+
+    // `fn` or `fn[]`: a parameter that takes the name of a function.
+    function_reference_type: (_) => seq('fn', repeat(seq('[', ']'))),
 
     // `int add(int, int);`, or `log(string);` for a function returning null.
     // Parameters are types only; `...` marks a variadic host function.

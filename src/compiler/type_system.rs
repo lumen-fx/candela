@@ -1033,7 +1033,7 @@ fn requalify_method(
         match kind {
             SymbolKind::Struct(id) => structs.get(*id as usize).map(|s| &s.name),
             SymbolKind::Enum(id) => enums.get(*id as usize).map(|e| &e.name),
-            SymbolKind::Fn(_) | SymbolKind::Template(_) => None,
+            SymbolKind::Fn(_) | SymbolKind::Template(_) | SymbolKind::Attribute(_) => None,
         }
     })?;
     (declared != type_name).then(|| mangle_method(declared, method))

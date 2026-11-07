@@ -38,7 +38,7 @@
       ]
     },
     "attribute": {
-      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
       "captures": {
         "1": { "name": "punctuation.definition.annotation.candela" },
         "2": { "name": "storage.type.annotation.candela" }

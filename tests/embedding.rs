@@ -2406,6 +2406,17 @@ fn named() -> bool {
 fn main() {}
 "#;
 
+/// A `process::StartOptions` as a host function receives it.
+fn start_options(fields: &[(&str, Value)]) -> Value {
+    Value::Struct {
+        name: String::from("process::StartOptions"),
+        fields: fields
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect(),
+    }
+}
+
 /// The field shape a registration of `process::start` declares.
 fn start_options_type() -> HostType {
     HostType::Struct(vec![
@@ -2419,7 +2430,7 @@ fn start_options_type() -> HostType {
 }
 
 #[test]
-fn a_host_struct_crosses_as_a_record_of_its_fields() {
+fn a_host_struct_crosses_as_a_struct_naming_its_fields() {
     let seen: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&seen);
     let mut engine = Engine::new();
@@ -2454,17 +2465,17 @@ fn a_host_struct_crosses_as_a_record_of_its_fields() {
     assert_eq!(
         *seen.borrow(),
         vec![
-            record(&[
+            start_options(&[
                 ("cwd", "instances/a".into()),
                 ("env", empty.clone()),
                 ("end_at_exit", true.into()),
             ]),
-            record(&[
+            start_options(&[
                 ("cwd", ".".into()),
                 ("env", empty),
                 ("end_at_exit", true.into()),
             ]),
-            record(&[
+            start_options(&[
                 ("cwd", ".".into()),
                 ("env", Value::Map(env)),
                 ("end_at_exit", false.into()),
@@ -2542,4 +2553,97 @@ fn a_host_struct_field_of_the_wrong_type_does_not_compile() {
     let src = HOST_STRUCT_PROGRAM.replace("cwd: dir,", "cwd: 4,");
     let err = engine.compile(&src, "process.cdl").err().unwrap();
     assert_eq!(err.code, "struct_field_type_mismatch", "{}", err.message);
+}
+
+const STRUCT_CALLS: &str = r"
+struct Point { x: float, y: float }
+
+fn length2(p: Point) -> float {
+    return p.x * p.x + p.y * p.y;
+}
+
+fn shift(points: Point[], dx: float) {
+    for p in points {
+        p.x += dx;
+    }
+}
+
+fn origin() -> Point {
+    return Point { x: 0.0, y: 0.0 };
+}
+
+struct Cell<T> { value: T }
+
+fn cell() -> Cell<int> {
+    return Cell<int>{ value: 3 };
+}
+
+fn main() {}
+";
+
+fn point(x: f64, y: f64) -> Value {
+    Value::Struct {
+        name: String::from("Point"),
+        fields: vec![
+            (String::from("x"), Value::Float(x)),
+            (String::from("y"), Value::Float(y)),
+        ],
+    }
+}
+
+/// A host passes a struct by naming it, gets one back named, and reads back
+/// what the function wrote into the structs it was passed.
+#[test]
+fn structs_cross_both_ways_and_come_back_from_call_in_out() {
+    let mut program = Engine::new()
+        .compile(STRUCT_CALLS, "points.cdl")
+        .expect("compiles");
+    assert_eq!(
+        program.call("length2", &[point(3.0, 4.0)]).unwrap(),
+        Value::Float(25.0)
+    );
+    assert_eq!(program.call("origin", &[]).unwrap(), point(0.0, 0.0));
+
+    let mut args = [
+        Value::Array(vec![point(1.0, 0.0), point(2.0, 0.0)]),
+        Value::Float(0.5),
+    ];
+    program.call_in_out("shift", &mut args).unwrap();
+    assert_eq!(
+        args,
+        [
+            Value::Array(vec![point(1.5, 0.0), point(2.5, 0.0)]),
+            Value::Float(0.5)
+        ]
+    );
+    // The trampoline is reused for the same types.
+    program.call_in_out("shift", &mut args).unwrap();
+    assert_eq!(
+        args[0],
+        Value::Array(vec![point(2.0, 0.0), point(3.0, 0.0)])
+    );
+}
+
+#[test]
+fn a_struct_that_does_not_match_its_declaration_is_refused() {
+    let mut program = Engine::new()
+        .compile(STRUCT_CALLS, "points.cdl")
+        .expect("compiles");
+    let missing = Value::Struct {
+        name: String::from("Point"),
+        fields: vec![(String::from("x"), Value::Float(1.0))],
+    };
+    let err = program.call("length2", &[missing]).unwrap_err();
+    assert_eq!(err.code, "argument_type_mismatch");
+    let unknown = Value::Struct {
+        name: String::from("Nope"),
+        fields: Vec::new(),
+    };
+    let err = program.call("length2", &[unknown]).unwrap_err();
+    assert_eq!(err.code, "argument_type_mismatch");
+    // The program is still callable.
+    assert_eq!(
+        program.call("length2", &[point(1.0, 0.0)]).unwrap(),
+        Value::Float(1.0)
+    );
 }

@@ -130,6 +130,13 @@ pub use candela_vm::HostRegistry;
 pub use candela_vm::LoadError;
 pub use candela_vm::RuntimeProgram;
 pub use candela_vm::load_program;
+// The attributes a program's scripts wrote, read without running it.
+pub use candela_vm::Attribute;
+pub use candela_vm::AttributeTable;
+pub use candela_vm::AttributeTarget;
+pub use candela_vm::AttributeValue;
+pub use candela_vm::read_attributes;
+pub use candela_vm::rt::DataType;
 // What the collector has done, read through `gc_stats` on either program type.
 pub use candela_vm::GcStats;
 pub use candela_vm::PoolStats;

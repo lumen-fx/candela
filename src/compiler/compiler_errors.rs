@@ -2500,7 +2500,7 @@ pub fn error_unknown_function_in_namespace(
                 SymbolKind::Template(template) => state
                     .generics
                     .path_fn_of_template(*template as usize, fn_name),
-                SymbolKind::Fn(_) => None,
+                SymbolKind::Fn(_) | SymbolKind::Attribute(_) => None,
             })
     });
     // A std function the module renamed when its name took over the prefix
@@ -3116,6 +3116,42 @@ pub fn error_range_invalid_type(
         span,
         &format!("Invalid type in range: expected int, but this expression's type is {perceived}"),
         "range_element_type_mismatch",
+    );
+}
+
+#[inline(never)]
+#[cold]
+pub fn error_attribute_already_declared(
+    name: &str,
+    span: Span,
+    file_idx: u16,
+    sources: &[Source],
+) -> ! {
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Attribute already declared")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "This file already declares an attribute named {}",
+                        blue(name),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!(
+            "Attribute already declared: this file already declares an attribute named {name}"
+        ),
+        "attribute_already_declared",
     );
 }
 

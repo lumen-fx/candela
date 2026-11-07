@@ -221,7 +221,7 @@ fn launch() -> bool {
 
 The closure is registered with `register_host_fn_typed`, naming the struct's
 fields in the order the block declares them, and receives the value as a
-`Value::Map` keyed by field name:
+`Value::Struct` naming the struct and its fields:
 
 ```rust
 use candela::{HostType, Value};
@@ -241,8 +241,7 @@ engine.register_host_fn_typed(
     ],
     HostType::Bool,
     |args: &[Value]| {
-        let opts = args[3].as_map().expect("a record");
-        let cwd = opts["cwd"].as_str().unwrap_or(".");
+        let cwd = args[3].field("cwd").and_then(Value::as_str).unwrap_or(".");
         Ok(Value::Bool(!cwd.is_empty()))
     },
 );
@@ -254,9 +253,8 @@ registration written for another version of the struct is a
 in the declaration: the script builds the whole value before the call, and the
 closure always receives every field.
 
-A struct crosses into the host only. A host function cannot return one, since
-the value would come back as a map; a declaration that does is refused when it
-binds. A `.cdlb` built from the script records the struct with the program's
+A host function cannot return a struct; a declaration that does is refused
+when it binds. A `.cdlb` built from the script records the struct with the program's
 own, so `RuntimeProgram` binds and passes it the same way.
 
 ### register_macro
@@ -460,6 +458,33 @@ the program's resident tables before hitting the error is undone, so the next
 call has started running, leaves the program's globals and any host-side state
 exactly as the call left them; nothing after the failing point ran.
 
+### call_in_out
+
+```rust
+let mut args = [rows, Value::Float(dt)];
+program.call_in_out("movement", &mut args)?;
+let rows = &args[0];
+```
+
+`call`, handing back what the function did to its arguments. A list, a map and
+a struct reach a script function by reference, so what the function writes into
+one is written into the value it was passed. Once the call returns, each
+argument that is a list, a map or a struct is replaced with its final value;
+the others are left as they were. One call carries data in, lets the script
+change it, and brings the result back, which is what a host that keeps its own
+copy of the data (an engine's component storage, say) needs. The arguments are
+only replaced when the call succeeds.
+
+### attributes
+
+```rust
+let table: AttributeTable = program.attributes();
+```
+
+Every [attribute](../language/attributes.md) the program's scripts wrote, with
+the struct and enum tables the types in it refer to; see
+[attributes](#reading-attributes).
+
 ## Finding macro regions
 
 A build tool often needs to know where a macro is used before anything is
@@ -575,6 +600,17 @@ have the body compiled at the types the host passes.
 Errors come back as a `CallError`: the name is not exported, the argument count
 or an argument type disagrees with the declaration, or the call raised a runtime
 error, which arrives as the `Diagnostic` it produced.
+
+### call_in_out and attributes
+
+`call_in_out` and `attributes` work as they do on `Program`. `read_attributes`
+reads the same table straight from the bytes of a `.cdlb`, without loading the
+program: no library is opened and nothing has to be registered, so a build
+step or an editor can list what a program declares.
+
+```rust
+let table = candela_vm::read_attributes(&std::fs::read("game.cdlb")?)?;
+```
 
 ## Collecting garbage between frames
 
@@ -761,6 +797,7 @@ pub enum Value {
     String(String),
     Array(Vec<Value>),
     Map(BTreeMap<String, Value>),
+    Struct { name: String, fields: Vec<(String, Value)> },
     Enum { variant: String, payload: Vec<Value> },
 }
 ```
@@ -768,12 +805,34 @@ pub enum Value {
 `From` is implemented for `i64`, `i32`, `f64`, `bool`, `String`, `&str` and
 `()`, so `5i64.into()` and `"title".into()` build one. Going the other way,
 `as_i64`, `as_f64`, `as_str`, `into_string`, `into_array` and `into_map` unwrap
-one when it holds what you ask for.
+one when it holds what you ask for, and `struct_name`, `field` and `field_mut`
+read a struct.
 
 `Value::Int` is an `i64`, the width a candela `int` holds, so an integer
 crosses either way unchanged. Arrays are homogeneous and maps are string-keyed,
-matching how candela types them. A struct read back from a script arrives as a
-`Map` of its fields.
+matching how candela types them.
+
+A struct crosses as `Value::Struct`: the name the program gives it and its
+fields in declaration order. That is how one comes back from a script, and how
+a host passes one in:
+
+```rust
+let p = Value::Struct {
+    name: "Point".into(),
+    fields: vec![("x".into(), Value::Float(3.0)), ("y".into(), Value::Float(4.0))],
+};
+assert_eq!(program.call("length2", &[p])?, Value::Float(25.0));
+```
+
+The name is the struct's name as the script declares it; a struct a `host`
+block declares is named behind its namespace (`process::StartOptions`), a
+generic struct by its instantiation (`Cell<int>`), and when two modules declare
+a struct of one name, each is named behind its module. A struct argument must
+carry exactly the fields the struct declares, each a value of its type, or the
+call is refused before it runs, the same way a wrong scalar is. A
+[tuple](../language/types.md) is a struct whose fields are named `0`, `1`, and
+so on, so it crosses the same way. A function that takes a struct, or a list of
+structs, is exported from an artifact like any other.
 
 A list or map argument is built in the program's heap the way one the script
 builds is, reusing the space of values the collector has freed. Once the call
@@ -803,6 +862,81 @@ a function no export. Build the value inside the script and return it.
 A [generic](../language/generics.md) type is instantiated at compile time, so
 nothing generic reaches the host: `Cell<int>` crosses the boundary as the
 ordinary struct it compiles to.
+
+## Reading attributes
+
+A `host` block can declare [attributes](../language/attributes.md) that the
+scripts compiled against it write on their functions and structs:
+
+```rust
+host "ecs" {
+    attribute component on struct;
+    attribute system(writes: type[] = [], after: fn[] = []) on fn;
+}
+```
+
+candela checks every use against its declaration and records it; what it means
+is up to the host. An engine that binds candela, for example, can ship the block
+above in a package, read which functions are systems and what each writes, and
+schedule them as its own: once a frame, it builds the rows of each query as a
+list of structs, calls the system with `call_in_out`, and copies back the
+components the system declared it writes.
+
+`Program::attributes`, `RuntimeProgram::attributes` and `read_attributes` all
+answer an `AttributeTable`:
+
+```rust
+pub struct AttributeTable {
+    pub attributes: Vec<Attribute>,
+    pub structs: Vec<StructInfo>,
+    pub enums: Vec<EnumInfo>,
+}
+
+pub struct Attribute {
+    pub namespace: String,
+    pub name: String,
+    pub target: AttributeTarget,
+    pub args: Vec<(String, AttributeValue)>,
+}
+
+pub enum AttributeTarget {
+    Fn { name: String, params: Vec<(String, DataType)> },
+    Struct(u16),
+}
+
+pub enum AttributeValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    String(String),
+    Type(DataType),
+    Fn(String),
+    Variant { enum_id: u16, name: String },
+    List(Vec<AttributeValue>),
+}
+```
+
+`namespace` is the namespace of the `host` block that declares the attribute,
+whatever name the script imported its module under. `args` holds every
+parameter the declaration lists, in its order, with the value the script wrote
+or the default. A function target carries its parameters and their declared
+types, `any` for one left bare, which is what a host reads to decide what to
+pass. A struct, an enum or a type refers to `structs` and `enums` by index;
+`StructInfo` has the struct's name and its fields, and `type_name` renders a
+`DataType` the way candela source writes it. `named(namespace, name)` walks
+the attributes of one kind:
+
+```rust
+for system in table.named("ecs", "system") {
+    let AttributeTarget::Fn { name, params } = &system.target else { continue };
+    let writes = system.arg("writes").and_then(AttributeValue::as_list);
+    println!("{name} takes {params:?} and writes {writes:?}");
+}
+```
+
+A host that ships the declaring package checks the rest when it loads the
+program: that a type a system writes is one it reads, say. candela checks only
+what the declaration says.
 
 ## Errors
 

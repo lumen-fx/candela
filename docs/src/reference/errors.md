@@ -51,7 +51,7 @@ Raised while the file is read, before any type is known.
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function |
-| Attribute | An `@` name other than `cfg`, an attribute with nothing after it to apply to, or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [conditional compilation](../language/conditional-compilation.md) |
+| Attribute | An attribute with nothing after it to apply to (`attribute_without_item`), an attribute other than `@cfg` in front of anything but a top-level `fn` or `struct` (`attribute_wrong_target`), or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [attributes](../language/attributes.md) and [conditional compilation](../language/conditional-compilation.md) |
 | Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
 
 ## Compile errors
@@ -190,6 +190,18 @@ a type C has no representation for (`no_c_representation`). `candela check`
 opens no library, so it reports neither a library it cannot open nor a missing
 symbol. See
 [modules](../language/modules.md) and [C libraries](../integration/c-libraries.md).
+
+**Attribute errors.** An attribute no `host` block declares where it is named
+is `unknown_attribute`. One on the kind of item its declaration does not name,
+or on a generic function or struct, is `attribute_wrong_target`. An argument
+for a parameter the attribute does not have, one given twice, one without its
+parameter's name, a parameter with no default left out, a value of the wrong
+type, a function name that names no function, or an enum variant that does not
+exist or carries a payload is `attribute_bad_argument`. A type name that does
+not resolve is the unknown-type error any annotation gets. In a `host` block, a
+parameter whose type no argument can be written for, or a parameter named
+twice, is `attribute_parameter_type`, and a second attribute of one name is
+`attribute_already_declared`. See [attributes](../language/attributes.md).
 
 **No entry point.** A program is entered through `main`, so a run, a build and
 an embedded compile all report a file that declares none. `candela check` does

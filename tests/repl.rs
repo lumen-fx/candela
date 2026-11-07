@@ -172,6 +172,22 @@ fn a_line_declares_everything_a_file_can() {
     );
 }
 
+/// A declaration behind an attribute a `host` block declares is a declaration,
+/// with arguments or without.
+#[test]
+fn a_line_behind_a_declared_attribute_declares() {
+    let (out, err) = session(concat!(
+        "host \"tags\" { attribute marker on struct; attribute task(rate: int = 1) on fn; }\n",
+        "@marker struct Point { x: int }\n",
+        "@task(rate: 2) fn twice(p: Point) -> int { return p.x * 2; }\n",
+        "print(twice(Point{x: 21}));\n",
+    ));
+    assert!(
+        out.contains("42") && err.is_empty(),
+        "both declarations are in the session, got:\n{out}\n{err}"
+    );
+}
+
 /// A line the parser cannot read reports what it expected and is dropped, and
 /// the prompt takes the next line as it would any other.
 #[test]

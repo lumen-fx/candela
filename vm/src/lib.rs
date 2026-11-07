@@ -39,6 +39,9 @@ pub mod events;
 // The `.cdlb` bytecode artifact format plus the load/run API.
 pub mod artifact;
 
+// The attribute table a `.cdlb` carries.
+pub mod attributes;
+
 // Loading and calling the machine code a `.cdlb` carries.
 pub mod native;
 
@@ -66,13 +69,17 @@ pub use embed::IntoHostResult;
 pub use embed::IntoHostValue;
 pub use embed::Value;
 pub use embed::marshal_args;
-pub use embed::marshal_value;
 pub use embed::unmarshal_value;
 
 pub use artifact::CallError;
 pub use artifact::LoadError;
 pub use artifact::RuntimeProgram;
 pub use artifact::load_program;
+pub use artifact::read_attributes;
+pub use attributes::Attribute;
+pub use attributes::AttributeTable;
+pub use attributes::AttributeTarget;
+pub use attributes::AttributeValue;
 
 // What the collector has done, for a host that collects between frames.
 pub use gc::GcStats;

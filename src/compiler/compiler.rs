@@ -36,7 +36,14 @@ use crate::vm::StringPool;
 use crate::vm::map_insert;
 use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
+use attributes::AttributeCtx;
+use attributes::AttributeTargetKind;
+use attributes::AttributeUse;
+use attributes::PendingAttributes;
+use attributes::UseTarget;
+use attributes::resolve_attributes;
 use candela_vm::artifact::ExportImage;
+use candela_vm::attributes::Attribute;
 use compiler_data::Ctx;
 use compiler_data::DynamicLibFn;
 use compiler_data::Dynamiclib;
@@ -166,6 +173,7 @@ type PendingDylib = (
     (SmolStr, LibraryOrigin),
     Span,
 );
+pub mod attributes;
 pub mod compiler_data;
 mod compiler_errors;
 pub mod imports;
@@ -6125,6 +6133,9 @@ pub enum SymbolKind {
     /// symbol is what makes `g::Slot<int>` reach the `Slot` the module behind
     /// `g` declares rather than whichever module declared that name last.
     Template(u32),
+    /// An attribute a `host` block declares, by its index in
+    /// `PendingAttributes::decls`.
+    Attribute(u16),
 }
 
 /// Whether two symbols are the same underlying definition (same kind, same
@@ -6133,7 +6144,8 @@ const fn symbol_ids_equal(a: SymbolKind, b: SymbolKind) -> bool {
     match (a, b) {
         (SymbolKind::Fn(x), SymbolKind::Fn(y))
         | (SymbolKind::Struct(x), SymbolKind::Struct(y))
-        | (SymbolKind::Enum(x), SymbolKind::Enum(y)) => x == y,
+        | (SymbolKind::Enum(x), SymbolKind::Enum(y))
+        | (SymbolKind::Attribute(x), SymbolKind::Attribute(y)) => x == y,
         (SymbolKind::Template(x), SymbolKind::Template(y)) => x == y,
         _ => false,
     }
@@ -6329,6 +6341,18 @@ impl Namespace {
             }
         })
     }
+    /// The attribute this namespace declares under `name`, by its declaration
+    /// index.
+    #[must_use]
+    pub fn find_attribute(&self, name: &str) -> Option<usize> {
+        self.symbols.iter().find_map(|(n, kind)| {
+            if n.as_str() == name {
+                kind.attribute()
+            } else {
+                None
+            }
+        })
+    }
     /// The namespace `path` names, or `None` when any segment of it is not
     /// declared. Resolution alone is not an error: a path can also name a
     /// `host` or `dylib` namespace, which lives in `State::dyn_libs`.
@@ -6478,6 +6502,7 @@ fn tried_paths(chosen: &Path, library: Option<&Path>) -> Vec<PathBuf> {
 /// same module. The modules declare impl blocks and generic enums, which every file
 /// reaches by name, so nothing is merged into any file's scope.
 fn load_prelude(
+    attrs: &mut PendingAttributes,
     fns: &mut Vec<Function>,
     structs: &mut Vec<Struct>,
     enums: &mut Vec<EnumType>,
@@ -6519,6 +6544,8 @@ fn load_prelude(
         let mut child_namespace = Namespace::default();
         parse_toplevel(
             parsed.code,
+            parsed.attributes,
+            attrs,
             &path,
             child_src_idx,
             fns,
@@ -6945,6 +6972,8 @@ fn exported_names(exports: &Namespace) -> Vec<SmolStr> {
 
 fn parse_toplevel(
     code: Vec<Expr>,
+    item_attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    attrs: &mut PendingAttributes,
     file_path: &Path,
     src_file_idx: u16,
     fns: &mut Vec<Function>,
@@ -6970,9 +6999,22 @@ fn parse_toplevel(
     resolver: &ImportResolver,
 ) {
     let mut imports = Vec::new();
-    for expr in code {
+    let mut item_attributes = item_attributes.into_iter().peekable();
+    for (index, expr) in code.into_iter().enumerate() {
+        // The attributes written in front of this item, if any.
+        let uses = item_attributes
+            .next_if(|(at, _)| *at == index)
+            .map(|(_, uses)| uses);
         match expr {
             Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type, type_params) => {
+                if let Some(uses) = uses {
+                    let target = if type_params.is_empty() {
+                        UseTarget::Fn(fns.len() as u16)
+                    } else {
+                        UseTarget::Generic(AttributeTargetKind::Fn)
+                    };
+                    attrs.uses.push((src_file_idx, target, uses));
+                }
                 if let Some((_, SymbolKind::Fn(func_id))) =
                     namespace.symbols.iter().rfind(|(f, _)| f == &fn_name)
                 {
@@ -7020,6 +7062,14 @@ fn parse_toplevel(
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
             Expr::StructDeclare(name, fields, span, type_params, defaults) => {
+                if let Some(uses) = uses {
+                    let target = if type_params.is_empty() {
+                        UseTarget::Struct(structs.len() as u16)
+                    } else {
+                        UseTarget::Generic(AttributeTargetKind::Struct)
+                    };
+                    attrs.uses.push((src_file_idx, target, uses));
+                }
                 // A generic declaration registers no type of its own: each
                 // instantiation of it becomes an ordinary struct.
                 if !type_params.is_empty() {
@@ -7048,7 +7098,24 @@ fn parse_toplevel(
                     .push((name, SymbolKind::Struct(struct_id)));
                 pending_structs.push((struct_id, src_file_idx, fields));
             }
-            Expr::HostBlock(host_namespace, fn_signatures, span, host_structs) => {
+            Expr::HostBlock(host_namespace, fn_signatures, span, host_structs, attribute_decls) => {
+                for decl in attribute_decls {
+                    if namespace.find_attribute(&decl.name).is_some() {
+                        compiler_errors::error_attribute_already_declared(
+                            &decl.name,
+                            decl.span,
+                            src_file_idx,
+                            sources,
+                        );
+                    }
+                    let id = attrs.decls.len() as u16;
+                    namespace
+                        .symbols
+                        .push((decl.name.clone(), SymbolKind::Attribute(id)));
+                    attrs
+                        .decls
+                        .push((host_namespace.clone(), src_file_idx, decl));
+                }
                 declare_host_structs(
                     &host_namespace,
                     host_structs,
@@ -7085,6 +7152,7 @@ fn parse_toplevel(
                     host_namespace,
                     fn_signatures,
                     span,
+                    Box::from([]),
                     Box::from([]),
                 ));
             }
@@ -7240,7 +7308,7 @@ fn parse_toplevel(
                     is_host: false,
                 });
             }
-            Expr::HostBlock(host_namespace, fn_signatures, span, _) => {
+            Expr::HostBlock(host_namespace, fn_signatures, span, _, _) => {
                 pending_host.push((
                     src_file_idx,
                     dynamic_libs.len() as u16,
@@ -7338,6 +7406,8 @@ fn parse_toplevel(
 
                     parse_toplevel(
                         parsed.code,
+                        parsed.attributes,
+                        attrs,
                         &file_path,
                         child_src_idx,
                         fns,
@@ -7397,6 +7467,7 @@ fn parse_toplevel(
     if src_file_idx == 0 {
         let first_template = generics.template_count();
         load_prelude(
+            attrs,
             fns,
             structs,
             enums,
@@ -7794,6 +7865,9 @@ pub struct CompileOutput {
     /// The entry point a runner and an embedder run event handlers through,
     /// when the program imports `std/event`.
     pub event_entry: Option<ExportImage>,
+    /// Every attribute a `host` block declares that the program's scripts
+    /// wrote on a function or a struct, checked against its declaration.
+    pub attributes: Vec<Attribute>,
 }
 
 impl CompileOutput {
@@ -7906,8 +7980,11 @@ pub fn compile_profile(
     )> = Vec::new();
 
     generics.add_impls(parsed.impls, 0);
+    let mut pending_attributes = PendingAttributes::default();
     parse_toplevel(
         parsed.code,
+        parsed.attributes,
+        &mut pending_attributes,
         &main_path,
         0,
         &mut functions,
@@ -7959,6 +8036,17 @@ pub fn compile_profile(
         &mut host_fns,
         &mut dyn_libs,
         &sources,
+    );
+    let attributes = resolve_attributes(
+        &pending_attributes,
+        &mut AttributeCtx {
+            namespaces: &file_namespaces,
+            sources: &sources,
+            structs: &mut structs,
+            enums: &mut enums,
+            fns: &mut functions,
+            generics: &mut generics,
+        },
     );
 
     let ctx = Ctx {
@@ -8096,6 +8184,7 @@ pub fn compile_profile(
         generics,
         optimize,
         event_entry: None,
+        attributes,
     };
     out.event_entry = crate::trampoline::compile_event_entry(&mut out);
     out

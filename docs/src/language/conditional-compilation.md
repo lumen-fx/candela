@@ -23,6 +23,9 @@ Code whose condition is false is dropped before any name in it is looked up.
 The `js` module above does not have to exist on a desktop, and the two `track`
 functions do not collide, because only one of them is ever compiled.
 
+`@cfg` is the attribute candela reads itself. The others a script writes are
+declared by the program that embeds candela; see [attributes](attributes.md).
+
 ## Where the flags come from
 
 candela names no flags of its own. The program that compiles your code decides

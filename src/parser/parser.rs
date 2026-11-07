@@ -6,6 +6,12 @@ use crate::RED;
 use crate::RESET;
 use crate::cfg;
 use crate::cfg::Cfg;
+use crate::compiler::attributes::AttrParamTypeExpr;
+use crate::compiler::attributes::AttrValueExpr;
+use crate::compiler::attributes::AttributeDecl;
+use crate::compiler::attributes::AttributeParamDecl;
+use crate::compiler::attributes::AttributeTargetKind;
+use crate::compiler::attributes::AttributeUse;
 use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
@@ -165,8 +171,9 @@ enum ParserErr<'a> {
     /// An operator token after `fn` in an `impl` block that a type cannot
     /// define. Carries the symbol that was written.
     OperatorMethodUnknown(&'static str),
-    /// `@name` for a name that is not an attribute.
-    UnknownAttribute(&'a str),
+    /// An attribute other than `@cfg` in front of something that is not a
+    /// top-level `fn` or `struct` declaration.
+    AttributeWrongTarget,
     /// An attribute with nothing after it to apply to.
     AttributeWithoutItem,
     /// `throw(...)`, the call spelling `throw` had before it was a statement.
@@ -216,7 +223,7 @@ impl ParserErr<'_> {
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
             ParserErr::NestingTooDeep => "nesting_too_deep",
             ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
-            ParserErr::UnknownAttribute(_) => "unknown_attribute",
+            ParserErr::AttributeWrongTarget => "attribute_wrong_target",
             ParserErr::AttributeWithoutItem => "attribute_without_item",
             ParserErr::ThrowCall => "throw_call",
             ParserErr::OutsideLoop(_) => "outside_loop",
@@ -344,8 +351,8 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
                 _ => "",
             }
         ),
-        ParserErr::UnknownAttribute(name) => &format!(
-            "There is no attribute named {RED}{BOLD}{name}{RESET}. The attribute candela has is {BLUE}{BOLD}@cfg(...){RESET}"
+        ParserErr::AttributeWrongTarget => &format!(
+            "Only {BLUE}{BOLD}@cfg(...){RESET} applies here. The attributes a host block declares go in front of a top-level fn or struct declaration"
         ),
         ParserErr::AttributeWithoutItem => {
             "An attribute applies to the declaration or statement after it, and nothing follows this one"
@@ -775,7 +782,11 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
     // A statement a `@cfg` turns off is parsed and dropped, and the statement
     // after it stands in its place.
     while token == Token::At {
-        let active = parse_attributes(parser);
+        let (active, uses) = parse_attributes(parser);
+        if let Some(first) = uses.first() {
+            cold_path();
+            parser.error(first.span, ParserErr::AttributeWrongTarget);
+        }
         if matches!(parser.peek_token_opt(), None | Some(Token::RBrace)) {
             cold_path();
             let span = parser
@@ -1609,7 +1620,7 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
         );
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
-    let (fn_signatures, end) = parse_fn_signature_block(parser, None);
+    let (fn_signatures, end) = parse_fn_signature_block(parser, None, None);
     Expr::ImportDylib(path, fn_signatures, (start, end).into())
 }
 
@@ -1623,6 +1634,7 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
 fn parse_fn_signature_block(
     parser: &mut Parser<'_>,
     mut structs: Option<&mut Vec<Expr>>,
+    mut attributes: Option<&mut Vec<AttributeDecl>>,
 ) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
     let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
     let end: u32;
@@ -1649,6 +1661,18 @@ fn parse_fn_signature_block(
                 );
             }
             structs.push(declared);
+            continue;
+        }
+        // `attribute name ... on fn;`. A function that returns a type named
+        // `attribute` is written `attribute name(int);`, which the parameter
+        // list tells apart: an attribute's parameters are named, and one with
+        // none is followed by `on`.
+        if parser.peek_token() == Token::Identifier("attribute")
+            && let Some(attributes) = attributes.as_deref_mut()
+            && opens_attribute_decl(parser)
+        {
+            let (_, start) = parser.next_token();
+            attributes.push(parse_attribute_decl(parser, start.start));
             continue;
         }
 
@@ -1751,29 +1775,43 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
     };
     parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'.");
     let mut structs: Vec<Expr> = Vec::new();
-    let (fn_signatures, end) = parse_fn_signature_block(parser, Some(&mut structs));
+    let mut attributes: Vec<AttributeDecl> = Vec::new();
+    let (fn_signatures, end) =
+        parse_fn_signature_block(parser, Some(&mut structs), Some(&mut attributes));
     Expr::HostBlock(
         namespace,
         fn_signatures,
         (start, end).into(),
         structs.into_boxed_slice(),
+        attributes.into_boxed_slice(),
     )
 }
 
 #[inline(always)]
-fn parse_file(parser: &mut Parser<'_>, impls: &mut Vec<ImplTemplate>) -> Vec<Expr> {
+fn parse_file(
+    parser: &mut Parser<'_>,
+    impls: &mut Vec<ImplTemplate>,
+    attributes: &mut Vec<(usize, Box<[AttributeUse]>)>,
+) -> Vec<Expr> {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while parser.peek_token_opt().is_some() {
         if parser.peek_token() == Token::At {
-            let active = parse_attributes(parser);
+            let (active, uses) = parse_attributes(parser);
             if parser.peek_token_opt().is_none() {
                 cold_path();
                 let span = parser.eof_span();
                 parser.error(span, ParserErr::AttributeWithoutItem);
             }
+            if !uses.is_empty() && !matches!(parser.peek_token(), Token::Function | Token::Struct) {
+                cold_path();
+                parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
+            }
             if active {
                 parse_item(parser, &mut output, impls);
+                if !uses.is_empty() {
+                    attributes.push((output.len() - 1, uses.into_boxed_slice()));
+                }
             } else {
                 parser.inactive += 1;
                 parse_item(parser, &mut Vec::new(), &mut Vec::new());
@@ -1811,41 +1849,313 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
     });
 }
 
-/// Reads the run of attributes in front of an item or a statement, and says
-/// whether the code they apply to is compiled: true when every `@cfg` among
-/// them holds.
-fn parse_attributes(parser: &mut Parser<'_>) -> bool {
+/// Reads the run of attributes in front of an item or a statement. Answers
+/// whether the code they apply to is compiled, which is true when every `@cfg`
+/// among them holds, and the other attributes in the run, which the compiler
+/// checks against the `host` block declaring each one.
+fn parse_attributes(parser: &mut Parser<'_>) -> (bool, Vec<AttributeUse>) {
     let mut active = true;
+    let mut uses = Vec::new();
     while parser.peek_token_opt() == Some(Token::At) {
-        parser.next_token();
+        let (_, at) = parser.next_token();
         let (t, span) = parser.next_token();
-        match t {
-            Token::Identifier("cfg") => {}
-            Token::Identifier(name) => {
-                cold_path();
-                parser.error(span, ParserErr::UnknownAttribute(name));
-            }
-            other => {
+        let Token::Identifier(first) = t else {
+            cold_path();
+            parser.error(
+                span,
+                ParserErr::UnexpectedToken(
+                    Token::Identifier("cfg"),
+                    t,
+                    "An attribute is '@' followed by its name, as in @cfg(web).",
+                ),
+            );
+        };
+        if first == "cfg" && parser.peek_token_opt() != Some(Token::DoubleColon) {
+            let open = parser.next_token_expect(
+                Token::LParen,
+                "A cfg attribute holds its condition in parentheses, as in @cfg(web).",
+            );
+            let holds = parse_cfg_predicate(parser);
+            parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
+            active &= holds;
+            continue;
+        }
+        let mut path = vec![SmolStr::new(first)];
+        while parser.peek_token_opt() == Some(Token::DoubleColon) {
+            parser.next_token();
+            let (t, span) = parser.next_token();
+            let Token::Identifier(segment) = t else {
                 cold_path();
                 parser.error(
                     span,
                     ParserErr::UnexpectedToken(
-                        Token::Identifier("cfg"),
-                        other,
-                        "An attribute is '@' followed by its name, as in @cfg(web).",
+                        Token::Identifier(""),
+                        t,
+                        "An attribute is named behind the module that declares it, as in @ecs::system.",
                     ),
                 );
+            };
+            path.push(SmolStr::new(segment));
+        }
+        let mut args = Vec::new();
+        if parser.peek_token_opt() == Some(Token::LParen) {
+            let (_, open) = parser.next_token();
+            parser.enter(open);
+            while parser.peek_token() != Token::RParen {
+                // An argument without its parameter's name is read as well, so
+                // the compiler reports an unknown attribute before it reports
+                // how the arguments of a known one are written.
+                let name_span = parser.peek_token_span();
+                let name = if let Some(name) = named_attr_arg(parser) {
+                    parser.next_token();
+                    parser.next_token();
+                    SmolStr::new(name)
+                } else {
+                    SmolStr::default()
+                };
+                let value = parse_attr_value(parser);
+                let arg_span = (name_span.start, value.span().end).into();
+                args.push((name, value, arg_span));
+                if parser.peek_token() == Token::Comma {
+                    parser.next_token();
+                } else {
+                    break;
+                }
+            }
+            parser.leave();
+            parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
+        }
+        uses.push(AttributeUse {
+            path: path.into_boxed_slice(),
+            args: args.into_boxed_slice(),
+            span: (at.start, parser.last_token_end as u32).into(),
+        });
+    }
+    (active, uses)
+}
+
+/// The parameter name an attribute argument opens with, when the parser stands
+/// on `name:`.
+fn named_attr_arg<'a>(parser: &Parser<'a>) -> Option<&'a str> {
+    let mut tokens = parser.input.clone().map(|(t, _)| t.ok());
+    let Some(Some(Token::Identifier(name))) = tokens.next() else {
+        return None;
+    };
+    (tokens.next() == Some(Some(Token::Colon))).then_some(name)
+}
+
+/// Reads one attribute argument: a literal, a list in brackets, or a name or
+/// path, which the compiler reads as a type, a function or an enum variant by
+/// the parameter it is passed for.
+fn parse_attr_value(parser: &mut Parser<'_>) -> AttrValueExpr {
+    let span = parser.peek_token_span();
+    match parser.peek_token() {
+        Token::LBracket => {
+            parser.next_token();
+            parser.enter(span);
+            let mut items = Vec::new();
+            while parser.peek_token() != Token::RBracket {
+                items.push(parse_attr_value(parser));
+                if parser.peek_token() == Token::Comma {
+                    parser.next_token();
+                } else {
+                    break;
+                }
+            }
+            parser.leave();
+            parser.next_token_expect_closer(Token::LBracket, span, Token::RBracket);
+            AttrValueExpr::List(
+                items.into_boxed_slice(),
+                (span.start, parser.last_token_end as u32).into(),
+            )
+        }
+        Token::Int(i) => {
+            parser.next_token();
+            AttrValueExpr::Int(i, span)
+        }
+        Token::Float(f) => {
+            parser.next_token();
+            AttrValueExpr::Float(f, span)
+        }
+        Token::OpSub => {
+            parser.next_token();
+            let (t, number) = parser.next_token();
+            let span = (span.start, number.end).into();
+            match t {
+                Token::Int(i) => AttrValueExpr::Int(i.wrapping_neg(), span),
+                Token::Float(f) => AttrValueExpr::Float(-f, span),
+                other => {
+                    cold_path();
+                    parser.error(
+                        number,
+                        ParserErr::UnexpectedTokenStr(
+                            "a number",
+                            other,
+                            "A '-' in an attribute argument stands in front of a number.",
+                        ),
+                    );
+                }
             }
         }
-        let open = parser.next_token_expect(
-            Token::LParen,
-            "A cfg attribute holds its condition in parentheses, as in @cfg(web).",
-        );
-        let holds = parse_cfg_predicate(parser);
-        parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
-        active &= holds;
+        Token::String(text) => {
+            parser.next_token();
+            AttrValueExpr::String(SmolStr::new(parse_string(text)), span)
+        }
+        Token::True => {
+            parser.next_token();
+            AttrValueExpr::Bool(true, span)
+        }
+        Token::False => {
+            parser.next_token();
+            AttrValueExpr::Bool(false, span)
+        }
+        _ => {
+            let texpr = parse_type(parser);
+            AttrValueExpr::Path(texpr, (span.start, parser.last_token_end as u32).into())
+        }
     }
-    active
+}
+
+/// Reads `attribute name(param: type = default, ...) on fn;` in a `host`
+/// block, after the `attribute` that opens it.
+fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
+    let (t, name_span) = parser.next_token();
+    let Token::Identifier(name) = t else {
+        cold_path();
+        parser.error(
+            name_span,
+            ParserErr::UnexpectedToken(
+                Token::Identifier(""),
+                t,
+                "Attribute names must be identifiers.",
+            ),
+        );
+    };
+    let mut params = Vec::new();
+    if parser.peek_token() == Token::LParen {
+        let (_, open) = parser.next_token();
+        while parser.peek_token() != Token::RParen {
+            let (t, param_span) = parser.next_token();
+            let Token::Identifier(param) = t else {
+                cold_path();
+                parser.error(
+                    param_span,
+                    ParserErr::UnexpectedToken(
+                        Token::Identifier(""),
+                        t,
+                        "An attribute parameter is a name, a ':' and its type, as in writes: type[].",
+                    ),
+                );
+            };
+            parser.next_token_expect(
+                Token::Colon,
+                "An attribute parameter is a name, a ':' and its type, as in writes: type[].",
+            );
+            let ty = parse_attr_param_type(parser);
+            let default = if parser.peek_token() == Token::Equals {
+                parser.next_token();
+                Some(parse_attr_value(parser))
+            } else {
+                None
+            };
+            params.push(AttributeParamDecl {
+                name: SmolStr::new(param),
+                ty,
+                default,
+                span: (param_span.start, parser.last_token_end as u32).into(),
+            });
+            if parser.peek_token() == Token::Comma {
+                parser.next_token();
+            } else {
+                break;
+            }
+        }
+        parser.next_token_expect_closer(Token::LParen, open, Token::RParen);
+    }
+    let (t, on_span) = parser.next_token();
+    if t != Token::Identifier("on") {
+        cold_path();
+        parser.error(
+            on_span,
+            ParserErr::UnexpectedToken(
+                Token::Identifier("on"),
+                t,
+                "An attribute declaration ends with what it goes on, as in on fn; or on struct;.",
+            ),
+        );
+    }
+    let (t, target_span) = parser.next_token();
+    let target = match t {
+        Token::Function => AttributeTargetKind::Fn,
+        Token::Struct => AttributeTargetKind::Struct,
+        other => {
+            cold_path();
+            parser.error(
+                target_span,
+                ParserErr::UnexpectedTokenStr(
+                    "'fn' or 'struct'",
+                    other,
+                    "An attribute goes on a function or a struct.",
+                ),
+            );
+        }
+    };
+    parser.next_token_expect(
+        Token::SemiColon,
+        "An attribute declaration ends with a semicolon.",
+    );
+    AttributeDecl {
+        name: SmolStr::new(name),
+        params: params.into_boxed_slice(),
+        target,
+        span: (start, name_span.end).into(),
+    }
+}
+
+/// Whether the `attribute` the parser stands on opens an attribute
+/// declaration rather than a host function returning a type of that name: a
+/// name followed by `on`, by `()` and `on`, or by a parameter list whose first
+/// entry is `name:`.
+fn opens_attribute_decl(parser: &Parser<'_>) -> bool {
+    let mut tokens = parser.input.clone().map(|(t, _)| t.ok());
+    let mut next = || tokens.next().flatten();
+    if next() != Some(Token::Identifier("attribute")) {
+        return false;
+    }
+    if !matches!(next(), Some(Token::Identifier(_))) {
+        return false;
+    }
+    match next() {
+        Some(Token::Identifier("on")) => true,
+        Some(Token::LParen) => match next() {
+            Some(Token::RParen) => next() == Some(Token::Identifier("on")),
+            Some(Token::Identifier(_)) => next() == Some(Token::Colon),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Reads the type of an attribute parameter: `type` or `fn`, either of them
+/// as a list (`type[]`), or any other type.
+fn parse_attr_param_type(parser: &mut Parser<'_>) -> AttrParamTypeExpr {
+    let mut ty = match parser.peek_token() {
+        Token::Function => {
+            parser.next_token();
+            AttrParamTypeExpr::Fn
+        }
+        Token::Identifier("type") => {
+            parser.next_token();
+            AttrParamTypeExpr::Type
+        }
+        _ => return AttrParamTypeExpr::Value(parse_type(parser)),
+    };
+    while parser.peek_token_opt() == Some(Token::LBracket) {
+        parser.next_token();
+        parser.next_token_expect(Token::RBracket, "A list type is written with '[]'.");
+        ty = AttrParamTypeExpr::List(Box::new(ty));
+    }
+    ty
 }
 
 /// Reads one `@cfg` condition and evaluates it against the active
@@ -1922,11 +2232,15 @@ fn parse_cfg_predicate(parser: &mut Parser<'_>) -> bool {
 pub struct ParsedFile {
     pub code: Vec<Expr>,
     pub impls: Vec<ImplTemplate>,
+    /// The attributes other than `@cfg` written in front of an item, by the
+    /// item's index in `code`, in order.
+    pub attributes: Vec<(usize, Box<[AttributeUse]>)>,
 }
 
 #[must_use]
 pub fn parse(input: &str, src: &Source) -> ParsedFile {
     let mut impls: Vec<ImplTemplate> = Vec::new();
+    let mut attributes = Vec::new();
     let cfg = cfg::active();
     let code = parse_file(
         &mut Parser {
@@ -1940,8 +2254,13 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             loops: 0,
         },
         &mut impls,
+        &mut attributes,
     );
-    ParsedFile { code, impls }
+    ParsedFile {
+        code,
+        impls,
+        attributes,
+    }
 }
 
 /// What one line of source is, as far as the grammar can tell from its opening
@@ -1978,22 +2297,34 @@ pub fn classify_line(line: &str) -> LineKind {
     // Attributes in front of a line say nothing about what it is: the line
     // is what follows them.
     while first == Token::At {
-        let mut depth = 0_u32;
-        let mut after = None;
-        for token in tokens.by_ref() {
-            let Ok(token) = token else {
-                return LineKind::Statement;
-            };
-            match token {
-                Token::LParen => depth += 1,
-                Token::RParen => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        after = tokens.next();
-                        break;
+        // The name, a path of names joined by `::`.
+        let mut after = tokens.next();
+        while let Some(Ok(Token::Identifier(_))) = after {
+            after = tokens.next();
+            if after != Some(Ok(Token::DoubleColon)) {
+                break;
+            }
+            after = tokens.next();
+        }
+        // The arguments, if any, run to the parenthesis balancing the first.
+        if after == Some(Ok(Token::LParen)) {
+            let mut depth = 1_u32;
+            after = None;
+            for token in tokens.by_ref() {
+                let Ok(token) = token else {
+                    return LineKind::Statement;
+                };
+                match token {
+                    Token::LParen => depth += 1,
+                    Token::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            after = tokens.next();
+                            break;
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         let Some(Ok(next)) = after else {

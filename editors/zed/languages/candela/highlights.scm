@@ -39,6 +39,18 @@
   "@" @attribute
   name: (identifier) @attribute)
 
+(attribute_declaration
+  [
+    "attribute"
+    "on"
+  ] @keyword)
+
+(attribute_declaration
+  name: (identifier) @attribute)
+
+(attribute_argument
+  name: (identifier) @property)
+
 (cfg_predicate
   flag: (identifier) @constant)
 
