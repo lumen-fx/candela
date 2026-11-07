@@ -643,12 +643,15 @@ fn compile_element(
 fn compile_array_literal(
     array_items: &[Expr],
     spans: &[Span],
+    mixed: bool,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
-    if let Some(first) = array_items.first() {
+    // A literal written into an `any[]` may hold elements of several types;
+    // any other holds one.
+    if !mixed && let Some(first) = array_items.first() {
         let first_type = first.infer_type(v, ctx, state);
         if let Some(failing_elem_idx) = array_items
             .iter()
@@ -2131,6 +2134,7 @@ fn compile_match_value(
 fn compile_map_literal(
     kv_pairs: &[(Expr, Span, Expr, Span)],
     map_span: Span,
+    (mixed_keys, mixed_values): (bool, bool),
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2172,7 +2176,9 @@ fn compile_map_literal(
                 global_key_type = key_t;
                 global_val_type = val_t;
             } else {
-                if key_t != global_key_type {
+                // A map literal written into a map declared `any` on a side
+                // may hold several types there.
+                if key_t != global_key_type && !mixed_keys {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -2183,7 +2189,7 @@ fn compile_map_literal(
                         state.type_names(),
                     )
                 }
-                if val_t != global_val_type {
+                if val_t != global_val_type && !mixed_values {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -4694,6 +4700,7 @@ fn check_declared_value(
         return;
     }
     let fresh = matches!(value, Expr::Array(..) | Expr::Map(..));
+    state.mark_literal_target(value, declared);
     if !let_type_fits(declared, &value_type, fresh, state.generics) {
         compiler_errors::error_variable_type_mismatch(
             ctx.file_idx,
@@ -5664,9 +5671,14 @@ impl Expr {
             }
             Self::Array(array_items, spans) => {
                 debug_assert!(uses_id);
+                let mixed = matches!(
+                    state.take_literal_target(self),
+                    Some(DataType::Array(Some(element))) if *element == DataType::Unknown
+                );
                 Some(compile_array_literal(
                     array_items,
                     spans,
+                    mixed,
                     v,
                     ctx,
                     state,
@@ -5695,7 +5707,22 @@ impl Expr {
             }
             Self::Map(kv_pairs, span) => {
                 debug_assert!(uses_id);
-                Some(compile_map_literal(kv_pairs, *span, v, ctx, state, output))
+                let (mixed_keys, mixed_values) = match state.take_literal_target(self) {
+                    Some(DataType::Map(slots)) => (
+                        slots.0 == Some(DataType::Unknown),
+                        slots.1 == Some(DataType::Unknown),
+                    ),
+                    _ => (false, false),
+                };
+                Some(compile_map_literal(
+                    kv_pairs,
+                    *span,
+                    (mixed_keys, mixed_values),
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ))
             }
             Self::GetStructField(struct_expr, field, struct_span, field_span) => {
                 debug_assert!(uses_id);
@@ -8455,6 +8482,7 @@ pub fn compile_profile(
         captured_binders: Vec::new(),
         string_slots: StringSlots::default(),
         chain_values: Vec::new(),
+        literal_target: None,
     };
     // The entry file's `main` is the program's top level. A file that declares
     // none compiles to nothing but the halt: its declarations and signatures are

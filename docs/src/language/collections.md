@@ -17,7 +17,11 @@ fn main() {
 }
 ```
 
-Mixing types in one list is a compile error: `[1, "a"]` does not compile.
+Mixing types in one list is a compile error: `[1, "a"]` does not compile. A
+literal written straight into a place declared `any[]`, a `let` or a parameter,
+is the exception: `let row: any[] = [1, "a"];` compiles, and so does
+`spawn([Spark { ttl: 0.5 }, Position { x: 1.0 }])` for `fn spawn(bundle:
+any[])`.
 
 ### The empty list
 
@@ -164,7 +168,9 @@ against what the scope holds; see [Functions](functions.md).
 ## Maps
 
 A map is written in braces as `key: value` pairs. Keys share one type and values
-share one type. `{}` is the empty map.
+share one type, unless the literal is written straight into a map declared
+`any` on that side: `let config: {string: any} = {"name": "a", "size": 3};`.
+`{}` is the empty map.
 
 ```rust
 fn main() {

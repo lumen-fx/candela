@@ -806,6 +806,7 @@ impl Program {
             captured_binders: Vec::new(),
             string_slots: StringSlots::default(),
             chain_values: Vec::new(),
+            literal_target: None,
         }
     }
 

@@ -38,7 +38,8 @@ A parameter that names `any` inside a list or map, such as `any[]` or
 `{string: any}`, takes only a value declared that way, since the callee may put
 anything into it: an `int[]` variable does not fit. A list or map literal
 written at the call is the exception, because nothing else holds it, so
-`count([3, 9, 4])` passes for `fn count(xs: any[])`.
+`count([3, 9, 4])` passes for `fn count(xs: any[])`, and its elements may differ
+in type: `count([3, "nine"])` passes too.
 
 ```rust
 fn repeat(text: string, times) {
