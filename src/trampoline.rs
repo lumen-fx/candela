@@ -170,7 +170,9 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
 
     let mut exports = Vec::new();
     for (name, arg_types) in annotated_functions(out) {
-        let host_callable = arg_types.iter().all(is_host_callable_type);
+        let host_callable = arg_types
+            .iter()
+            .all(|ty| is_host_callable_type(ty, &out.structs));
         let export = compile_entry_point(out, 0, &name, arg_types);
         if host_callable {
             exports.push(export);
@@ -221,7 +223,9 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         if !cfg!(panic = "unwind") {
             continue;
         }
-        let host_callable = arg_types.iter().all(is_host_callable_type);
+        let host_callable = arg_types
+            .iter()
+            .all(|ty| is_host_callable_type(ty, &out.structs));
         let checkpoint = compiler_state(out).checkpoint();
         match collect_diagnostic(|| compile_entry_point(out, 0, &name, arg_types)) {
             Ok(export) => {

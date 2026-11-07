@@ -1,6 +1,7 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use super::attributes::AttributeDecl;
 use super::type_system::ReturnAnnotation;
 use super::type_system::TypeExpr;
 use super::type_system::TypeParams;
@@ -279,18 +280,21 @@ pub enum Expr {
         Span,
     ),
 
-    /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end), structs)
+    /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end), structs, attributes)
     ///
     /// Declares a host namespace whose functions are backed by Rust closures
     /// registered on the embedding [`crate::Engine`]. Mirrors [`Self::ImportDylib`]
     /// but dispatches to a registered closure instead of a C symbol. `structs`
     /// holds the [`Self::StructDeclare`]s the block declares, which a script
-    /// names behind the namespace (`process::StartOptions`).
+    /// names behind the namespace (`process::StartOptions`), and `attributes`
+    /// the attributes it declares, which a script names behind the module the
+    /// block is written in (`@ecs::system`).
     HostBlock(
         SmolStr,
         Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
         Span,
         Box<[Self]>,
+        Box<[AttributeDecl]>,
     ),
 
     /// ImportFile(path, binding, is_logical, (start, end))

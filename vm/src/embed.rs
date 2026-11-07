@@ -13,7 +13,6 @@
 
 use crate::data::Data;
 use crate::data::NULL;
-use crate::gc::GcState;
 use crate::gc::Heap;
 use crate::rt::DataType;
 use crate::rt::EnumType;
@@ -44,9 +43,16 @@ pub enum Value {
     /// A candela array `T[]`. Elements are expected to be homogeneous, matching
     /// candela's static array typing.
     Array(Vec<Self>),
-    /// A candela string-keyed map `{string: V}` (or a struct read back as a record).
-    /// Ordered so equality and iteration are deterministic on the host side.
+    /// A candela string-keyed map `{string: V}`. Ordered so equality and
+    /// iteration are deterministic on the host side.
     Map(BTreeMap<String, Self>),
+    /// A candela struct: the name the program's struct table gives it and its
+    /// fields in declaration order. A tuple is a struct whose fields are named
+    /// `0`, `1`, and so on.
+    Struct {
+        name: String,
+        fields: Vec<(String, Self)>,
+    },
     /// A candela enum value: the variant it was built as, and that variant's
     /// payload in declaration order. A nullary variant carries an empty
     /// payload. The enum's own type name is not carried; a host reads the
@@ -102,6 +108,33 @@ impl Value {
     pub const fn as_map(&self) -> Option<&BTreeMap<String, Self>> {
         if let Self::Map(m) = self {
             Some(m)
+        } else {
+            None
+        }
+    }
+    /// The value of field `name`, for a [`Value::Struct`] that has one.
+    #[must_use]
+    pub fn field(&self, name: &str) -> Option<&Self> {
+        if let Self::Struct { fields, .. } = self {
+            fields.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+        } else {
+            None
+        }
+    }
+    /// A mutable reference to field `name`, for a [`Value::Struct`] that has
+    /// one.
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut Self> {
+        if let Self::Struct { fields, .. } = self {
+            fields.iter_mut().find(|(n, _)| n == name).map(|(_, v)| v)
+        } else {
+            None
+        }
+    }
+    /// The struct name, for a [`Value::Struct`].
+    #[must_use]
+    pub fn struct_name(&self) -> Option<&str> {
+        if let Self::Struct { name, .. } = self {
+            Some(name)
         } else {
             None
         }
@@ -203,8 +236,8 @@ pub enum HostType {
     Array(Box<Self>),
     Map(Box<Self>),
     /// A struct a `host` block declares, as its fields in declaration order.
-    /// It crosses into the host only, as a [`Value::Map`] keyed by field
-    /// name; a host function cannot return one.
+    /// A host function receives it as a [`Value::Struct`]; a host function
+    /// cannot return one.
     Struct(Vec<(String, Self)>),
 }
 
@@ -295,10 +328,17 @@ impl HostType {
 ///
 /// This is the gate `candela build` applies when it decides which functions get
 /// a host-callable export, and it admits exactly the types
-/// [`value_matches_type`] can check an argument against. Struct, enum and
-/// function parameters are left out: a host has no way to build one.
+/// [`value_matches_type`] can check an argument against. A struct is admitted
+/// when every field is, read from `structs`, the program's struct table. Enum
+/// and function parameters are left out: a host has no way to build one.
 #[must_use]
-pub fn is_host_callable_type(ty: &DataType) -> bool {
+pub fn is_host_callable_type(ty: &DataType, structs: &[Struct]) -> bool {
+    host_callable_in(ty, structs, &mut Vec::new())
+}
+
+/// [`is_host_callable_type`], with the structs being checked on the way down:
+/// a struct that holds itself has no finite value a host could build.
+fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> bool {
     match ty {
         DataType::Int
         | DataType::Float
@@ -306,13 +346,33 @@ pub fn is_host_callable_type(ty: &DataType) -> bool {
         | DataType::String
         | DataType::Null
         | DataType::Unknown => true,
-        DataType::Array(element) => element.as_deref().is_none_or(is_host_callable_type),
+        DataType::Array(element) => element
+            .as_deref()
+            .is_none_or(|el| host_callable_in(el, structs, open)),
         DataType::Map(kv) => {
             matches!(&kv.0, None | Some(DataType::String))
-                && kv.1.as_ref().is_none_or(is_host_callable_type)
+                && kv
+                    .1
+                    .as_ref()
+                    .is_none_or(|v| host_callable_in(v, structs, open))
         }
-        DataType::Union(members) => members.iter().all(is_host_callable_type),
-        DataType::Fn(_) | DataType::FnValue(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+        DataType::Union(members) => members.iter().all(|m| host_callable_in(m, structs, open)),
+        DataType::Struct(id) => {
+            let Some(declared) = structs.get(*id as usize) else {
+                return false;
+            };
+            if open.contains(id) {
+                return false;
+            }
+            open.push(*id);
+            let callable = declared
+                .fields
+                .iter()
+                .all(|(_, t, _)| host_callable_in(t, structs, open));
+            open.pop();
+            callable
+        }
+        DataType::Fn(_) | DataType::FnValue(_) | DataType::Enum(_) => false,
     }
 }
 
@@ -329,6 +389,7 @@ pub fn holds_enum(value: &Value) -> bool {
         Value::Enum { .. } => true,
         Value::Array(items) => items.iter().any(holds_enum),
         Value::Map(entries) => entries.values().any(holds_enum),
+        Value::Struct { fields, .. } => fields.iter().any(|(_, v)| holds_enum(v)),
         Value::Null | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) => false,
     }
 }
@@ -344,6 +405,7 @@ pub fn describe_value(value: &Value) -> String {
         Value::String(_) => String::from("string"),
         Value::Array(_) => String::from("array"),
         Value::Map(_) => String::from("map"),
+        Value::Struct { name, .. } => format!("struct {name}"),
         Value::Enum { variant, .. } => format!("enum variant {variant}"),
     }
 }
@@ -352,42 +414,85 @@ pub fn describe_value(value: &Value) -> String {
 ///
 /// `any` (candela's [`DataType::Unknown`]) accepts every value except an enum;
 /// a union accepts a value any member accepts; an unparameterised array or map
-/// accepts any array or map, because the element type was never pinned. Paired
+/// accepts any array or map, because the element type was never pinned. A
+/// [`Value::Struct`] matches a struct type when it carries the declared name
+/// and exactly the declared fields, each matching its declared type; in a
+/// position that pins no type it must name a struct of the program, and is
+/// checked against that one. `structs` is the program's struct table. Paired
 /// with [`is_host_callable_type`], which decides which parameter types reach
 /// here at all.
 #[must_use]
-pub fn value_matches_type(value: &Value, ty: &DataType) -> bool {
+pub fn value_matches_type(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
     // No parameter type accepts an enum, `any` and an unpinned collection
     // included, so the value is asked first and every arm below answers for a
     // value with no enum in it.
     if holds_enum(value) {
         return false;
     }
+    matches_in(value, ty, structs)
+}
+
+/// [`value_matches_type`] for a value already known to hold no enum.
+fn matches_in(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
     match ty {
-        DataType::Unknown => true,
+        DataType::Unknown => match value {
+            Value::Struct { name, .. } => struct_id(name, structs)
+                .is_some_and(|id| matches_in(value, &DataType::Struct(id), structs)),
+            Value::Array(items) => items.iter().all(|item| matches_in(item, ty, structs)),
+            Value::Map(entries) => entries.values().all(|entry| matches_in(entry, ty, structs)),
+            _ => true,
+        },
         DataType::Int => matches!(value, Value::Int(_)),
         DataType::Float => matches!(value, Value::Float(_)),
         DataType::Bool => matches!(value, Value::Bool(_)),
         DataType::String => matches!(value, Value::String(_)),
         DataType::Null => matches!(value, Value::Null),
         DataType::Array(element) => match value {
-            Value::Array(items) => element
-                .as_deref()
-                .is_none_or(|el| items.iter().all(|item| value_matches_type(item, el))),
+            Value::Array(items) => {
+                let element = element.as_deref().unwrap_or(&DataType::Unknown);
+                items.iter().all(|item| matches_in(item, element, structs))
+            }
             _ => false,
         },
         DataType::Map(kv) => match value {
             Value::Map(entries) => {
-                kv.1.as_ref()
-                    .is_none_or(|v| entries.values().all(|entry| value_matches_type(entry, v)))
+                let element = kv.1.as_ref().unwrap_or(&DataType::Unknown);
+                entries
+                    .values()
+                    .all(|entry| matches_in(entry, element, structs))
             }
             _ => false,
         },
         DataType::Union(members) => members
             .iter()
-            .any(|member| value_matches_type(value, member)),
-        DataType::Fn(_) | DataType::FnValue(_) | DataType::Struct(_) | DataType::Enum(_) => false,
+            .any(|member| matches_in(value, member, structs)),
+        DataType::Struct(id) => {
+            let (Value::Struct { name, fields }, Some(declared)) =
+                (value, structs.get(*id as usize))
+            else {
+                return false;
+            };
+            *name == *declared.name
+                && fields.len() == declared.fields.len()
+                && declared.fields.iter().all(|(field, field_ty, _)| {
+                    fields
+                        .iter()
+                        .find(|(n, _)| *n == **field)
+                        .is_some_and(|(_, v)| matches_in(v, field_ty, structs))
+                })
+        }
+        DataType::Fn(_) | DataType::FnValue(_) | DataType::Enum(_) => false,
     }
+}
+
+/// The id of the struct the program names `name`. Struct names are unique
+/// within a program: a name two modules both declare is qualified by module.
+#[must_use]
+pub fn struct_id(name: &str, structs: &[Struct]) -> Option<u16> {
+    structs
+        .iter()
+        .position(|s| s.name == name)
+        .map(|i| i as u16)
 }
 
 /// The type-erased closure the VM dispatches a `host` call to.
@@ -1016,39 +1121,29 @@ impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 
 /// Allocates `v` into candela's heap pools and returns the value to store.
 ///
-/// Scalars become NaN-boxed values directly. A list or map takes its slot the
-/// way one the program builds does, reusing a freed slot when there is one,
-/// so building it can start or carry on a collection. Everything built so far
-/// therefore stays reachable from the roots a collection reads, `registers`
-/// and `recursion_stack`: the outermost container sits on top of
-/// `recursion_stack` while it is filled, and each entry goes into its parent
-/// before anything inside it is allocated. The caller keeps every other value
-/// the program still holds reachable from the roots too, and stores the
-/// result before it allocates again.
+/// Scalars become NaN-boxed values directly. A list, map or struct takes its
+/// slot the way one the program builds does, reusing a freed slot when there
+/// is one, so building it can start or carry on a collection. Everything built
+/// so far therefore stays reachable from the roots a collection reads,
+/// `heap.registers` and `heap.recursion_stack`: the outermost container sits
+/// on top of `recursion_stack` while it is filled, and each entry goes into
+/// its parent before anything inside it is allocated. The caller keeps every
+/// other value the program still holds reachable from the roots too, and
+/// stores the result before it allocates again.
+///
+/// A [`Value::Struct`] is built as the struct `structs` names it by, with its
+/// fields in declaration order. One that names no struct of the program, or
+/// whose fields differ from the declaration, becomes `null`; a call checks its
+/// arguments with [`value_matches_type`] before anything is marshalled, so
+/// only a value a host function returns unchecked can reach that.
 ///
 /// A string is interned: one the pool already holds by its text is shared,
 /// since a map finds a string key by its slot.
-pub fn marshal_value(
-    v: &Value,
-    registers: &RegisterFile,
-    recursion_stack: &mut RegisterFile,
-    objs: &mut ObjectPool,
-    maps: &mut MapPool,
-    strings: &mut StringPool,
-    gc: &mut GcState,
-) -> Data {
-    let mut heap = Heap {
-        objs,
-        maps,
-        strings,
-        gc,
-        registers,
-        recursion_stack,
-    };
-    let d = shell(&mut heap, v);
-    if matches!(v, Value::Array(_) | Value::Map(_)) {
+pub(crate) fn marshal_value(v: &Value, heap: &mut Heap<'_>, structs: &[Struct]) -> Data {
+    let d = shell(heap, v, structs);
+    if matches!(v, Value::Array(_) | Value::Map(_) | Value::Struct { .. }) && !d.is_null() {
         heap.recursion_stack.0.push(d);
-        fill(&mut heap, v, d);
+        fill(heap, v, d, structs);
         heap.recursion_stack.0.pop();
     }
     d
@@ -1056,32 +1151,54 @@ pub fn marshal_value(
 
 /// Writes each of `args` into the matching register of `arg_registers`, with
 /// the register file as the only roots: what a host does between runs.
+/// `structs` is the program's struct table, which a [`Value::Struct`] is
+/// built from.
 pub fn marshal_args(
     args: &[Value],
     arg_registers: &[u16],
     registers: &mut Vec<Data>,
     pools: &mut Pools,
+    structs: &[Struct],
 ) {
     let mut file = RegisterFile(std::mem::take(registers));
     let mut stack = RegisterFile(Vec::new());
     for (arg, &register) in args.iter().zip(arg_registers) {
         let d = marshal_value(
             arg,
-            &file,
-            &mut stack,
-            &mut pools.objs,
-            &mut pools.maps,
-            &mut pools.strings,
-            &mut pools.gc,
+            &mut Heap {
+                objs: &mut pools.objs,
+                maps: &mut pools.maps,
+                strings: &mut pools.strings,
+                gc: &mut pools.gc,
+                registers: &file,
+                recursion_stack: &mut stack,
+            },
+            structs,
         );
         file.0[register as usize] = d;
     }
     *registers = file.0;
 }
 
-/// `v` itself: a scalar, a string, or an empty list or map for [`fill`] to
-/// fill in.
-fn shell(heap: &mut Heap<'_>, v: &Value) -> Data {
+/// The declared struct a [`Value::Struct`] is built as: the one named `name`,
+/// when `fields` names exactly its fields.
+fn declared_struct<'s>(
+    name: &str,
+    fields: &[(String, Value)],
+    structs: &'s [Struct],
+) -> Option<&'s Struct> {
+    let declared = &structs[struct_id(name, structs)? as usize];
+    (declared.fields.len() == fields.len()
+        && declared
+            .fields
+            .iter()
+            .all(|(field, _, _)| fields.iter().any(|(n, _)| *n == **field)))
+    .then_some(declared)
+}
+
+/// `v` itself: a scalar, a string, or an empty list, map or struct for
+/// [`fill`] to fill in.
+fn shell(heap: &mut Heap<'_>, v: &Value, structs: &[Struct]) -> Data {
     match v {
         Value::Null => NULL,
         Value::Int(i) => Data::int(*i),
@@ -1090,6 +1207,13 @@ fn shell(heap: &mut Heap<'_>, v: &Value) -> Data {
         Value::String(s) => heap.string(s),
         Value::Array(_) => heap.array(),
         Value::Map(_) => heap.map(),
+        Value::Struct { name, fields } => match declared_struct(name, fields, structs) {
+            Some(declared) => {
+                let id = heap.array().as_array() as u32;
+                Data::struct_instance(declared.id, id)
+            }
+            None => NULL,
+        },
         // Enums travel outward only: both embedding paths refuse an argument
         // that holds one (see `holds_enum`) before anything is marshalled, so
         // this arm is what keeps the match exhaustive rather than a conversion
@@ -1100,15 +1224,19 @@ fn shell(heap: &mut Heap<'_>, v: &Value) -> Data {
 
 /// Fills `d`, the shell [`shell`] made for `v` and already reachable from the
 /// roots. Each entry goes in before anything inside it is allocated.
-fn fill(heap: &mut Heap<'_>, v: &Value, d: Data) {
+fn fill(heap: &mut Heap<'_>, v: &Value, d: Data, structs: &[Struct]) {
+    // A struct value that matches no declaration was built as `null`.
+    if d.is_null() {
+        return;
+    }
     match v {
         Value::Array(items) => {
             let id = d.as_array();
             heap.objs[id].reserve(items.len());
             for item in items {
-                let child = shell(heap, item);
+                let child = shell(heap, item, structs);
                 heap.objs[id].push(child);
-                fill(heap, item, child);
+                fill(heap, item, child, structs);
             }
         }
         Value::Map(entries) => {
@@ -1116,9 +1244,22 @@ fn fill(heap: &mut Heap<'_>, v: &Value, d: Data) {
             for (k, val) in entries {
                 let key = heap.string(k);
                 map_insert(&mut heap.maps[id], key, NULL, heap.strings);
-                let child = shell(heap, val);
+                let child = shell(heap, val, structs);
                 map_insert(&mut heap.maps[id], key, child, heap.strings);
-                fill(heap, val, child);
+                fill(heap, val, child, structs);
+            }
+        }
+        Value::Struct { fields, .. } => {
+            let id = d.as_struct();
+            let declared = &structs[d.struct_type_id() as usize];
+            heap.objs[id].reserve(declared.fields.len());
+            for (field, _, _) in &declared.fields {
+                let Some((_, val)) = fields.iter().find(|(n, _)| *n == **field) else {
+                    continue;
+                };
+                let child = shell(heap, val, structs);
+                heap.objs[id].push(child);
+                fill(heap, val, child, structs);
             }
         }
         _ => {}
@@ -1127,8 +1268,8 @@ fn fill(heap: &mut Heap<'_>, v: &Value, d: Data) {
 
 /// Reads a runtime [`Data`] back into a host [`Value`], recursively for arrays,
 /// maps, structs and enums. Arrays, structs and enums live in the shared object
-/// pool; structs are surfaced as string-keyed [`Value::Map`]s using their
-/// declared field names, and an enum becomes a [`Value::Enum`] naming the
+/// pool; a struct becomes a [`Value::Struct`] naming the struct and its fields
+/// in declaration order, and an enum becomes a [`Value::Enum`] naming the
 /// variant it holds. Map keys that are not strings are skipped.
 pub fn unmarshal_value(
     d: Data,
@@ -1153,9 +1294,10 @@ pub fn unmarshal_value(
             .collect();
         Value::Array(items)
     } else if d.is_struct() {
-        let fields = &structs[d.struct_type_id() as usize].fields;
+        let declared = &structs[d.struct_type_id() as usize];
         let values = &objs[d.as_struct()];
-        let record = fields
+        let fields = declared
+            .fields
             .iter()
             .zip(values.iter())
             .map(|((name, _, _), val)| {
@@ -1165,7 +1307,10 @@ pub fn unmarshal_value(
                 )
             })
             .collect();
-        Value::Map(record)
+        Value::Struct {
+            name: declared.name.to_string(),
+            fields,
+        }
     } else if d.is_enum() {
         // An enum instance is `[tag, payload...]` in the object pool; the tag
         // indexes the variant list of its declared type.

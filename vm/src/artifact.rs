@@ -22,6 +22,8 @@
 //! subcommand can populate it from a fresh compile; everything needed to LOAD
 //! and RUN it lives here.
 
+use crate::attributes::Attribute;
+use crate::attributes::AttributeTable;
 use crate::data::Data;
 use crate::embed::HostBindError;
 use crate::embed::HostDispatch;
@@ -97,8 +99,9 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// `is` compiles to for a struct, an enum, a function, a union or a collection,
 /// and the nested type codes that check what a list or a map holds. Version 16
 /// added the event entry ([`ProgramImage::event_entry`]) and the instructions
-/// `std/event` and the new `std/fs` functions compile to.
-const FORMAT_VERSION: u8 = 16;
+/// `std/event` and the new `std/fs` functions compile to. Version 17 added the
+/// attribute table ([`ProgramImage::attributes`]).
+const FORMAT_VERSION: u8 = 17;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///
@@ -147,6 +150,9 @@ pub struct ProgramImage {
     /// all name another machine runs on bytecode alone. The bytecode stays
     /// complete either way.
     pub native: Vec<NativeImage>,
+    /// Every attribute a `host` block declares that the program's scripts
+    /// wrote on a function or a struct, as the compiler checked it.
+    pub attributes: Vec<Attribute>,
 }
 
 /// Machine code `candela build` generated for one kind of machine, and what
@@ -368,6 +374,22 @@ pub struct SourceImage {
     pub contents: String,
 }
 
+/// The registers a call read its arguments from and left its result in.
+struct ExportRegisters {
+    arg_registers: Box<[u16]>,
+    ret_register: u16,
+}
+
+/// Whether a host value reaches a script function by reference, so a call
+/// can hand back what the function did to it.
+#[must_use]
+pub fn passed_by_reference(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Array(_) | Value::Map(_) | Value::Struct { .. }
+    )
+}
+
 /// One host-callable function in a loaded program: where its trampoline starts,
 /// which registers its parameters live in, and what it leaves the result in.
 struct Export {
@@ -415,6 +437,8 @@ pub struct RuntimeProgram {
     /// The program's machine code, when its artifact carries some this
     /// machine runs.
     native: Option<crate::native::NativeCode>,
+    /// The attributes its scripts wrote.
+    attributes: Vec<Attribute>,
 }
 
 impl RuntimeProgram {
@@ -539,6 +563,38 @@ impl RuntimeProgram {
     /// arguments disagree with the declared signature, or if the call raises a
     /// runtime error.
     pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, CallError> {
+        let export = self.run_export(name, args)?;
+        Ok(self.read_register(export.ret_register))
+    }
+
+    /// [`Self::call`], handing back what the function left in each argument it
+    /// was passed by reference.
+    ///
+    /// A list, a map and a struct reach a script function by reference, so
+    /// what the function writes into one is written into the value the call
+    /// passed. Once the call returns, every argument that is one of those is
+    /// replaced with its final value; every other argument is left as it was.
+    /// This is how a host passes data in, lets the script change it, and reads
+    /// the result back in one call.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`]. An argument is only replaced once the call has run
+    /// without an error.
+    pub fn call_in_out(&mut self, name: &str, args: &mut [Value]) -> Result<Value, CallError> {
+        let export = self.run_export(name, args)?;
+        for (arg, &register) in args.iter_mut().zip(export.arg_registers.iter()) {
+            if passed_by_reference(arg) {
+                *arg = self.read_register(register);
+            }
+        }
+        Ok(self.read_register(export.ret_register))
+    }
+
+    /// Checks `args` against the export `name`, marshals them into its
+    /// argument registers and runs its trampoline, answering the registers it
+    /// read its arguments from and left its result in.
+    fn run_export(&mut self, name: &str, args: &[Value]) -> Result<ExportRegisters, CallError> {
         let export = self
             .exports
             .get(name)
@@ -552,35 +608,51 @@ impl RuntimeProgram {
             });
         }
         for (idx, (arg, declared)) in args.iter().zip(export.arg_types.iter()).enumerate() {
-            if !value_matches_type(arg, declared) {
+            if !value_matches_type(arg, declared, &self.structs) {
                 return Err(CallError::ArgType {
                     function: name.to_owned(),
                     index: idx + 1,
-                    expected: declared.to_string(),
+                    expected: AttributeTable::new(Vec::new(), &self.structs, &self.enums)
+                        .type_name(declared),
                     found: describe_value(arg),
                 });
             }
         }
 
         let entry = export.entry;
-        let ret_register = export.ret_register as usize;
+        let registers = ExportRegisters {
+            arg_registers: export.arg_registers.clone(),
+            ret_register: export.ret_register,
+        };
         marshal_args(
             args,
-            &export.arg_registers,
+            &registers.arg_registers,
             &mut self.registers,
             &mut self.pools,
+            &self.structs,
         );
 
         self.execute_from(entry)?;
+        Ok(registers)
+    }
 
-        Ok(unmarshal_value(
-            self.registers[ret_register],
+    /// The value register `register` holds, read back into a host [`Value`].
+    fn read_register(&self, register: u16) -> Value {
+        unmarshal_value(
+            self.registers[register as usize],
             &self.pools.objs,
             &self.pools.maps,
             &self.pools.strings,
             &self.structs,
             &self.enums,
-        ))
+        )
+    }
+
+    /// Every attribute the program's scripts wrote, with the struct and enum
+    /// tables the types in it refer to.
+    #[must_use]
+    pub fn attributes(&self) -> AttributeTable {
+        AttributeTable::new(self.attributes.clone(), &self.structs, &self.enums)
     }
 
     /// Does up to about `budget` units of garbage collection while the
@@ -763,41 +835,8 @@ impl RuntimeProgram {
         );
         let strings = StringPool::from_strings(img.strings);
 
-        let structs: Vec<Struct> = img
-            .structs
-            .into_iter()
-            .map(|s| Struct {
-                name: SmolStr::from(s.name),
-                fields: s
-                    .fields
-                    .into_iter()
-                    .map(|(n, t, sp)| (SmolStr::from(n), t, sp))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                id: s.id,
-                name_span: s.name_span,
-            })
-            .collect();
-
-        let enums: Vec<EnumType> = img
-            .enums
-            .into_iter()
-            .map(|e| EnumType {
-                name: SmolStr::from(e.name),
-                variants: e
-                    .variants
-                    .into_iter()
-                    .map(|v| EnumVariant {
-                        name: SmolStr::from(v.name),
-                        payload: v.payload.into_boxed_slice(),
-                        name_span: v.name_span,
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                id: e.id,
-                name_span: e.name_span,
-            })
-            .collect();
+        let structs = structs_from_images(img.structs);
+        let enums = enums_from_images(img.enums);
 
         // `host` functions need a host-supplied closure to dispatch to. Bind
         // them all before anything runs, so an unbound call is impossible once
@@ -850,8 +889,49 @@ impl RuntimeProgram {
             allocated_arg_count: img.allocated_arg_count as usize,
             allocated_call_depth: img.allocated_call_depth as usize,
             native: None,
+            attributes: img.attributes,
         })
     }
+}
+
+/// The runtime struct table a `.cdlb` recorded.
+fn structs_from_images(images: Vec<StructImage>) -> Vec<Struct> {
+    images
+        .into_iter()
+        .map(|s| Struct {
+            name: SmolStr::from(s.name),
+            fields: s
+                .fields
+                .into_iter()
+                .map(|(n, t, sp)| (SmolStr::from(n), t, sp))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            id: s.id,
+            name_span: s.name_span,
+        })
+        .collect()
+}
+
+/// The runtime enum table a `.cdlb` recorded.
+fn enums_from_images(images: Vec<EnumImage>) -> Vec<EnumType> {
+    images
+        .into_iter()
+        .map(|e| EnumType {
+            name: SmolStr::from(e.name),
+            variants: e
+                .variants
+                .into_iter()
+                .map(|v| EnumVariant {
+                    name: SmolStr::from(v.name),
+                    payload: v.payload.into_boxed_slice(),
+                    name_span: v.name_span,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            id: e.id,
+            name_span: e.name_span,
+        })
+        .collect()
 }
 
 /// Re-opens each referenced dynamic library through the OS loader and rebuilds a
@@ -1113,4 +1193,19 @@ pub fn read_artifact(bytes: &[u8]) -> Result<(ProgramImage, Option<FunctionTable
     }
     let table: FunctionTable = postcard::from_bytes(rest).map_err(LoadError::Decode)?;
     Ok((image, Some(table)))
+}
+
+/// Reads the attribute table out of a `.cdlb` without loading the program:
+/// no library is opened and no `host` function is bound, so a build tool or
+/// an editor lists what a program declares with nothing registered.
+///
+/// # Errors
+///
+/// Returns a [`LoadError`] if the header is wrong or the image fails to
+/// decode.
+pub fn read_attributes(bytes: &[u8]) -> Result<AttributeTable, LoadError> {
+    let (image, _) = read_artifact(bytes)?;
+    let structs = structs_from_images(image.structs);
+    let enums = enums_from_images(image.enums);
+    Ok(AttributeTable::new(image.attributes, &structs, &enums))
 }

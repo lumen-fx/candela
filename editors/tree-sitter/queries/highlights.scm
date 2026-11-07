@@ -61,6 +61,22 @@
   "host"
 ] @keyword.directive
 
+; `attribute name(...) on fn;` in a `host` block.
+(attribute_declaration
+  [
+    "attribute"
+    "on"
+  ] @keyword.directive)
+
+(attribute_declaration
+  name: (identifier) @attribute)
+
+(attribute_parameter
+  name: (identifier) @variable.parameter)
+
+(attribute_argument
+  name: (identifier) @property)
+
 ; Attributes
 
 (attribute

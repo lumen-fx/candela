@@ -46,6 +46,7 @@ nav = [
      "language/error-handling.md",
      "language/modules.md",
      "language/macros.md",
+     "language/attributes.md",
      "language/conditional-compilation.md",
   ]},
   {"Standard library" = [

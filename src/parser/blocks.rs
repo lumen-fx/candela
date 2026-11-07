@@ -501,7 +501,11 @@ pub fn parse_impl_block(
             break;
         }
         if parser.peek_token() == Token::At {
-            let active = parse_attributes(parser);
+            let (active, uses) = parse_attributes(parser);
+            if let Some(first) = uses.first() {
+                cold_path();
+                parser.error(first.span, ParserErr::AttributeWrongTarget);
+            }
             if parser.peek_token() == Token::RBrace {
                 cold_path();
                 let span = parser.peek_token_span();

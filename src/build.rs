@@ -283,5 +283,6 @@ fn image_from_output(out: CompileOutput, exports: Vec<ExportImage>) -> ProgramIm
         exports,
         event_entry: out.event_entry,
         native: Vec::new(),
+        attributes: out.attributes,
     }
 }

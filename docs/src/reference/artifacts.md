@@ -47,6 +47,11 @@ The artifact produces the same output as running the source through `candela`.
 - For a program that imports [std/event](../standard-library/event.md), the
   trampoline the runtime runs event handlers through, after `main` and from
   `dispatch_events`.
+- The attribute table: every [attribute](../language/attributes.md) a script
+  wrote, with the namespace and name of its declaration, the function or struct
+  it is on, and the value of each argument. A host reads it from a loaded
+  program or straight from the file; see
+  [embedding](../integration/embedding.md#reading-attributes).
 - Machine code for the functions the code generator handles, for the machine
   the build ran on or the one `--target` named. See [machine code](#machine-code).
 - The function table: every compiled function with its name, where it starts,
@@ -91,12 +96,12 @@ A function gets an entry when all of the following hold:
 - It is defined in the file you are building, not in a module it imports.
 - It is reachable by its bare name, and it is not `main`.
 - Every parameter has a type a host value can be: `int`, `float`, `bool`,
-  `string`, `null`, `any`, a union of those, an array of those, or a
-  string-keyed map of those.
+  `string`, `null`, `any`, a struct whose fields are all such types, a union of
+  those, an array of those, or a string-keyed map of those.
 
 The parameter types are what a host's arguments are checked against. A
-parameter typed as a struct or an enum is left out, since a host has no way to
-build one. See [embedding](../integration/embedding.md) for how a host makes the
+function with a parameter typed as an enum or a function is left out, since a
+host has no way to build one, and so is one taking a struct that holds itself. See [embedding](../integration/embedding.md) for how a host makes the
 call.
 
 Compiling an entry point is also what type-checks the function's body, so the
@@ -180,6 +185,7 @@ been raised for:
   a map holds
 - the event entry, and the instructions `std/event` and the directory, byte and
   digest functions of `std/fs` compile to
+- the attribute table
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

@@ -246,6 +246,9 @@ fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
             SymbolKind::Fn(id) => (ScopeKind::Function, Some(*id as usize)),
             SymbolKind::Struct(_) | SymbolKind::Template(_) => (ScopeKind::Struct, None),
             SymbolKind::Enum(_) => (ScopeKind::Enum, None),
+            // An attribute is written after `@`, never where an expression or
+            // a type goes.
+            SymbolKind::Attribute(_) => return,
         };
         if !entries.iter().any(|e| e.label == label) {
             entries.push(ScopeEntry {
@@ -678,6 +681,16 @@ mod tests {
             "{:?}",
             outcome.diagnostic.map(|d| d.message)
         );
+    }
+
+    /// A misspelt function in an attribute is a diagnostic in the editor, as
+    /// it is a failure on the command line.
+    #[test]
+    fn a_bad_attribute_argument_is_reported() {
+        let source = "host \"ecs\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n@system(after: [movment])\nfn spawn() {}\n\nfn movement() {}\n\nfn main() {}\n";
+        let outcome = analyze(source, "buffer.cdl");
+        let diagnostic = outcome.diagnostic.expect("movment is no function");
+        assert_eq!(diagnostic.code, "attribute_bad_argument");
     }
 
     /// The macro is skipped, not the errors around it.

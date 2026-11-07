@@ -44,6 +44,10 @@ An artifact also carries an export table: a call trampoline per host-callable
 function, compiled at build time. That is what lets an embedding program invoke
 a script function by name with the compiler absent.
 
+It also carries the attribute table: the attributes a `host` block declares that
+the scripts wrote on their functions and structs. `read_attributes` lists them
+from the file without loading it.
+
 A release build adds machine code for the functions it can compile, and the
 runtime runs them as machine code when the code was built for the machine it
 runs on. It carries a loader for that code, not a code generator. Anywhere the

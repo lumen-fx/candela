@@ -46,6 +46,9 @@ use crate::trampoline::check_only;
 use crate::trampoline::compile_checked;
 use crate::trampoline::compile_trampoline;
 use crate::warnings::collect_warnings;
+use candela_vm::artifact::passed_by_reference;
+use candela_vm::attributes::Attribute;
+use candela_vm::attributes::AttributeTable;
 use candela_vm::data::Data;
 use candela_vm::data::NULL;
 use candela_vm::embed::HostDispatch;
@@ -57,7 +60,9 @@ use candela_vm::embed::Value;
 use candela_vm::embed::describe_value;
 use candela_vm::embed::holds_enum;
 use candela_vm::embed::marshal_args;
+use candela_vm::embed::struct_id;
 use candela_vm::embed::unmarshal_value;
+use candela_vm::embed::value_matches_type;
 use candela_vm::errors::Diagnostic;
 use candela_vm::errors::ErrorCtx;
 use candela_vm::errors::collect_diagnostic;
@@ -413,6 +418,7 @@ impl Engine {
                 arg_registers: entry.arg_registers.into_boxed_slice(),
                 ret_register: entry.ret_register,
             }),
+            attributes: out.attributes,
         };
 
         // Instantiate: run `main` once so top-level state is established before
@@ -461,6 +467,8 @@ pub struct Program {
     /// The trampoline event handlers run through, when the program imports
     /// `std/event`.
     event_entry: Option<CompiledCall>,
+    /// The attributes the program's scripts wrote.
+    attributes: Vec<Attribute>,
 }
 
 /// A host call compiled onto the resident instruction stream.
@@ -502,25 +510,81 @@ impl Program {
     /// Returns a [`Diagnostic`] if `fn_name` is unknown, if the arguments don't
     /// type-check against its signature, or if the call raises a runtime error.
     pub fn call(&mut self, fn_name: &str, args: &[Value]) -> Result<Value, Diagnostic> {
+        let call = self.run_call(fn_name, args)?;
+        Ok(self.read_register(call.ret_register))
+    }
+
+    /// [`Self::call`], handing back what the function left in each argument it
+    /// was passed by reference.
+    ///
+    /// A list, a map and a struct reach a script function by reference, so
+    /// what the function writes into one is written into the value the call
+    /// passed. Once the call returns, every argument that is one of those is
+    /// replaced with its final value; every other argument is left as it was.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`]. An argument is only replaced once the call has run
+    /// without an error.
+    pub fn call_in_out(&mut self, fn_name: &str, args: &mut [Value]) -> Result<Value, Diagnostic> {
+        let call = self.run_call(fn_name, args)?;
+        for (arg, &register) in args.iter_mut().zip(call.arg_registers.iter()) {
+            if passed_by_reference(arg) {
+                *arg = self.read_register(register);
+            }
+        }
+        Ok(self.read_register(call.ret_register))
+    }
+
+    /// Every attribute the program's scripts wrote, with the struct and enum
+    /// tables the types in it refer to.
+    #[must_use]
+    pub fn attributes(&self) -> AttributeTable {
+        AttributeTable::new(self.attributes.clone(), &self.structs, &self.enums)
+    }
+
+    /// The value register `register` holds, read back into a host [`Value`].
+    fn read_register(&self, register: u16) -> Value {
+        unmarshal_value(
+            self.registers[register as usize],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+            &self.enums,
+        )
+    }
+
+    /// An argument-type diagnostic for argument `index` of `fn_name`.
+    fn argument_error(&self, fn_name: &str, index: usize, why: &str) -> Diagnostic {
+        Diagnostic {
+            filename: self
+                .sources
+                .first()
+                .map(|source| source.filename.to_string())
+                .unwrap_or_default(),
+            span: 0..0,
+            message: format!("argument {} of '{fn_name}' {why}", index + 1),
+            code: String::from("argument_type_mismatch"),
+        }
+    }
+
+    /// Checks `args`, compiles or reuses the trampoline for their types, writes
+    /// them into it and runs it, answering the trampoline.
+    fn run_call(&mut self, fn_name: &str, args: &[Value]) -> Result<CompiledCall, Diagnostic> {
         // An enum travels outward only, and no parameter accepts one, not even
         // an `any` one that accepts everything else. Refusing it here, before
         // anything is marshalled, is what keeps the script from reading a null
         // the host never passed.
         if let Some((index, value)) = args.iter().enumerate().find(|(_, v)| holds_enum(v)) {
-            return Err(Diagnostic {
-                filename: self
-                    .sources
-                    .first()
-                    .map(|source| source.filename.to_string())
-                    .unwrap_or_default(),
-                span: 0..0,
-                message: format!(
-                    "argument {} of '{fn_name}' cannot be a {}: an enum value crosses the boundary outward only",
-                    index + 1,
+            return Err(self.argument_error(
+                fn_name,
+                index,
+                &format!(
+                    "cannot be a {}: an enum value crosses the boundary outward only",
                     describe_value(value)
                 ),
-                code: String::from("argument_type_mismatch"),
-            });
+            ));
         }
 
         // A call is compiled once per function and argument types, into a
@@ -528,7 +592,23 @@ impl Program {
         // every later call with the same types writes them and runs it again.
         // The key renders the types, since `DataType` equality lets an empty
         // list stand for a list of anything.
-        let types: Vec<DataType> = args.iter().map(value_datatype).collect();
+        let mut types: Vec<DataType> = Vec::with_capacity(args.len());
+        for (index, arg) in args.iter().enumerate() {
+            let ty = value_datatype(arg, &self.structs);
+            // A struct is built field by field from the declaration it names,
+            // so it has to match that declaration before anything is built.
+            if holds_struct(arg) && !value_matches_type(arg, &ty, &self.structs) {
+                return Err(self.argument_error(
+                    fn_name,
+                    index,
+                    &format!(
+                        "is a {} that does not match the struct it names: every field the struct declares, with a value of its type, and no other",
+                        describe_value(arg)
+                    ),
+                ));
+            }
+            types.push(ty);
+        }
         let key = (fn_name.to_owned(), format!("{types:?}"));
         let call = if let Some(call) = self.calls.get(&key) {
             marshal_args(
@@ -536,6 +616,7 @@ impl Program {
                 &call.arg_registers,
                 &mut self.registers,
                 &mut self.pools,
+                &self.structs,
             );
             call.clone()
         } else {
@@ -545,16 +626,7 @@ impl Program {
         };
 
         self.execute_from(call.start)?;
-        let ret_id = call.ret_register;
-
-        Ok(unmarshal_value(
-            self.registers[ret_id as usize],
-            &self.pools.objs,
-            &self.pools.maps,
-            &self.pools.strings,
-            &self.structs,
-            &self.enums,
-        ))
+        Ok(call)
     }
 
     /// Compiles the trampoline for a call of `fn_name` with arguments of
@@ -584,7 +656,13 @@ impl Program {
                 (self.registers.len() - 1) as u16
             })
             .collect();
-        marshal_args(args, &arg_registers, &mut self.registers, &mut self.pools);
+        marshal_args(
+            args,
+            &arg_registers,
+            &mut self.registers,
+            &mut self.pools,
+            &self.structs,
+        );
 
         let dummy = Span { start: 0, end: 0 };
         let mut arg_exprs: Vec<Expr> = Vec::with_capacity(args.len());
@@ -767,21 +845,38 @@ impl Program {
 /// argument can be given a type the call site type-checks against. Homogeneous
 /// element/value types are assumed (matching candela's static collection typing);
 /// the first element is sampled, empty collections yield an unknown element type.
-/// An enum only travels outward, and [`Program::call`] refuses an argument
-/// holding one before it gets here, so that arm is what keeps the match
-/// exhaustive rather than a type anything is given.
-fn value_datatype(v: &Value) -> DataType {
+/// A struct is the one `structs` names it by, and `any` when it names none, which
+/// the check in [`Program::call`] then refuses. An enum only travels outward,
+/// and [`Program::call`] refuses an argument holding one before it gets here, so
+/// that arm is what keeps the match exhaustive rather than a type anything is
+/// given.
+fn value_datatype(v: &Value, structs: &[Struct]) -> DataType {
     match v {
         Value::Null | Value::Enum { .. } => DataType::Null,
         Value::Int(_) => DataType::Int,
         Value::Float(_) => DataType::Float,
         Value::Bool(_) => DataType::Bool,
         Value::String(_) => DataType::String,
-        Value::Array(items) => DataType::Array(items.first().map(|e| Box::new(value_datatype(e)))),
+        Value::Array(items) => {
+            DataType::Array(items.first().map(|e| Box::new(value_datatype(e, structs))))
+        }
         Value::Map(entries) => {
-            let value = entries.values().next().map(value_datatype);
+            let value = entries.values().next().map(|e| value_datatype(e, structs));
             DataType::Map(Box::new((Some(DataType::String), value)))
         }
+        Value::Struct { name, .. } => {
+            struct_id(name, structs).map_or(DataType::Unknown, DataType::Struct)
+        }
+    }
+}
+
+/// Whether `v` is a struct or holds one.
+fn holds_struct(v: &Value) -> bool {
+    match v {
+        Value::Struct { .. } => true,
+        Value::Array(items) => items.iter().any(holds_struct),
+        Value::Map(entries) => entries.values().any(holds_struct),
+        _ => false,
     }
 }
 

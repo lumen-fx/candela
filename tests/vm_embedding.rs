@@ -1152,12 +1152,14 @@ fn main() {}
         program.call("in_dir", &["instances/a".into()]).unwrap(),
         Value::Bool(true)
     );
-    let expected: BTreeMap<String, Value> = [
-        (String::from("cwd"), Value::from("instances/a")),
-        (String::from("end_at_exit"), Value::Bool(true)),
-    ]
-    .into();
-    assert_eq!(*seen.borrow(), vec![Value::Map(expected)]);
+    let expected = Value::Struct {
+        name: String::from("process::StartOptions"),
+        fields: vec![
+            (String::from("cwd"), Value::from("instances/a")),
+            (String::from("end_at_exit"), Value::Bool(true)),
+        ],
+    };
+    assert_eq!(*seen.borrow(), vec![expected]);
 
     // A registration whose struct has other fields does not bind.
     let mut wrong = HostRegistry::new();
@@ -1183,5 +1185,188 @@ fn main() {}
         }
         Some(other) => panic!("wrong load error: {other}"),
         None => panic!("a mismatched host struct must not bind"),
+    }
+}
+
+const STRUCT_PROGRAM: &str = r#"
+struct Point { x: float, y: float }
+struct Segment { from: Point, to: Point, tag: string }
+
+fn length2(p: Point) -> float {
+    return p.x * p.x + p.y * p.y;
+}
+
+fn shift(points: Point[], dx: float) {
+    for p in points {
+        p.x += dx;
+    }
+}
+
+fn grow(xs: int[], seg: Segment, n: int, counts: {string: int}) {
+    xs.push(n);
+    seg.to.y = 9.0;
+    seg.tag = "moved";
+    counts["seen"] = n;
+    n = 0;
+}
+
+fn replace(xs: int[]) {
+    xs.push(1);
+    xs = [7];
+}
+
+fn origin() -> Point {
+    return Point { x: 0.0, y: 0.0 };
+}
+
+fn echo(v: any) -> any {
+    return v;
+}
+
+fn main() {}
+"#;
+
+fn point(x: f64, y: f64) -> Value {
+    Value::Struct {
+        name: String::from("Point"),
+        fields: vec![
+            (String::from("x"), Value::Float(x)),
+            (String::from("y"), Value::Float(y)),
+        ],
+    }
+}
+
+/// A function that takes a struct gets an export, and a host calls it with a
+/// struct value that names the struct.
+#[test]
+fn a_struct_parameter_is_callable_from_an_artifact() {
+    let mut program = load(STRUCT_PROGRAM, "points.cdl", &HostRegistry::new());
+    program.run();
+    let exports: Vec<&str> = program.exports().collect();
+    for name in ["length2", "shift", "grow", "echo"] {
+        assert!(exports.contains(&name), "{name} is exported: {exports:?}");
+    }
+    assert_eq!(
+        program.call("length2", &[point(3.0, 4.0)]).unwrap(),
+        Value::Float(25.0)
+    );
+    // A struct comes back naming the struct it is.
+    assert_eq!(program.call("origin", &[]).unwrap(), point(0.0, 0.0));
+    // A struct reaches an `any` parameter as the struct it names.
+    assert_eq!(
+        program.call("echo", &[point(1.0, 2.0)]).unwrap(),
+        point(1.0, 2.0)
+    );
+}
+
+/// A struct argument that disagrees with the declaration is refused before
+/// anything runs.
+#[test]
+fn a_struct_argument_must_match_its_declaration() {
+    let mut program = load(STRUCT_PROGRAM, "points.cdl", &HostRegistry::new());
+    program.run();
+    let wrong = [
+        Value::Struct {
+            name: String::from("Vec2"),
+            fields: vec![
+                (String::from("x"), Value::Float(1.0)),
+                (String::from("y"), Value::Float(1.0)),
+            ],
+        },
+        Value::Struct {
+            name: String::from("Point"),
+            fields: vec![(String::from("x"), Value::Float(1.0))],
+        },
+        Value::Struct {
+            name: String::from("Point"),
+            fields: vec![
+                (String::from("x"), Value::Float(1.0)),
+                (String::from("y"), Value::Int(1)),
+            ],
+        },
+        Value::Struct {
+            name: String::from("Point"),
+            fields: vec![
+                (String::from("x"), Value::Float(1.0)),
+                (String::from("y"), Value::Float(1.0)),
+                (String::from("z"), Value::Float(1.0)),
+            ],
+        },
+    ];
+    for arg in wrong {
+        match program.call("length2", std::slice::from_ref(&arg)) {
+            Err(CallError::ArgType { expected, .. }) => assert_eq!(expected, "Point"),
+            other => panic!("{arg:?} must be refused, got {other:?}"),
+        }
+    }
+    // In an `any` position the struct still has to be one the program declares.
+    let unknown = Value::Struct {
+        name: String::from("Nope"),
+        fields: Vec::new(),
+    };
+    assert!(matches!(
+        program.call("echo", &[unknown]),
+        Err(CallError::ArgType { .. })
+    ));
+}
+
+/// `call_in_out` hands back what the function did to every list, map and
+/// struct it was passed, and leaves the other arguments alone.
+#[test]
+fn call_in_out_hands_back_what_the_function_wrote() {
+    let mut program = load(STRUCT_PROGRAM, "points.cdl", &HostRegistry::new());
+    program.run();
+
+    let mut rows = [
+        Value::Array(vec![point(1.0, 0.0), point(2.0, 0.0)]),
+        Value::Float(0.5),
+    ];
+    program.call_in_out("shift", &mut rows).unwrap();
+    assert_eq!(
+        rows,
+        [
+            Value::Array(vec![point(1.5, 0.0), point(2.5, 0.0)]),
+            Value::Float(0.5)
+        ]
+    );
+
+    let segment = Value::Struct {
+        name: String::from("Segment"),
+        fields: vec![
+            (String::from("from"), point(0.0, 0.0)),
+            (String::from("to"), point(1.0, 1.0)),
+            (String::from("tag"), Value::from("a")),
+        ],
+    };
+    let mut args = [
+        Value::Array(vec![Value::Int(1)]),
+        segment,
+        Value::Int(4),
+        Value::Map(BTreeMap::new()),
+    ];
+    program.call_in_out("grow", &mut args).unwrap();
+    assert_eq!(args[0], Value::Array(vec![Value::Int(1), Value::Int(4)]));
+    assert_eq!(args[1].field("to"), Some(&point(1.0, 9.0)));
+    assert_eq!(args[1].field("tag"), Some(&Value::from("moved")));
+    assert_eq!(args[2], Value::Int(4));
+    assert_eq!(
+        args[3],
+        Value::Map(BTreeMap::from([(String::from("seen"), Value::Int(4))]))
+    );
+
+    // A parameter the body rebinds still hands back the value the call
+    // passed, with what was written into it before the rebinding.
+    let mut args = [Value::Array(vec![Value::Int(3)])];
+    program.call_in_out("replace", &mut args).unwrap();
+    assert_eq!(args[0], Value::Array(vec![Value::Int(3), Value::Int(1)]));
+
+    // Many calls in a row, so collections run between them.
+    for i in 0..200 {
+        let mut args = [
+            Value::Array(vec![point(f64::from(i), 0.0)]),
+            Value::Float(1.0),
+        ];
+        program.call_in_out("shift", &mut args).unwrap();
+        assert_eq!(args[0], Value::Array(vec![point(f64::from(i) + 1.0, 0.0)]));
     }
 }

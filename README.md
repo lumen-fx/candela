@@ -97,6 +97,11 @@ Run `candela` with no arguments for a REPL.
 - **Macros the host defines.** `name!( ... )` hands the raw region between the
   parentheses to the embedding program, which returns candela source to parse in
   its place. candela ships no macros of its own and never interprets a region.
+- **Attributes the host defines.** A `host` block declares attributes such as
+  `attribute system(writes: type[] = []) on fn;`, and a script writes them on
+  its functions and structs. The compiler checks every use, and the host reads
+  them back from the program or the `.cdlb` without running it, so an engine
+  can schedule script functions as systems of its own.
 
 ## Performance
 

@@ -808,6 +808,84 @@ fn main() {
             (string_literal)))))))
 
 ================================================================================
+Attributes a host block declares (docs/src/language/attributes.md)
+================================================================================
+
+host "ecs" {
+    attribute component on struct;
+    attribute system(writes: type[] = [], after: fn[] = [], schedule: Schedule = Schedule::Update) on fn;
+}
+
+@ecs::component struct Position { x: float, y: float }
+
+@ecs::system(writes: [Position], after: [movement], schedule: ecs::Schedule::Startup)
+fn spawn(rate: int) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (host_block
+    (string_literal)
+    (signature_list
+      (attribute_declaration
+        (identifier))
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (array_type
+            (type_identifier))
+          (attribute_list))
+        (attribute_parameter
+          (identifier)
+          (function_reference_type)
+          (attribute_list))
+        (attribute_parameter
+          (identifier)
+          (type_identifier)
+          (qualified_type
+            (type_identifier)
+            (type_identifier))))))
+  (attribute
+    (identifier)
+    (identifier))
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (identifier)
+        (type_identifier))
+      (field_declaration
+        (identifier)
+        (type_identifier))))
+  (attribute
+    (identifier)
+    (identifier)
+    (attribute_arguments
+      (attribute_argument
+        (identifier)
+        (attribute_list
+          (type_identifier)))
+      (attribute_argument
+        (identifier)
+        (attribute_list
+          (type_identifier)))
+      (attribute_argument
+        (identifier)
+        (qualified_type
+          (qualified_type
+            (type_identifier)
+            (type_identifier))
+          (type_identifier)))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (block)))
+
+================================================================================
 Expression bodies with => (docs/src/language/functions.md)
 ================================================================================
 

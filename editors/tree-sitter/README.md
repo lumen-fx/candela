@@ -56,7 +56,9 @@ Every declaration form: `import` with an alias, a list of items, or neither,
 or `=> expr;` body, `struct` with a field's
 `= value` default, `enum` with payload types, `impl` blocks, and the `dylib` and
 `host` signature blocks including the variadic `...` parameter and the structs
-a `host` block declares. Statements: `let`, assignment and its
+and attributes a `host` block declares. An attribute in front of a declaration
+is `@cfg(...)` or a declared one named behind its module, with named
+arguments (`@ecs::system(writes: [Position])`). Statements: `let`, assignment and its
 compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
 range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks. `match` stands alone or gives a
 value, its arms take a block or an expression, and `|` separates a pattern's
