@@ -4286,6 +4286,10 @@
             "named": true
           },
           {
+            "type": "break_statement",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -4295,6 +4299,10 @@
           },
           {
             "type": "closure_expression",
+            "named": true
+          },
+          {
+            "type": "continue_statement",
             "named": true
           },
           {
@@ -4354,6 +4362,10 @@
             "named": true
           },
           {
+            "type": "return_statement",
+            "named": true
+          },
+          {
             "type": "slice_expression",
             "named": true
           },
@@ -4363,6 +4375,10 @@
           },
           {
             "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "throw_statement",
             "named": true
           },
           {

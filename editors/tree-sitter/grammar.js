@@ -528,7 +528,8 @@ module.exports = grammar({
       seq('match', field('value', $._expression), field('body', $.match_arm_list)),
 
     // An arm is `pattern => { ... }`, or `pattern => expr` followed by a `,`
-    // that the last arm may leave off.
+    // that the last arm may leave off. The expression can be `return`,
+    // `throw`, `break` or `continue`, written without its `;`.
     match_arm_list: ($) =>
       seq(
         '{',
@@ -540,10 +541,27 @@ module.exports = grammar({
     match_arm: ($) => seq(field('pattern', $.match_pattern), '=>', field('body', $.block)),
 
     _expression_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._expression), ','),
+      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value), ','),
 
     _last_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._expression)),
+      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value)),
+
+    _match_arm_value: ($) =>
+      choice(
+        $._expression,
+        alias($._arm_return, $.return_statement),
+        alias($._arm_throw, $.throw_statement),
+        alias($._arm_break, $.break_statement),
+        alias($._arm_continue, $.continue_statement),
+      ),
+
+    _arm_return: ($) => prec.right(seq('return', optional(field('value', $._expression)))),
+
+    _arm_throw: ($) => seq('throw', field('value', $._expression)),
+
+    _arm_break: (_) => 'break',
+
+    _arm_continue: (_) => 'continue',
 
     // A pattern is an expression: an enum variant with bindings, a qualified
     // name, or a literal compared for equality. `|` separates alternatives and

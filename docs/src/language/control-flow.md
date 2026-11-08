@@ -159,6 +159,21 @@ fn main() {
 Arms match by equality, so any type you can compare works, strings included.
 `|` between patterns makes one arm for several values.
 
+An expression arm can also be `break`, `continue`, `return` or `throw`, which
+leave the loop or the function the way they do inside a block.
+
+```rust
+fn main() {
+    for i in 0..10 {
+        match i {
+            1 => continue,
+            4 => break,
+            _ => print(i),
+        }
+    }
+}
+```
+
 ```rust
 fn main() {
     match "b" {
@@ -204,7 +219,8 @@ A `match` written where a value is expected produces a value: the value of the
 arm that fits. Like an `if` used as a value, it has to give one on every path,
 so it needs a `_` arm unless it matches an enum and lists every variant, or
 ends in a [tuple pattern](#tuple-patterns) of names alone. A
-braced arm holds one expression, as the branches of an `if` used as a value do.
+braced arm holds one expression, as the branches of an `if` used as a value do,
+and no arm of it can leave through `break`, `continue`, `return` or `throw`.
 
 ```rust
 fn main() {

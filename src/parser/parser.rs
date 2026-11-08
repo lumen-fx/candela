@@ -1067,7 +1067,12 @@ fn parse_op_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32, op: Token<
 fn parse_return(input: &mut Parser<'_>) -> Expr {
     let (t, _) = input.next_token();
     debug_assert_eq!(t, Token::Return);
-    if input.peek_token_opt() == Some(Token::SemiColon) {
+    // A `return` with no value ends at its `;`, or, as a match arm's
+    // expression, at the `,` or `}` after it.
+    if matches!(
+        input.peek_token_opt(),
+        Some(Token::SemiColon | Token::Comma | Token::RBrace)
+    ) {
         Expr::ReturnVal(Box::new(None))
     } else {
         let e = parse_expr(input);
@@ -1097,48 +1102,51 @@ fn parse_throw(input: &mut Parser<'_>) -> Expr {
     )
 }
 
+/// `return`, `throw`, `break` or `continue`, the statements that leave the
+/// code around them, when `peek` starts one. A line and a statement match's
+/// expression arm both read them here, so `1 => break,` leaves the loop the
+/// way `1 => { break; }` does.
+fn parse_jump(input: &mut Parser<'_>, peek: Token<'_>) -> Option<Expr> {
+    let (keyword, jump) = match peek {
+        Token::Return => return Some(parse_return(input)),
+        Token::Throw => return Some(parse_throw(input)),
+        Token::Break => ("break", Expr::Break),
+        Token::Continue => ("continue", Expr::Continue),
+        _ => return None,
+    };
+    let (_, span) = input.next_token();
+    if input.loops == 0 {
+        cold_path();
+        input.error(span, ParserErr::OutsideLoop(keyword));
+    }
+    Some(jump)
+}
+
 fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
-    let line_code = match peek {
-        Token::Let => parse_var_declare(input),
-        Token::Return => parse_return(input),
-        Token::Throw => parse_throw(input),
-        Token::Break => {
-            let (_, span) = input.next_token();
-            if input.loops == 0 {
-                cold_path();
-                input.error(span, ParserErr::OutsideLoop("break"));
-            }
-            Expr::Break
-        }
-        Token::Continue => {
-            let (_, span) = input.next_token();
-            if input.loops == 0 {
-                cold_path();
-                input.error(span, ParserErr::OutsideLoop("continue"));
-            }
-            Expr::Continue
-        }
-        _ => {
-            let e_start = input.peek_token_span().start;
-            let e = parse_expr(input);
-            let peek_token = input.peek_token_opt();
-            match peek_token {
-                Some(Token::Equals) => parse_var_assign(input, e, e_start),
-                Some(
-                    op @ (Token::AssignOpAdd
-                    | Token::AssignOpSub
-                    | Token::AssignOpMul
-                    | Token::AssignOpDiv
-                    | Token::AssignOpMod
-                    | Token::AssignOpPow
-                    | Token::AssignOpBitAnd
-                    | Token::AssignOpBitOr
-                    | Token::AssignOpBitXor
-                    | Token::AssignOpShl
-                    | Token::AssignOpShr),
-                ) => parse_op_var_assign(input, e, e_start, op),
-                _ => e,
-            }
+    let line_code = if peek == Token::Let {
+        parse_var_declare(input)
+    } else if let Some(jump) = parse_jump(input, peek) {
+        jump
+    } else {
+        let e_start = input.peek_token_span().start;
+        let e = parse_expr(input);
+        let peek_token = input.peek_token_opt();
+        match peek_token {
+            Some(Token::Equals) => parse_var_assign(input, e, e_start),
+            Some(
+                op @ (Token::AssignOpAdd
+                | Token::AssignOpSub
+                | Token::AssignOpMul
+                | Token::AssignOpDiv
+                | Token::AssignOpMod
+                | Token::AssignOpPow
+                | Token::AssignOpBitAnd
+                | Token::AssignOpBitOr
+                | Token::AssignOpBitXor
+                | Token::AssignOpShl
+                | Token::AssignOpShr),
+            ) => parse_op_var_assign(input, e, e_start, op),
+            _ => e,
         }
     };
     if input.peek_token_opt() != Some(Token::SemiColon) {
