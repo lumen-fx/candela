@@ -1,9 +1,9 @@
 [package]
 name = "websocket"
-version = "0.1.7"
+version = "0.2.0"
 description = "WebSocket connections with text frames, on the desktop and in a browser"
 entry = "src/websocket.cdl"
-candela = ">=0.1.7"
+candela = ">=0.2.0"
 
 [dependencies]
 
