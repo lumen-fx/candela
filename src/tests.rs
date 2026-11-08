@@ -3291,6 +3291,68 @@ pub fn match_arm_computation() {
     );
 }
 
+/// A `match` on a variable inside a `while` loop compares what the variable
+/// holds on that turn, not the value it started the loop with, when an arm
+/// writes it. The same holds for any `let` that copies a variable the loop
+/// writes.
+#[test]
+pub fn a_match_in_a_while_loop_reads_the_variable_an_arm_writes() {
+    assert_eq!(
+        run_output(
+            "
+            fn main() {
+                let i = 0;
+                while i < 10 {
+                    match i {
+                        3 => { print(\"three\"); i = 20; }
+                        _ => { print(i); i = i + 1; }
+                    }
+                }
+                let a = 0;
+                while a < 3 {
+                    let t = a;
+                    t = t * 10;
+                    print(t);
+                    a = a + 1;
+                }
+            }
+            "
+        ),
+        "0\n1\n2\nthree\n0\n10\n20\n"
+    );
+}
+
+/// A `match` inside a `for` loop on a variable set from the loop variable
+/// takes the literal arm the value matches.
+#[test]
+pub fn a_match_in_a_for_loop_reads_the_variable_an_arm_writes() {
+    assert_eq!(
+        run_output(
+            "
+            fn main() {
+                let s = 0;
+                for x in [1, 2, 3, 4] {
+                    s = x;
+                    match s {
+                        3 => { print(\"three\"); }
+                        _ => { print(s); s = 0; }
+                    }
+                }
+                let n = 0;
+                for k in 0..5 {
+                    n = k;
+                    match n {
+                        2 => { print(\"two\"); n = 9; }
+                        _ => { print(n); n = 0; }
+                    }
+                }
+            }
+            "
+        ),
+        "1\n2\nthree\n4\n0\n1\ntwo\n3\n4\n"
+    );
+}
+
 #[test]
 pub fn loop_break() {
     run_and_check_registers!(

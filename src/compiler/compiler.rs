@@ -4831,7 +4831,15 @@ fn bind_variable(
     let var_id = if needs_own {
         let mutable_id = state.alloc_reg();
         if !write_scratch_into(output, output_len, src_id, mutable_id, v, state) {
-            move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
+            // Only a constant register still holds the value it was filled
+            // with. Another variable's register holds what was last written
+            // to it, which in a loop is not the value it started from, so
+            // that one is copied as it is.
+            if state.const_registers.values().any(|&reg| reg == src_id) {
+                move_reg_to_reg(output, src_id, mutable_id, state.registers[src_id as usize]);
+            } else {
+                output.push(Instr::Mov(src_id, mutable_id));
+            }
         }
         mutable_id
     } else {
