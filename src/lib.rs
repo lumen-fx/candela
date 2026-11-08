@@ -250,7 +250,10 @@ pub fn get_output() -> String {
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take())
 }
 
-#[cfg(all(all(target_arch = "wasm32", target_os = "unknown"), feature = "compiler"))]
+#[cfg(all(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    feature = "compiler"
+))]
 #[wasm_bindgen]
 pub fn run(code: String) {
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());

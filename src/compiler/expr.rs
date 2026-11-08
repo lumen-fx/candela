@@ -58,6 +58,19 @@ pub fn tuple_literal(elements: Vec<(Expr, Span)>, span: Span) -> Expr {
 /// No identifier can start with `[`.
 pub const TUPLE_LET_PREFIX: &str = "[TUPLE ";
 
+/// The call that reads the constant `name`: a constant is a function of no
+/// arguments that a bare name calls.
+#[must_use]
+pub fn const_read(name: &SmolStr, span: Span) -> Expr {
+    Expr::FunctionCall(
+        Box::from([]),
+        Box::from([name.clone()]),
+        span,
+        Box::from([]),
+        Box::from([]),
+    )
+}
+
 /// The variable a `let` pattern of `places` places written at `span` holds
 /// its tuple in. See [`TUPLE_LET_PREFIX`].
 #[must_use]
@@ -111,6 +124,11 @@ pub enum ImportBinding {
     /// of its name, merged into the file's own scope. The module itself is
     /// bound under no name.
     Items(Box<[(SmolStr, Span)]>),
+    /// `import "drift" { * };`: every item the module declares, merged into
+    /// the file's scope. A declaration of the file's own of the same name
+    /// shadows the imported one; a name two glob imports both bring in is
+    /// ambiguous, and an error only where the file uses it.
+    Glob(Span),
 }
 
 /// Where a struct literal written with `..` takes the fields it does not

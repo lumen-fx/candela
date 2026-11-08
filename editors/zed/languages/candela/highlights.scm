@@ -11,6 +11,7 @@
   "as"
   "break"
   "catch"
+  "const"
   "continue"
   "dylib"
   "else"

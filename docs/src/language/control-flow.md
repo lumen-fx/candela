@@ -94,6 +94,26 @@ fn main() {
 }
 ```
 
+A pattern in parentheses takes each element apart the way a
+[`let` pattern](variables.md#taking-a-tuple-apart) does: one name per place of a
+tuple, `_` to skip a place, and a nested pattern for a tuple inside it.
+
+```rust
+fn main() {
+    let scores = [("ada", 3), ("bob", 5)];
+    for (name, points) in scores {
+        print(name, points);
+    }
+    for (_, (x, y)) in [("a", (1, 2))] {
+        print(x + y);
+    }
+}
+```
+
+A name a pattern binds to a struct is that element, not a copy, so changing a
+field through it changes the list. A range binds a number, so it takes a name,
+not a pattern.
+
 The loop variable belongs to the loop and is not in scope after it.
 
 ## loop

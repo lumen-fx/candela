@@ -940,6 +940,7 @@ pub fn error_unknown_struct(
     sources: &[Source],
     file_idx: u16,
 ) -> ! {
+    check_ambiguous_import(struct_name, struct_span, scope, file_idx, sources);
     let help = bound_type_help(scope, struct_name, |t| blue(t));
     throw_compiler_error(
         &|| {
@@ -1899,6 +1900,7 @@ pub fn error_unknown_function(
     file_idx: u16,
     sources: &[Source],
 ) -> ! {
+    check_ambiguous_import(fn_name, span, namespace, file_idx, sources);
     let similar_fn = find_closest_str(fn_name, namespace.fns().map(|f| f.0.as_str()));
     // A name a module declares, or a removed built-in that module now holds,
     // is a missing import rather than a typo.
@@ -2984,6 +2986,7 @@ pub fn error_unknown_type(
     sources: &[Source],
     namespace: &Namespace,
 ) -> ! {
+    check_ambiguous_import(t, span, namespace, file_idx, sources);
     let closest_struct = find_closest_str(t, namespace.structs().map(|s| s.0.as_str()));
     throw_compiler_error(
         &|| {
@@ -3318,6 +3321,51 @@ pub fn error_attribute_already_declared(
 
 #[inline(never)]
 #[cold]
+/// A name two glob imports both bring in is an error where it is used, not
+/// where it is imported; this raises it when an unknown name is one of those.
+pub fn check_ambiguous_import(
+    name: &str,
+    span: Span,
+    namespace: &Namespace,
+    file_idx: u16,
+    sources: &[Source],
+) {
+    let Some((_, first, second)) = namespace.ambiguous.iter().find(|(n, _, _)| *n == name) else {
+        return;
+    };
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), span.into()),
+            )
+            .with_message("Ambiguous import")
+            .with_label(
+                Label::new((src.filename.as_str(), span.into()))
+                    .with_message(format_args!(
+                        "{} is imported from both \"{}\" and \"{}\" by {{ * }}",
+                        blue(name),
+                        blue(first),
+                        blue(second),
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(format_args!(
+                "Name the one you mean in an import list, such as {}, or declare {} in this file.",
+                green(format_args!("import \"{first}\" {{ {name} }};")),
+                blue(name),
+            ))
+            .finish()
+        },
+        sources,
+        file_idx,
+        span,
+        &format!("Ambiguous import: {name} is imported from both \"{first}\" and \"{second}\""),
+        "ambiguous_import",
+    );
+}
+
 pub fn error_import_symbol_collision(
     symbol: &str,
     existing_origin: &str,

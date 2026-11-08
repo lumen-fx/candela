@@ -101,7 +101,7 @@ const MAGIC: [u8; 4] = *b"CDLB";
 /// added the event entry ([`ProgramImage::event_entry`]) and the instructions
 /// `std/event` and the new `std/fs` functions compile to. Version 17 added the
 /// attribute table ([`ProgramImage::attributes`]).
-const FORMAT_VERSION: u8 = 17;
+const FORMAT_VERSION: u8 = 18;
 
 /// Serializable mirror of a compiled program's runtime state.
 ///

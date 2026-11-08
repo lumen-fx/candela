@@ -14,13 +14,16 @@ use crate::compiler::expr::Operand;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::UNARY_MINUS_METHOD;
 use crate::compiler::expr::mangle_method;
+use crate::compiler::expr::tuple_let_temp;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::ReturnAnnotation;
 use crate::parser::Parser;
 use crate::parser::TypeExpr;
+use crate::parser::declare_let_pattern;
 use crate::parser::parse_attributes;
 use crate::parser::parse_code;
 use crate::parser::parse_jump;
+use crate::parser::parse_let_pattern;
 use crate::parser::parse_type;
 use crate::parser::parse_type_args;
 use crate::parser::parse_type_params;
@@ -155,6 +158,46 @@ pub fn parse_while_block(input: &mut Parser<'_>) -> Expr {
 pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
     let t = parser.next_token();
     debug_assert_eq!(t.0, Token::For);
+    // `for (a, b) in xs`: the element goes into a variable no program can
+    // name, and the body opens with the declarations `let (a, b) = element;`
+    // would make.
+    if parser.peek_token() == Token::LParen {
+        let pattern_start = parser.peek_token_span().start;
+        let pattern = parse_let_pattern(parser);
+        let pattern_span = Span::from((pattern_start, parser.last_token_end as u32));
+        let element = SmolStr::from(format!("[for {} {}]", pattern_span.start, pattern_span.end));
+        let temp = tuple_let_temp(pattern.len(), pattern_span);
+        let mut prelude = vec![Expr::VarDeclare(
+            temp.clone(),
+            Box::new(Expr::Var(element.clone(), pattern_span)),
+            None,
+        )];
+        declare_let_pattern(&pattern, &temp, pattern_span, &mut prelude);
+        parser.next_token_expect(Token::In, "");
+        let start = parser.peek_token_span().start;
+        let for_collection = parse_expr_no_struct(parser);
+        let end = parser.last_token_end as u32;
+        if parser.peek_token() == Token::RangeDot {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(
+                span,
+                ParserErr::UnexpectedToken(
+                    Token::LBrace,
+                    Token::RangeDot,
+                    "A range binds one number, not a pattern.",
+                ),
+            );
+        }
+        let body = parse_loop_body(parser);
+        prelude.extend(body);
+        return Expr::ForLoop(
+            element,
+            Box::new(for_collection),
+            Box::from(prelude),
+            (start, end).into(),
+        );
+    }
     let (i_token, span) = parser.next_token();
     let id = if let Token::Identifier(id) = i_token {
         SmolStr::new(id)
@@ -289,6 +332,42 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
 ///
 /// The annotation is checked against what the body returns; see
 /// `compile_function`. Leaving it off keeps the return type inferred.
+/// `const NAME: Type = value;` at the top of a file: a function of no
+/// arguments, with the declared type as its return type, that a bare `NAME`
+/// reads. The `const` keyword is not yet read.
+pub fn parse_const(parser: &mut Parser<'_>) -> Expr {
+    parser.next_token();
+    let (t, name_span) = parser.next_token();
+    let Token::Identifier(name) = t else {
+        cold_path();
+        parser.error(
+            name_span,
+            ParserErr::UnexpectedToken(Token::Identifier(""), t, "A constant needs a name."),
+        );
+    };
+    parser.next_token_expect(
+        Token::Colon,
+        "A constant declares its type: const NAME: Type = value;",
+    );
+    let type_start = parser.peek_token_span().start;
+    let ty = parse_type(parser);
+    let type_span: Span = (type_start, parser.last_token_end as u32).into();
+    parser.next_token_expect(
+        Token::Equals,
+        "A constant needs a value: const NAME: Type = value;",
+    );
+    let value = parse_expr(parser);
+    parser.next_token_expect(Token::SemiColon, "A constant ends with ';'.");
+    Expr::FunctionDecl(
+        SmolStr::new(name),
+        Box::from([]),
+        Rc::from([Expr::ReturnVal(Box::new(Some(value)))]),
+        name_span,
+        Some(Box::new((ty, type_span))),
+        Box::from([]),
+    )
+}
+
 fn parse_return_annotation(parser: &mut Parser<'_>) -> ReturnAnnotation {
     if parser.peek_token() != Token::Arrow {
         return None;
@@ -415,7 +494,10 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
     if empty {
         parser.next_token();
     }
-    while !empty {
+    loop {
+        if empty {
+            break;
+        }
         let (next_token, _) = parser.next_token();
         let field_name = if let Token::Identifier(i) = next_token {
             SmolStr::new(i)

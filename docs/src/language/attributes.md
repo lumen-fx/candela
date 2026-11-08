@@ -43,8 +43,9 @@ say) is the host's to check, when it loads the program.
 ## Writing arguments
 
 Every argument names its parameter, `name: value`, in any order. A parameter
-the declaration gives a default may be left out, and an attribute whose
-parameters all have defaults may be written with no parentheses at all.
+the declaration gives a default may be left out, and so may one it marks
+optional; an attribute whose parameters can all be left out may be written with
+no parentheses at all.
 
 | Parameter type | A value is written as |
 | --- | --- |
@@ -52,6 +53,7 @@ parameters all have defaults may be written with no parentheses at all.
 | `type` | a type: `Position`, `int[]`, `(int, string)`, `shapes::Circle` |
 | `fn` | the name of a function: `movement`, `other::step` |
 | an enum | one of its variants without a payload: `ecs::Schedule::Startup` |
+| `enum` | a variant without a payload of any enum the script declares: `Phase::Over` |
 | a list of one of these, `T[]` | the values in brackets: `[Position, Velocity]` |
 
 A literal of one numeric type does not stand for the other: a `float`
@@ -59,11 +61,10 @@ parameter takes `1.0`, not `1`.
 
 ## Where attributes go
 
-An attribute goes in front of a top-level `fn` or `struct` declaration, and
-several may stand in a row, `@cfg` among them. A function or a struct with type
-parameters cannot carry one, since it stands for one function or struct per set
-of type arguments, and neither can a method, an `enum`, an `import` or a
-statement.
+An attribute goes in front of a top-level `fn`, `struct` or `enum` declaration,
+and several may stand in a row, `@cfg` among them. A function, struct or enum
+with type parameters cannot carry one, since it stands for one per set of type
+arguments, and neither can a method, an `import` or a statement.
 
 When `@cfg` drops a declaration, the attributes in front of it are dropped with
 it and not checked.
@@ -80,9 +81,21 @@ host "ecs" {
 }
 ```
 
-`on fn` or `on struct` says what the attribute goes on. Each parameter has a
-name, a type from the table above, and optionally `= value` as its default.
-An enum a parameter takes is declared like any other.
+`on fn`, `on struct` or `on enum` says what the attribute goes on. Each
+parameter has a name, a type from the table above, and optionally `= value` as
+its default. An enum a parameter takes is declared like any other; a parameter
+typed `enum` takes a variant of whichever enum the script names.
+
+A `?` after the type makes a parameter optional with no default: a script may
+leave it out, and the host then finds no argument for it rather than a default
+value.
+
+```rust
+host "game" {
+    attribute state on enum;
+    attribute system(in_state: enum[] = [], on_enter: enum?, run_if: fn[] = []) on fn;
+}
+```
 
 A script names the attribute behind the module the block is written in: a
 package `ecs` that holds the block above is imported with `import "ecs";` and

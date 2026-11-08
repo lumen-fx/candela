@@ -67,6 +67,8 @@ pub enum AttrParamTypeExpr {
     Type,
     /// `fn`: a function the script declares.
     Fn,
+    /// `enum`: a variant without a payload of any enum the script declares.
+    AnyEnum,
     /// Any other type: `int`, `float`, `bool`, `string`, an enum, or a list
     /// of one of those.
     Value(TypeExpr),
@@ -80,6 +82,9 @@ pub struct AttributeParamDecl {
     pub name: SmolStr,
     pub ty: AttrParamTypeExpr,
     pub default: Option<AttrValueExpr>,
+    /// Written `name: T?`: a use may leave it out, and then the attribute
+    /// table holds no argument for it.
+    pub optional: bool,
     pub span: Span,
 }
 
@@ -88,6 +93,7 @@ pub struct AttributeParamDecl {
 pub enum AttributeTargetKind {
     Fn,
     Struct,
+    Enum,
 }
 
 impl AttributeTargetKind {
@@ -95,6 +101,7 @@ impl AttributeTargetKind {
         match self {
             Self::Fn => "fn",
             Self::Struct => "struct",
+            Self::Enum => "enum",
         }
     }
 }
@@ -122,6 +129,7 @@ pub struct AttributeUse {
 pub enum UseTarget {
     Fn(u16),
     Struct(u16),
+    Enum(u16),
     /// A generic declaration, which names no one function or struct.
     Generic(AttributeTargetKind),
 }
@@ -146,6 +154,7 @@ enum ParamKind {
     Type,
     Fn,
     Enum(u16),
+    AnyEnum,
     List(Box<Self>),
 }
 
@@ -181,6 +190,7 @@ impl AttributeCtx<'_> {
             ParamKind::Type => String::from("type"),
             ParamKind::Fn => String::from("fn"),
             ParamKind::Enum(id) => self.enums[*id as usize].name.to_string(),
+            ParamKind::AnyEnum => String::from("enum"),
             ParamKind::List(inner) => format!("{}[]", self.describe(inner)),
         }
     }
@@ -259,6 +269,7 @@ pub fn resolve_attributes(
             let kind = match target {
                 UseTarget::Fn(_) => AttributeTargetKind::Fn,
                 UseTarget::Struct(_) => AttributeTargetKind::Struct,
+                UseTarget::Enum(_) => AttributeTargetKind::Enum,
                 UseTarget::Generic(kind) => *kind,
             };
             if kind != decl.target {
@@ -290,6 +301,7 @@ pub fn resolve_attributes(
                     }
                 }
                 UseTarget::Struct(struct_id) => AttributeTarget::Struct(struct_id),
+                UseTarget::Enum(enum_id) => AttributeTarget::Enum(enum_id),
                 UseTarget::Generic(kind) => error_attribute(
                     "attribute_wrong_target",
                     "Attribute on a generic declaration",
@@ -362,7 +374,11 @@ pub fn resolve_attributes(
             }
             let mut args = Vec::with_capacity(params.len());
             for ((param, (_, default)), value) in decl.params.iter().zip(params).zip(given) {
-                let Some(value) = value.or_else(|| default.clone()) else {
+                let value = value.or_else(|| default.clone());
+                if value.is_none() && param.optional {
+                    continue;
+                }
+                let Some(value) = value else {
                     error_attribute(
                         "attribute_bad_argument",
                         "Missing attribute argument",
@@ -401,6 +417,7 @@ fn resolve_param_type(
     match ty {
         AttrParamTypeExpr::Type => ParamKind::Type,
         AttrParamTypeExpr::Fn => ParamKind::Fn,
+        AttrParamTypeExpr::AnyEnum => ParamKind::AnyEnum,
         AttrParamTypeExpr::List(inner) => {
             ParamKind::List(Box::new(resolve_param_type(inner, span, file_idx, ctx)))
         }
@@ -502,7 +519,19 @@ fn check_value(
                     ctx.sources,
                 );
             };
-            Some(AttributeValue::Fn(ctx.fns[fn_id].name.to_string()))
+            let function = &ctx.fns[fn_id];
+            Some(AttributeValue::Fn {
+                name: function.name.to_string(),
+                params: function
+                    .args
+                    .iter()
+                    .map(|(n, t)| (n.to_string(), t.clone().unwrap_or(DataType::Unknown)))
+                    .collect(),
+                ret: function
+                    .return_type
+                    .as_ref()
+                    .map_or(DataType::Unknown, |(t, _)| t.clone()),
+            })
         }
         (
             ParamKind::Enum(enum_id),
@@ -538,6 +567,41 @@ fn check_value(
                 _ => None,
             }
         }
+        (
+            ParamKind::AnyEnum,
+            AttrValueExpr::Path(TypeExpr::NamespacedIdentifier(full, _), span),
+        ) => {
+            let (path, variant) = full.split_at(full.len() - 1);
+            let variant = &variant[0];
+            let (enum_path, enum_name) = path.split_at(path.len().saturating_sub(1));
+            let found = enum_name
+                .first()
+                .and_then(|enum_name| ctx.namespaces.get(file_idx).find_enum(enum_path, enum_name));
+            match found.map(|id| {
+                (
+                    id,
+                    ctx.enums[id].variants.iter().find(|v| v.name == *variant),
+                )
+            }) {
+                Some((enum_id, Some(v))) if v.payload.is_empty() => Some(AttributeValue::Variant {
+                    enum_id: enum_id as u16,
+                    name: variant.to_string(),
+                }),
+                Some((_, Some(_))) => error_attribute(
+                    "attribute_bad_argument",
+                    "Attribute argument with a payload",
+                    &format!(
+                        "{} carries a payload, and an attribute argument is a variant without one",
+                        blue(full.join("::"))
+                    ),
+                    None,
+                    *span,
+                    file_idx,
+                    ctx.sources,
+                ),
+                _ => None,
+            }
+        }
         _ => None,
     };
     resolved.unwrap_or_else(|| {
@@ -547,6 +611,9 @@ fn check_value(
                 String::from("A type argument is a type name, as in Position or int[]")
             }
             ParamKind::Fn => String::from("A function argument is the name of a declared function"),
+            ParamKind::AnyEnum => String::from(
+                "An enum argument is a variant without a payload, written behind its enum, as in Phase::Ready",
+            ),
             ParamKind::Enum(id) => format!(
                 "An enum argument is one of its variants, as in {}::{}",
                 expected,

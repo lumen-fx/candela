@@ -1613,6 +1613,7 @@ fn lower_method(
     let mut callees = Vec::new();
     collect_direct_fn_calls(code, Some(type_name.as_str()), &mut callees);
     ctx.fns.push(Function {
+        is_const: false,
         name: mangled,
         args: resolved_args,
         code: Rc::clone(code),
@@ -3915,6 +3916,11 @@ impl Expr {
             Self::Var(name, span) => {
                 if let Some(var) = v.iter().rfind(|x| &x.name == name) {
                     var.var_type.clone()
+                } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name)
+                    && state.fns[fn_id].is_const
+                {
+                    crate::compiler::expr::const_read(name, *span)
+                        .infer_type_from(None, v, ctx, state)
                 } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name) {
                     // A bare identifier that names a function is a function
                     // reference (a compile-time value passed to a higher-order
@@ -4837,6 +4843,7 @@ impl Expr {
                         .collect();
                 let id = state.fns.len() as u16;
                 state.fns.push(Function {
+                    is_const: false,
                     name: fn_name,
                     args: args.iter().map(|a| (a.clone(), None)).collect(),
                     code: Rc::from(code.clone()),

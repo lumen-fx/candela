@@ -16555,6 +16555,132 @@ pub fn let_destructures_a_tuple() {
     assert_eq!(out, "7\nseven\n3\nc\n20\na1\nb2\n");
 }
 
+/// `for (a, b) in xs` binds each element's places the way `let (a, b) = x;`
+/// does: names, `_` and nested patterns. A struct bound by a name is the
+/// element itself, so changing it changes the list.
+#[test]
+pub fn for_destructures_each_element() {
+    let out = run_output(
+        r#"
+        struct P { x: float = 0.0 }
+
+        fn main() {
+            let rows: (P, int)[] = [(P { .. }, 1), (P { x: 2.0 }, 2)];
+            for (p, n) in rows {
+                p.x += float(n);
+            }
+            print(rows[0].0.x, rows[1].0.x);
+            for (a, (b, _)) in [(1, (2, "a")), (3, (4, "b"))] {
+                print(a + b);
+            }
+            for (_, word) in [(1, "x")] {
+                print(word);
+            }
+        }
+        "#,
+    );
+    assert_eq!(out, "1.0\n4.0\n3\n7\nx\n");
+}
+
+/// A pattern that does not fit the element, and a pattern over a range, are
+/// errors before the program runs.
+#[test]
+pub fn for_pattern_errors() {
+    for (src, code) in [
+        (
+            "fn main() { for (a, b) in [(1, 2, 3)] { print(a); } }",
+            "tuple_pattern_mismatch",
+        ),
+        (
+            "fn main() { for (a, b) in [1, 2] { print(a); } }",
+            "tuple_pattern_mismatch",
+        ),
+        (
+            "fn main() { for (a, b) in 0..3 { print(a); } }",
+            "unexpected_token",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
+/// `const NAME: Type = value;` declares a value a bare `NAME` reads anywhere
+/// in the file, checked against its type. Each read computes it again, so
+/// changing what one read gave does not change the next.
+#[test]
+pub fn const_declarations() {
+    let out = run_output(
+        r#"
+        struct P { x: float = 0.0, y: float = 0.0 }
+        const SPEED: float = 2.5;
+        const LIMIT: int = 3 + 4;
+        const ORIGIN: P = P { x: 1.0, y: SPEED * 2.0 };
+        const NAMES: string[] = ["a", "b"];
+
+        fn twice() -> float { return SPEED * 2.0; }
+
+        fn main() {
+            print(LIMIT, twice(), ORIGIN.y, NAMES.len());
+            let o = ORIGIN;
+            o.x = 99.0;
+            print(ORIGIN.x);
+            let total = 0;
+            for i in 0..LIMIT {
+                total += i;
+            }
+            print(total);
+        }
+        "#,
+    );
+    assert_eq!(out, "7\n5.0\n5.0\n2\n1.0\n21\n");
+}
+
+#[test]
+pub fn const_errors() {
+    for (src, code) in [
+        (
+            "const A: int = \"x\";\nfn main() { print(A); }",
+            "invalid_type",
+        ),
+        ("const A = 1;\nfn main() { print(A); }", "unexpected_token"),
+        (
+            "const A: int = 1\nfn main() { print(A); }",
+            "unexpected_token",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
+/// A list or map literal returned from a function whose declared return type
+/// holds `any` may mix element types, as one written into such a `let` may.
+#[test]
+pub fn a_declared_return_type_types_a_returned_literal() {
+    let out = run_output(
+        r#"
+        struct A { a: int = 1 }
+        struct B { b: string = "x" }
+
+        fn bundle() -> any[] { return [A { .. }, B { .. }, 3]; }
+        fn fields() -> {string: any} { return {"a": 1, "b": "two"}; }
+
+        fn main() {
+            let xs = bundle();
+            print(xs.len(), fields()["b"]);
+        }
+        "#,
+    );
+    assert_eq!(out, "3\ntwo\n");
+    let src = "fn bad() -> int[] { return [1, \"x\"]; }\nfn main() { print(bad()); }";
+    let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "array_element_type_mismatch", "{d:?}");
+}
+
 /// A tuple pattern in a `match` arm binds its names and compares the rest of
 /// its elements; `|` alternatives bind the same names, and a last arm of names
 /// alone covers every other case.

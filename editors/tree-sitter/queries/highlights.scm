@@ -25,6 +25,7 @@
 "fn" @keyword.function
 
 "let" @keyword
+"const" @keyword
 
 "return" @keyword.return
 

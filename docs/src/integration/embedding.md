@@ -940,6 +940,7 @@ pub struct Attribute {
 pub enum AttributeTarget {
     Fn { name: String, params: Vec<(String, DataType)> },
     Struct(u16),
+    Enum(u16),
 }
 
 pub enum AttributeValue {
@@ -948,7 +949,7 @@ pub enum AttributeValue {
     Bool(bool),
     String(String),
     Type(DataType),
-    Fn(String),
+    Fn { name: String, params: Vec<(String, DataType)>, ret: DataType },
     Variant { enum_id: u16, name: String },
     List(Vec<AttributeValue>),
 }
@@ -957,9 +958,14 @@ pub enum AttributeValue {
 `namespace` is the namespace of the `host` block that declares the attribute,
 whatever name the script imported its module under. `args` holds every
 parameter the declaration lists, in its order, with the value the script wrote
-or the default. A function target carries its parameters and their declared
-types, `any` for one left bare, which is what a host reads to decide what to
-pass. A struct, an enum or a type refers to `structs` and `enums` by index;
+or the default; a parameter declared optional (`name: T?`) that the script left
+out has no entry, so `arg` answers `None` for it. A function target carries its
+parameters and their declared types, `any` for one left bare, which is what a
+host reads to decide what to pass. A function argument (`fn` or `fn[]`)
+carries the same for the function it names, with its declared return type,
+`any` when it declares none, so a host can call a function that has no
+attribute of its own, such as a condition a system names. An enum target and a
+variant carry the enum's id in `enums`. A struct, an enum or a type refers to `structs` and `enums` by index;
 `StructInfo` has the struct's name and its fields, and `type_name` renders a
 `DataType` the way candela source writes it. `named(namespace, name)` walks
 the attributes of one kind:

@@ -1280,3 +1280,100 @@ fn a_host_struct_is_reached_through_the_module_name() {
     );
     assert!(!output.status.success(), "the namespace is not repeated");
 }
+
+/// `import "m" { * };` brings in every item the module declares; a
+/// declaration of the importing file shadows an imported one of its name, and
+/// an attribute its host block declares is reached bare.
+#[test]
+fn a_glob_import_brings_every_item() {
+    let output = run_program(
+        "glob",
+        &[
+            (
+                "a.cdl",
+                "struct Vec2 { x: float = 0.0 }\n\
+                 impl Vec2 { fn len(self) -> float { return self.x; } }\n\
+                 const SPEED: float = 2.5;\n\
+                 fn only_a() -> string { return \"a\"; }\n\
+                 host \"tags\" { attribute marker on struct; }\n",
+            ),
+            ("b.cdl", "fn only_b() -> string { return \"b\"; }\n"),
+            (
+                "prog.cdl",
+                "import \"a.cdl\" { * };\n\
+                 import \"b.cdl\" { * };\n\
+                 @marker\nstruct Tag { n: int = 1 }\n\
+                 fn only_a() -> string { return \"local\"; }\n\
+                 fn main() { print(only_a(), only_b(), Vec2 { x: 2.0 }.len(), Tag { .. }.n, SPEED); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "local\nb\n2.0\n1\n2.5\n"
+    );
+}
+
+/// A name two glob imports both bring in is an error where it is used, and
+/// naming it in an item import picks one.
+#[test]
+fn a_name_two_globs_bring_in_is_ambiguous_where_used() {
+    let modules = [
+        (
+            "a.cdl",
+            "fn shared() -> int { return 1; }\nfn only_a() -> int { return 3; }\n",
+        ),
+        ("b.cdl", "fn shared() -> int { return 2; }\n"),
+    ];
+    let unused = run_program(
+        "glob_unused",
+        &[
+            modules[0],
+            modules[1],
+            (
+                "prog.cdl",
+                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(only_a()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        unused.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&unused.stderr)
+    );
+    let used = run_program(
+        "glob_used",
+        &[
+            modules[0],
+            modules[1],
+            (
+                "prog.cdl",
+                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(shared()); }\n",
+            ),
+        ],
+    );
+    assert!(!used.status.success());
+    assert!(String::from_utf8_lossy(&used.stderr).contains("Ambiguous import"));
+    let picked = run_program(
+        "glob_picked",
+        &[
+            modules[0],
+            modules[1],
+            (
+                "prog.cdl",
+                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nimport \"b.cdl\" { shared };\nfn main() { print(shared()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        picked.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&picked.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&picked.stdout), "2\n");
+}

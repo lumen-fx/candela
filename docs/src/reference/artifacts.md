@@ -188,6 +188,8 @@ been raised for:
 - the event entry, and the instructions `std/event` and the directory, byte and
   digest functions of `std/fs` compile to
 - the attribute table
+- the signature a function named in an attribute argument carries, and
+  attributes on enums
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

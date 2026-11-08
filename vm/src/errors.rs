@@ -671,7 +671,11 @@ pub fn crash() -> ! {
     #[cfg(debug_assertions)]
     panic!();
 
-    #[cfg(not(any(debug_assertions, all(target_arch = "wasm32", target_os = "unknown"), feature = "embed")))]
+    #[cfg(not(any(
+        debug_assertions,
+        all(target_arch = "wasm32", target_os = "unknown"),
+        feature = "embed"
+    )))]
     std::process::exit(1);
 
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]

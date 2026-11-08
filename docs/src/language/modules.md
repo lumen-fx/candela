@@ -92,15 +92,35 @@ fn main() {
 }
 ```
 
-An item is a function, a struct or an enum the module declares; naming a type
-brings the functions its `impl` blocks declare along with it. This form binds
-no module name, and there is no form that brings in everything. Naming an item
+An item is a function, a struct, an enum, a constant or an attribute the module
+declares; naming a type brings the functions its `impl` blocks declare along
+with it. This form binds no module name. Naming an item
 the module does not declare is a compile error that lists the ones it does. The
 same module may be imported both ways, one import under its name and one with
 a list.
 
 `as` and a list do not combine on one import; write two imports of the same
 path instead.
+
+## Importing every item
+
+`{ * }` brings in every item the module declares, the way a list naming each of
+them would:
+
+```rust
+import "./geometry.cdl" { * };
+
+fn main() {
+    print(area(2, 3), Point { x: 1, y: 2 });
+}
+```
+
+A declaration of the file's own shadows an item of the same name that `{ * }`
+brought in, so a module that gains a name later does not break the files
+importing it. A name two `{ * }` imports both bring in is ambiguous: the
+program compiles as long as the file does not use it, and a use is a compile
+error naming both modules. Naming the item in a list import, as in
+`import "./geometry.cdl" { area };`, picks that module's.
 
 ## Name collisions
 

@@ -62,10 +62,34 @@ The pattern has to have one place for each element of the value: a pair goes
 into `(a, b)`, not into `(a, b, c)` or `(a, (b, c))`. Write `: Type` after the
 pattern to declare the tuple's type, as in `let (x, y): (int, int) = p;`.
 
+## Constants
+
+`const` at the top of a file names a value, with its type written out:
+
+```rust
+const GRAVITY: float = 9.8;
+const GROUND: Point = Point { x: 0.0, y: 400.0 };
+
+struct Point { x: float, y: float }
+
+fn main() {
+    print(GRAVITY * 2.0, GROUND.y);
+}
+```
+
+A constant is read by its bare name anywhere in the file, and in files that
+import it by name or with `{ * }`. The value is checked against the declared
+type. Each read computes the value from its expression again, so a constant
+holding a struct or a list hands each reader a value of its own: changing what
+one read gave changes nothing else. Keep a constant's expression to values that
+do not change between reads, such as literals, arithmetic, other constants and
+struct or list literals of those. A constant is not a variable: it cannot be
+assigned.
+
 ## Variables live inside functions
 
 The top level of a file holds declarations only: functions, structs, enums,
-`impl` blocks, and imports. There are no global variables, so every `let`
+`impl` blocks, constants, and imports. There are no global variables, so every `let`
 belongs to a function body or a block inside one. A function declaration is the
 reverse: it belongs at the top level, and writing one inside a block is a
 compile error.

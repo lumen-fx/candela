@@ -439,7 +439,9 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumTyp
             Value::Enum { .. } => false,
             Value::Struct { name, .. } => struct_id(name, structs)
                 .is_some_and(|id| matches_in(value, &DataType::Struct(id), structs, enums)),
-            Value::Array(items) => items.iter().all(|item| matches_in(item, ty, structs, enums)),
+            Value::Array(items) => items
+                .iter()
+                .all(|item| matches_in(item, ty, structs, enums)),
             Value::Map(entries) => entries
                 .values()
                 .all(|entry| matches_in(entry, ty, structs, enums)),
@@ -453,7 +455,9 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumTyp
         DataType::Array(element) => match value {
             Value::Array(items) => {
                 let element = element.as_deref().unwrap_or(&DataType::Unknown);
-                items.iter().all(|item| matches_in(item, element, structs, enums))
+                items
+                    .iter()
+                    .all(|item| matches_in(item, element, structs, enums))
             }
             _ => false,
         },
@@ -1235,7 +1239,13 @@ fn declared_struct<'s>(
 
 /// `v` itself: a scalar, a string, or an empty list, map or struct for
 /// [`fill`] to fill in.
-fn shell(heap: &mut Heap<'_>, v: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumType]) -> Data {
+fn shell(
+    heap: &mut Heap<'_>,
+    v: &Value,
+    ty: &DataType,
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> Data {
     match v {
         Value::Null => NULL,
         Value::Int(i) => Data::int(*i),
