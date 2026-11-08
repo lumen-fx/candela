@@ -6818,11 +6818,12 @@ fn library_module(
     if let Some(text) = embedded_std_module(path) {
         return Some((PathBuf::from(path), Some(text)));
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    // A browser has no files to read; an Emscripten build does.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     return resolver
         .library_path(path)
         .map(|on_disk| (loaded_file_key(on_disk), None));
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
         let _ = resolver;
         None
@@ -6834,13 +6835,13 @@ fn library_module(
 /// editor's go-to-definition point at a file that exists, and its library path
 /// otherwise.
 fn carried_module_filename(path: &str, resolver: &ImportResolver) -> SmolStr {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     if let Some(on_disk) = resolver.library_path(path).filter(|p| p.is_file())
         && let Some(name) = loaded_file_key(on_disk).to_str()
     {
         return SmolStr::from(name);
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     let _ = resolver;
     SmolStr::from(path)
 }
@@ -7573,7 +7574,8 @@ fn parse_toplevel(
             Expr::ImportDylib(..) if file_path.to_str().and_then(embedded_std_module).is_none() => {
                 wasm_error("WASM does not support loading dynamic libraries")
             }
-            #[cfg(target_arch = "wasm32")]
+            // An Emscripten build has a file system, so files import there.
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Expr::ImportFile(ref path, _, is_logical, _)
                 if !is_logical || embedded_std_module(path).is_none() =>
             {
@@ -7714,15 +7716,15 @@ fn parse_toplevel(
                 // from nowhere, every place that was tried. A module the
                 // compiler carries comes with its text.
                 let library = library_module(path.as_str(), resolver);
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                 let library_path = library.as_ref().map(|(path, _)| path.clone());
                 // In a browser the module is one the runtime carries; the first
                 // pass let no other through.
-                #[cfg(target_arch = "wasm32")]
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
                 let file_path = library
                     .as_ref()
                     .map_or_else(|| PathBuf::from(path.as_str()), |(path, _)| path.clone());
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                 let file_path = if is_logical {
                     // A library import (`import "std/string";`, extensionless)
                     // resolves against a package root or the shipped library
@@ -7759,9 +7761,9 @@ fn parse_toplevel(
                         .and_then(|(_, text)| *text);
                     let file_contents = match carried {
                         Some(text) => String::from(text),
-                        #[cfg(target_arch = "wasm32")]
+                        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
                         None => String::new(),
-                        #[cfg(not(target_arch = "wasm32"))]
+                        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                         None => std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
                             error_cannot_read_file(
                                 span,

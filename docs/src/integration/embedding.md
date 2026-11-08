@@ -36,6 +36,16 @@ profile that unwinds, which the crate provides as `embed`:
 cargo build --profile embed --features embed
 ```
 
+### In an Emscripten build
+
+A C or C++ program built with Emscripten can link candela the same way: build
+the crate for `wasm32-unknown-emscripten` as a static library and link it with
+`-fwasm-exceptions`. That build reads files and package roots from
+Emscripten's file system, so files packaged with the program import as they do
+on a desktop. The standard library modules that bind native libraries
+(`std/math`, `std/time`, `std/random`, `std/hash`) are carried inside it, as in
+the browser build, and other dynamic libraries do not load.
+
 ## A whole program
 
 ```rust
@@ -865,11 +875,27 @@ match program.call("pick", &[Value::Int(1)])? {
 }
 ```
 
-Enums travel outward only. A `Value::Enum` is refused as an argument in any
-position, an `any` parameter and a list element included, and the call comes
-back as an `argument_type_mismatch` naming the variant it was handed. A
-parameter typed as an enum is not host-callable at all: an artifact gives such
-a function no export. Build the value inside the script and return it.
+An enum goes in where its type is declared: a struct field, a list element or
+a map value whose type names the enum. The variant must be one of that enum's,
+with a payload of the types it declares, or the call comes back as an
+`argument_type_mismatch`. That is how a host passes a component whose field is
+an enum, and reads it back with `call_in_out`:
+
+```rust
+// enum Align { Left, Center } struct Label { text: string, align: Align }
+let label = Value::Struct {
+    name: "Label".into(),
+    fields: vec![
+        ("text".into(), "score".into()),
+        ("align".into(), Value::Enum { variant: "Center".into(), payload: vec![] }),
+    ],
+};
+program.call("show", &[label])?;
+```
+
+A bare enum, as an argument or in an `any` position, names no enum to build
+and is refused. A parameter typed as an enum is not host-callable at all: an
+artifact gives such a function no export.
 
 A [generic](../language/generics.md) type is instantiated at compile time, so
 nothing generic reaches the host: `Cell<int>` crosses the boundary as the

@@ -422,24 +422,27 @@ pub fn describe_value(value: &Value) -> String {
 /// with [`is_host_callable_type`], which decides which parameter types reach
 /// here at all.
 #[must_use]
-pub fn value_matches_type(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
-    // No parameter type accepts an enum, `any` and an unpinned collection
-    // included, so the value is asked first and every arm below answers for a
-    // value with no enum in it.
-    if holds_enum(value) {
-        return false;
-    }
-    matches_in(value, ty, structs)
+pub fn value_matches_type(
+    value: &Value,
+    ty: &DataType,
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> bool {
+    matches_in(value, ty, structs, enums)
 }
 
-/// [`value_matches_type`] for a value already known to hold no enum.
-fn matches_in(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
+fn matches_in(value: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumType]) -> bool {
     match ty {
+        // A position that pins no type cannot say which enum a variant name
+        // belongs to, so it takes no enum.
         DataType::Unknown => match value {
+            Value::Enum { .. } => false,
             Value::Struct { name, .. } => struct_id(name, structs)
-                .is_some_and(|id| matches_in(value, &DataType::Struct(id), structs)),
-            Value::Array(items) => items.iter().all(|item| matches_in(item, ty, structs)),
-            Value::Map(entries) => entries.values().all(|entry| matches_in(entry, ty, structs)),
+                .is_some_and(|id| matches_in(value, &DataType::Struct(id), structs, enums)),
+            Value::Array(items) => items.iter().all(|item| matches_in(item, ty, structs, enums)),
+            Value::Map(entries) => entries
+                .values()
+                .all(|entry| matches_in(entry, ty, structs, enums)),
             _ => true,
         },
         DataType::Int => matches!(value, Value::Int(_)),
@@ -450,7 +453,7 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
         DataType::Array(element) => match value {
             Value::Array(items) => {
                 let element = element.as_deref().unwrap_or(&DataType::Unknown);
-                items.iter().all(|item| matches_in(item, element, structs))
+                items.iter().all(|item| matches_in(item, element, structs, enums))
             }
             _ => false,
         },
@@ -459,13 +462,13 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
                 let element = kv.1.as_ref().unwrap_or(&DataType::Unknown);
                 entries
                     .values()
-                    .all(|entry| matches_in(entry, element, structs))
+                    .all(|entry| matches_in(entry, element, structs, enums))
             }
             _ => false,
         },
         DataType::Union(members) => members
             .iter()
-            .any(|member| matches_in(value, member, structs)),
+            .any(|member| matches_in(value, member, structs, enums)),
         DataType::Struct(id) => {
             let (Value::Struct { name, fields }, Some(declared)) =
                 (value, structs.get(*id as usize))
@@ -478,10 +481,30 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct]) -> bool {
                     fields
                         .iter()
                         .find(|(n, _)| *n == **field)
-                        .is_some_and(|(_, v)| matches_in(v, field_ty, structs))
+                        .is_some_and(|(_, v)| matches_in(v, field_ty, structs, enums))
                 })
         }
-        DataType::Fn(_) | DataType::FnValue(_) | DataType::Enum(_) => false,
+        // An enum value names its variant; the declared type says which enum,
+        // so the variant has to be one of its own, with its payload.
+        DataType::Enum(id) => {
+            let (Value::Enum { variant, payload }, Some(declared)) =
+                (value, enums.get(*id as usize))
+            else {
+                return false;
+            };
+            declared
+                .variants
+                .iter()
+                .find(|v| *v.name == **variant)
+                .is_some_and(|v| {
+                    v.payload.len() == payload.len()
+                        && v.payload
+                            .iter()
+                            .zip(payload)
+                            .all(|(t, p)| matches_in(p, t, structs, enums))
+                })
+        }
+        DataType::Fn(_) | DataType::FnValue(_) => false,
     }
 }
 
@@ -1139,11 +1162,21 @@ impl_into_host_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
 ///
 /// A string is interned: one the pool already holds by its text is shared,
 /// since a map finds a string key by its slot.
-pub(crate) fn marshal_value(v: &Value, heap: &mut Heap<'_>, structs: &[Struct]) -> Data {
-    let d = shell(heap, v, structs);
-    if matches!(v, Value::Array(_) | Value::Map(_) | Value::Struct { .. }) && !d.is_null() {
+pub(crate) fn marshal_value(
+    v: &Value,
+    ty: &DataType,
+    heap: &mut Heap<'_>,
+    structs: &[Struct],
+    enums: &[EnumType],
+) -> Data {
+    let d = shell(heap, v, ty, structs, enums);
+    if matches!(
+        v,
+        Value::Array(_) | Value::Map(_) | Value::Struct { .. } | Value::Enum { .. }
+    ) && !d.is_null()
+    {
         heap.recursion_stack.0.push(d);
-        fill(heap, v, d, structs);
+        fill(heap, v, d, ty, structs, enums);
         heap.recursion_stack.0.pop();
     }
     d
@@ -1155,16 +1188,19 @@ pub(crate) fn marshal_value(v: &Value, heap: &mut Heap<'_>, structs: &[Struct]) 
 /// built from.
 pub fn marshal_args(
     args: &[Value],
+    arg_types: &[DataType],
     arg_registers: &[u16],
     registers: &mut Vec<Data>,
     pools: &mut Pools,
     structs: &[Struct],
+    enums: &[EnumType],
 ) {
     let mut file = RegisterFile(std::mem::take(registers));
     let mut stack = RegisterFile(Vec::new());
-    for (arg, &register) in args.iter().zip(arg_registers) {
+    for (i, (arg, &register)) in args.iter().zip(arg_registers).enumerate() {
         let d = marshal_value(
             arg,
+            arg_types.get(i).unwrap_or(&DataType::Unknown),
             &mut Heap {
                 objs: &mut pools.objs,
                 maps: &mut pools.maps,
@@ -1174,6 +1210,7 @@ pub fn marshal_args(
                 recursion_stack: &mut stack,
             },
             structs,
+            enums,
         );
         file.0[register as usize] = d;
     }
@@ -1198,7 +1235,7 @@ fn declared_struct<'s>(
 
 /// `v` itself: a scalar, a string, or an empty list, map or struct for
 /// [`fill`] to fill in.
-fn shell(heap: &mut Heap<'_>, v: &Value, structs: &[Struct]) -> Data {
+fn shell(heap: &mut Heap<'_>, v: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumType]) -> Data {
     match v {
         Value::Null => NULL,
         Value::Int(i) => Data::int(*i),
@@ -1214,17 +1251,31 @@ fn shell(heap: &mut Heap<'_>, v: &Value, structs: &[Struct]) -> Data {
             }
             None => NULL,
         },
-        // Enums travel outward only: both embedding paths refuse an argument
-        // that holds one (see `holds_enum`) before anything is marshalled, so
-        // this arm is what keeps the match exhaustive rather than a conversion
-        // anything reaches.
-        Value::Enum { .. } => NULL,
+        // An enum is built as the enum its declared type names; a call checks
+        // the variant against that type before anything is marshalled.
+        Value::Enum { variant, .. } => match ty {
+            DataType::Enum(id) => match enums.get(*id as usize) {
+                Some(declared) if declared.variants.iter().any(|v| *v.name == **variant) => {
+                    let obj = heap.array().as_array() as u32;
+                    Data::enum_instance(*id, obj)
+                }
+                _ => NULL,
+            },
+            _ => NULL,
+        },
     }
 }
 
 /// Fills `d`, the shell [`shell`] made for `v` and already reachable from the
 /// roots. Each entry goes in before anything inside it is allocated.
-fn fill(heap: &mut Heap<'_>, v: &Value, d: Data, structs: &[Struct]) {
+fn fill(
+    heap: &mut Heap<'_>,
+    v: &Value,
+    d: Data,
+    ty: &DataType,
+    structs: &[Struct],
+    enums: &[EnumType],
+) {
     // A struct value that matches no declaration was built as `null`.
     if d.is_null() {
         return;
@@ -1232,34 +1283,56 @@ fn fill(heap: &mut Heap<'_>, v: &Value, d: Data, structs: &[Struct]) {
     match v {
         Value::Array(items) => {
             let id = d.as_array();
+            let element = match ty {
+                DataType::Array(Some(e)) => &**e,
+                _ => &DataType::Unknown,
+            };
             heap.objs[id].reserve(items.len());
             for item in items {
-                let child = shell(heap, item, structs);
+                let child = shell(heap, item, element, structs, enums);
                 heap.objs[id].push(child);
-                fill(heap, item, child, structs);
+                fill(heap, item, child, element, structs, enums);
             }
         }
         Value::Map(entries) => {
             let id = d.as_map();
+            let element = match ty {
+                DataType::Map(kv) => kv.1.as_ref().unwrap_or(&DataType::Unknown),
+                _ => &DataType::Unknown,
+            };
             for (k, val) in entries {
                 let key = heap.string(k);
                 map_insert(&mut heap.maps[id], key, NULL, heap.strings);
-                let child = shell(heap, val, structs);
+                let child = shell(heap, val, element, structs, enums);
                 map_insert(&mut heap.maps[id], key, child, heap.strings);
-                fill(heap, val, child, structs);
+                fill(heap, val, child, element, structs, enums);
             }
         }
         Value::Struct { fields, .. } => {
             let id = d.as_struct();
             let declared = &structs[d.struct_type_id() as usize];
             heap.objs[id].reserve(declared.fields.len());
-            for (field, _, _) in &declared.fields {
+            for (field, field_ty, _) in &declared.fields {
                 let Some((_, val)) = fields.iter().find(|(n, _)| *n == **field) else {
                     continue;
                 };
-                let child = shell(heap, val, structs);
+                let child = shell(heap, val, field_ty, structs, enums);
                 heap.objs[id].push(child);
-                fill(heap, val, child, structs);
+                fill(heap, val, child, field_ty, structs, enums);
+            }
+        }
+        // `[tag, payload...]`, the layout the VM builds a variant in.
+        Value::Enum { variant, payload } => {
+            let id = d.as_enum();
+            let declared = &enums[d.enum_type_id() as usize];
+            let Some(tag) = declared.variants.iter().position(|v| *v.name == **variant) else {
+                return;
+            };
+            heap.objs[id].push(Data::int(tag as i64));
+            for (val, val_ty) in payload.iter().zip(declared.variants[tag].payload.iter()) {
+                let child = shell(heap, val, val_ty, structs, enums);
+                heap.objs[id].push(child);
+                fill(heap, val, child, val_ty, structs, enums);
             }
         }
         _ => {}

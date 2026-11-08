@@ -316,7 +316,8 @@ fn main() {
 ```
 
 Build a value with `Name { field: value, ... }`, giving every field. Read and
-write a field with a dot.
+write a field with a dot. A struct may have no fields, `struct Marker {}`,
+built as `Marker {}`; such a struct marks something by its type alone.
 
 ```rust
 struct Point {

@@ -622,8 +622,11 @@ impl RuntimeError {
 #[inline(never)]
 #[cfg(target_arch = "wasm32")]
 pub fn wasm_error(msg: &str) -> ! {
-    crate::captured_output::print(&format!("CANDELA ERROR\n{msg}\n"));
+    let _ = writeln!(crate::captured_output::stderr(), "CANDELA ERROR\n{msg}");
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     wasm_bindgen::throw_str("candela error");
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    crash();
 }
 
 #[cold]
@@ -668,10 +671,10 @@ pub fn crash() -> ! {
     #[cfg(debug_assertions)]
     panic!();
 
-    #[cfg(not(any(debug_assertions, target_arch = "wasm32", feature = "embed")))]
+    #[cfg(not(any(debug_assertions, all(target_arch = "wasm32", target_os = "unknown"), feature = "embed")))]
     std::process::exit(1);
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     wasm_bindgen::throw_str("candela_error");
 
     #[cfg(all(feature = "embed", not(debug_assertions)))]
