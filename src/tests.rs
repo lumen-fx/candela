@@ -1200,6 +1200,35 @@ pub fn string_split_of_nothing_on_empty_separator_is_empty() {
     );
 }
 
+/// A short string that ends in a null character keeps it: a literal, a
+/// concatenation, a character read by index and a part of a split all count
+/// it in their length, and it is not the empty string.
+#[test]
+pub fn a_short_string_keeps_a_trailing_null_character() {
+    assert_eq!(
+        run_output(
+            r#"
+            fn main() {
+                print("\0".len());
+                print("a\0".len());
+                print("\0" == "");
+                print(("ab" + "\0").len());
+                print("a\0b".len());
+                print("abcde\0".len());
+                print("abcdefgh\0".len());
+                let s = "x\0y";
+                print(s[1].len(), s[1] == "\0");
+                let parts = s.split("");
+                print(parts.len(), parts[1].len(), parts[1] == "\0");
+                let m = {"\0": 1, "": 2};
+                print(m.len(), m["\0"]);
+            }
+            "#
+        ),
+        "1\n2\nfalse\n3\n3\n6\n9\n1\ntrue\n3\n1\ntrue\n2\n1\n"
+    );
+}
+
 #[test]
 pub fn string_contains() {
     run_and_check_registers!(

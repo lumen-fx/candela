@@ -320,10 +320,11 @@ impl Data {
     }
     /// This will create a new inlined string.
     /// In debug it'll panic (just in case).
-    /// The caller guarantees that `s` is never longer than 6 bytes.
+    /// The caller guarantees that `s` fits the inline form; see
+    /// [`Self::fits_inline`].
     #[inline(always)]
     pub fn small_str(s: &str) -> Self {
-        debug_assert!(s.len() <= 6);
+        debug_assert!(Self::fits_inline(s));
         let mut payload: u64 = 0;
         // Packs 6 bytes into the payload, filling up the 48 payload bits
         for (i, byte) in s.as_bytes().iter().enumerate() {
@@ -358,8 +359,8 @@ impl Data {
     pub fn p_str(s: &str, string_pool: &mut StringPool) -> Self {
         Self::interned(s, string_pool).unwrap_or_else(|| Self::new_pooled(s, string_pool))
     }
-    /// `s` as a value without allocating: inline if it is six bytes or
-    /// shorter, else the pool slot already holding it, if one does.
+    /// `s` as a value without allocating: inline if it fits the inline form,
+    /// else the pool slot already holding it, if one does.
     pub fn interned(s: &str, string_pool: &mut StringPool) -> Option<Self> {
         if Self::fits_inline(s) {
             return Some(Self::small_str(s));
@@ -367,11 +368,20 @@ impl Data {
         let id = string_pool.iter().position(|existing| existing == s)?;
         Some(Self::pooled(id, string_pool))
     }
-    /// Whether `s` is stored inside the value rather than in the string pool.
+    /// Whether `s` is stored inside the value rather than in the string pool:
+    /// six bytes or fewer, the last of them not a null character. The inline
+    /// form keeps no length and reads it as the position of the last byte
+    /// that is not zero, so a trailing null would be read as padding and
+    /// dropped.
     #[inline(always)]
     #[must_use]
     pub const fn fits_inline(s: &str) -> bool {
-        s.len() <= 6
+        let bytes = s.as_bytes();
+        match bytes.len() {
+            0 => true,
+            len @ 1..=6 => bytes[len - 1] != 0,
+            _ => false,
+        }
     }
     /// The string in pool slot `id`, for a caller that found the slot itself.
     pub fn pooled(id: usize, string_pool: &mut StringPool) -> Self {
@@ -387,10 +397,11 @@ impl Data {
         string_pool.push(s.to_owned());
         Self::tagged(NAN_STRING_LARGE | string_pool_id)
     }
-    /// Allocates a string, storing it directly inside the value if it is six
-    /// bytes or shorter and in the string pool otherwise. A pooled string can
-    /// start a collection, so every value the program still holds has to be
-    /// reachable from `registers` or `recursion_stack`.
+    /// Allocates a string, storing it directly inside the value if it fits
+    /// the inline form ([`Self::fits_inline`]) and in the string pool
+    /// otherwise. A pooled string can start a collection, so every value the
+    /// program still holds has to be reachable from `registers` or
+    /// `recursion_stack`.
     #[inline(always)]
     pub fn string<S: PoolString>(
         s: S,
@@ -401,7 +412,7 @@ impl Data {
         recursion_stack: &RegisterFile,
         gc: &mut GcState,
     ) -> Self {
-        if s.str_len() <= 6 {
+        if Self::fits_inline(s.pool_as_str()) {
             Self::small_str(s.pool_as_str())
         } else {
             let id = alloc_string(

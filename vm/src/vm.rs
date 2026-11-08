@@ -82,8 +82,9 @@ pub type CandelaMap = IndexMap<Data, Data, BuildHasherDefault<DataHash>>;
 pub type MapPool = Pool<CandelaMap>;
 
 /// Whether two values are the same as a map key or a list element: the same
-/// value, or two strings with the same text. A string longer than six bytes
-/// lives in the string pool, and the same text can sit in more than one slot.
+/// value, or two strings with the same text. A string too long for the inline
+/// form lives in the string pool, and the same text can sit in more than one
+/// slot.
 #[inline(always)]
 #[must_use]
 pub fn same_key(a: Data, b: Data, strings: &StringPool) -> bool {
@@ -2805,8 +2806,9 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 // As many characters as bytes means every character takes one
                 // of them, so the position is already the offset and the
                 // character it names is that one byte. A character takes at
-                // most four bytes either way, so the answer always fits the
-                // inlined string form.
+                // most four bytes either way, so the answer fits the inlined
+                // string form, except a null character, which goes to the pool
+                // to keep its length.
                 let (start, end) = if char_len == bytes.len() {
                     (idx as usize, idx as usize + 1)
                 } else {
@@ -2816,7 +2818,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         start + utf8_width(unsafe { *bytes.get_unchecked(start) }),
                     )
                 };
-                regs[dest] = Data::small_str(unsafe {
+                regs[dest] = string!(unsafe {
                     std::str::from_utf8_unchecked(bytes.get_unchecked(start..end))
                 });
             }
@@ -3371,12 +3373,11 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         // before the first character and after the last, and
                         // would cut a multi-byte character in half. A character
                         // is at most four bytes, so every part fits the inline
-                        // string form and none reaches the pool.
-                        let output = obj_pool.get_mut(output_id as usize);
+                        // string form, except a null character, which goes to
+                        // the pool to keep its length.
                         for (byte_i, character) in source.char_indices() {
-                            output.push(Data::small_str(
-                                &source[byte_i..byte_i + character.len_utf8()],
-                            ));
+                            let part = string!(&source[byte_i..byte_i + character.len_utf8()]);
+                            obj_pool.get_mut(output_id as usize).push(part);
                         }
                     } else {
                         let mut i = 0;
