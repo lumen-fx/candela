@@ -65,15 +65,20 @@ libloading = "0.9.0"
 libffi = "5.1.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# The C math functions Rust's f64 does not carry (erf, erfc, ilogb, ldexp,
+# scalbn), for the std/math intrinsics.
+libm = "0.2"
+getrandom = "0.4.3"
+
+# The browser build (wasm32-unknown-unknown) reaches the page through
+# wasm-bindgen. Emscripten builds have a C library and use it instead.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # Pinned to the locked version rather than `*`: crates.io rejects a wildcard
 # requirement, and this crate publishes.
 wasm-bindgen = "0.2.126"
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
 # The browser's clock and calendar, for the std/time intrinsics.
 js-sys = "0.3.103"
-# The C math functions Rust's f64 does not carry (erf, erfc, ilogb, ldexp,
-# scalbn), for the std/math intrinsics.
-libm = "0.2"
 
 # The intrinsics compile into the native unit tests too, so their behaviour is
 # checked off the browser.

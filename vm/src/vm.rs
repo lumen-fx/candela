@@ -2538,6 +2538,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     Ok(value) => {
                         regs[dest] = crate::embed::marshal_value(
                             &value,
+                            &DataType::Unknown,
                             &mut crate::gc::Heap {
                                 objs: obj_pool,
                                 maps: map_pool,
@@ -2547,6 +2548,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                                 recursion_stack,
                             },
                             structs,
+                            enums,
                         );
                     }
                     // The closure raised. Report it where the script called it,

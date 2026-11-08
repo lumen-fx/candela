@@ -415,10 +415,10 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     #[cfg(debug_assertions)]
     panic!();
 
-    #[cfg(not(any(debug_assertions, target_arch = "wasm32", feature = "embed")))]
+    #[cfg(not(any(debug_assertions, all(target_arch = "wasm32", target_os = "unknown"), feature = "embed")))]
     std::process::exit(1);
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     wasm_bindgen::throw_str("candela_error");
 
     #[cfg(all(feature = "embed", not(debug_assertions)))]

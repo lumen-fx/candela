@@ -32,7 +32,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::hint::cold_path;
 #[cfg(all(feature = "embed", feature = "compiler"))]
 use std::panic::catch_unwind;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen::prelude::*;
 
 // The runtime core is the `candela-vm` crate. Alias its modules under `crate::`
@@ -244,13 +244,13 @@ pub(crate) fn execute_compiled(out: compiler::CompileOutput) {
     let _ = event_entry;
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[wasm_bindgen]
 pub fn get_output() -> String {
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.take())
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "compiler"))]
+#[cfg(all(all(target_arch = "wasm32", target_os = "unknown"), feature = "compiler"))]
 #[wasm_bindgen]
 pub fn run(code: String) {
     candela_vm::captured_output::CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());

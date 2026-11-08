@@ -410,7 +410,12 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
     parser.next_token_expect(Token::LBrace, "Expected '{'");
     let mut fields: Vec<(SmolStr, TypeExpr, Span)> = Vec::with_capacity(4);
     let mut defaults: Vec<Option<(Expr, Span)>> = Vec::with_capacity(4);
-    loop {
+    // `struct Tag {}`: a struct with no fields, such as a marker.
+    let empty = parser.peek_token() == Token::RBrace;
+    if empty {
+        parser.next_token();
+    }
+    while !empty {
         let (next_token, _) = parser.next_token();
         let field_name = if let Token::Identifier(i) = next_token {
             SmolStr::new(i)

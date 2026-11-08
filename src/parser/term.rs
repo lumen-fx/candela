@@ -51,7 +51,12 @@ fn parse_struct(
 ) -> Expr {
     let mut fields: Vec<(SmolStr, Expr, Span, Span)> = Vec::with_capacity(4);
     let mut base: Option<Box<(StructRest, Span)>> = None;
-    let end: u32;
+    let mut end: u32 = start;
+    // `Tag {}`: a struct with no fields.
+    if parser.peek_token() == Token::RBrace {
+        end = parser.next_token().1.end;
+        return Expr::Struct(namespace, Box::from(fields), (start, end).into(), type_args, base);
+    }
     loop {
         // `..base` closes the literal: every field it does not write is taken
         // from `base`, the way Rust's struct update syntax reads. A bare `..`

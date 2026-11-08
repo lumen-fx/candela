@@ -608,7 +608,7 @@ impl RuntimeProgram {
             });
         }
         for (idx, (arg, declared)) in args.iter().zip(export.arg_types.iter()).enumerate() {
-            if !value_matches_type(arg, declared, &self.structs) {
+            if !value_matches_type(arg, declared, &self.structs, &self.enums) {
                 return Err(CallError::ArgType {
                     function: name.to_owned(),
                     index: idx + 1,
@@ -626,10 +626,12 @@ impl RuntimeProgram {
         };
         marshal_args(
             args,
+            &export.arg_types,
             &registers.arg_registers,
             &mut self.registers,
             &mut self.pools,
             &self.structs,
+            &self.enums,
         );
 
         self.execute_from(entry)?;

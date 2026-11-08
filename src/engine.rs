@@ -580,12 +580,14 @@ impl Program {
         // an `any` one that accepts everything else. Refusing it here, before
         // anything is marshalled, is what keeps the script from reading a null
         // the host never passed.
-        if let Some((index, value)) = args.iter().enumerate().find(|(_, v)| holds_enum(v)) {
+        // An enum goes in only where a struct field or list element declares
+        // its type; a bare one names no enum to build.
+        if let Some((index, value)) = args.iter().enumerate().find(|(_, v)| matches!(v, Value::Enum { .. })) {
             return Err(self.argument_error(
                 fn_name,
                 index,
                 &format!(
-                    "cannot be a {}: an enum value crosses the boundary outward only",
+                    "cannot be a {}: an enum value goes in only as a field or element whose type names its enum",
                     describe_value(value)
                 ),
             ));
@@ -601,7 +603,9 @@ impl Program {
             let ty = value_datatype(arg, &self.structs);
             // A struct is built field by field from the declaration it names,
             // so it has to match that declaration before anything is built.
-            if holds_struct(arg) && !value_matches_type(arg, &ty, &self.structs) {
+            if (holds_struct(arg) || holds_enum(arg))
+                && !value_matches_type(arg, &ty, &self.structs, &self.enums)
+            {
                 return Err(self.argument_error(
                     fn_name,
                     index,
@@ -617,10 +621,12 @@ impl Program {
         let call = if let Some(call) = self.calls.get(&key) {
             marshal_args(
                 args,
+                &types,
                 &call.arg_registers,
                 &mut self.registers,
                 &mut self.pools,
                 &self.structs,
+                &self.enums,
             );
             call.clone()
         } else {
@@ -668,10 +674,12 @@ impl Program {
             .collect();
         marshal_args(
             args,
+            &types,
             &arg_registers,
             &mut self.registers,
             &mut self.pools,
             &self.structs,
+            &self.enums,
         );
 
         let dummy = Span { start: 0, end: 0 };

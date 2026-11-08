@@ -24,7 +24,7 @@ thread_local! {
 /// Whether output on this thread is redirected into [`CAPTURED_OUTPUT`].
 #[inline]
 pub fn is_capturing() -> bool {
-    cfg!(target_arch = "wasm32") || CAPTURING.with(Cell::get)
+    cfg!(all(target_arch = "wasm32", target_os = "unknown")) || CAPTURING.with(Cell::get)
 }
 
 /// Starts or stops redirecting output on this thread, and returns the setting

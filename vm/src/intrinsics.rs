@@ -182,7 +182,7 @@ fn logb(x: f64) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// The wall clock and the local calendar, read from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod clock {
     use super::Tm;
 
@@ -211,7 +211,7 @@ mod clock {
 
 /// The clock off the browser, where only the unit tests reach this module.
 /// It reads UTC.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 mod clock {
     use super::Tm;
 
