@@ -49,6 +49,8 @@ pub enum AttributeTarget {
     },
     /// A struct, by its id in the program's struct table.
     Struct(u16),
+    /// An enum, by its id in the program's enum table.
+    Enum(u16),
 }
 
 /// The value one argument of an [`Attribute`] holds.
@@ -61,9 +63,15 @@ pub enum AttributeValue {
     /// A type, for a parameter declared `type`. A struct or an enum carries its
     /// id in the program's tables.
     Type(DataType),
-    /// A function, for a parameter declared `fn`, by the name it is declared
-    /// with.
-    Fn(String),
+    /// A function, for a parameter declared `fn`: the name it is declared
+    /// with, its parameters in declaration order (`Unknown` for one written
+    /// without a type) and its declared return type (`Unknown` when it
+    /// declares none), which is what a host reads to call it.
+    Fn {
+        name: String,
+        params: Vec<(String, DataType)>,
+        ret: DataType,
+    },
     /// A variant of an enum the program declares, by the enum's id and the
     /// variant's name.
     Variant {

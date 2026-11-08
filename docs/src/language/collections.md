@@ -21,7 +21,9 @@ Mixing types in one list is a compile error: `[1, "a"]` does not compile. A
 literal written straight into a place declared `any[]`, a `let` or a parameter,
 is the exception: `let row: any[] = [1, "a"];` compiles, and so does
 `spawn([Spark { ttl: 0.5 }, Position { x: 1.0 }])` for `fn spawn(bundle:
-any[])`.
+any[])`, and `return [Spark { ttl: 0.5 }, 3];` in a function declared
+`-> any[]`. A map literal follows the same rule for a place declared
+`{string: any}`.
 
 ### The empty list
 

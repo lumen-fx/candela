@@ -51,11 +51,17 @@ fn parse_struct(
 ) -> Expr {
     let mut fields: Vec<(SmolStr, Expr, Span, Span)> = Vec::with_capacity(4);
     let mut base: Option<Box<(StructRest, Span)>> = None;
-    let mut end: u32 = start;
+    let end: u32;
     // `Tag {}`: a struct with no fields.
     if parser.peek_token() == Token::RBrace {
-        end = parser.next_token().1.end;
-        return Expr::Struct(namespace, Box::from(fields), (start, end).into(), type_args, base);
+        let close = parser.next_token().1.end;
+        return Expr::Struct(
+            namespace,
+            Box::from(fields),
+            (start, close).into(),
+            type_args,
+            base,
+        );
     }
     loop {
         // `..base` closes the literal: every field it does not write is taken

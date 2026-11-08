@@ -34,6 +34,7 @@ use ariadne::Label;
 use ariadne::Report;
 use ariadne::ReportKind;
 use blocks::parse_condition_block;
+use blocks::parse_const;
 use blocks::parse_enum_declare;
 use blocks::parse_eval_block;
 use blocks::parse_for_loop;
@@ -103,6 +104,8 @@ struct Parser<'a> {
     /// placed right after it: `let (a, b) = t;` is a declaration of the tuple
     /// and then one of each name.
     pending_statements: Vec<Expr>,
+    /// The indices in the file's items of its `const` declarations.
+    consts: Vec<usize>,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -415,7 +418,11 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
     #[cfg(debug_assertions)]
     panic!();
 
-    #[cfg(not(any(debug_assertions, all(target_arch = "wasm32", target_os = "unknown"), feature = "embed")))]
+    #[cfg(not(any(
+        debug_assertions,
+        all(target_arch = "wasm32", target_os = "unknown"),
+        feature = "embed"
+    )))]
     std::process::exit(1);
 
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -763,6 +770,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         inactive: parser.inactive,
         loops: parser.loops,
         pending_statements: Vec::new(),
+        consts: Vec::new(),
     };
     let expr = parse_expr(&mut sub);
     if sub.peek_token_opt().is_some() {
@@ -1348,7 +1356,22 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
         }
         parser.next_token();
         let mut items: Vec<(SmolStr, Span)> = Vec::new();
+        // `{ * }`: every item of the module.
+        if parser.peek_token() == Token::OpMul {
+            let star = parser.next_token().1;
+            end = parser
+                .next_token_expect(
+                    Token::RBrace,
+                    "A glob import is written { * }, with nothing else in the braces",
+                )
+                .end;
+            binding = Some(ImportBinding::Glob(star));
+        }
+        let glob = binding.is_some();
         loop {
+            if glob {
+                break;
+            }
             let (token, span) = parser.next_token();
             match token {
                 Token::RBrace => {
@@ -1389,11 +1412,13 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
                 }
             }
         }
-        if items.is_empty() {
-            cold_path();
-            parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
+        if !matches!(binding, Some(ImportBinding::Glob(_))) {
+            if items.is_empty() {
+                cold_path();
+                parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
+            }
+            binding = Some(ImportBinding::Items(items.into_boxed_slice()));
         }
-        binding = Some(ImportBinding::Items(items.into_boxed_slice()));
     }
     // With neither, the module is bound under the last segment of its path:
     // `std/json` binds `json`, `./geometry.cdl` binds `geometry`.
@@ -1990,7 +2015,7 @@ fn parse_file(
     parser: &mut Parser<'_>,
     impls: &mut Vec<ImplTemplate>,
     attributes: &mut Vec<(usize, Box<[AttributeUse]>)>,
-) -> Vec<Expr> {
+) -> (Vec<Expr>, Vec<usize>) {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while parser.peek_token_opt().is_some() {
@@ -2001,7 +2026,12 @@ fn parse_file(
                 let span = parser.eof_span();
                 parser.error(span, ParserErr::AttributeWithoutItem);
             }
-            if !uses.is_empty() && !matches!(parser.peek_token(), Token::Function | Token::Struct) {
+            if !uses.is_empty()
+                && !matches!(
+                    parser.peek_token(),
+                    Token::Function | Token::Struct | Token::Enum
+                )
+            {
                 cold_path();
                 parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
             }
@@ -2019,7 +2049,7 @@ fn parse_file(
         }
         parse_item(parser, &mut output, impls);
     }
-    output
+    (output, std::mem::take(&mut parser.consts))
 }
 
 /// Parses one top-level declaration into `output`.
@@ -2030,6 +2060,13 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
     // A block on a generic type is kept as a template instead.
     if t == Token::Impl {
         parse_impl_block(parser, output, impls);
+        return;
+    }
+    if t == Token::Identifier("const") {
+        if parser.inactive == 0 {
+            parser.consts.push(output.len());
+        }
+        output.push(parse_const(parser));
         return;
     }
     output.push(match t {
@@ -2250,6 +2287,10 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
                 "An attribute parameter is a name, a ':' and its type, as in writes: type[].",
             );
             let ty = parse_attr_param_type(parser);
+            let optional = parser.peek_token() == Token::Question;
+            if optional {
+                parser.next_token();
+            }
             let default = if parser.peek_token() == Token::Equals {
                 parser.next_token();
                 Some(parse_attr_value(parser))
@@ -2260,6 +2301,7 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
                 name: SmolStr::new(param),
                 ty,
                 default,
+                optional,
                 span: (param_span.start, parser.last_token_end as u32).into(),
             });
             if parser.peek_token() == Token::Comma {
@@ -2286,14 +2328,15 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
     let target = match t {
         Token::Function => AttributeTargetKind::Fn,
         Token::Struct => AttributeTargetKind::Struct,
+        Token::Enum => AttributeTargetKind::Enum,
         other => {
             cold_path();
             parser.error(
                 target_span,
                 ParserErr::UnexpectedTokenStr(
-                    "'fn' or 'struct'",
+                    "'fn', 'struct' or 'enum'",
                     other,
-                    "An attribute goes on a function or a struct.",
+                    "An attribute goes on a function, a struct or an enum.",
                 ),
             );
         }
@@ -2345,6 +2388,10 @@ fn parse_attr_param_type(parser: &mut Parser<'_>) -> AttrParamTypeExpr {
         Token::Identifier("type") => {
             parser.next_token();
             AttrParamTypeExpr::Type
+        }
+        Token::Enum => {
+            parser.next_token();
+            AttrParamTypeExpr::AnyEnum
         }
         _ => return AttrParamTypeExpr::Value(parse_type(parser)),
     };
@@ -2433,6 +2480,8 @@ pub struct ParsedFile {
     /// The attributes other than `@cfg` written in front of an item, by the
     /// item's index in `code`, in order.
     pub attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    /// The indices in `code` of the functions that are `const` declarations.
+    pub consts: Vec<usize>,
 }
 
 #[must_use]
@@ -2451,14 +2500,16 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             inactive: 0,
             loops: 0,
             pending_statements: Vec::new(),
+            consts: Vec::new(),
         },
         &mut impls,
         &mut attributes,
     );
     ParsedFile {
-        code,
+        code: code.0,
         impls,
         attributes,
+        consts: code.1,
     }
 }
 

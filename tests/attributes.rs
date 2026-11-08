@@ -147,8 +147,8 @@ fn main() {}
         .arg("after")
         .and_then(AttributeValue::as_list)
         .unwrap();
-    assert!(matches!(&after[0], AttributeValue::Fn(f) if f == "step"));
-    assert!(matches!(&after[1], AttributeValue::Fn(f) if f == "helper"));
+    assert!(matches!(&after[0], AttributeValue::Fn { name, .. } if name == "step"));
+    assert!(matches!(&after[1], AttributeValue::Fn { name, .. } if name == "helper"));
     let Some(AttributeValue::Variant { name, .. }) = later.arg("phase") else {
         panic!("phase defaults to a variant");
     };
@@ -370,4 +370,109 @@ fn main() {}
     assert!(
         matches!(&table.attributes[0].target, AttributeTarget::Fn { name, .. } if name == "kept")
     );
+}
+
+/// An attribute declared `on enum` goes on an enum declaration and records
+/// the enum's id; a parameter typed `enum` takes a variant of any enum the
+/// script declares; a parameter written `T?` may be left out, and is then
+/// absent from the table; and a function argument carries the function's
+/// parameters and declared return type.
+#[test]
+fn enum_targets_any_enum_parameters_and_function_signatures() {
+    let src = r#"
+host "flow" {
+    attribute state on enum;
+    attribute stage(in_state: enum[] = [], on_enter: enum?, run_if: fn[] = []) on fn;
+}
+
+@state
+enum Phase { Ready, Playing, Over }
+
+enum Mode { Easy, Hard }
+
+fn playing(level: int, label) -> bool { return level > 0; }
+
+@stage(in_state: [Phase::Playing, Mode::Hard], on_enter: Phase::Over, run_if: [playing])
+fn crash() {}
+
+@stage
+fn idle() {}
+
+fn main() {}
+"#;
+    let program = Engine::new().compile(src, "flow.cdl").unwrap();
+    let table = program.attributes();
+    let state = &table.attributes[0];
+    let AttributeTarget::Enum(phase) = state.target else {
+        panic!("state goes on an enum");
+    };
+    assert_eq!(table.enums[phase as usize].name, "Phase");
+
+    let crash = &table.attributes[1];
+    let in_state = crash
+        .arg("in_state")
+        .and_then(AttributeValue::as_list)
+        .unwrap();
+    let names: Vec<(&str, &str)> = in_state
+        .iter()
+        .map(|v| match v {
+            AttributeValue::Variant { enum_id, name } => {
+                (table.enums[*enum_id as usize].name.as_str(), name.as_str())
+            }
+            other => panic!("{other:?} is not a variant"),
+        })
+        .collect();
+    assert_eq!(names, [("Phase", "Playing"), ("Mode", "Hard")]);
+    assert!(
+        matches!(crash.arg("on_enter"), Some(AttributeValue::Variant { name, .. }) if name == "Over")
+    );
+    let run_if = crash
+        .arg("run_if")
+        .and_then(AttributeValue::as_list)
+        .unwrap();
+    let AttributeValue::Fn { name, params, ret } = &run_if[0] else {
+        panic!("run_if holds functions");
+    };
+    assert_eq!(name, "playing");
+    assert_eq!(params.len(), 2);
+    assert!(matches!(params[0].1, DataType::Int));
+    assert!(matches!(params[1].1, DataType::Unknown));
+    assert!(matches!(ret, DataType::Bool));
+
+    let idle = &table.attributes[2];
+    assert!(idle.arg("on_enter").is_none());
+    assert!(idle.arg("in_state").is_some());
+}
+
+/// A variant with a payload, a name that is no variant, and an attribute on
+/// the wrong kind of declaration are compile errors.
+#[test]
+fn enum_attribute_errors() {
+    let decl = r#"
+host "flow" {
+    attribute state on enum;
+    attribute stage(on_enter: enum?) on fn;
+}
+enum Phase { Ready, Hit(int) }
+"#;
+    for (body, code) in [
+        (
+            "@stage(on_enter: Phase::Hit)\nfn f() {}",
+            "attribute_bad_argument",
+        ),
+        (
+            "@stage(on_enter: Phase::Gone)\nfn f() {}",
+            "attribute_bad_argument",
+        ),
+        ("@stage(on_enter: 3)\nfn f() {}", "attribute_bad_argument"),
+        ("@state\nstruct S { n: int = 0 }", "attribute_wrong_target"),
+        ("@stage\nenum E { A }", "attribute_wrong_target"),
+    ] {
+        let src = format!("{decl}{body}\nfn main() {{}}\n");
+        let code_found = match Engine::new().compile(&src, "flow.cdl") {
+            Ok(_) => panic!("{body} compiles, and should not"),
+            Err(d) => d.code,
+        };
+        assert_eq!(code_found, code, "{body}");
+    }
 }

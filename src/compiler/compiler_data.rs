@@ -111,6 +111,9 @@ impl std::fmt::Display for NamedType<'_> {
 #[derive(Debug)]
 pub struct Function {
     pub name: SmolStr,
+    /// Declared with `const NAME: T = expr;`: a bare `NAME` reads it, which
+    /// calls it, rather than naming the function as a value.
+    pub is_const: bool,
     pub args: Box<[(SmolStr, Option<DataType>)]>,
     pub code: Rc<[Expr]>,
     pub impls: Vec<FunctionImpl>,
@@ -395,6 +398,9 @@ pub struct State<'a> {
     /// diagnostic uses and the type the body returns, which is what a `?`
     /// in it has to hand back.
     pub fn_returns: Vec<(SmolStr, DataType)>,
+    /// The `-> Type` each body in `fn_returns` declares, as written, so a list
+    /// or map literal it returns can take `any` from it.
+    pub declared_returns: Vec<Option<DataType>>,
     /// The names an `is` being compiled binds that a closure in their scope
     /// captures, so each is bound in a cell. Set by whatever compiles the
     /// condition, which is what knows the scope.

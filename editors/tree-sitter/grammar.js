@@ -99,9 +99,22 @@ module.exports = grammar({
         $.function_declaration,
         $.struct_declaration,
         $.enum_declaration,
+        $.const_declaration,
         $.impl_block,
         $.dylib_block,
         $.host_block,
+      ),
+
+    // `const NAME: Type = value;`: a bare NAME reads the value.
+    const_declaration: ($) =>
+      seq(
+        'const',
+        field('name', $.identifier),
+        ':',
+        field('type', $._type),
+        '=',
+        field('value', $._expression),
+        ';',
       ),
 
     // ------------------------------------------------------------------
@@ -167,8 +180,13 @@ module.exports = grammar({
         ';',
       ),
 
+    // `{ eq, ne }` names items; `{ * }` brings in every item of the module.
     import_items: ($) =>
-      seq('{', sepBy1(',', field('item', $.identifier)), optional(','), '}'),
+      seq(
+        '{',
+        choice(seq(sepBy1(',', field('item', $.identifier)), optional(',')), field('glob', '*')),
+        '}',
+      ),
 
     function_declaration: ($) =>
       seq(
@@ -304,7 +322,7 @@ module.exports = grammar({
           seq('(', sepByTrailing(',', $.attribute_parameter), ')'),
         ),
         'on',
-        field('target', choice('fn', 'struct')),
+        field('target', choice('fn', 'struct', 'enum')),
         ';',
       ),
 
@@ -312,12 +330,16 @@ module.exports = grammar({
       seq(
         field('name', $.identifier),
         ':',
-        field('type', choice($._type, $.function_reference_type)),
+        field('type', choice($._type, $.function_reference_type, $.enum_reference_type)),
+        optional(field('optional', '?')),
         optional(seq('=', field('default', $._attribute_value))),
       ),
 
     // `fn` or `fn[]`: a parameter that takes the name of a function.
     function_reference_type: (_) => seq('fn', repeat(seq('[', ']'))),
+
+    // `enum` or `enum[]`: a parameter that takes a variant of any enum.
+    enum_reference_type: (_) => seq('enum', repeat(seq('[', ']'))),
 
     // `int add(int, int);`, or `log(string);` for a function returning null.
     // Parameters are types only; `...` marks a variadic host function.
@@ -506,12 +528,12 @@ module.exports = grammar({
     while_statement: ($) =>
       seq('while', field('condition', $._expression), field('body', $.block)),
 
-    // `for x in list`, `for i in low..high`, and `for i in ..high`, which
-    // counts from zero.
+    // `for x in list`, `for (a, b) in pairs`, `for i in low..high`, and
+    // `for i in ..high`, which counts from zero.
     for_statement: ($) =>
       seq(
         'for',
-        field('binding', $.identifier),
+        field('binding', choice($.identifier, $.tuple_pattern)),
         'in',
         field('iterable', choice($.range_expression, $._expression)),
         field('body', $.block),

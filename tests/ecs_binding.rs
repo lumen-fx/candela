@@ -225,7 +225,7 @@ fn fn_names(value: &AttributeValue) -> Vec<String> {
         .unwrap_or_default()
         .iter()
         .filter_map(|v| match v {
-            AttributeValue::Fn(name) => Some(name.clone()),
+            AttributeValue::Fn { name, .. } => Some(name.clone()),
             _ => None,
         })
         .collect()
@@ -240,7 +240,7 @@ impl Binding {
                 .named("ecs", name)
                 .filter_map(|a| match a.target {
                     AttributeTarget::Struct(id) => Some(id),
-                    AttributeTarget::Fn { .. } => None,
+                    AttributeTarget::Fn { .. } | AttributeTarget::Enum(_) => None,
                 })
                 .collect()
         };
@@ -253,7 +253,7 @@ impl Binding {
                 AttributeTarget::Struct(id) => {
                     Some((id, struct_names(a.arg("without").unwrap(), table)))
                 }
-                AttributeTarget::Fn { .. } => None,
+                AttributeTarget::Fn { .. } | AttributeTarget::Enum(_) => None,
             })
             .collect();
 
@@ -610,7 +610,7 @@ fn systems_run_on_a_built_artifact() {
         .named("ecs", "system")
         .map(|a| match &a.target {
             AttributeTarget::Fn { name, .. } => name.clone(),
-            AttributeTarget::Struct(_) => unreachable!(),
+            AttributeTarget::Struct(_) | AttributeTarget::Enum(_) => unreachable!(),
         })
         .collect();
     assert_eq!(

@@ -175,7 +175,7 @@
         },
         {
           "name": "storage.type.candela",
-          "match": "\\b(fn|let|struct|enum|impl)\\b"
+          "match": "\\b(fn|let|const|struct|enum|impl)\\b"
         }
       ]
     },

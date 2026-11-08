@@ -71,6 +71,7 @@ use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
+use expr::const_read;
 use expr::mangle_method;
 use expr::tuple_let_pattern;
 use functions::handle_functions;
@@ -2257,7 +2258,7 @@ fn compile_map_literal(
                 global_key_type = key_t;
                 global_val_type = val_t;
             } else {
-                if key_t != global_key_type {
+                if key_t != global_key_type && !mixed_keys {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -2268,7 +2269,7 @@ fn compile_map_literal(
                         state.type_names(),
                     )
                 }
-                if val_t != global_val_type {
+                if val_t != global_val_type && !mixed_values {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -5178,6 +5179,7 @@ fn compile_function_definition(
         })
     });
     state.fns.push(Function {
+        is_const: false,
         name: fn_name.clone(),
         args,
         code: fn_code.clone(),
@@ -5235,6 +5237,14 @@ fn compile_return(
     {
         let span = state.fns[fn_id as usize].name_span;
         check_declared_fn(x, declared, span, output, v, ctx, state);
+    }
+    // A list or map literal returned from a function declared to return
+    // `any[]` (or a map of `any`) may mix types, as one written into a `let`
+    // declared that way may.
+    if matches!(x, Expr::Array(..) | Expr::Map(..))
+        && let Some(Some(declared)) = state.declared_returns.last().cloned()
+    {
+        state.mark_literal_target(x, &declared);
     }
     let mut id = if matches!(declared_fn, Some(DataType::FnValue(_))) {
         compile_fn_value(x, v, ctx, state, output, None)
@@ -5647,6 +5657,20 @@ impl Expr {
                     } else {
                         Some(var.register_id)
                     }
+                } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name)
+                    && state.fns[fn_id].is_const
+                {
+                    // A constant is read by calling it.
+                    const_read(name, *span).compile_form(
+                        v,
+                        ctx,
+                        state,
+                        output,
+                        tgt_id,
+                        var_assignment,
+                        remaining_code,
+                        uses_id,
+                    )
                 } else if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], name) {
                     // A bare name that names a function is the function itself
                     // wherever it is read rather than called, so a `let`, a
@@ -6528,6 +6552,9 @@ pub struct Namespace {
     /// For a module bound by an import, its path as the import wrote it
     /// (`std/json`, `./geometry.cdl`), for a message to name it by.
     pub import_path: SmolStr,
+    /// Names two glob imports both bring in, with the modules they come from.
+    /// Using one is an error; declaring one of the file's own resolves it.
+    pub ambiguous: Vec<(SmolStr, SmolStr, SmolStr)>,
 }
 
 /// The scope of every file in the program, keyed by its index in `sources`.
@@ -6912,6 +6939,7 @@ fn load_prelude(
         parse_toplevel(
             parsed.code,
             parsed.attributes,
+            &parsed.consts,
             attrs,
             &path,
             child_src_idx,
@@ -7243,6 +7271,7 @@ fn bind_import(
     file_path: &Path,
     module_display: &SmolStr,
     merged_symbol_origins: &mut Vec<(SmolStr, SmolStr)>,
+    globbed: &mut Vec<(SmolStr, SmolStr)>,
     span: Span,
     src_file_idx: u16,
     sources: &[Source],
@@ -7309,6 +7338,12 @@ fn bind_import(
                     Vec::new()
                 };
                 for (name, kind) in found.into_iter().chain(methods) {
+                    // A name a glob brought in gives way to one the file names.
+                    if let Some(at) = globbed.iter().position(|(n, _)| *n == name) {
+                        globbed.remove(at);
+                        namespace.symbols.retain(|(n, _)| *n != name);
+                        namespace.ambiguous.retain(|(n, _, _)| *n != name);
+                    }
                     if let Some((_, existing)) = namespace.symbols.iter().find(|(n, _)| *n == name)
                     {
                         // The same underlying symbol arriving through two
@@ -7337,6 +7372,51 @@ fn bind_import(
                 }
             }
         }
+        ImportBinding::Glob(_) => {
+            // Types the file declares itself: their own methods stay theirs,
+            // and the imported type's methods do not attach to them.
+            let shadowed_types: Vec<SmolStr> = exports
+                .symbols
+                .iter()
+                .filter(|(name, kind)| {
+                    !matches!(kind, SymbolKind::Fn(_))
+                        && !globbed.iter().any(|(g, _)| g == name)
+                        && namespace.symbols.iter().any(|(n, _)| n == name)
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            for (name, kind) in exports.symbols {
+                if (name == "main" && matches!(kind, SymbolKind::Fn(_)))
+                    || name.starts_with(type_system::ANON_FN_PREFIX)
+                {
+                    continue;
+                }
+                if let Some((type_name, _)) = name.split_once(METHOD_SEP)
+                    && shadowed_types.iter().any(|t| t == type_name)
+                {
+                    continue;
+                }
+                match namespace.symbols.iter().find(|(n, _)| *n == name) {
+                    None if namespace.ambiguous.iter().any(|(n, _, _)| *n == name) => {}
+                    None => {
+                        globbed.push((name.clone(), module_display.clone()));
+                        namespace.symbols.push((name, kind));
+                    }
+                    Some((_, existing)) if symbol_ids_equal(*existing, kind) => {}
+                    Some(_) => {
+                        // Another glob brought this name in: neither wins.
+                        if let Some(at) = globbed.iter().position(|(n, _)| *n == name) {
+                            let (_, first) = globbed[at].clone();
+                            namespace.symbols.retain(|(n, _)| *n != name);
+                            namespace
+                                .ambiguous
+                                .push((name, first, module_display.clone()));
+                        }
+                        // Otherwise the file declares or names it: it shadows.
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -7361,6 +7441,7 @@ fn exported_names(exports: &Namespace) -> Vec<SmolStr> {
 fn parse_toplevel(
     code: Vec<Expr>,
     item_attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    consts: &[usize],
     attrs: &mut PendingAttributes,
     file_path: &Path,
     src_file_idx: u16,
@@ -7421,6 +7502,7 @@ fn parse_toplevel(
 
                 let fn_id = fns.len() as u16;
                 fns.push(Function {
+                    is_const: consts.contains(&index),
                     name: fn_name.clone(),
                     args: Box::new([]),
                     code: fn_code,
@@ -7545,6 +7627,14 @@ fn parse_toplevel(
                 ));
             }
             Expr::EnumDeclare(name, variants, span, type_params) => {
+                if let Some(uses) = uses {
+                    let target = if type_params.is_empty() {
+                        UseTarget::Enum(enums.len() as u16)
+                    } else {
+                        UseTarget::Generic(AttributeTargetKind::Enum)
+                    };
+                    attrs.uses.push((src_file_idx, target, uses));
+                }
                 if !type_params.is_empty() {
                     let template = generics.add_enum_template(
                         name.clone(),
@@ -7595,6 +7685,9 @@ fn parse_toplevel(
     // Names merged into this file's scope by bare imports, with the module
     // each came from; consulted to report both sources on a collision.
     let mut merged_symbol_origins: Vec<(SmolStr, SmolStr)> = Vec::new();
+    // Names glob imports brought in, with the module each came from: a
+    // later explicit item replaces one, and a second glob makes it ambiguous.
+    let mut globbed: Vec<(SmolStr, SmolStr)> = Vec::new();
 
     for import in imports {
         match import {
@@ -7796,6 +7889,7 @@ fn parse_toplevel(
                     parse_toplevel(
                         parsed.code,
                         parsed.attributes,
+                        &parsed.consts,
                         attrs,
                         &file_path,
                         child_src_idx,
@@ -7840,6 +7934,7 @@ fn parse_toplevel(
                     &file_path,
                     &module_display,
                     &mut merged_symbol_origins,
+                    &mut globbed,
                     span,
                     src_file_idx,
                     sources,
@@ -8412,6 +8507,7 @@ pub fn compile_profile(
     parse_toplevel(
         parsed.code,
         parsed.attributes,
+        &parsed.consts,
         &mut pending_attributes,
         &main_path,
         0,
@@ -8510,6 +8606,7 @@ pub fn compile_profile(
         indirect_registers: &mut indirect_registers,
         propagations: Vec::new(),
         fn_returns: Vec::new(),
+        declared_returns: Vec::new(),
         captured_binders: Vec::new(),
         string_slots: StringSlots::default(),
         chain_values: Vec::new(),

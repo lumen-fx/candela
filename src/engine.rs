@@ -582,7 +582,11 @@ impl Program {
         // the host never passed.
         // An enum goes in only where a struct field or list element declares
         // its type; a bare one names no enum to build.
-        if let Some((index, value)) = args.iter().enumerate().find(|(_, v)| matches!(v, Value::Enum { .. })) {
+        if let Some((index, value)) = args
+            .iter()
+            .enumerate()
+            .find(|(_, v)| matches!(v, Value::Enum { .. }))
+        {
             return Err(self.argument_error(
                 fn_name,
                 index,
@@ -811,6 +815,7 @@ impl Program {
             indirect_registers: &mut self.indirect_registers,
             propagations: Vec::new(),
             fn_returns: Vec::new(),
+            declared_returns: Vec::new(),
             captured_binders: Vec::new(),
             string_slots: StringSlots::default(),
             chain_values: Vec::new(),

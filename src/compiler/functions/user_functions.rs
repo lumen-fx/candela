@@ -787,6 +787,9 @@ fn compile_function(
         .as_ref()
         .and_then(|(declared, _)| return_check(declared, state));
     state.fn_returns.push((shown_name, body_returns));
+    state
+        .declared_returns
+        .push(declared_return.as_ref().map(|(t, _)| t.clone()));
     let parsed = {
         let _body = CompilingBody::enter(function_id);
         compile_expr(
@@ -805,6 +808,7 @@ fn compile_function(
         )
     };
     state.fn_returns.pop();
+    state.declared_returns.pop();
     state.generics.pop_bindings();
     for i in anon_fns.into_iter().rev() {
         state.scope_mut(fn_file_idx).symbols.remove(i);
