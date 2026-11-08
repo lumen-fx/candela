@@ -5637,6 +5637,82 @@ pub fn diagnostics_break_and_continue_outside_a_loop() {
     assert_eq!(run_output(src), "2\n");
 }
 
+/// `break`, `continue`, `return` and `throw` stand as a match arm's
+/// expression the way they stand in a braced arm, in every kind of loop and in
+/// a match nested in another, and `break` or `continue` there outside a loop
+/// is still an error.
+#[test]
+pub fn a_match_arm_can_be_a_jump() {
+    let src = "
+        fn first_over(xs: int[], limit: int) -> int {
+            for x in xs {
+                match x > limit { true => return x, _ => {} }
+            }
+            return -1;
+        }
+        fn checked(x: int) -> int {
+            match x { 0 => throw \"zero\", _ => {} }
+            return x;
+        }
+        fn skip_one(x: int) {
+            match x { 1 => return, _ => {} }
+            print(x);
+        }
+        fn main() {
+            let i = 0;
+            let odd = 0;
+            while i < 10 {
+                i += 1;
+                match i % 2 { 0 => continue, _ => {} }
+                odd += 1;
+                match i { 7 => break, _ => {} }
+            }
+            print(i, odd);
+            let seen = 0;
+            for x in 0..100 {
+                match x { 5 => break, 2 => continue, _ => { seen += 1; } }
+            }
+            print(seen);
+            let n = 0;
+            loop {
+                n += 1;
+                match n % 3 {
+                    0 => { match n { 9 => break, _ => continue } }
+                    _ => {}
+                }
+            }
+            print(n);
+            let k = 0;
+            loop {
+                k += 1;
+                match k { 1 => {} 2 => {} _ => break }
+            }
+            print(k);
+            print(first_over([1, 5, 9], 4), first_over([1], 4));
+            try { checked(0); } catch e { print(e); }
+            skip_one(1);
+            skip_one(2);
+        }
+    ";
+    assert_eq!(run_output(src), "7\n4\n4\n9\n3\n5\n-1\nzero\n2\n");
+    for (src, wanted) in [
+        ("fn main() { match 1 { 1 => break, _ => {} } }", "break"),
+        (
+            "fn main() { match 1 { 1 => {} _ => continue } }",
+            "continue",
+        ),
+        (
+            "fn main() { for i in 0..3 { let g = fn() { match i { 1 => break, _ => {} } }; g(); } }",
+            "break",
+        ),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "outside_loop", "{src}");
+        assert_eq!(&src[d.span], wanted, "{src}");
+    }
+}
+
 /// A value that is not a function, passed where a parameter declares one, is
 /// the argument mismatch it is rather than a value the body calls through.
 #[test]

@@ -61,7 +61,8 @@ is `@cfg(...)` or a declared one named behind its module, with named
 arguments (`@ecs::system(writes: [Position])`). Statements: `let`, assignment and its
 compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
 range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks. `match` stands alone or gives a
-value, its arms take a block or an expression, and `|` separates a pattern's
+value, its arms take a block, an expression, or `break`, `continue`, `return`
+or `throw`, and `|` separates a pattern's
 alternatives. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates
 before it raises; calls, method calls, field access, indexing, slicing and the

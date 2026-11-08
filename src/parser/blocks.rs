@@ -20,6 +20,7 @@ use crate::parser::Parser;
 use crate::parser::TypeExpr;
 use crate::parser::parse_attributes;
 use crate::parser::parse_code;
+use crate::parser::parse_jump;
 use crate::parser::parse_type;
 use crate::parser::parse_type_args;
 use crate::parser::parse_type_params;
@@ -820,9 +821,10 @@ fn parse_match_patterns(parser: &mut Parser<'_>) -> Box<[Expr]> {
 }
 
 /// The body after an arm's `=>`: a braced block, or an expression followed by
-/// the `,` that separates it from the next arm. The `,` is optional before
-/// the closing brace, and `last` says the wildcard arm is being read, which
-/// the closing brace always follows.
+/// the `,` that separates it from the next arm. In a statement the
+/// expression can be `return`, `throw`, `break` or `continue`. The `,` is
+/// optional before the closing brace, and `last` says the wildcard arm is
+/// being read, which the closing brace always follows.
 fn parse_match_arm_body(parser: &mut Parser<'_>, is_value: bool, last: bool) -> Vec<Expr> {
     if parser.peek_token() == Token::LBrace {
         return if is_value {
@@ -831,7 +833,12 @@ fn parse_match_arm_body(parser: &mut Parser<'_>, is_value: bool, last: bool) -> 
             parse_block(parser)
         };
     }
-    let value = parse_expr(parser);
+    let peek = parser.peek_token();
+    let value = if is_value {
+        parse_expr(parser)
+    } else {
+        parse_jump(parser, peek).unwrap_or_else(|| parse_expr(parser))
+    };
     match parser.peek_token_opt() {
         Some(Token::Comma) => {
             parser.next_token();
