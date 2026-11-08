@@ -1,9 +1,9 @@
 [package]
 name = "js"
-version = "0.2.0"
+version = "0.2.1"
 description = "The page's own JavaScript: global functions and values, modules loaded at run time, DOM events"
 entry = "src/js.cdl"
-candela = ">=0.2.0"
+candela = ">=0.2.1"
 
 [dependencies]
 
