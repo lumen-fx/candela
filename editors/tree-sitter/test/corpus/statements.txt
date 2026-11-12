@@ -514,3 +514,34 @@ fn main() {
           (type_identifier)
           (type_identifier))
         (identifier)))))
+
+================================================================================
+For loops with a tuple pattern
+================================================================================
+
+fn main() {
+    for (a, (b, _)) in pairs {
+        print(a);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (for_statement
+        (tuple_pattern
+          (identifier)
+          (tuple_pattern
+            (identifier)
+            (identifier)))
+        (identifier)
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))))))))

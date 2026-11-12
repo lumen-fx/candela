@@ -1019,3 +1019,68 @@ struct Edge {
                 (tuple_type
                   (type_identifier)
                   (type_identifier))))))))))
+
+================================================================================
+Glob imports, constants and enum attributes
+================================================================================
+
+import "drift" { * };
+
+const GROUND: float = 400.0;
+
+host "drift" {
+    attribute state on enum;
+    attribute system(in_state: enum[] = [], on_enter: enum?) on fn;
+}
+
+@state
+enum Phase { Ready, Over }
+
+@system(on_enter: Phase::Over)
+fn crash() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (string_literal)
+    (import_items))
+  (const_declaration
+    (identifier)
+    (type_identifier)
+    (float_literal))
+  (host_block
+    (string_literal)
+    (signature_list
+      (attribute_declaration
+        (identifier))
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (enum_reference_type)
+          (attribute_list))
+        (attribute_parameter
+          (identifier)
+          (enum_reference_type)))))
+  (attribute
+    (identifier))
+  (enum_declaration
+    (identifier)
+    (enum_variant_list
+      (enum_variant
+        (identifier))
+      (enum_variant
+        (identifier))))
+  (attribute
+    (identifier)
+    (attribute_arguments
+      (attribute_argument
+        (identifier)
+        (qualified_type
+          (type_identifier)
+          (type_identifier)))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block)))
