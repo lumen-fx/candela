@@ -16,6 +16,7 @@
   "dylib"
   "else"
   "enum"
+  "export"
   "fn"
   "for"
   "host"
