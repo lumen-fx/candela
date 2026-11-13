@@ -838,9 +838,16 @@ impl<'a> Infer<'a> {
                 {
                     return ret;
                 }
-                // A variant built with its payload.
-                if path.len() >= 2 && self.summary.enum_named(path[path.len() - 2]).is_some() {
-                    return Ty::Named(path[path.len() - 2].to_owned());
+                if path.len() >= 2 {
+                    let owner = path[path.len() - 2];
+                    // A function of an `impl` block, called through its type.
+                    if let Some(m) = self.summary.method(owner, last) {
+                        return m.ret.as_deref().map_or(Ty::Unknown, Ty::parse);
+                    }
+                    // A variant built with its payload.
+                    if self.summary.enum_named(owner).is_some() {
+                        return Ty::Named(owner.to_owned());
+                    }
                 }
                 Ty::Unknown
             }
@@ -867,11 +874,6 @@ impl<'a> Infer<'a> {
                 }
                 if let Some(b) = self.scope.get(last) {
                     return self.binding(b);
-                }
-                if last == "self"
-                    && let Some(t) = &self.scope.impl_type
-                {
-                    return Ty::Named(t.clone());
                 }
                 if let Some(f) = self.summary.function(last)
                     && f.is_const
@@ -937,4 +939,69 @@ fn builtin_return(table: &[(&str, &str)], name: &str) -> Option<Ty> {
     let first = doc.lines().next()?;
     let ret = first.rsplit_once("->")?.1.trim();
     Some(Ty::parse(ret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Tokens, Ty, scope_at};
+
+    #[test]
+    fn types_read_from_text() {
+        let named = |s: &str| Ty::Named(s.to_owned());
+        assert_eq!(
+            Ty::parse("{string: int}"),
+            Ty::Map(Box::new(named("string")), Box::new(named("int")))
+        );
+        assert_eq!(Ty::parse("{string: int}").render(), "{string: int}");
+        assert_eq!(Ty::parse("fn(int) -> int"), Ty::Unknown);
+        assert_eq!(Ty::parse("fn()"), Ty::Unknown);
+        assert_eq!(Ty::parse("geo::Point"), named("Point"));
+        assert_eq!(Ty::parse("int | string"), Ty::Unknown);
+        assert_eq!(Ty::parse("Vec2?"), named("Vec2"));
+        assert_eq!(Ty::parse("(int)"), named("int"));
+        assert_eq!(Ty::parse("Cell<int, (A, B)>"), named("Cell<int, (A, B)>"));
+        assert_eq!(Ty::parse("Cell<int"), named("Cell<int>"));
+        assert_eq!(Ty::parse("!"), Ty::Unknown);
+        assert_eq!(Ty::Unknown.render(), "any");
+        assert_eq!(Ty::parse("{string: int}").element(), named("string"));
+        assert_eq!(named("string").element(), named("string"));
+        assert_eq!(named("int").element(), Ty::Unknown);
+    }
+
+    #[test]
+    fn tokens_and_brackets() {
+        let toks = Tokens::new("a(b, [c]) // done\nx");
+        assert!(toks.in_comment_or_string(13));
+        assert_eq!(toks.closing(1), 7);
+        assert_eq!(toks.opening(7), Some(1));
+        assert_eq!(toks.opening(0), None);
+        assert_eq!(Tokens::new("f(").closing(1), 2);
+        // A space between two tokens is covered by neither.
+        let gap = Tokens::new("a  b");
+        assert_eq!(gap.at(2), None);
+        assert_eq!(Tokens::new("a.b").at(1), Some(0));
+        assert_eq!(Tokens::new("a  .  b").at(3), Some(1));
+        // A chain stops at a brace that is no struct literal, and at an
+        // unmatched closer.
+        let block = Tokens::new("f() { }.y");
+        assert_eq!(block.chain_start(5), 5);
+        let stray = Tokens::new(") .y");
+        assert_eq!(stray.chain_start(1), 1);
+        let op = Tokens::new("a + .y");
+        assert_eq!(op.chain_start(2), 2);
+        let start = Tokens::new(".y");
+        assert_eq!(start.chain_start(0), 0);
+        assert!(Tokens::new("\"open").in_comment_or_string(3));
+    }
+
+    #[test]
+    fn scopes_of_generic_functions_and_untyped_parameters() {
+        let toks = Tokens::new("fn id<T>(x, y: T) {\n let a: int = 1;\n for z in w {");
+        let scope = scope_at(&toks, toks.toks.len());
+        let names: Vec<&str> = scope.bindings.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "y", "a", "z"]);
+        // A `for` with no `in` yet binds nothing.
+        let toks = Tokens::new("fn f() { for (a, b)");
+        assert!(scope_at(&toks, toks.toks.len()).bindings.is_empty());
+    }
 }

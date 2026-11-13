@@ -1814,3 +1814,384 @@ fn reset(birds: (Bird, Transform)[], game: Game, state: State<Phase>) {
         assert!(super::attribute_warnings(GAME, &s).is_empty());
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::{Ide, Symbol, hover_markdown};
+    use crate::analysis::{ProgramSummary, analyze};
+    use candela::compiler::imports::ImportResolver;
+
+    /// The forms `tests::GAME` leaves out: a required attribute parameter, a
+    /// constant, payload variants, functions without `self`, methods on an
+    /// enum, and the expressions a type is followed through.
+    const MORE: &str = r#"host "app" {
+    attribute settings(section: string) on struct;
+    attribute flagged(on: bool = true, weight: int = 1, tags: string[] = []) on fn;
+}
+
+const LIMIT: int = 3;
+
+// A shape on the board.
+enum Shape {
+    // Round.
+    Circle(float),
+    Square(float, float),
+    Dot,
+}
+impl Shape {
+    fn area(self) -> float { return 1.0; }
+}
+
+// Tuning read from the settings.
+@settings(section: "board")
+struct Board {
+    // How wide.
+    width: int = 4,
+    names: string[] = [],
+    lookup: {string: int} = {},
+}
+impl Board {
+    fn empty() -> Board { return Board { .. }; }
+    fn cell(self, i: int) -> (int, string) { return (i, "a"); }
+}
+
+fn pair(a, b) { return a + b; }
+
+struct Holder<T> { value: T }
+
+@flagged(weight: 2)
+fn run(board: Board, shape: Shape) {
+    let n: int = LIMIT;
+    let (i, name) = board.cell(1);
+    let names = board.names;
+    let first = board.names[0];
+    let count = board.lookup["a"];
+    let all = [1.5, 2.5];
+    let both = (1, "x");
+    let neg = -n;
+    let flag = !true;
+    let s = "abc";
+    let words = s.split(",");
+    let size = names.len();
+    let grown = Board { width: 9, .. }.width;
+    let any_n: any = n;
+    let as_int = any_n as int;
+    let total = pair(1, 2);
+    for k in 0..n {
+        print(k);
+    }
+    for w in names {
+        print(w);
+    }
+    let v = Shape::Circle(1.0);
+    let d = Shape::Dot;
+    let lim = LIMIT;
+    let cmp = n > 1;
+    let part = names[0..1];
+    let ch = s[0];
+    let table = board.lookup;
+    let second = both.1;
+    let held = Holder<int> { value: 1 };
+    let inner = held.value;
+    for key in table {
+        print(key);
+    }
+    print(shape.area() + float(size) + float(i) + all[0]);
+}
+"#;
+
+    fn summary() -> ProgramSummary {
+        let outcome = analyze(MORE, "more.cdl", &ImportResolver::new());
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        outcome.summary.expect("the program compiles")
+    }
+
+    fn edited(anchor: &str, edit: &str) -> (String, usize) {
+        assert!(MORE.contains(anchor), "{anchor}");
+        let text = MORE.replacen(anchor, edit, 1);
+        let at = text.find("$0").expect("the edit marks the cursor");
+        (text.replacen("$0", "", 1), at)
+    }
+
+    fn labels(s: &ProgramSummary, anchor: &str, edit: &str) -> Vec<String> {
+        let (text, at) = edited(anchor, edit);
+        let mut items = Ide::new(&text, s, at).completions();
+        items.sort_by(|a, b| {
+            let key = |i: &tower_lsp::lsp_types::CompletionItem| {
+                (
+                    i.sort_text.clone().unwrap_or_else(|| i.label.clone()),
+                    i.label.clone(),
+                )
+            };
+            key(a).cmp(&key(b))
+        });
+        items.into_iter().map(|i| i.label).collect()
+    }
+
+    /// The type a local's hover reports, at the local's declaration.
+    fn local_type(s: &ProgramSummary, name: &str) -> String {
+        let at = MORE
+            .lines()
+            .filter(|l| l.trim_start().starts_with("let "))
+            .find_map(|l| {
+                let pattern = l.split('=').next()?;
+                let col = pattern.match_indices(name).map(|(c, _)| c).find(|&c| {
+                    let word =
+                        |b: Option<u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_');
+                    !word(pattern.as_bytes().get(c + name.len()).copied())
+                        && !word(
+                            c.checked_sub(1)
+                                .and_then(|p| pattern.as_bytes().get(p).copied()),
+                        )
+                })?;
+                let line_start = MORE.find(l)?;
+                Some(line_start + col)
+            })
+            .expect("declared");
+        match Ide::new(MORE, s, at).symbol() {
+            Some(Symbol::Local { ty, .. }) => ty.render(),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn types_follow_expressions() {
+        let s = summary();
+        for (name, ty) in [
+            ("n", "int"),
+            ("i", "int"),
+            ("name", "string"),
+            ("names", "string[]"),
+            ("first", "string"),
+            ("count", "int"),
+            ("all", "float[]"),
+            ("both", "(int, string)"),
+            ("neg", "int"),
+            ("flag", "bool"),
+            ("s", "string"),
+            ("words", "string[]"),
+            ("size", "int"),
+            ("grown", "int"),
+            ("as_int", "int"),
+            ("total", "int"),
+            ("v", "Shape"),
+            ("d", "Shape"),
+            ("lim", "int"),
+            ("cmp", "bool"),
+            ("part", "string[]"),
+            ("ch", "string"),
+            ("table", "{string: int}"),
+            ("second", "string"),
+            ("held", "Holder<int>"),
+            ("inner", "int"),
+        ] {
+            assert_eq!(local_type(&s, name), ty, "{name}");
+        }
+        // Loop variables over a range and over a list.
+        let at = MORE.find("print(k)").expect("k") + 6;
+        assert!(
+            matches!(Ide::new(MORE, &s, at).symbol(), Some(Symbol::Local { ty, .. }) if ty.render() == "int")
+        );
+        let at = MORE.find("print(w)").expect("w") + 6;
+        assert!(
+            matches!(Ide::new(MORE, &s, at).symbol(), Some(Symbol::Local { ty, .. }) if ty.render() == "string")
+        );
+    }
+
+    #[test]
+    fn members_of_tuples_enums_and_builtins() {
+        let s = summary();
+        let anchor = "    let v = Shape::Circle(1.0);";
+        assert_eq!(labels(&s, anchor, "    both.$0"), vec!["0", "1"]);
+        assert_eq!(labels(&s, anchor, "    shape.$0"), vec!["area"]);
+        let words = labels(&s, anchor, "    s.$0");
+        assert!(
+            words.contains(&"split".to_owned()) && words.contains(&"len".to_owned()),
+            "{words:?}"
+        );
+        assert!(!words.contains(&"push".to_owned()), "{words:?}");
+        let list = labels(&s, anchor, "    names.$0");
+        assert!(
+            list.contains(&"push".to_owned()) && !list.contains(&"uppercase".to_owned()),
+            "{list:?}"
+        );
+        // A call's result and a struct literal chain like a name.
+        assert_eq!(
+            labels(&s, anchor, "    Board::empty().$0")[..3],
+            ["lookup", "names", "width"]
+        );
+        assert_eq!(labels(&s, anchor, "    board.cell(1).$0"), vec!["0", "1"]);
+        assert_eq!(labels(&s, anchor, "    (board).$0")[..1], ["lookup"]);
+    }
+
+    #[test]
+    fn paths_types_and_values() {
+        let s = summary();
+        let anchor = "    let v = Shape::Circle(1.0);";
+        // A struct's functions without `self`, after its name.
+        assert_eq!(labels(&s, anchor, "    let b = Board::$0"), vec!["empty"]);
+        // Variants with payloads, and the enum's methods without `self`.
+        assert_eq!(
+            labels(&s, anchor, "    let x = Shape::$0"),
+            vec!["Circle", "Square", "Dot"]
+        );
+        // Types after `->`, after `let x:` and in a struct declaration.
+        let types = labels(&s, "fn pair(a, b)", "fn pair(a, b) -> $0");
+        assert!(types.contains(&"Board".to_owned()) && types.contains(&"Shape".to_owned()));
+        assert!(labels(&s, anchor, "    let x: $0").contains(&"int".to_owned()));
+        assert!(labels(&s, "    width: int = 4,", "    width: $0").contains(&"Board".to_owned()));
+        assert!(labels(&s, anchor, "    let x: (int, $0").contains(&"Shape".to_owned()));
+        // A field's value: the enum's variants first.
+        let text = "    let b = Board { width: $0 };";
+        assert!(labels(&s, anchor, text).contains(&"LIMIT".to_owned()));
+    }
+
+    #[test]
+    fn attribute_arguments_of_every_kind() {
+        let s = summary();
+        let anchor = "@flagged(weight: 2)";
+        assert_eq!(
+            labels(&s, anchor, "@flagged(on: $0)"),
+            vec!["false", "true"]
+        );
+        assert!(labels(&s, anchor, "@flagged(weight: $0)").is_empty());
+        // The required parameter is written by the completion.
+        let (text, at) = edited(
+            "@settings(section: \"board\")",
+            "@$0\nstruct Other {}\n@settings(section: \"board\")",
+        );
+        let items = Ide::new(&text, &s, at).completions();
+        let settings = items
+            .iter()
+            .find(|i| i.label == "settings")
+            .expect("settings");
+        assert_eq!(
+            settings.insert_text.as_deref(),
+            Some("settings(section: ${1})")
+        );
+        // The top-level skeleton names it too.
+        let (text, at) = edited("fn pair(a, b)", "$0\nfn pair(a, b)");
+        let items = Ide::new(&text, &s, at).completions();
+        let skeleton = items
+            .iter()
+            .find(|i| i.label == "@settings struct")
+            .expect("skeleton");
+        assert!(
+            skeleton
+                .insert_text
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("@settings(section: ${2})")
+        );
+    }
+
+    #[test]
+    fn hover_on_every_kind_of_declaration() {
+        let s = summary();
+        let hover = |anchor: &str, edit: &str| {
+            let (text, at) = edited(anchor, edit);
+            Ide::new(&text, &s, at).hover().unwrap_or_default()
+        };
+        let anchor = "    let v = Shape::Circle(1.0);";
+        assert!(
+            hover(anchor, "    let v = Shape::Circ$0le(1.0);")
+                .contains("Shape::Circle(float)\n```\n\nRound.")
+        );
+        assert!(
+            hover(anchor, "    let v = Sha$0pe::Dot;")
+                .contains("enum Shape { Circle(float), Square(float, float), Dot }")
+        );
+        assert!(
+            hover("@flagged(weight: 2)", "@flagged(wei$0ght: 2)")
+                .contains("@flagged(weight: int = 1)")
+        );
+        assert!(
+            hover("@flagged(weight: 2)", "@flag$0ged(weight: 2)")
+                .contains("attribute flagged(on: bool = true")
+        );
+        assert!(hover(anchor, "    pri$0nt(1);").contains("(builtin)"));
+        assert!(hover(anchor, "    s.upper$0case();").contains("(builtin)"));
+        assert!(
+            hover("    width: int = 4,", "    wid$0th: int = 4,")
+                .contains("Board.width: int\n```\n\nHow wide.")
+        );
+        assert!(
+            hover(anchor, "    let x = Board { wid$0th: 1, .. };").contains("Board.width: int")
+        );
+        assert!(hover("fn pair(a, b)", "fn pa$0ir(a, b)").contains("Called as:"));
+        assert!(hover(anchor, "    let x = LIM$0IT;").contains("const LIMIT: int"));
+        assert!(hover(anchor, "    let x = Board::emp$0ty();").contains("fn empty() -> Board"));
+        assert!(hover("    fn area(self)", "    fn ar$0ea(self)").contains("impl Shape"));
+        assert!(
+            hover("struct Board {", "struct Bo$0ard {").contains("Tuning read from the settings.")
+        );
+    }
+
+    #[test]
+    fn definitions_of_types() {
+        let s = summary();
+        let def = |anchor: &str, edit: &str| {
+            let (text, at) = edited(anchor, edit);
+            match Ide::new(&text, &s, at).definition() {
+                Some(Ok(t)) => MORE[t.span.start as usize..t.span.end as usize].to_owned(),
+                Some(Err(_)) => "local".to_owned(),
+                None => String::new(),
+            }
+        };
+        let anchor = "    let v = Shape::Circle(1.0);";
+        assert_eq!(def(anchor, "    let v = Sha$0pe::Dot;"), "Shape");
+        assert_eq!(def(anchor, "    let v = Boa$0rd::empty();"), "Board");
+        assert_eq!(def(anchor, "    pri$0nt(1);"), "");
+    }
+
+    #[test]
+    fn signatures_of_methods_variants_and_builtins() {
+        let s = summary();
+        let sig = |anchor: &str, edit: &str| {
+            let (text, at) = edited(anchor, edit);
+            Ide::new(&text, &s, at)
+                .signature_help()
+                .map(|h| (h.signatures[0].label.clone(), h.active_parameter))
+        };
+        let anchor = "    let v = Shape::Circle(1.0);";
+        assert_eq!(
+            sig(anchor, "    board.cell($0"),
+            Some(("fn cell(i: int) -> (int, string)".to_owned(), Some(0)))
+        );
+        assert_eq!(
+            sig(anchor, "    let x = Shape::Square(1.0, $0"),
+            Some(("Shape::Square(float, float)".to_owned(), Some(1)))
+        );
+        assert_eq!(
+            sig(anchor, "    let x = Board::empty($0"),
+            Some(("fn empty() -> Board".to_owned(), Some(0)))
+        );
+        assert_eq!(
+            sig(anchor, "    print($0").map(|s| s.0),
+            Some("print(T)".to_owned())
+        );
+        assert_eq!(
+            sig(anchor, "    let x = Board { width: pair($0 }").map(|s| s.0),
+            Some("fn pair(a, b) -> int".to_owned())
+        );
+        assert_eq!(sig(anchor, "    pair(fn(x) { $0"), None);
+        assert_eq!(
+            sig("@flagged(weight: 2)", "@flagged(weight: 2, $0)").and_then(|s| s.1),
+            Some(0)
+        );
+        assert_eq!(sig(anchor, "    // pair($0"), None);
+    }
+
+    #[test]
+    fn hover_text_of_a_builtin_and_a_local() {
+        let s = summary();
+        let at = MORE.find("let n").expect("n") + 4;
+        let sym = Ide::new(MORE, &s, at).symbol().expect("a local");
+        assert_eq!(hover_markdown(&sym), "```candela\nn: int\n```");
+        assert!(Ide::new(MORE, &s, 0).completions().is_empty() || MORE.starts_with("host"));
+    }
+}

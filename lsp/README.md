@@ -139,7 +139,8 @@ These are deliberate, and the source refers here for them.
   out: a parameter and a struct field of a user enum, and the `any` slot.
 - `src/ide.rs` unit-tests completion, hover, signature help, go-to-definition
   and the attribute warnings against a small game written for a host that
-  declares its attributes in a `host` block, the way an engine module does.
+  declares its attributes in a `host` block, the way an engine module does,
+  and the type of each expression form a local can be declared with.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
@@ -149,6 +150,9 @@ These are deliberate, and the source refers here for them.
   a well-typed one (expects none), once for hover on a function whose
   parameter is a user enum, and once with a package given in
   `initializationOptions`: completion on a buffer that does not compile,
-  hover, and go-to-definition into the package.
+  hover, and go-to-definition into the package. A last one changes the
+  settings after start-up and checks that the open buffer is checked again,
+  then asks for signature help and the outline, saves with an error in the
+  imported file, and closes the buffer.
 
 Run both with `cargo test -p candela-lsp`.
