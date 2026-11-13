@@ -7599,8 +7599,7 @@ fn parse_toplevel(
                     .children
                     .iter()
                     .find(|(child, _)| *child == host_namespace)
-                    .map(|(_, ns)| ns.structs().map(|(n, _)| n.clone()).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|(_, ns)| ns.structs().map(|(n, _)| n.clone()).collect());
                 let fn_signatures = if local.is_empty() {
                     fn_signatures
                 } else {
@@ -7695,7 +7694,7 @@ fn parse_toplevel(
             Expr::ImportDylib(path, fn_signatures, span) => {
                 // The spec exactly as written; recorded in the artifact recipe so
                 // a `.cdlb` re-resolves the library by name (per-OS) at load.
-                let spec = path.clone();
+                let spec = path;
                 // A bare logical name (no path separator, not absolute, no
                 // extension, e.g. `z`, `sqlite3`) names a system library the
                 // OS loader searches for. Anything with a separator or extension
@@ -7875,7 +7874,7 @@ fn parse_toplevel(
                     let child_src_idx = sources.len() as u16;
 
                     sources.push(Source {
-                        filename: file_name.clone(),
+                        filename: file_name,
                         contents: file_contents,
                     });
 

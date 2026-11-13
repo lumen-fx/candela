@@ -446,8 +446,7 @@ impl<'a> Analysis<'a> {
         }
         let entry_in = index
             .get(&unit.entry)
-            .map(|&k| live_in[k].clone())
-            .unwrap_or_default();
+            .map_or_default(|&k| live_in[k].clone());
         let out_map = unit
             .body
             .iter()

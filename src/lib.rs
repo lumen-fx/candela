@@ -299,7 +299,6 @@ pub unsafe extern "C" fn candela_free_output(output: *mut c_char) {
 
 /// The `candela` command. The command line itself is read in [`cli`].
 #[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
-#[must_use]
 pub fn main() -> std::process::ExitCode {
     #[cfg(not(debug_assertions))]
     std::panic::set_hook(Box::new(|info| {
