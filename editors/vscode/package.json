@@ -1,8 +1,8 @@
 {
   "name": "candela",
   "displayName": "Candela",
-  "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics, hover, completion, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
-  "version": "0.2.3",
+  "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics, hover, completion, signature help, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
+  "version": "0.3.0",
   "publisher": "lumen-fx",
   "license": "Apache-2.0",
   "engines": {
@@ -71,6 +71,19 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`. Set this to point at a locally-built server, e.g. one built from the repo's `lsp/` crate."
+        },
+        "candela.importRoots": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Packages `import \"name\";` reads, by name. Each value is a package directory (entered through the file its `candela.toml` names, or `src/main.cdl`) or a `.cdl` file. `~` and `${workspaceFolder}` expand, and a relative path is read from the first workspace folder. For example `{ \"engine\": \"~/engine/module\" }` lets a script `import \"engine\";` without a manifest."
+        },
+        "candela.libPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The directory holding the standard library (`std/`), what `CANDELA_LIB_PATH` names. Leave empty to use `CANDELA_LIB_PATH`, or the library installed beside `candela-lsp`."
         }
       }
     }
