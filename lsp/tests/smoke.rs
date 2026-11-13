@@ -501,3 +501,139 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
 
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Settings that change after start-up apply to the open buffers: a module
+/// named by its `.cdl` file under a `candela` key resolves once the
+/// configuration names it. Outline, signature help, an attribute warning, an
+/// error inside the imported file, save and close all answer on that buffer.
+#[tokio::test]
+async fn settings_changed_later_apply_to_open_buffers() {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_config_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let module = dir.join("kit.cdl");
+    std::fs::write(
+        &module,
+        "host \"kit\" {\n    attribute tag(n: int = 0) on fn;\n}\n\n\
+         // Adds.\nfn add(a: int, b: int) -> int { return a + b; }\nenum Mode { On, Off }\n",
+    )
+    .expect("write module");
+    let game = dir.join("game.cdl");
+    let text = "import \"kit\" { * };\n\n@tag\n@tag\nfn run() {\n    print(add(1, 2));\n}\n";
+    std::fs::write(&game, text).expect("write game");
+    let uri = format!("file://{}", game.display());
+
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": text } }
+        }),
+    )
+    .await;
+    let diagnostics = |msg: &Value| {
+        msg["params"]["diagnostics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let next_diagnostics = async |stdout: &mut BufReader<tokio::process::ChildStdout>| loop {
+        let msg = timeout(TIMEOUT, read_message(stdout))
+            .await
+            .expect("diagnostics");
+        if msg["method"] == "textDocument/publishDiagnostics" {
+            return msg;
+        }
+    };
+    let first = next_diagnostics(&mut stdout).await;
+    assert_eq!(
+        diagnostics(&first)[0]["code"],
+        "cannot_read_file",
+        "{first}"
+    );
+
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "workspace/didChangeConfiguration",
+            "params": { "settings": { "candela": {
+                "importRoots": { "kit": module },
+                "libPath": dir.join("no-std-here")
+            } } }
+        }),
+    )
+    .await;
+    let after = next_diagnostics(&mut stdout).await;
+    let codes: Vec<String> = diagnostics(&after)
+        .iter()
+        .filter_map(|d| d["code"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(codes, vec!["attribute_repeated"], "{after}");
+
+    let position = |line: u32, character: u32| json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } });
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 3, "method": "textDocument/signatureHelp", "params": position(5, 17) }),
+    )
+    .await;
+    let help = response(&mut stdout, 3).await;
+    assert_eq!(
+        help["result"]["signatures"][0]["label"], "fn add(a: int, b: int) -> int",
+        "{help}"
+    );
+    assert_eq!(help["result"]["activeParameter"], 1, "{help}");
+
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 4, "method": "textDocument/documentSymbol",
+            "params": { "textDocument": { "uri": uri } }
+        }),
+    )
+    .await;
+    let outline = response(&mut stdout, 4).await;
+    assert_eq!(outline["result"][0]["name"], "run", "{outline}");
+
+    // An error in the imported file is reported at the top, naming it.
+    std::fs::write(
+        &module,
+        "host \"kit\" {\n    attribute tag(n: int = 0) on fn;\n}\n\nfn add(a: int, b: int) -> int { return a + \"x\"; }\n",
+    )
+    .expect("break module");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "textDocument/didSave", "params": { "textDocument": { "uri": uri } } }),
+    )
+    .await;
+    let saved = next_diagnostics(&mut stdout).await;
+    let message = diagnostics(&saved)[0]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(message.contains("kit.cdl"), "{saved}");
+
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "textDocument/didClose", "params": { "textDocument": { "uri": uri } } }),
+    )
+    .await;
+    let closed = next_diagnostics(&mut stdout).await;
+    assert!(diagnostics(&closed).is_empty(), "{closed}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
