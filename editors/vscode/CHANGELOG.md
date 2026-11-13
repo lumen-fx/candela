@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+- The `candela.importRoots` setting names the packages `import "name";` reads,
+  so a script that imports a host's module (`import "engine" { * };`)
+  compiles in the editor without a manifest. `candela.libPath` points the
+  server at a standard library other than the one installed beside it. Both
+  apply as soon as they change.
+- With a `candela-lsp` from the same release: completion follows the cursor
+  (fields and methods after `.`, variants after `Enum::`, the missing fields
+  of a struct literal, attributes after `@` and their parameters and values),
+  hover shows the `//` comment above a declaration, signature help shows a
+  call's or an attribute's parameters, and go-to-definition reaches fields,
+  methods, variants, attributes and locals.
+
 ## 0.2.3
 
 - `throw` colours as a keyword: it is a statement, `throw "kind";`.

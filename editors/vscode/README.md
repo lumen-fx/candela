@@ -3,7 +3,8 @@
 Editor support for the Candela language (`.cdl` files): TextMate syntax
 highlighting, language configuration (comments, brackets, auto-closing,
 indentation), snippets, and a language server client (live diagnostics,
-hover, completion, outline, go-to-definition) backed by `candela-lsp`.
+hover, completion, signature help, outline, go-to-definition) backed by
+`candela-lsp`.
 
 Candela is the scripting language of the Lumen UI framework. It is a fork of
 [keel](https://github.com/horacehoff/keel) by Horace Hoff, renamed and extended
@@ -42,8 +43,8 @@ attribution details.
   `for`, `forin`, `while`, `loop`, `match`, `host`, `dylib`, `import`,
   `importlib`, and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
-  diagnostics, hover, completion, document symbols (outline), and
-  go-to-definition. See `../../lsp/README.md` for the exact scope of each.
+  diagnostics, hover, completion, signature help, document symbols (outline),
+  and go-to-definition. See `../../lsp/README.md` for the exact scope of each.
 
 ## Language facts
 
@@ -77,6 +78,20 @@ uses. It looks for a `candela-lsp` (or `candela-lsp.exe` on Windows) binary on
 at a specific binary instead (for example, one built locally with
 `cargo build -p candela-lsp` from the repo root; see that crate's README for why
 to avoid `--release`).
+
+A script that imports a package no manifest lists, such as the module a host
+program ships (`import "engine" { * };`), needs the server to know where it
+is. Name it in `candela.importRoots`, a map from the name the script imports
+to the package's directory or its `.cdl` file:
+
+```json
+"candela.importRoots": { "engine": "~/engine/module" }
+```
+
+`~` and `${workspaceFolder}` expand, and a relative path is read from the first
+workspace folder. `candela.libPath` points the server at a standard library
+other than the one installed beside it, the directory `CANDELA_LIB_PATH` would
+name. Changing either re-checks the open files.
 
 If `candela-lsp` cannot be started, the extension shows an error message
 instead of failing silently; the syntax highlighting/snippets/language
