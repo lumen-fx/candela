@@ -1,9 +1,9 @@
 //! Static analysis over a candela buffer, built entirely on top of candela's
 //! own lexer/parser/type-checker (`candela::check_only`). This module does not
 //! reimplement any language frontend logic: it calls `check_only()`,
-//! `collect_warnings` and `collect_diagnostic`, then walks the resulting
-//! AST/symbol tables (`CompileOutput`) to answer the position-based questions
-//! the LSP needs (hover, completion, go-to-definition, document symbols).
+//! `collect_warnings` and `collect_diagnostic`, then copies the symbol tables
+//! the compile produced (`CompileOutput`) into plain owned data the editor
+//! features in `crate::ide` read.
 //!
 //! `check_only()` is the compile `candela check` performs: the program, and
 //! then an entry point for every fully annotated function in the buffer, which
@@ -23,112 +23,291 @@
 //! limitation added here; see the crate README for what this means for
 //! `publishDiagnostics`.
 //!
-//! `candela::compiler::compiler_data::Struct` (unlike `Function`) is not
-//! tagged with the source file that declared it. To decide whether a struct
-//! declaration belongs to the buffer currently open in the editor (as
-//! opposed to one pulled in via `import`), this module checks that the
-//! struct's `name_span` indexes back to its own name in the buffer
-//! text. That is a heuristic (documented on `struct_is_in_buffer`), not a
+//! `candela::compiler::compiler_data::Struct` and `EnumType` (unlike
+//! `Function`) are not tagged with the source file that declared them. This
+//! module places one in the first source file whose text at the declaration's
+//! `name_span` is its name (see `declaring_file`), a heuristic rather than a
 //! compiler-guaranteed invariant.
 
 use candela::check_only;
-use candela::compiler::compiler_data::{Function, Struct};
-use candela::compiler::expr::METHOD_SEP;
-use candela::compiler::expr::{Expr, IsTarget, Span};
+use candela::compiler::attributes::{AttrParamTypeExpr, AttrValueExpr, AttributeTargetKind};
+use candela::compiler::compiler_data::Function;
+use candela::compiler::expr::{METHOD_SEP, Span};
 use candela::compiler::imports::ImportResolver;
-use candela::compiler::type_system::ANON_FN_PREFIX;
-use candela::compiler::type_system::tuple_arity;
-use candela::compiler::{Namespace, SymbolKind};
+use candela::compiler::type_system::{ANON_FN_PREFIX, TypeExpr};
+use candela::compiler::{CompileOutput, Namespace, SymbolKind};
 use candela::macros::MacroEnv;
+use candela::{AttributeTarget, AttributeValue};
 use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
-use smol_strc::SmolStr;
 
-/// A function or struct declaration, with enough information to render a
-/// document symbol / hover / go-to-definition target.
+/// One file the compile read: the buffer (index 0) or a module it imports.
+#[derive(Debug, Clone)]
+pub struct SourceFile {
+    pub path: String,
+    /// The text the compile read, which is what every span into this file
+    /// indexes.
+    pub text: String,
+    /// Whether the file is a standard library module.
+    pub is_std: bool,
+}
+
+/// A function parameter, with its declared type when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    pub ty: Option<String>,
+}
+
+impl Param {
+    #[must_use]
+    pub fn render(&self) -> String {
+        match &self.ty {
+            Some(ty) => format!("{}: {ty}", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// A function or method declaration.
 #[derive(Debug, Clone)]
 pub struct FunctionSymbol {
+    /// The name in the compiler's table. A method's is `Type#name`.
     pub name: String,
+    /// For a method, the type its `impl` block attaches it to and its own
+    /// name.
+    pub method: Option<(String, String)>,
     pub name_span: Span,
-    /// Rendered parameter list, e.g. `["a: int", "b"]` (untyped params show
-    /// only their name; their type is inferred per call site, see
-    /// `signatures`).
-    pub params: Vec<String>,
-    /// Concrete `(params) -> return` signatures this function has
-    /// been specialized for, sourced from `Function::return_type_cache`.
-    /// Empty when the function has not been called anywhere in the compiled
-    /// program yet, in which case its return type has not been
-    /// inferred; this is surfaced as such, not guessed.
+    pub params: Vec<Param>,
+    /// The declared return type, or the one inferred when every call site
+    /// agrees on it.
+    pub ret: Option<String>,
+    /// Concrete `(params) -> return` signatures this function has been
+    /// specialized for, sourced from `Function::return_type_cache`. Empty when
+    /// the function has not been called anywhere in the compiled program yet.
     pub signatures: Vec<String>,
-    /// Index into `ProgramSummary::source_files`.
+    /// Index into `ProgramSummary::sources`.
     pub src_file: u16,
+    /// The `//` comment lines written right above the declaration.
+    pub doc: String,
+    /// Declared with `const NAME: T = expr;`.
+    pub is_const: bool,
+}
+
+impl FunctionSymbol {
+    /// The name a call writes: the method's own name for a method.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.method.as_ref().map_or(&self.name, |(_, name)| name)
+    }
+
+    /// The parameters a call passes: a method's `self` is its receiver.
+    pub fn call_params(&self) -> impl Iterator<Item = &Param> {
+        let skip = usize::from(
+            self.method.is_some() && self.params.first().is_some_and(|p| p.name == "self"),
+        );
+        self.params.iter().skip(skip)
+    }
+
+    /// `fn name(a: int, b) -> T`, the way the declaration reads.
+    #[must_use]
+    pub fn header(&self) -> String {
+        if self.is_const {
+            return format!(
+                "const {}: {}",
+                self.name,
+                self.ret.as_deref().unwrap_or("any")
+            );
+        }
+        let params: Vec<String> = self.call_params().map(Param::render).collect();
+        let ret = self
+            .ret
+            .as_ref()
+            .map(|r| format!(" -> {r}"))
+            .unwrap_or_default();
+        format!("fn {}({}){ret}", self.label(), params.join(", "))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldSymbol {
+    pub name: String,
+    pub ty: String,
+    pub span: Span,
+    pub doc: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct StructSymbol {
     pub name: String,
     pub name_span: Span,
-    pub fields: Vec<(String, String)>,
-    /// Best-effort; see the heuristic note on `struct_is_in_buffer`. `None`
-    /// when the heuristic could not place it in any known source file.
+    pub fields: Vec<FieldSymbol>,
+    /// The file that declares it; see `declaring_file`. `None` for a tuple
+    /// type and for a struct the heuristic could not place.
     pub src_file: Option<u16>,
+    pub doc: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefKind {
-    Call,
-    StructLiteral,
+impl StructSymbol {
+    /// A tuple type is a struct the compiler declares, named the way the type
+    /// is written.
+    #[must_use]
+    pub fn is_tuple(&self) -> bool {
+        self.name.starts_with('(')
+    }
 }
 
-/// A use-site of a function or struct found while walking the compiled
-/// function bodies: `span` covers just the callee name/path (not the whole
-/// call), so hover/go-to-definition can match a click precisely.
 #[derive(Debug, Clone)]
-pub struct RefSite {
+pub struct VariantSymbol {
+    pub name: String,
+    pub payload: Vec<String>,
     pub span: Span,
-    pub kind: RefKind,
-    /// Bare (last path segment) name.
-    pub target_name: String,
-    /// The module path in front of a free call (`["json"]` for
-    /// `json::parse(s)`); `None` for a method call, which resolves on its
-    /// receiver.
-    pub target_path: Option<Vec<String>>,
-    /// The function a free call resolves to in the scope of the file it is
-    /// written in, as an index into `ProgramSummary::functions`, when it
-    /// resolves to one; see `ProgramSummary::targets_of`.
-    pub target_fn: Option<usize>,
+    pub doc: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumSymbol {
+    pub name: String,
+    pub name_span: Span,
+    pub variants: Vec<VariantSymbol>,
+    pub src_file: Option<u16>,
+    pub doc: String,
+}
+
+/// What an attribute parameter accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrParamKind {
+    /// Any type the script can name.
+    Type,
+    /// A function the script declares.
+    Fn,
+    /// A payload-free variant of any enum the script declares.
+    AnyEnum,
+    /// A variant of the named enum.
+    Enum(String),
+    Bool,
+    /// An int, a float or a string.
+    Literal,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttrParam {
+    pub name: String,
+    pub kind: AttrParamKind,
+    /// Declared as a list (`fn[]`, `type[]`, `enum[]`).
+    pub list: bool,
+    /// The type as the declaration writes it.
+    pub ty: String,
+    pub default: Option<String>,
+    /// Written `name: T?`.
+    pub optional: bool,
+}
+
+impl AttrParam {
+    /// Whether a use must give it.
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        !self.optional && self.default.is_none()
+    }
+
+    #[must_use]
+    pub fn render(&self) -> String {
+        let opt = if self.optional { "?" } else { "" };
+        match &self.default {
+            Some(d) => format!("{}: {}{opt} = {d}", self.name, self.ty),
+            None => format!("{}: {}{opt}", self.name, self.ty),
+        }
+    }
+}
+
+/// An attribute a `host` block declares.
+#[derive(Debug, Clone)]
+pub struct AttributeSymbol {
+    /// The host namespace that declares it.
+    pub namespace: String,
+    pub name: String,
+    /// `fn`, `struct` or `enum`: what it may be written on.
+    pub target: &'static str,
+    pub params: Vec<AttrParam>,
+    pub span: Span,
     pub src_file: u16,
+    pub doc: String,
+}
+
+impl AttributeSymbol {
+    /// `attribute name(params) on target`, the way the declaration reads.
+    #[must_use]
+    pub fn header(&self) -> String {
+        let params: Vec<String> = self.params.iter().map(AttrParam::render).collect();
+        if params.is_empty() {
+            format!("attribute {} on {}", self.name, self.target)
+        } else {
+            format!(
+                "attribute {}({}) on {}",
+                self.name,
+                params.join(", "),
+                self.target
+            )
+        }
+    }
+}
+
+/// The item an attribute use is written on, by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseOn {
+    Fn(String),
+    Struct(String),
+    Enum(String),
+}
+
+/// An attribute the program's scripts wrote on an item.
+#[derive(Debug, Clone)]
+pub struct AttributeUseSymbol {
+    pub namespace: String,
+    pub name: String,
+    pub on: UseOn,
+    /// The functions each `fn` or `fn[]` argument names, by parameter.
+    pub fn_args: Vec<(String, Vec<String>)>,
 }
 
 /// What a name written in the buffer can be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
-    Function,
-    Struct,
-    Enum,
+    /// An index into `ProgramSummary::functions`.
+    Function(usize),
+    /// An index into `ProgramSummary::structs`; `None` for a generic struct,
+    /// which names no one struct.
+    Struct(Option<usize>),
+    /// An index into `ProgramSummary::enums`.
+    Enum(usize),
+    /// An index into `ProgramSummary::attributes`.
+    Attribute(usize),
 }
 
 /// A name the buffer can write as it stands: its own declarations, the items
-/// its imports named, and `module::name` for each module an import bound.
+/// its imports named or a glob import brought in, and `module::name` for each
+/// module an import bound.
 #[derive(Debug, Clone)]
 pub struct ScopeEntry {
     pub label: String,
     pub kind: ScopeKind,
-    /// For a function, its index into `ProgramSummary::functions`.
-    pub function: Option<usize>,
 }
 
-/// Everything this module extracts from a successful `compile()`, in plain
-/// owned data (no `Rc`, no borrows) so it can be produced synchronously and
-/// then freely moved across an `.await` point in the LSP's async handlers.
+/// Everything this module extracts from a successful compile, in plain owned
+/// data (no `Rc`, no borrows) so it can be produced synchronously and then
+/// freely moved across an `.await` point in the LSP's async handlers.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramSummary {
     /// Indexed by candela's internal `src_file` id. Index 0 is always the
     /// buffer this summary was built from.
-    pub source_files: Vec<String>,
+    pub sources: Vec<SourceFile>,
     pub functions: Vec<FunctionSymbol>,
+    /// Indexed like the compiler's struct table.
     pub structs: Vec<StructSymbol>,
-    pub refs: Vec<RefSite>,
-    /// The names the buffer can write, for completion.
+    /// Indexed like the compiler's enum table.
+    pub enums: Vec<EnumSymbol>,
+    pub attributes: Vec<AttributeSymbol>,
+    pub attribute_uses: Vec<AttributeUseSymbol>,
+    /// The names the buffer can write.
     pub scope: Vec<ScopeEntry>,
 }
 
@@ -154,11 +333,14 @@ pub struct AnalysisOutcome {
 ///
 /// `path` should be the buffer's real filesystem path (from the LSP URI) so
 /// that any `import "..."` statements resolve relative to the right
-/// directory, exactly like the `candela` CLI would.
+/// directory, exactly like the `candela` CLI would. `resolver` says where a
+/// library import reads from: the standard library, and the packages the
+/// editor's settings name (see `crate::backend::ImportSettings`).
 #[must_use]
-pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
+pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOutcome {
     let owned = text.to_owned();
     let path = path.to_owned();
+    let resolver = resolver.clone();
     // Macros belong to whatever program embeds candela, and the server is not
     // that program: it has no expanders and cannot get them. An unregistered
     // macro therefore compiles as `null` here instead of failing, so a buffer
@@ -166,11 +348,6 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
     // errors.
     let mut macros = MacroEnv::new();
     macros.allow_unknown(true);
-    // Library imports resolve against the standard library beside the
-    // toolchain, which is what a fresh resolver points at. The server reads no
-    // project manifest, so an import of a package the project depends on is
-    // reported as a file it cannot find.
-    let resolver = ImportResolver::new();
     // The server is not the host either, so it enables no `@cfg` flag. Code a
     // `@cfg` turns off is parsed and dropped, which is what a compile with no
     // flags on does: a syntax error in it is reported, a name it uses that
@@ -187,14 +364,23 @@ pub fn analyze(text: &str, path: &str) -> AnalysisOutcome {
         },
         Ok((out, warnings)) => AnalysisOutcome {
             diagnostic: None,
-            summary: Some(build_summary(&out, text)),
+            summary: Some(build_summary(&out)),
             warnings,
         },
     }
 }
 
-fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> ProgramSummary {
-    let source_files = out.sources.iter().map(|s| s.filename.to_string()).collect();
+fn build_summary(out: &CompileOutput) -> ProgramSummary {
+    let sources: Vec<SourceFile> = out
+        .sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| SourceFile {
+            path: s.filename.to_string(),
+            text: s.contents.clone(),
+            is_std: u16::try_from(i).is_ok_and(|i| out.namespaces.is_std(i)),
+        })
+        .collect();
 
     // The compiler's own renderer, with the tables this compile produced. A
     // type shows up in a tooltip named the way a diagnostic names it.
@@ -206,35 +392,233 @@ fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> P
     let functions = out
         .functions
         .iter()
-        .map(|f| function_symbol(f, types))
+        .map(|f| function_symbol(f, types, &sources))
         .collect();
 
     let structs = out
         .structs
         .iter()
-        .map(|s| struct_symbol(s, types, buffer_text))
+        .map(|s| {
+            let src_file = if s.is_tuple() {
+                None
+            } else {
+                declaring_file(&sources, &s.name, s.name_span)
+            };
+            let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
+            StructSymbol {
+                name: s.name.to_string(),
+                name_span: s.name_span,
+                fields: s
+                    .fields
+                    .iter()
+                    .map(|(name, ty, span)| {
+                        let span = field_name_span(text, name, *span);
+                        FieldSymbol {
+                            name: name.to_string(),
+                            ty: types.of(ty).to_string(),
+                            span,
+                            doc: own_line_doc(text, span.start as usize),
+                        }
+                    })
+                    .collect(),
+                src_file,
+                doc: doc_above(text, s.name_span.start as usize),
+            }
+        })
         .collect();
 
-    let mut refs: Vec<RefSite> = out.functions.iter().flat_map(collect_refs).collect();
-    // A free call resolves in the scope of the file it is written in, which
-    // is what makes `geo::area` reach the `area` the module bound as `geo`
-    // declares rather than any `area` in the program.
-    for r in &mut refs {
-        if let Some(path) = &r.target_path {
-            let path: Vec<SmolStr> = path.iter().map(SmolStr::from).collect();
-            r.target_fn = out
-                .namespaces
-                .get(r.src_file)
-                .find_function(&path, &r.target_name);
-        }
-    }
+    let enums = out
+        .enums
+        .iter()
+        .map(|e| {
+            let src_file = declaring_file(&sources, &e.name, e.name_span);
+            let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
+            EnumSymbol {
+                name: e.name.to_string(),
+                name_span: e.name_span,
+                variants: e
+                    .variants
+                    .iter()
+                    .map(|v| VariantSymbol {
+                        name: v.name.to_string(),
+                        payload: v.payload.iter().map(|t| types.of(t).to_string()).collect(),
+                        span: v.name_span,
+                        doc: own_line_doc(text, v.name_span.start as usize),
+                    })
+                    .collect(),
+                src_file,
+                doc: doc_above(text, e.name_span.start as usize),
+            }
+        })
+        .collect();
+
+    let attributes = out
+        .attribute_decls
+        .iter()
+        .map(|(namespace, file, decl)| {
+            let text = sources.get(*file as usize).map_or("", |s| s.text.as_str());
+            AttributeSymbol {
+                namespace: namespace.to_string(),
+                name: decl.name.to_string(),
+                target: match decl.target {
+                    AttributeTargetKind::Fn => "fn",
+                    AttributeTargetKind::Struct => "struct",
+                    AttributeTargetKind::Enum => "enum",
+                },
+                params: decl
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let (kind, list) = attr_param_kind(&p.ty);
+                        AttrParam {
+                            name: p.name.to_string(),
+                            kind,
+                            list,
+                            ty: render_attr_param_type(&p.ty),
+                            default: p.default.as_ref().map(render_attr_value),
+                            optional: p.optional,
+                        }
+                    })
+                    .collect(),
+                span: decl.span,
+                src_file: *file,
+                doc: doc_above(text, decl.span.start as usize),
+            }
+        })
+        .collect();
+
+    let attribute_uses = out
+        .attributes
+        .iter()
+        .map(|a| AttributeUseSymbol {
+            namespace: a.namespace.clone(),
+            name: a.name.clone(),
+            on: match &a.target {
+                AttributeTarget::Fn { name, .. } => UseOn::Fn(name.clone()),
+                AttributeTarget::Struct(id) => UseOn::Struct(
+                    out.structs
+                        .get(*id as usize)
+                        .map(|s| s.name.to_string())
+                        .unwrap_or_default(),
+                ),
+                AttributeTarget::Enum(id) => UseOn::Enum(
+                    out.enums
+                        .get(*id as usize)
+                        .map(|e| e.name.to_string())
+                        .unwrap_or_default(),
+                ),
+            },
+            fn_args: a
+                .args
+                .iter()
+                .filter_map(|(name, value)| {
+                    let fns = fn_names(value);
+                    (!fns.is_empty()).then(|| (name.clone(), fns))
+                })
+                .collect(),
+        })
+        .collect();
 
     ProgramSummary {
-        source_files,
+        sources,
         functions,
         structs,
-        refs,
+        enums,
+        attributes,
+        attribute_uses,
         scope: scope_entries(out.namespaces.root()),
+    }
+}
+
+/// The function names an attribute argument holds.
+fn fn_names(value: &AttributeValue) -> Vec<String> {
+    match value {
+        AttributeValue::Fn { name, .. } => vec![name.clone()],
+        AttributeValue::List(items) => items.iter().flat_map(fn_names).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn attr_param_kind(ty: &AttrParamTypeExpr) -> (AttrParamKind, bool) {
+    match ty {
+        AttrParamTypeExpr::Type => (AttrParamKind::Type, false),
+        AttrParamTypeExpr::Fn => (AttrParamKind::Fn, false),
+        AttrParamTypeExpr::AnyEnum => (AttrParamKind::AnyEnum, false),
+        AttrParamTypeExpr::List(inner) => (attr_param_kind(inner).0, true),
+        AttrParamTypeExpr::Value(TypeExpr::Array(inner)) => (value_kind(inner), true),
+        AttrParamTypeExpr::Value(t) => (value_kind(t), false),
+    }
+}
+
+fn value_kind(t: &TypeExpr) -> AttrParamKind {
+    match t {
+        TypeExpr::Identifier(name, _) => match name.as_str() {
+            "bool" => AttrParamKind::Bool,
+            "int" | "float" | "string" => AttrParamKind::Literal,
+            other => AttrParamKind::Enum(other.to_owned()),
+        },
+        TypeExpr::NamespacedIdentifier(path, _) => {
+            path.last().map_or(AttrParamKind::Literal, |n| {
+                AttrParamKind::Enum(n.to_string())
+            })
+        }
+        _ => AttrParamKind::Literal,
+    }
+}
+
+fn render_attr_param_type(ty: &AttrParamTypeExpr) -> String {
+    match ty {
+        AttrParamTypeExpr::Type => "type".to_owned(),
+        AttrParamTypeExpr::Fn => "fn".to_owned(),
+        AttrParamTypeExpr::AnyEnum => "enum".to_owned(),
+        AttrParamTypeExpr::Value(t) => render_type_expr(t),
+        AttrParamTypeExpr::List(inner) => format!("{}[]", render_attr_param_type(inner)),
+    }
+}
+
+/// A type annotation, written back the way the source spells it.
+fn render_type_expr(t: &TypeExpr) -> String {
+    match t {
+        TypeExpr::Identifier(name, _) => name.to_string(),
+        TypeExpr::NamespacedIdentifier(path, _) => path.join("::"),
+        TypeExpr::Generic(g) => {
+            let mut name: Vec<String> = g.namespace.iter().map(ToString::to_string).collect();
+            name.push(g.name.to_string());
+            let args: Vec<String> = g.args.iter().map(render_type_expr).collect();
+            format!("{}<{}>", name.join("::"), args.join(", "))
+        }
+        TypeExpr::Array(inner) => format!("{}[]", render_type_expr(inner)),
+        TypeExpr::Map(k, v) => format!("{{{}: {}}}", render_type_expr(k), render_type_expr(v)),
+        TypeExpr::Union(members) => members
+            .iter()
+            .map(render_type_expr)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        TypeExpr::Fn(f) => {
+            let args: Vec<String> = f.args.iter().map(render_type_expr).collect();
+            match &f.return_type {
+                Some(r) => format!("fn({}) -> {}", args.join(", "), render_type_expr(r)),
+                None => format!("fn({})", args.join(", ")),
+            }
+        }
+    }
+}
+
+fn render_attr_value(v: &AttrValueExpr) -> String {
+    match v {
+        AttrValueExpr::Int(i, _) => i.to_string(),
+        AttrValueExpr::Float(f, _) => format!("{f:?}"),
+        AttrValueExpr::Bool(b, _) => b.to_string(),
+        AttrValueExpr::String(s, _) => format!("\"{s}\""),
+        AttrValueExpr::List(items, _) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(render_attr_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        AttrValueExpr::Path(t, _) => render_type_expr(t),
     }
 }
 
@@ -243,20 +627,15 @@ fn build_summary(out: &candela::compiler::CompileOutput, buffer_text: &str) -> P
 fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
     let mut entries: Vec<ScopeEntry> = Vec::new();
     let mut add = |label: String, kind: &SymbolKind| {
-        let (kind, function) = match kind {
-            SymbolKind::Fn(id) => (ScopeKind::Function, Some(*id as usize)),
-            SymbolKind::Struct(_) | SymbolKind::Template(_) => (ScopeKind::Struct, None),
-            SymbolKind::Enum(_) => (ScopeKind::Enum, None),
-            // An attribute is written after `@`, never where an expression or
-            // a type goes.
-            SymbolKind::Attribute(_) => return,
+        let kind = match kind {
+            SymbolKind::Fn(id) => ScopeKind::Function(*id as usize),
+            SymbolKind::Struct(id) => ScopeKind::Struct(Some(*id as usize)),
+            SymbolKind::Template(_) => ScopeKind::Struct(None),
+            SymbolKind::Enum(id) => ScopeKind::Enum(*id as usize),
+            SymbolKind::Attribute(id) => ScopeKind::Attribute(*id as usize),
         };
         if !entries.iter().any(|e| e.label == label) {
-            entries.push(ScopeEntry {
-                label,
-                kind,
-                function,
-            });
+            entries.push(ScopeEntry { label, kind });
         }
     };
     for (name, kind) in &root.symbols {
@@ -279,17 +658,17 @@ fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
     entries
 }
 
-fn function_symbol(f: &Function, types: TypeNames<'_>) -> FunctionSymbol {
+fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -> FunctionSymbol {
     let params = f
         .args
         .iter()
-        .map(|(name, ty)| match ty {
-            Some(t) => format!("{name}: {}", types.of(t)),
-            None => name.to_string(),
+        .map(|(name, ty)| Param {
+            name: name.to_string(),
+            ty: ty.as_ref().map(|t| types.of(t).to_string()),
         })
         .collect();
 
-    let signatures = f
+    let signatures: Vec<String> = f
         .return_type_cache
         .iter()
         .map(|(args, ret)| {
@@ -302,276 +681,133 @@ fn function_symbol(f: &Function, types: TypeNames<'_>) -> FunctionSymbol {
         })
         .collect();
 
+    let ret = f
+        .return_type
+        .as_ref()
+        .map_or_else(
+            || {
+                let mut rets = f
+                    .return_type_cache
+                    .iter()
+                    .map(|(_, r)| types.of(r).to_string());
+                let first = rets.next()?;
+                rets.all(|r| r == first).then_some(first)
+            },
+            |(t, _)| Some(types.of(t).to_string()),
+        )
+        // A function that hands nothing back reads without an arrow.
+        .filter(|r| r != "null");
+
+    let method = f
+        .name
+        .split_once(METHOD_SEP)
+        .map(|(ty, name)| (ty.to_owned(), name.to_owned()));
+    let doc = sources
+        .get(f.src_file as usize)
+        .map(|s| doc_above(&s.text, f.name_span.start as usize))
+        .unwrap_or_default();
+
     FunctionSymbol {
         name: f.name.to_string(),
+        method,
         name_span: f.name_span,
         params,
+        ret,
         signatures,
         src_file: f.src_file,
+        doc,
+        is_const: f.is_const,
     }
 }
 
-/// `Struct` carries no source-file id (unlike `Function`), so this
-/// approximates "does this struct's `name_span` land inside `buffer_text`"
-/// by checking that slicing `buffer_text` at that byte range yields
-/// the struct's own name. A struct declared in a different, imported file
-/// would need a wildly coincidental span + name collision to pass this
-/// check, which is an acceptable false-positive rate for an editor feature
-/// (document symbols / hover), but it is not a hard guarantee.
-fn struct_is_in_buffer(s: &Struct, buffer_text: &str) -> bool {
-    let start = s.name_span.start as usize;
-    let end = s.name_span.end as usize;
-    buffer_text.get(start..end) == Some(s.name.as_str())
+/// Where a field's name is written. The compiler records the span of the
+/// field's type; the name is the last occurrence of it before that.
+fn field_name_span(text: &str, name: &str, type_span: Span) -> Span {
+    text.get(..type_span.start as usize)
+        .and_then(|before| before.rfind(name))
+        .and_then(|start| {
+            Some(Span {
+                start: u32::try_from(start).ok()?,
+                end: u32::try_from(start + name.len()).ok()?,
+            })
+        })
+        .unwrap_or(type_span)
 }
 
-fn struct_symbol(s: &Struct, types: TypeNames<'_>, buffer_text: &str) -> StructSymbol {
-    let fields = s
-        .fields
+/// The source file a struct or an enum was declared in: the first whose text
+/// at `span` is the declaration's name. An instantiation of a generic,
+/// `State<Phase>`, is placed at its template, whose name is the part before
+/// the `<`.
+fn declaring_file(sources: &[SourceFile], name: &str, span: Span) -> Option<u16> {
+    let base = name.split('<').next().unwrap_or(name);
+    let range = span.start as usize..span.end as usize;
+    sources
         .iter()
-        .map(|(name, ty, _span)| (name.to_string(), types.of(ty).to_string()))
-        .collect();
-
-    StructSymbol {
-        name: s.name.to_string(),
-        name_span: s.name_span,
-        fields,
-        src_file: struct_is_in_buffer(s, buffer_text).then_some(0),
-    }
+        .position(|s| s.text.get(range.clone()) == Some(base))
+        .and_then(|i| u16::try_from(i).ok())
 }
 
-/// Walks every expression reachable from `f.code`, collecting a `RefSite`
-/// for each function call and struct literal so hover / go-to-definition can
-/// later match a cursor position against them without re-walking the AST.
-fn collect_refs(f: &Function) -> Vec<RefSite> {
-    let mut out = Vec::new();
-    for e in f.code.iter() {
-        visit_expr(e, f.src_file, &mut out);
-    }
-    out
+/// The `//` comment lines right above the declaration that starts on the line
+/// holding `offset`, without their markers. Attribute lines between the
+/// comment and the declaration are skipped; a blank line ends the comment.
+#[must_use]
+pub fn doc_above(text: &str, offset: usize) -> String {
+    comment_above(text, offset, true)
 }
 
-fn visit_expr(e: &Expr, src_file: u16, out: &mut Vec<RefSite>) {
-    match e {
-        Expr::Float(_)
-        | Expr::Int(_)
-        | Expr::Bool(_)
-        | Expr::Null
-        | Expr::String(_)
-        | Expr::Var(_, _)
-        | Expr::Break
-        | Expr::Continue
-        | Expr::ImportDylib(..)
-        | Expr::HostBlock(..)
-        | Expr::ImportFile(..)
-        | Expr::StructDeclare(..)
-        | Expr::EnumDeclare(..)
-        | Expr::StructDefault(..)
-        | Expr::NamespacedRef(..) => {}
+/// The comment lines above `offset`. With `attributes`, the lines of an
+/// attribute written in front of the declaration are stepped over, including
+/// one written across several lines, read bottom up until the line that opens
+/// it with `@`.
+fn comment_above(text: &str, offset: usize, attributes: bool) -> String {
+    let Some(before) = text.get(..offset) else {
+        return String::new();
+    };
+    let mut lines: Vec<&str> = before.lines().collect();
+    // The declaration's own line, up to the name.
+    if !before.ends_with('\n') {
+        lines.pop();
+    }
+    let mut doc = Vec::new();
+    let mut in_attribute = false;
+    while let Some(line) = lines.pop() {
+        let t = line.trim();
+        if attributes && t.starts_with('@') {
+            in_attribute = false;
+            if !doc.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if in_attribute {
+            continue;
+        }
+        if let Some(comment) = t.strip_prefix("//") {
+            doc.push(comment.strip_prefix(' ').unwrap_or(comment));
+        } else if attributes
+            && doc.is_empty()
+            && (t.ends_with(',') || t.ends_with(')') || t.ends_with(']'))
+        {
+            in_attribute = true;
+        } else {
+            break;
+        }
+    }
+    doc.reverse();
+    doc.join("\n").trim().to_owned()
+}
 
-        Expr::Match(scrutinee, arms, wildcard, _, _) => {
-            visit_expr(scrutinee, src_file, out);
-            for (patterns, body) in arms.iter() {
-                for pat in patterns.iter() {
-                    visit_expr(pat, src_file, out);
-                }
-                for b in body.iter() {
-                    visit_expr(b, src_file, out);
-                }
-            }
-            if let Some(w) = wildcard {
-                for b in w.iter() {
-                    visit_expr(b, src_file, out);
-                }
-            }
-        }
-
-        Expr::Array(items, _) => {
-            for it in items.iter() {
-                visit_expr(it, src_file, out);
-            }
-        }
-        Expr::Map(pairs, _) => {
-            for (k, _, v, _) in pairs.iter() {
-                visit_expr(k, src_file, out);
-                visit_expr(v, src_file, out);
-            }
-        }
-        Expr::Struct(path, fields, span, _, base) => {
-            for (_, val, _, _) in fields.iter() {
-                visit_expr(val, src_file, out);
-            }
-            if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
-                visit_expr(base, src_file, out);
-            }
-            // A tuple literal names the struct the compiler declares for
-            // tuples, which has no declaration to go to.
-            if let Some(name) = path.last()
-                && tuple_arity(name).is_none()
-            {
-                out.push(RefSite {
-                    span: *span,
-                    kind: RefKind::StructLiteral,
-                    target_name: name.to_string(),
-                    target_path: None,
-                    target_fn: None,
-                    src_file,
-                });
-            }
-        }
-        Expr::GetStructField(obj, _, _, _) => visit_expr(obj, src_file, out),
-        Expr::SetStructField(obj, _, val, _, _, _) => {
-            visit_expr(obj, src_file, out);
-            visit_expr(val, src_file, out);
-        }
-        Expr::VarDeclare(_, val, _) => visit_expr(val, src_file, out),
-        Expr::VarAssign(_, val, _, _) => visit_expr(val, src_file, out),
-        Expr::Condition(cond, body, _, _)
-        | Expr::InlineCondition(cond, body, _, _)
-        | Expr::ElseIfBlock(cond, body, _) => {
-            visit_expr(cond, src_file, out);
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::ElseBlock(body)
-        | Expr::AnonymousFunction(_, body, _)
-        | Expr::EvalBlock(body)
-        | Expr::LoopBlock(body) => {
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::WhileBlock(cond, body, _) => {
-            visit_expr(cond, src_file, out);
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::FunctionCall(args, path, span, _, _) => {
-            for a in args.iter() {
-                visit_expr(a, src_file, out);
-            }
-            if let Some((name, module)) = path.split_last() {
-                out.push(RefSite {
-                    span: *span,
-                    kind: RefKind::Call,
-                    target_name: name.to_string(),
-                    target_path: Some(module.iter().map(ToString::to_string).collect()),
-                    target_fn: None,
-                    src_file,
-                });
-            }
-        }
-        Expr::ObjFunctionCall(obj, args, path, _obj_span, fn_span, _, _) => {
-            visit_expr(obj, src_file, out);
-            for a in args.iter() {
-                visit_expr(a, src_file, out);
-            }
-            if let Some(name) = path.last() {
-                out.push(RefSite {
-                    span: *fn_span,
-                    kind: RefKind::Call,
-                    target_name: name.to_string(),
-                    target_path: None,
-                    target_fn: None,
-                    src_file,
-                });
-            }
-        }
-        Expr::FunctionDecl(_, _, body, _, _, _) => {
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::ReturnVal(opt) => {
-            if let Some(v) = opt.as_ref() {
-                visit_expr(v, src_file, out);
-            }
-        }
-        Expr::ArrayGetIndex(base, idx, _) => {
-            visit_expr(base, src_file, out);
-            visit_expr(idx, src_file, out);
-        }
-        Expr::ArrayGetSlice(base, s, e, _) => {
-            visit_expr(base, src_file, out);
-            visit_expr(s, src_file, out);
-            if let Some(e) = e {
-                visit_expr(e, src_file, out);
-            }
-        }
-        Expr::ArrayModify(base, idx, val, _, _) => {
-            visit_expr(base, src_file, out);
-            visit_expr(idx, src_file, out);
-            visit_expr(val, src_file, out);
-        }
-        Expr::ForLoop(_, arr, body, _) => {
-            visit_expr(arr, src_file, out);
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::IntForLoop(_, from, to, body, _, _) => {
-            visit_expr(from, src_file, out);
-            visit_expr(to, src_file, out);
-            for b in body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        Expr::TryCatchBlock(try_body, _, catch_body) => {
-            for b in try_body.iter() {
-                visit_expr(b, src_file, out);
-            }
-            for b in catch_body.iter() {
-                visit_expr(b, src_file, out);
-            }
-        }
-        // A chain's operands in order, walked with a loop: a long chain
-        // nests as deep as it is long.
-        Expr::Mul(..)
-        | Expr::Div(..)
-        | Expr::Add(..)
-        | Expr::Sub(..)
-        | Expr::Mod(..)
-        | Expr::Pow(..)
-        | Expr::BitAnd(..)
-        | Expr::BitOr(..)
-        | Expr::BitXor(..)
-        | Expr::Shl(..)
-        | Expr::Shr(..)
-        | Expr::Eq(..)
-        | Expr::NotEq(..)
-        | Expr::Sup(..)
-        | Expr::SupEq(..)
-        | Expr::Inf(..)
-        | Expr::InfEq(..)
-        | Expr::BoolAnd(..)
-        | Expr::BoolOr(..) => {
-            for operand in e.chain_operands() {
-                visit_expr(operand, src_file, out);
-            }
-        }
-        Expr::BoolNeg(a, _, _)
-        | Expr::Neg(a, _, _)
-        | Expr::BitNot(a, _, _)
-        | Expr::Propagate(a, _)
-        | Expr::Cast(a, _, _, _) => {
-            visit_expr(a, src_file, out);
-        }
-        // A variant pattern is visited the way a `match` arm's is.
-        Expr::Is(a, target, _, _) => {
-            visit_expr(a, src_file, out);
-            if let IsTarget::Variant(pattern) = &**target {
-                visit_expr(pattern, src_file, out);
-            }
-        }
-        // An indirect call names no function, so it records no reference of
-        // its own; the callee and the arguments still hold names to resolve.
-        Expr::CallValue(callee, args, _, _) => {
-            visit_expr(callee, src_file, out);
-            for a in args.iter() {
-                visit_expr(a, src_file, out);
-            }
-        }
+/// The comment above a member (a field or a variant), which only has one of
+/// its own when the member starts its own line.
+fn own_line_doc(text: &str, offset: usize) -> String {
+    let Some(before) = text.get(..offset) else {
+        return String::new();
+    };
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    if before[line_start..].trim().is_empty() {
+        comment_above(text, offset, false)
+    } else {
+        String::new()
     }
 }
 
@@ -587,74 +823,106 @@ pub fn is_a_written_name(name: &str) -> bool {
     !name.starts_with(ANON_FN_PREFIX) && !name.contains(METHOD_SEP)
 }
 
+/// Whether `name` is an identifier rather than an operator a method can be
+/// named by (`Vec2#+`).
+#[must_use]
+pub fn is_identifier(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
 impl ProgramSummary {
-    /// Document symbols: top-level fn/struct declarations that live in the
-    /// buffer itself (`src_file == 0`), not ones pulled in via `import`, and
-    /// not the ones the compiler made for itself (see [`is_a_written_name`]).
+    /// Document symbols: top-level fn declarations that live in the buffer
+    /// itself (`src_file == 0`), not ones pulled in via `import`, and not the
+    /// ones the compiler made for itself (see [`is_a_written_name`]).
     pub fn own_functions(&self) -> impl Iterator<Item = &FunctionSymbol> {
         self.functions
             .iter()
             .filter(|f| f.src_file == 0 && is_a_written_name(&f.name))
     }
+
+    /// The structs the buffer declares. A tuple type is a struct the compiler
+    /// declares, named the way the type is written, so its name can match the
+    /// buffer's text without being a declaration.
     pub fn own_structs(&self) -> impl Iterator<Item = &StructSymbol> {
-        // A tuple type is a struct the compiler declares, named the way the
-        // type is written, so its name can match the buffer's text without
-        // being a declaration.
         self.structs
             .iter()
-            .filter(|s| s.src_file == Some(0) && !s.name.starts_with('('))
+            .filter(|s| s.src_file == Some(0) && !s.is_tuple() && !s.name.contains('<'))
     }
 
-    /// The innermost call/struct-literal reference whose span contains
-    /// `offset`, restricted to references that live in the buffer itself
-    /// (`src_file == 0`); a reference from an imported file's body would
-    /// have a span relative to that other file's text, which is
-    /// meaningless against this buffer's offsets.
-    #[must_use]
-    pub fn reference_at(&self, offset: u32) -> Option<&RefSite> {
-        self.refs
+    pub fn own_enums(&self) -> impl Iterator<Item = &EnumSymbol> {
+        self.enums
             .iter()
-            .filter(|r| r.src_file == 0 && r.span.start <= offset && offset <= r.span.end)
-            // Prefer the tightest (shortest) enclosing span.
-            .min_by_key(|r| r.span.end - r.span.start)
+            .filter(|e| e.src_file == Some(0) && !e.name.contains('<'))
     }
 
-    /// The function declaration (if any) whose name_span contains `offset`,
-    /// restricted to this buffer.
+    /// Whether `file` is one of the program's own files or packages rather
+    /// than a standard library module.
     #[must_use]
-    pub fn own_function_decl_at(&self, offset: u32) -> Option<&FunctionSymbol> {
-        self.own_functions()
-            .find(|f| f.name_span.start <= offset && offset <= f.name_span.end)
+    pub fn is_user_file(&self, file: Option<u16>) -> bool {
+        file.and_then(|f| self.sources.get(f as usize))
+            .is_some_and(|s| !s.is_std)
     }
 
-    /// The struct declaration (if any) whose name_span contains `offset`,
-    /// restricted to this buffer.
     #[must_use]
-    pub fn own_struct_decl_at(&self, offset: u32) -> Option<&StructSymbol> {
-        self.own_structs()
-            .find(|s| s.name_span.start <= offset && offset <= s.name_span.end)
+    pub fn struct_named(&self, name: &str) -> Option<&StructSymbol> {
+        self.structs.iter().find(|s| s.name == name)
     }
 
-    /// The function declarations a call site can mean: the one its path
-    /// resolves to in its file's scope when it resolves, and otherwise every
-    /// function with its bare name (a method call, whose receiver decides).
-    pub fn targets_of<'a>(&'a self, r: &'a RefSite) -> Vec<&'a FunctionSymbol> {
-        match r.target_fn.and_then(|id| self.functions.get(id)) {
-            Some(f) => vec![f],
-            None => self.functions_named(&r.target_name).collect(),
+    #[must_use]
+    pub fn enum_named(&self, name: &str) -> Option<&EnumSymbol> {
+        self.enums.iter().find(|e| e.name == name)
+    }
+
+    /// The methods an `impl` block attaches to the type named `ty`, leaving
+    /// out the operators.
+    pub fn methods_of<'a>(&'a self, ty: &'a str) -> impl Iterator<Item = &'a FunctionSymbol> {
+        self.functions.iter().filter(move |f| {
+            f.method
+                .as_ref()
+                .is_some_and(|(t, name)| t == ty && is_identifier(name))
+        })
+    }
+
+    #[must_use]
+    pub fn method(&self, ty: &str, name: &str) -> Option<&FunctionSymbol> {
+        self.functions.iter().find(|f| {
+            f.method
+                .as_ref()
+                .is_some_and(|(t, n)| t == ty && n == name && is_identifier(n))
+        })
+    }
+
+    /// The scope entry the buffer writes as `label` (`name` or
+    /// `module::name`).
+    #[must_use]
+    pub fn lookup(&self, label: &str) -> Option<ScopeKind> {
+        self.scope.iter().find(|e| e.label == label).map(|e| e.kind)
+    }
+
+    /// The free function the buffer calls as `label`.
+    #[must_use]
+    pub fn function(&self, label: &str) -> Option<&FunctionSymbol> {
+        match self.lookup(label)? {
+            ScopeKind::Function(id) => self.functions.get(id),
+            _ => None,
         }
     }
 
-    /// All function declarations (from this buffer or an import) with the
-    /// given bare name, used to resolve a `RefSite::target_name`.
-    pub fn functions_named<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> impl Iterator<Item = &'a FunctionSymbol> {
-        self.functions.iter().filter(move |f| f.name == name)
+    /// The attribute the buffer writes as `@label`.
+    #[must_use]
+    pub fn attribute(&self, label: &str) -> Option<&AttributeSymbol> {
+        match self.lookup(label)? {
+            ScopeKind::Attribute(id) => self.attributes.get(id),
+            _ => None,
+        }
     }
-    pub fn structs_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a StructSymbol> {
-        self.structs.iter().filter(move |s| s.name == name)
+
+    /// The attribute uses written on `on`.
+    pub fn uses_on<'a>(&'a self, on: &'a UseOn) -> impl Iterator<Item = &'a AttributeUseSymbol> {
+        self.attribute_uses.iter().filter(move |u| &u.on == on)
     }
 }
 
@@ -663,6 +931,11 @@ mod tests {
     use super::ANON_FN_PREFIX;
     use super::METHOD_SEP;
     use super::analyze;
+    use candela::compiler::imports::ImportResolver;
+
+    fn analyze_buffer(text: &str, path: &str) -> super::AnalysisOutcome {
+        analyze(text, path, &ImportResolver::new())
+    }
 
     /// A buffer using a macro of the host it is written for still analyzes:
     /// the server has no expanders, so the macro compiles as `null` and the
@@ -673,7 +946,7 @@ mod tests {
         // server walks it without recursing down it and stays up.
         let chain = vec!["a"; 20_000].join(" + ");
         let source = format!("fn main() {{\n    let a = 1;\n    print({chain});\n}}\n");
-        let outcome = analyze(&source, "buffer.cdl");
+        let outcome = analyze_buffer(&source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -686,7 +959,7 @@ mod tests {
     #[test]
     fn an_unknown_macro_is_not_a_diagnostic() {
         let source = "fn main() {\n    let markup = lmn!(<p>hi</p>);\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -702,7 +975,7 @@ mod tests {
     #[test]
     fn code_under_a_false_cfg_is_not_a_diagnostic() {
         let source = "@cfg(web)\nimport \"js\";\n\n@cfg(web)\nfn track(e: string) { js::call(\"gtag\", [e]); }\n@cfg(not(web))\nfn track(e: string) {}\n\nfn main() {\n    @cfg(web)\n    let x = only_on_web();\n    track(\"open\");\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -715,7 +988,7 @@ mod tests {
     #[test]
     fn a_bad_attribute_argument_is_reported() {
         let source = "host \"ecs\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n@system(after: [movment])\nfn spawn() {}\n\nfn movement() {}\n\nfn main() {}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         let diagnostic = outcome.diagnostic.expect("movment is no function");
         assert_eq!(diagnostic.code, "attribute_bad_argument");
     }
@@ -726,7 +999,7 @@ mod tests {
     #[test]
     fn tuples_analyse_and_stay_out_of_the_outline() {
         let source = "fn swap(t: (int, int)) -> (int, int) {\n    let (a, b) = t;\n    return (b, a);\n}\n\nfn main() {\n    print(swap((1, 2)).0);\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -741,7 +1014,7 @@ mod tests {
     #[test]
     fn a_real_error_beside_a_macro_is_still_reported() {
         let source = "fn main() {\n    let markup = lmn!(<p/>);\n    let broken = 1 +\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(outcome.diagnostic.is_some());
     }
 
@@ -751,7 +1024,7 @@ mod tests {
     #[test]
     fn a_body_error_in_an_uncalled_function_is_reported() {
         let source = "fn broken(a: int) -> int {\n    return a + \"nope\";\n}\n\nfn main() {\n    print(1);\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         let diagnostic = outcome
             .diagnostic
             .expect("the uncalled function's body is checked");
@@ -777,7 +1050,7 @@ mod tests {
                       fn main() {\n\
                       \x20   print((Vec2 { x: 1 } + Vec2 { x: 2 }).x);\n\
                       }\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -804,7 +1077,7 @@ mod tests {
                       fn width(v: Value, xs: Value[], m: {string: Value}) -> int {\n\
                       \x20   return xs.len();\n\
                       }\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -815,8 +1088,9 @@ mod tests {
             .own_functions()
             .find(|f| f.name == "width")
             .expect("the function is in the outline");
+        let params: Vec<String> = width.params.iter().map(super::Param::render).collect();
         assert_eq!(
-            width.params,
+            params,
             vec![
                 String::from("v: Value"),
                 String::from("xs: Value[]"),
@@ -835,7 +1109,7 @@ mod tests {
     fn a_struct_field_of_an_enum_type_is_named() {
         let source = "enum Value { Num(int), Text(string) }\n\
                       struct Holder { first: Value, rest: Value[] }\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -846,8 +1120,13 @@ mod tests {
             .own_structs()
             .find(|s| s.name == "Holder")
             .expect("the struct is in the outline");
+        let fields: Vec<(String, String)> = holder
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), f.ty.clone()))
+            .collect();
         assert_eq!(
-            holder.fields,
+            fields,
             vec![
                 (String::from("first"), String::from("Value")),
                 (String::from("rest"), String::from("Value[]")),
@@ -861,7 +1140,7 @@ mod tests {
     #[test]
     fn a_dynamic_slot_is_spelled_the_way_the_compiler_spells_it() {
         let source = "fn pick(a: any) -> int {\n    return 1;\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -872,7 +1151,7 @@ mod tests {
             .own_functions()
             .find(|f| f.name == "pick")
             .expect("the function is in the outline");
-        assert_eq!(pick.params, vec![String::from("a: any")]);
+        assert_eq!(pick.params[0].render(), "a: any");
     }
 
     /// The outline lists what the buffer declares. A closure the type checker
@@ -881,7 +1160,7 @@ mod tests {
     #[test]
     fn the_outline_leaves_out_the_names_the_compiler_made() {
         let source = "struct Point { x: int }\n                      impl Point { fn twice(self) -> int { return self.x * 2; } }\n                      fn apply(f, n) { return f(n); }\n                      fn main() {\n                          print(apply(fn(v) { return v + 1; }, Point{ x: 1 }.twice()));\n                      }\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -908,7 +1187,7 @@ mod tests {
     #[test]
     fn a_buffer_with_no_main_still_analyzes() {
         let source = "fn double(a: int) -> int {\n    return a * 2;\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -929,7 +1208,7 @@ mod tests {
     #[test]
     fn a_warning_comes_back_with_the_summary() {
         let source = "fn on_click(id) {\n    print(id);\n}\n\nfn main() {}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(outcome.diagnostic.is_none());
         assert!(outcome.summary.is_some());
         assert_eq!(outcome.warnings.len(), 1);
@@ -946,7 +1225,7 @@ mod tests {
     #[test]
     fn expression_forms_analyze() {
         let source = "enum Light { Stop, Slow, Go }\n\nfn word(l: Light) -> string => match l {\n    Stop | Slow => \"wait\",\n    Go => \"go\",\n};\n\nfn main() {\n    let xs = [1, 2, 3].map(fn(x) => x * 2);\n    print(word(Light::Go), xs[1..]);\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -961,7 +1240,7 @@ mod tests {
     #[test]
     fn a_dylib_is_bound_without_its_library() {
         let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
-        let outcome = analyze(source, "buffer.cdl");
+        let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.diagnostic.is_none(),
             "{:?}",
@@ -988,7 +1267,7 @@ mod tests {
                       \x20   print(geo::area(2, 3) + unit());\n\
                       }\n";
         let path = dir.join("buffer.cdl");
-        let outcome = analyze(source, path.to_str().unwrap());
+        let outcome = analyze_buffer(source, path.to_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             outcome.diagnostic.is_none(),
@@ -996,17 +1275,15 @@ mod tests {
             outcome.diagnostic.map(|d| d.message)
         );
         let summary = outcome.summary.expect("a summary is produced");
-        let call = summary
-            .refs
-            .iter()
-            .find(|r| r.src_file == 0 && r.target_name == "area")
-            .expect("the call is recorded");
-        let targets = summary.targets_of(call);
-        assert_eq!(targets.len(), 1);
+        let area = summary
+            .function("geo::area")
+            .expect("geo::area is in scope");
         assert!(
-            summary.source_files[targets[0].src_file as usize].ends_with("geo.cdl"),
+            summary.sources[area.src_file as usize]
+                .path
+                .ends_with("geo.cdl"),
             "{:?}",
-            summary.source_files
+            summary.sources.iter().map(|s| &s.path).collect::<Vec<_>>()
         );
         let labels: Vec<&str> = summary.scope.iter().map(|e| e.label.as_str()).collect();
         assert!(labels.contains(&"geo::area"), "{labels:?}");

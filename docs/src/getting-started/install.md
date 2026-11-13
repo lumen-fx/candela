@@ -167,8 +167,11 @@ export CANDELA_NO_UPDATE_CHECK=1
 
 The toolchain installs `candela-lsp`, a language server that runs candela's own
 parser and type checker, so an editor reports the same errors the compiler
-does. On top of diagnostics it gives hover, completion, go-to-definition, and a
-document outline. Every editor below finds it as `candela-lsp` on your path.
+does. On top of diagnostics it gives completion that knows what the cursor is
+on (a value's fields and methods, an enum's variants, a struct literal's
+missing fields, an attribute's parameters and values), hover with the comment
+above a declaration, signature help, go-to-definition, and a document outline.
+Every editor below finds it as `candela-lsp` on your path.
 
 Highlighting comes from one of two grammars. VS Code and the IntelliJ-based
 IDEs use a TextMate grammar; Neovim, Helix, and Zed use the tree-sitter
@@ -176,7 +179,10 @@ grammar, which also drives structural selection and bracket matching. Both live
 in the repository, under `editors/`.
 
 - **VS Code.** Install the Candela extension from the Marketplace or Open VSX.
-  Set `candela.languageServerPath` to use a server that is not on your path.
+  Set `candela.languageServerPath` to use a server that is not on your path,
+  and `candela.importRoots` to name a package a script imports without a
+  manifest, such as a host program's module:
+  `{ "engine": "~/engine/module" }`.
 - **IntelliJ IDEA and the other JetBrains IDEs.** Build `editors/jetbrains`
   with `./gradlew buildPlugin`, install [LSP4IJ] from the JetBrains
   Marketplace, then install the zip from `build/distributions/` with

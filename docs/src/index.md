@@ -77,9 +77,9 @@ packages a project depends on.
 
 Editor support comes from `candela-lsp`, the language server, which runs the
 same compiler your build does and reports what it finds as you type.
-Diagnostics, hover, completion, an outline, and go to definition come from it,
-so every client gets the same answers. Highlighting is the client's own, from
-one of two grammars, and `editors/` holds five clients:
+Diagnostics, hover, completion, signature help, an outline, and go to
+definition come from it, so every client gets the same answers. Highlighting is
+the client's own, from one of two grammars, and `editors/` holds five clients:
 
 - `editors/vscode`, for VS Code: a TextMate grammar, with snippets.
 - `editors/jetbrains`, for the IntelliJ-based IDEs: the same TextMate grammar,

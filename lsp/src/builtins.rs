@@ -8,11 +8,17 @@
 //! and from `docs/src/standard-library/builtins.md`, and must be
 //! kept in sync by hand if candela's built-ins change.
 
-/// Reserved words, from `Token` in `src/parser/lexer.rs`.
-pub const KEYWORDS: &[&str] = &[
-    "fn", "let", "struct", "if", "else", "match", "while", "for", "in", "loop", "return", "break",
-    "continue", "try", "catch", "throw", "import", "as", "is", "host", "dylib", "true", "false",
-    "null",
+/// Reserved words a statement or an expression starts with, from `Token` in
+/// `src/parser/lexer.rs`.
+pub const STATEMENT_KEYWORDS: &[&str] = &[
+    "let", "if", "else", "match", "while", "for", "in", "loop", "return", "break", "continue",
+    "try", "catch", "throw", "true", "false", "null", "fn", "as", "is",
+];
+
+/// Reserved words a top-level declaration starts with. `const` is read by the
+/// parser as a name in that position rather than lexed as a keyword.
+pub const ITEM_KEYWORDS: &[&str] = &[
+    "fn", "struct", "enum", "impl", "import", "const", "host", "dylib",
 ];
 
 /// Free-standing built-in functions, from

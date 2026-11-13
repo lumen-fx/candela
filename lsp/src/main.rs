@@ -8,7 +8,9 @@
 mod analysis;
 mod backend;
 mod builtins;
+mod ide;
 mod line_index;
+mod syntax;
 
 use backend::Backend;
 use tower_lsp::{LspService, Server};
