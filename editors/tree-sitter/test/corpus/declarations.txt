@@ -7,6 +7,7 @@ import "pgo_import_test.cdl";
 import "std/json" as j;
 import "std/assert" { eq, is_true };
 import "std/set" { Set, };
+export import "./parts.cdl" { * };
 
 --------------------------------------------------------------------------------
 
@@ -26,7 +27,10 @@ import "std/set" { Set, };
   (import_declaration
     (string_literal)
     (import_items
-      (identifier))))
+      (identifier)))
+  (import_declaration
+    (string_literal)
+    (import_items)))
 
 ================================================================================
 Function declaration
