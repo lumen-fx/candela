@@ -1377,3 +1377,145 @@ fn a_name_two_globs_bring_in_is_ambiguous_where_used() {
     );
     assert_eq!(String::from_utf8_lossy(&picked.stdout), "2\n");
 }
+
+/// `export import` passes what it brings in on to the files importing the
+/// module, so one module can gather several files under its own name: every
+/// kind of item, the methods of a type, and a host block's attributes, through
+/// more than one level, whether the module is imported by items or by name.
+#[test]
+fn an_export_import_passes_its_items_on() {
+    let output = run_program(
+        "export_glob",
+        &[
+            (
+                "parts/shapes.cdl",
+                "struct Vec2 { x: float = 0.0 }\n\
+                 impl Vec2 { fn len(self) -> float { return self.x; } }\n\
+                 enum Kind { Round, Square }\n\
+                 const SIDE: int = 4;\n\
+                 fn area() -> int { return SIDE * SIDE; }\n",
+            ),
+            (
+                "parts/tags.cdl",
+                "host \"tags\" { attribute marker on struct; }\n",
+            ),
+            (
+                "parts/all.cdl",
+                "export import \"./shapes.cdl\" { * };\n\
+                 export import \"./tags.cdl\" { * };\n",
+            ),
+            (
+                "lib.cdl",
+                "export import \"./parts/all.cdl\" { * };\n\
+                 fn own() -> string { return \"own\"; }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" { * };\n\
+                 import \"lib.cdl\";\n\
+                 @marker\nstruct Tag { n: int = 1 }\n\
+                 fn main() { print(own(), area(), Vec2 { x: 2.0 }.len(), Kind::Square, SIDE, Tag { .. }.n, lib::area()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "own\n16\n2.0\nSquare\n4\n1\n16\n"
+    );
+}
+
+/// A list passes on only the items it names, a plain import passes on
+/// nothing, and a declaration of the module's own shadows an item an
+/// `export import` brought in.
+#[test]
+fn an_export_import_passes_on_only_what_the_module_shows() {
+    let modules = [
+        (
+            "a.cdl",
+            "fn named() -> int { return 1; }\nfn unnamed() -> int { return 2; }\n",
+        ),
+        ("c.cdl", "fn shadowed() -> string { return \"c\"; }\n"),
+        ("b.cdl", "fn hidden() -> int { return 3; }\n"),
+        (
+            "lib.cdl",
+            "export import \"./a.cdl\" { named };\n\
+             export import \"./c.cdl\" { * };\n\
+             import \"./b.cdl\" { * };\n\
+             fn shadowed() -> string { return \"lib\"; }\n",
+        ),
+    ];
+    let named = run_program(
+        "export_named",
+        &[
+            modules[0],
+            modules[1],
+            modules[2],
+            modules[3],
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" { * };\nfn main() { print(named(), shadowed()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        named.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&named.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&named.stdout), "1\nlib\n");
+    for (test, call) in [("export_unnamed", "unnamed"), ("export_plain", "hidden")] {
+        let prog = format!("import \"lib.cdl\" {{ * }};\nfn main() {{ print({call}()); }}\n");
+        let output = run_program(
+            test,
+            &[
+                modules[0],
+                modules[1],
+                modules[2],
+                modules[3],
+                ("prog.cdl", &prog),
+            ],
+        );
+        assert!(!output.status.success(), "{call} should not reach prog.cdl");
+    }
+}
+
+/// An `export import` names the items it passes on; one that binds the
+/// module under a name is an error that shows the form to write.
+#[test]
+fn an_export_import_without_items_is_an_error() {
+    let output = check_program(
+        "export_bare",
+        &[
+            ("a.cdl", "fn f() -> int { return 1; }\n"),
+            ("prog.cdl", "export import \"a.cdl\";\n"),
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("export import"), "stderr: {stderr}");
+    assert!(stderr.contains("{ * }"), "stderr: {stderr}");
+}
+
+/// `export` is a word only in front of `import`, so a function named
+/// `export` still compiles.
+#[test]
+fn export_stays_a_name_elsewhere() {
+    let output = run_program(
+        "export_name",
+        &[(
+            "prog.cdl",
+            "fn export(n: int) -> int { return n + 1; }\nfn main() { print(export(1)); }\n",
+        )],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
+}

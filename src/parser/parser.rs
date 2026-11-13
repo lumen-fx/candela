@@ -166,6 +166,9 @@ enum ParserErr<'a> {
     ImportAliasWithItems,
     /// `{}` with no item in it.
     ImportItemsEmpty,
+    /// `export import` that binds the module under a name instead of naming
+    /// the items it passes on.
+    ExportImportWithoutItems,
     /// `name!(` whose region the file ends before closing.
     UnterminatedMacroRegion(&'a str),
     /// `name!(...)` with no expander registered for `name`.
@@ -231,6 +234,7 @@ impl ParserErr<'_> {
             ParserErr::ImportNameNotIdentifier(_) => "import_name_not_identifier",
             ParserErr::ImportAliasWithItems => "import_alias_with_items",
             ParserErr::ImportItemsEmpty => "import_items_empty",
+            ParserErr::ExportImportWithoutItems => "export_import_without_items",
             ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
             ParserErr::UnknownMacro(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
@@ -340,6 +344,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::ImportItemsEmpty => &format!(
             "Name at least one item between the braces, or drop them to bind the module: {BLUE}{BOLD}import \"std/json\";{RESET}"
+        ),
+        ParserErr::ExportImportWithoutItems => &format!(
+            "An {BLUE}{BOLD}export import{RESET} passes items on to the files importing this one, so it names them: {BLUE}{BOLD}export import \"./shapes.cdl\" {{ * }};{RESET} or {BLUE}{BOLD}{{ Circle, area }}{RESET}"
         ),
         ParserErr::UnterminatedMacroRegion(name) => &format!(
             "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
@@ -1270,9 +1277,10 @@ fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {
     output
 }
 
-fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
+fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Import);
+    let start = exported.map_or(start, |span| span.start);
     let (next_token, span) = parser.next_token();
     // One import form: a quoted path.
     //   * A path ending in `.cdl` is a file import, resolved next to the
@@ -1420,6 +1428,17 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
             binding = Some(ImportBinding::Items(items.into_boxed_slice()));
         }
     }
+    // An `export import` passes on what it brings in, so it has to bring
+    // items in rather than bind a name.
+    if exported.is_some()
+        && !matches!(
+            binding,
+            Some(ImportBinding::Items(_) | ImportBinding::Glob(_))
+        )
+    {
+        cold_path();
+        parser.error((start, end).into(), ParserErr::ExportImportWithoutItems);
+    }
     // With neither, the module is bound under the last segment of its path:
     // `std/json` binds `json`, `./geometry.cdl` binds `geometry`.
     let binding = binding.unwrap_or_else(|| {
@@ -1437,7 +1456,13 @@ fn parse_file_import(parser: &mut Parser<'_>) -> Expr {
         Token::SemiColon,
         "Import statements must end with a semicolon",
     );
-    Expr::ImportFile(path, binding, is_logical, (start, end).into())
+    Expr::ImportFile(
+        path,
+        binding,
+        is_logical,
+        (start, end).into(),
+        exported.is_some(),
+    )
 }
 
 /// The name an import binds its module under when it says no other: the last
@@ -2069,9 +2094,28 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
         output.push(parse_const(parser));
         return;
     }
+    // `export import`: `export` is a word only in front of `import`, so a
+    // program that names something `export` keeps compiling.
+    if t == Token::Identifier("export") {
+        let (_, span) = parser.next_token();
+        if parser.peek_token_opt() != Some(Token::Import) {
+            cold_path();
+            let (next, at) = parser.next_token();
+            parser.error(
+                at,
+                ParserErr::UnexpectedToken(
+                    Token::Import,
+                    next,
+                    "export goes in front of an import: export import \"./shapes.cdl\" { * };",
+                ),
+            );
+        }
+        output.push(parse_file_import(parser, Some(span)));
+        return;
+    }
     output.push(match t {
         Token::Function => parse_function(parser),
-        Token::Import => parse_file_import(parser),
+        Token::Import => parse_file_import(parser, None),
         Token::Struct => parse_struct_declare(parser),
         Token::Enum => parse_enum_declare(parser),
         Token::Dylib => parse_dylib_import(parser),

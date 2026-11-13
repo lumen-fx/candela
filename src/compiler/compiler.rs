@@ -7420,6 +7420,39 @@ fn bind_import(
     }
 }
 
+/// The items an `export import` with `binding` brings in from a module that
+/// shows `exports`: every item for `{ * }`, and for a list the named items
+/// with the methods of each named type.
+fn reexported(exports: &Namespace, binding: &ImportBinding) -> Vec<(SmolStr, SymbolKind)> {
+    let shown = |name: &SmolStr, kind: &SymbolKind| {
+        let own_main = name == "main" && matches!(kind, SymbolKind::Fn(_));
+        !own_main && !name.starts_with(type_system::ANON_FN_PREFIX)
+    };
+    match binding {
+        ImportBinding::Glob(_) => exports
+            .symbols
+            .iter()
+            .filter(|(name, kind)| shown(name, kind))
+            .cloned()
+            .collect(),
+        ImportBinding::Items(items) => exports
+            .symbols
+            .iter()
+            .filter(|(name, kind)| {
+                shown(name, kind)
+                    && items.iter().any(|(item, _)| {
+                        name == item
+                            || name
+                                .split_once(METHOD_SEP)
+                                .is_some_and(|(type_name, _)| type_name == item)
+                    })
+            })
+            .cloned()
+            .collect(),
+        ImportBinding::Namespace(_) => Vec::new(),
+    }
+}
+
 /// The names a module declares that an import can name, in declaration
 /// order: its functions, structs and enums, without the `impl` methods that
 /// travel with a type and without a `main` of its own.
@@ -7665,7 +7698,7 @@ fn parse_toplevel(
             }
             // An Emscripten build has a file system, so files import there.
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-            Expr::ImportFile(ref path, _, is_logical, _)
+            Expr::ImportFile(ref path, _, is_logical, ..)
                 if !is_logical || embedded_std_module(path).is_none() =>
             {
                 wasm_error(
@@ -7687,6 +7720,9 @@ fn parse_toplevel(
     // Names glob imports brought in, with the module each came from: a
     // later explicit item replaces one, and a second glob makes it ambiguous.
     let mut globbed: Vec<(SmolStr, SmolStr)> = Vec::new();
+    // What each `export import` brought in, which joins what this file shows
+    // its importers once every import is bound.
+    let mut passed_on: Vec<(SmolStr, SymbolKind)> = Vec::new();
 
     for import in imports {
         match import {
@@ -7803,7 +7839,7 @@ fn parse_toplevel(
                     is_host: true,
                 });
             }
-            Expr::ImportFile(path, binding, is_logical, span) => {
+            Expr::ImportFile(path, binding, is_logical, span, exported) => {
                 // Where the import reads from, and, for the error when it reads
                 // from nowhere, every place that was tried. A module the
                 // compiler carries comes with its text.
@@ -7926,6 +7962,9 @@ fn parse_toplevel(
                 } else {
                     path.clone()
                 };
+                if exported {
+                    passed_on.extend(reexported(&child_namespace, &binding));
+                }
                 bind_import(
                     namespace,
                     child_namespace,
@@ -7940,6 +7979,23 @@ fn parse_toplevel(
                 );
             }
             _ => unsafe { unreachable_unchecked() },
+        }
+    }
+
+    // An item an `export import` brought in joins what this file shows, when
+    // the file's scope still holds it: a declaration of the file's own that
+    // shadows it is what importers see, and a name two globs made ambiguous
+    // is passed on by neither.
+    if !passed_on.is_empty() {
+        let shown = files.entry(file_path.to_path_buf()).or_default();
+        for (name, kind) in passed_on {
+            let in_scope = namespace
+                .symbols
+                .iter()
+                .any(|(n, k)| *n == name && symbol_ids_equal(*k, kind));
+            if in_scope && !shown.symbols.iter().any(|(n, _)| *n == name) {
+                shown.symbols.push((name, kind));
+            }
         }
     }
 

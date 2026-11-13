@@ -15,6 +15,9 @@
 (import_declaration
   "as" @keyword.import)
 
+(import_declaration
+  "export" @keyword.import)
+
 ; `v is int` and `v as int`: the type test and the checked downcast.
 (type_test_expression
   "is" @keyword.operator)

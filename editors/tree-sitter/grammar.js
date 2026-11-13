@@ -167,8 +167,10 @@ module.exports = grammar({
 
     // `import "std/json";` binds the module under its last path segment,
     // `as` names it, and a braced list brings named items into scope instead.
+    // `export` in front passes the items on to the files importing this one.
     import_declaration: ($) =>
       seq(
+        optional(field('export', 'export')),
         'import',
         field('path', $.string_literal),
         optional(
