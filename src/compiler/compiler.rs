@@ -8390,6 +8390,11 @@ pub struct CompileOutput {
     /// Every attribute a `host` block declares that the program's scripts
     /// wrote on a function or a struct, checked against its declaration.
     pub attributes: Vec<Attribute>,
+    /// Every attribute declaration the program's `host` blocks hold, with the
+    /// host namespace and the file it was written in. A
+    /// [`SymbolKind::Attribute`] is an index into this list. A tool reads it to
+    /// offer the attributes a script can write and the parameters they take.
+    pub attribute_decls: Vec<(SmolStr, u16, attributes::AttributeDecl)>,
 }
 
 impl CompileOutput {
@@ -8714,6 +8719,7 @@ pub fn compile_profile(
         optimize,
         event_entry: None,
         attributes,
+        attribute_decls: pending_attributes.decls,
     };
     out.event_entry = crate::trampoline::compile_event_entry(&mut out);
     out
