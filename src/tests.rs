@@ -6125,7 +6125,7 @@ pub fn stress_compiler_semantic_errors() {
         // No compiler error may fall back to the old blanket code.
         assert_ne!(d.code, "compile_error", "blanket code for: {src}");
         assert_eq!(d.code, expected_code, "unexpected code for: {src}");
-        distinct.insert(d.code.clone());
+        distinct.insert(d.code);
     }
     // The corpus deliberately spans many distinct error kinds; make sure the
     // codes differentiate them rather than all being equal.

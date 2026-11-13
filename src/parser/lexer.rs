@@ -254,6 +254,9 @@ pub enum Token<'a> {
     // The exponent form is what lets a constant like 6.02e23 be written at the
     // scale it is quoted at. A float with nothing before its point, `.5`, is
     // read as [`Token::DotDigits`] instead; see there.
+    // Every spelling hands its slice to the same `read_float` callback, which
+    // clippy reads as a repeated attribute argument.
+    #[allow(clippy::duplicated_attributes)]
     #[regex(r"[0-9]+[.][0-9]+", read_float)]
     #[regex(r"([0-9]*[.])?[0-9]+[eE][+-]?[0-9]+", read_float)]
     // An exponent marker with nothing after it. The rule exists so the number

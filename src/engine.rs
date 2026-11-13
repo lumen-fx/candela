@@ -565,8 +565,7 @@ impl Program {
             filename: self
                 .sources
                 .first()
-                .map(|source| source.filename.to_string())
-                .unwrap_or_default(),
+                .map_or_default(|source| source.filename.to_string()),
             span: 0..0,
             message: format!("argument {} of '{fn_name}' {why}", index + 1),
             code: String::from("argument_type_mismatch"),

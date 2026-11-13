@@ -515,17 +515,14 @@ impl Generics {
     }
 
     fn bound_names(&self) -> Vec<SmolStr> {
-        self.bindings
-            .last()
-            .map(|frame| {
-                frame
-                    .named
-                    .iter()
-                    .map(|(p, _)| p.clone())
-                    .chain(frame.unnamed.iter().cloned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.bindings.last().map_or_default(|frame| {
+            frame
+                .named
+                .iter()
+                .map(|(p, _)| p.clone())
+                .chain(frame.unnamed.iter().cloned())
+                .collect()
+        })
     }
 
     /// The parameters of the generic declaration `name` names, for a caller

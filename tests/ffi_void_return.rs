@@ -113,8 +113,7 @@ fn a_type_with_no_c_shape_is_a_compile_error() {
             diagnostic.message
         );
         assert_eq!(
-            &src[diagnostic.span.clone()],
-            name,
+            &src[diagnostic.span], name,
             "the report points at the function"
         );
     }
