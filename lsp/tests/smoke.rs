@@ -349,13 +349,155 @@ async fn hover_over_an_enum_typed_parameter_names_the_enum() {
         "hover should name the parameter's enum: {shown}"
     );
     assert!(
-        shown.contains("(Value) -> int"),
-        "the inferred signature should name it too: {shown}"
+        shown.contains("fn width(v: Value) -> int"),
+        "the signature should name it too: {shown}"
     );
     assert!(
         !shown.contains("enum"),
         "no type should read as the bare word `enum`: {shown}"
     );
+
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Reads messages until the response to request `id` arrives.
+async fn response(stdout: &mut BufReader<tokio::process::ChildStdout>, id: i64) -> Value {
+    for _ in 0..50 {
+        let msg = timeout(TIMEOUT, read_message(stdout))
+            .await
+            .expect("timed out waiting for a response");
+        if msg["id"] == id {
+            return msg;
+        }
+    }
+    panic!("server never answered request {id}");
+}
+
+/// A package named in `initializationOptions` resolves `import "engine"`, and
+/// completion, hover and go-to-definition reach into it: a glob import's
+/// attribute after `@`, a struct's fields after `.` on a typed parameter
+/// while the buffer does not compile, and the field's declaration in the
+/// package's file.
+#[tokio::test]
+async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_roots_{}", std::process::id()));
+    let package = dir.join("engine");
+    std::fs::create_dir_all(package.join("src")).expect("create package dir");
+    std::fs::write(
+        package.join("src/main.cdl"),
+        "host \"engine\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n\
+         // Where a thing is.\nstruct Spot {\n    // Across.\n    x: float = 0.0,\n    y: float = 0.0,\n}\n",
+    )
+    .expect("write package");
+    let game = dir.join("game.cdl");
+    let compiles = "import \"engine\" { * };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
+    std::fs::write(&game, compiles).expect("write game");
+    let uri = format!("file://{}", game.display());
+
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": null,
+                "capabilities": {},
+                "initializationOptions": { "importRoots": { "engine": package } }
+            }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": compiles } }
+        }),
+    )
+    .await;
+
+    // Mid-edit: `s.` on its own line does not compile.
+    let editing = compiles.replace("    s.x += 1.0;", "    s.");
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": editing }]
+            }
+        }),
+    )
+    .await;
+    let request = |id: i64, method: &str, line: u32, character: u32| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }
+        })
+    };
+    write_message(&mut stdin, &request(3, "textDocument/completion", 4, 6)).await;
+    let fields: Vec<String> = response(&mut stdout, 3).await["result"]
+        .as_array()
+        .expect("a completion list")
+        .iter()
+        .map(|i| i["label"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(fields, vec!["x", "y"]);
+
+    write_message(&mut stdin, &request(4, "textDocument/completion", 2, 1)).await;
+    let attrs = response(&mut stdout, 4).await;
+    assert_eq!(attrs["result"][0]["label"], "system", "{attrs}");
+
+    // Back to the compiling text: hover and definition on `s.x`.
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 3 },
+                "contentChanges": [{ "text": compiles }]
+            }
+        }),
+    )
+    .await;
+    write_message(&mut stdin, &request(5, "textDocument/hover", 4, 6)).await;
+    let hover = response(&mut stdout, 5).await;
+    let shown = hover["result"]["contents"]["value"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        shown.contains("Spot.x: float") && shown.contains("Across."),
+        "{shown}"
+    );
+
+    write_message(&mut stdin, &request(6, "textDocument/definition", 4, 6)).await;
+    let def = response(&mut stdout, 6).await;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        def["result"]["uri"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("engine/src/main.cdl"),
+        "{def}"
+    );
+    assert_eq!(def["result"]["range"]["start"]["line"], 7, "{def}");
 
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }

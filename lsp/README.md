@@ -25,13 +25,35 @@ The binary speaks LSP over stdin and stdout and expects to be launched by an
 editor (see `../editors/vscode/` for the reference client). It is not meant to
 be run interactively from a terminal.
 
+## Settings
+
+The server reads where imports resolve from in the `initializationOptions`
+the client sends, and again in every `workspace/didChangeConfiguration`. The
+object may sit under a `candela` key:
+
+```json
+{ "importRoots": { "engine": "/opt/engine/module" }, "libPath": "/opt/candela/libs" }
+```
+
+- `importRoots` names the packages `import "name";` reads. A directory is a
+  package root, entered through the file its `candela.toml` names, or
+  `src/main.cdl`; a `.cdl` file is the module itself. A program that imports a
+  host's module, which no manifest lists, needs this to compile in the editor.
+- `libPath` is the directory holding `std/`, what `CANDELA_LIB_PATH` names.
+  Without it the server reads `CANDELA_LIB_PATH`, then the `libs/` beside its
+  own executable.
+
+The VS Code extension sends both from its `candela.importRoots` and
+`candela.libPath` settings.
+
 ## Features
 
 Every feature re-analyses the buffer by calling candela's compiler (parse,
 type-check, and codegen, without running `main`, so editing has no script side
 effects) and reads the symbol tables it returns. A per-document cache keeps the
-last successful compile's symbols around, so hover, completion, outline, and
-go-to-definition keep working while a buffer is mid-edit and not yet compiling.
+last successful compile's tables, so the features below keep working while a
+buffer is mid-edit and not yet compiling. What the cursor is on is read from
+the current text, so `bird.` completes while the line around it is unfinished.
 
 - **Diagnostics.** Parse and type errors are pushed as
   `textDocument/publishDiagnostics`. candela reports one error per compile, so
@@ -41,54 +63,69 @@ go-to-definition keep working while a buffer is mid-edit and not yet compiling.
   never calls is reported here too, as long as that function annotates every
   parameter. A `main` is not required, so a library buffer analyses like any
   other. The warnings that command prints, such as a bare parameter on a
-  function nothing calls, are pushed alongside at warning severity.
+  function nothing calls, are pushed alongside at warning severity. Two more
+  warnings cover attributes the compiler accepts but a host is unlikely to
+  mean: the same attribute written twice on one item, and a variant passed for
+  an `enum` parameter from an enum the declaring host marks with none of its
+  attributes while it marks others.
 
 - **Document sync.** Full-document sync (`didOpen`/`didChange`/`didClose`); each
   change replaces the whole buffer.
 
-- **Hover.** On a struct, shows its fields with their declared types. On a
-  function, shows its parameters with the concrete `(arg types) -> return type`
-  signatures it has been specialised for; candela infers a function's return
-  type per call site, so a function nothing calls yet shows no return type
-  unless it annotates every parameter, in which case the entry point compiled
-  for it stands in for the missing call. On a built-in function or method,
-  shows its documentation. Hover works on a use site as well as a declaration.
-  A type is written the way a compiler error writes it, through the same
-  renderer, so your own struct or enum reads by the name you declared it under.
-  Hovering a local variable shows nothing: candela does not retain
-  per-variable inferred types after compilation.
+- **Completion.** What is offered depends on where the cursor is:
+  - after `value.`, the fields and methods of the value's type. The type is
+    followed from a parameter's annotation, a `let`, a `for` pattern
+    (including each element of `for (a, b) in q` over a list of tuples), a
+    field, a call's return type or a struct literal;
+  - after `Enum::`, its variants; after `module::`, the module's names;
+  - inside `Name { ... }`, the fields not written yet, and in a field's value
+    the variants of its enum first;
+  - after `@`, the attributes the program's `host` blocks declare, only those
+    that go on the item below; inside `@name(...)`, the parameters not
+    written yet, and in a parameter's value what its declaration accepts: the
+    variants of a declared enum, the variants of the enums the declaring host
+    marks for an `enum` parameter, the program's functions for a `fn` one, and
+    its structs for a `type` one. Functions and structs that carry the
+    attribute being written rank by how the program fills that parameter
+    already, so ordering arguments list systems and predicates list the rest;
+  - after `:` in a parameter list, a `let` or a struct declaration, and after
+    `->`, the types in scope;
+  - anywhere else, the bindings in scope with their types, the program's
+    names (its own, the items its imports named or a glob import brought in,
+    and `module::name`), builtins and keywords. At the top level, keywords and a
+    skeleton for each declared attribute: `@system fn`, `@component struct`.
+  `.`, `:` and `@` are trigger characters.
 
-- **Completion.** Completes keywords, built-in functions, and the names the
-  buffer can write: its own functions, structs and enums, the items its imports
-  name, and `module::name` for every module an import binds. `.` is a
-  registered trigger character, and typing it narrows the list to built-in
-  methods. Struct-field completion is not available.
+- **Hover.** The declaration under the cursor, written the way it reads in the
+  source, with the `//` comment above it: a function's or method's signature,
+  a struct's fields, an enum's variants, a field's type, an attribute's
+  parameters, and a local's or parameter's type. Types are written the way a
+  compiler error writes them. A function with an unannotated parameter also
+  lists the signatures its call sites gave it.
 
-- **Document symbols / outline.** `fn` and `struct` declarations from the open
-  buffer, as a flat list.
+- **Signature help.** Inside a call's parentheses, the function's or method's
+  parameters, with the one being written highlighted; inside `@name(...)`, the
+  attribute's parameters.
 
-- **Go-to-definition.** Jumps from a call site to the function's declaration,
-  including into an `import`ed file. A call written `geo::area(...)` goes to the
-  `area` of the module bound as `geo`. Struct literals resolve only within the
-  open buffer.
+- **Document symbols / outline.** The functions, structs and enums the buffer
+  declares.
+
+- **Go-to-definition.** From a use of a function, method, struct, enum,
+  variant, field, attribute or local to where it is declared, including into an
+  imported module and a package from `importRoots`. A call written
+  `geo::area(...)` goes to the `area` of the module bound as `geo`.
 
 ## Known simplifications
 
 These are deliberate, and the source refers here for them.
 
-- A method call and a struct literal match by bare name across the compiled
-  program, and return every match. A free function call resolves through the
-  scope of the file it is written in.
-- A struct carries no source-file index, so anything that needs a struct's
-  origin file (go-to-definition, and hover on a declaration) works only for
-  structs declared in the open buffer.
-- Jumping into an imported file reads that file from disk synchronously, on the
-  request.
-- The outline lists the functions and structs the buffer declares. Neither the
-  outline nor completion lists a method of an `impl` block: the compiler names it after the
-  type it attaches to (`Point#twice`), which is not a name to write, show, or
-  put a cursor on.
-- Enums are compiled but do not appear in the outline.
+- The type of a value is followed through the text, not the compiler: an
+  expression it cannot follow (a closure's parameter, a `match` arm's binding,
+  a generic function's return) completes with the builtin methods only.
+- A struct or an enum carries no source-file index, so its declaring file is
+  found by matching its name at its recorded position in each file.
+- A method of a generic struct is known once the program uses an
+  instantiation of the struct (`State<Phase>`).
 - The server handles `didSave` but does not advertise it, so a client that sends
   only what is advertised never delivers one.
 
@@ -100,16 +137,18 @@ These are deliberate, and the source refers here for them.
   nothing calls, one with no `main`, one that compiles with a warning, and one
   whose `dylib` library does not exist. It also covers how a type is written
   out: a parameter and a struct field of a user enum, and the `any` slot.
+- `src/ide.rs` unit-tests completion, hover, signature help, go-to-definition
+  and the attribute warnings against a small game written for a host that
+  declares its attributes in a `host` block, the way an engine module does.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
 - `tests/smoke.rs` is a headless integration test: it spawns the built
   `candela-lsp` binary as a subprocess and drives it over the LSP JSON-RPC
-  protocol (`initialize` -> `initialized` -> `didOpen` -> assert on
-  `publishDiagnostics` -> `shutdown` -> `exit`), once with a broken `.cdl`
-  snippet (expects a diagnostic) and once with a well-typed one (expects none).
-  A third case sends a `textDocument/hover` over a function whose parameter is
-  a user enum and asserts the reply names that enum. No editor or window is
-  involved.
+  protocol, once with a broken `.cdl` snippet (expects a diagnostic), once with
+  a well-typed one (expects none), once for hover on a function whose
+  parameter is a user enum, and once with a package given in
+  `initializationOptions`: completion on a buffer that does not compile,
+  hover, and go-to-definition into the package.
 
 Run both with `cargo test -p candela-lsp`.

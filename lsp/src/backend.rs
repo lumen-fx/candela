@@ -1,13 +1,18 @@
 //! The `tower_lsp::LanguageServer` implementation: wires document sync,
-//! diagnostics, hover, completion, document symbols, and go-to-definition to
-//! the analysis in `crate::analysis`, which in turn is a thin wrapper around
-//! candela's own `compile()`.
+//! diagnostics, hover, completion, signature help, document symbols, and
+//! go-to-definition to the analysis in `crate::analysis` (a thin wrapper
+//! around candela's own compile) and the position-based features in
+//! `crate::ide`.
 
-use crate::analysis::{self, ProgramSummary, RefKind, ScopeKind};
-use crate::builtins;
+use crate::analysis::{self, ProgramSummary};
+use crate::ide::Ide;
 use crate::line_index;
 use candela::Diagnostic as CdlDiagnostic;
+use candela::compiler::imports::ImportResolver;
 use dashmap::DashMap;
+use serde_json::Value;
+use std::path::PathBuf;
+use std::sync::RwLock;
 use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::Diagnostic as LspDiagnostic;
 use tower_lsp::lsp_types::*;
@@ -23,9 +28,78 @@ struct Document {
     last_good: Option<ProgramSummary>,
 }
 
+/// Where library imports read from, as the editor's settings give it.
+///
+/// The client sends it as `initializationOptions` and again with every
+/// `workspace/didChangeConfiguration`, either bare or under a `candela` key:
+///
+/// ```json
+/// { "libPath": "/opt/candela/libs", "importRoots": { "drift": "/opt/drift/module" } }
+/// ```
+///
+/// `libPath` is the directory holding `std/`, what `CANDELA_LIB_PATH` names;
+/// without it the standard library is looked up the way the `candela` command
+/// does. Each `importRoots` entry makes `import "name";` read a package: a
+/// directory is a package root, entered through the file its `candela.toml`
+/// names or `src/main.cdl`; a `.cdl` file is the module itself.
+#[derive(Debug, Clone, Default)]
+pub struct ImportSettings {
+    lib_path: Option<PathBuf>,
+    roots: Vec<(String, PathBuf)>,
+}
+
+impl ImportSettings {
+    /// Reads the settings out of a client's JSON. Missing or malformed keys
+    /// are left out.
+    #[must_use]
+    pub fn from_json(value: &Value) -> Self {
+        let value = value.get("candela").unwrap_or(value);
+        let lib_path = value
+            .get("libPath")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+        let roots = value
+            .get("importRoots")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(name, dir)| {
+                        let dir = dir.as_str()?.trim();
+                        (!dir.is_empty()).then(|| (name.clone(), PathBuf::from(dir)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { lib_path, roots }
+    }
+
+    /// The resolver a compile of an open buffer uses.
+    #[must_use]
+    pub fn resolver(&self) -> ImportResolver {
+        let mut resolver = ImportResolver::new();
+        if let Some(dir) = &self.lib_path {
+            resolver.set_lib_dir(dir.clone());
+        }
+        for (name, path) in &self.roots {
+            if path.extension().is_some_and(|e| e == "cdl") {
+                let dir = path.parent().map(PathBuf::from).unwrap_or_default();
+                let entry = path.file_name().map(PathBuf::from).unwrap_or_default();
+                resolver.add_root(name, dir, entry);
+            } else {
+                resolver.add_package(name, path.clone());
+            }
+        }
+        resolver
+    }
+}
+
 pub struct Backend {
     client: Client,
     docs: DashMap<Url, Document>,
+    /// Where library imports read from. A resolver is built from it for
+    /// each compile; the resolver itself does not cross threads.
+    settings: RwLock<ImportSettings>,
 }
 
 impl Backend {
@@ -34,6 +108,7 @@ impl Backend {
         Self {
             client,
             docs: DashMap::new(),
+            settings: RwLock::new(ImportSettings::default()),
         }
     }
 
@@ -47,14 +122,22 @@ impl Backend {
             .unwrap_or_else(|| uri.path().to_owned())
     }
 
+    fn analyze(&self, text: &str, path: &str) -> analysis::AnalysisOutcome {
+        let resolver = self
+            .settings
+            .read()
+            .map_or_else(|_| ImportResolver::new(), |s| s.resolver());
+        analysis::analyze(text, path, &resolver)
+    }
+
     /// Re-analyzes the document's current text. On success, refreshes the
     /// cached `last_good` summary and returns it; on failure, falls back to
     /// whatever was last cached (which may be `None` if the document has
     /// never compiled successfully).
     fn current_or_cached_summary(&self, uri: &Url) -> Option<ProgramSummary> {
+        let text = self.doc_text(uri)?;
+        let outcome = self.analyze(&text, &Self::uri_to_path(uri));
         let mut doc = self.docs.get_mut(uri)?;
-        let path = Self::uri_to_path(uri);
-        let outcome = analysis::analyze(&doc.text, &path);
         if let Some(summary) = outcome.summary {
             doc.last_good = Some(summary.clone());
             Some(summary)
@@ -72,13 +155,13 @@ impl Backend {
             return;
         };
         let path = Self::uri_to_path(uri);
-        let outcome = analysis::analyze(&text, &path);
+        let outcome = self.analyze(&text, &path);
         if let Some(summary) = &outcome.summary
             && let Some(mut doc) = self.docs.get_mut(uri)
         {
             doc.last_good = Some(summary.clone());
         }
-        let diagnostics = outcome
+        let mut diagnostics: Vec<LspDiagnostic> = outcome
             .diagnostic
             .iter()
             .map(|d| to_lsp_diagnostic(d, &path, &text, DiagnosticSeverity::ERROR))
@@ -89,42 +172,63 @@ impl Backend {
                     .map(|w| to_lsp_diagnostic(w, &path, &text, DiagnosticSeverity::WARNING)),
             )
             .collect();
+        if let Some(summary) = &outcome.summary {
+            for (start, end, message, code) in crate::ide::attribute_warnings(&text, summary) {
+                diagnostics.push(LspDiagnostic {
+                    range: range_of(&text, start, end),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String(code.to_owned())),
+                    source: Some("candela".to_owned()),
+                    message,
+                    ..LspDiagnostic::default()
+                });
+            }
+        }
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
             .await;
     }
 
-    /// Resolves a `RefSite`'s target to editor `Location`s. For a
-    /// declaration in the buffer itself (`src_file == 0`) this reuses the
-    /// buffer's own in-memory text. For a declaration pulled in via
-    /// `import` (`src_file != 0`), candela records that file's absolute,
-    /// canonicalized path (see `ImportFile` handling in
-    /// `compiler.rs`) but not its text, so this reads it from disk. This is a
-    /// synchronous read on the async task, acceptable for the small scripts
-    /// candela targets, but a known limitation (see README) for very large
-    /// imported files or files that only exist unsaved in another editor
-    /// buffer.
+    /// The text, summary and byte offset a position request works on.
+    fn request(&self, uri: &Url, position: Position) -> Option<(String, ProgramSummary, usize)> {
+        let text = self.doc_text(uri)?;
+        let summary = self.current_or_cached_summary(uri)?;
+        let offset = line_index::position_to_offset(&text, position) as usize;
+        Some((text, summary, offset))
+    }
+
+    /// The editor location of a span in one of the program's files. The
+    /// compile kept every file's text, so the span is placed against the text
+    /// it indexes; the buffer's own declarations map back to the buffer.
     fn location_for(
-        &self,
         summary: &ProgramSummary,
         src_file: u16,
         span: candela::compiler::expr::Span,
         current_uri: &Url,
     ) -> Option<Location> {
-        let (target_uri, text) = if src_file == 0 {
-            (current_uri.clone(), self.doc_text(current_uri)?)
+        let source = summary.sources.get(src_file as usize)?;
+        let uri = if src_file == 0 {
+            current_uri.clone()
         } else {
-            let path = summary.source_files.get(src_file as usize)?;
-            let uri = Url::from_file_path(path).ok()?;
-            let text = std::fs::read_to_string(path).ok()?;
-            (uri, text)
+            Url::from_file_path(&source.path).ok()?
         };
-        let range = Range::new(
-            line_index::offset_to_position(&text, span.start),
-            line_index::offset_to_position(&text, span.end),
-        );
-        Some(Location::new(target_uri, range))
+        let range = range_of(&source.text, span.start as usize, span.end as usize);
+        Some(Location::new(uri, range))
     }
+
+    fn apply_settings(&self, value: &Value) {
+        let settings = ImportSettings::from_json(value);
+        if let Ok(mut s) = self.settings.write() {
+            *s = settings;
+        }
+    }
+}
+
+fn range_of(text: &str, start: usize, end: usize) -> Range {
+    Range::new(
+        line_index::offset_to_position(text, u32::try_from(start).unwrap_or(u32::MAX)),
+        line_index::offset_to_position(text, u32::try_from(end).unwrap_or(u32::MAX)),
+    )
 }
 
 fn to_lsp_diagnostic(
@@ -141,10 +245,7 @@ fn to_lsp_diagnostic(
     // rather than a fabricated location.
     let (range, message) = if d.filename == doc_path {
         (
-            Range::new(
-                line_index::offset_to_position(doc_text, d.span.start as u32),
-                line_index::offset_to_position(doc_text, d.span.end as u32),
-            ),
+            range_of(doc_text, d.span.start, d.span.end),
             d.message.clone(),
         )
     } else {
@@ -166,74 +267,33 @@ fn to_lsp_diagnostic(
     }
 }
 
-fn render_function_hover(f: &analysis::FunctionSymbol) -> String {
-    let signature = format!("fn {}({})", f.name, f.params.join(", "));
-    let detail = if f.signatures.is_empty() {
-        "Return type not yet inferred: candela specializes a function's return type per call \
-         site, and this function has not been called anywhere in the compiled program yet."
-            .to_owned()
-    } else {
-        let lines: Vec<String> = f.signatures.iter().map(|s| format!("- `{s}`")).collect();
-        format!("Inferred signature(s):\n{}", lines.join("\n"))
-    };
-    format!("```candela\n{signature}\n```\n\n{detail}")
-}
-
-fn render_struct_hover(s: &analysis::StructSymbol) -> String {
-    let fields: Vec<String> = s
-        .fields
-        .iter()
-        .map(|(name, ty)| format!("    {name}: {ty},"))
-        .collect();
-    format!(
-        "```candela\nstruct {} {{\n{}\n}}\n```",
-        s.name,
-        fields.join("\n")
-    )
-}
-
-fn hover_markdown(summary: &ProgramSummary, offset: u32) -> Option<String> {
-    if let Some(f) = summary.own_function_decl_at(offset) {
-        return Some(render_function_hover(f));
-    }
-    if let Some(s) = summary.own_struct_decl_at(offset) {
-        return Some(render_struct_hover(s));
-    }
-    let r = summary.reference_at(offset)?;
-    match r.kind {
-        RefKind::Call => {
-            if let Some(f) = summary.targets_of(r).first() {
-                return Some(render_function_hover(f));
-            }
-            builtins::BUILTIN_FUNCTIONS
-                .iter()
-                .chain(builtins::BUILTIN_METHODS)
-                .find(|(name, _)| *name == r.target_name)
-                .map(|(name, doc)| format!("**{name}** (builtin)\n\n{doc}"))
-        }
-        RefKind::StructLiteral => summary
-            .structs_named(&r.target_name)
-            .next()
-            .map(render_struct_hover),
-    }
-}
-
-fn completion_item(label: &str, kind: CompletionItemKind, doc: &str) -> CompletionItem {
-    CompletionItem {
-        label: label.to_owned(),
-        kind: Some(kind),
-        detail: Some(doc.lines().next().unwrap_or_default().to_owned()),
-        documentation: Some(Documentation::MarkupContent(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: doc.to_owned(),
-        })),
-        ..CompletionItem::default()
+#[allow(deprecated)]
+fn document_symbol(
+    text: &str,
+    name: &str,
+    detail: String,
+    kind: SymbolKind,
+    span: candela::compiler::expr::Span,
+) -> DocumentSymbol {
+    let range = range_of(text, span.start as usize, span.end as usize);
+    DocumentSymbol {
+        name: name.to_owned(),
+        detail: Some(detail),
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: None,
     }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _params: InitializeParams) -> RpcResult<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
+        if let Some(options) = &params.initialization_options {
+            self.apply_settings(options);
+        }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -241,8 +301,17 @@ impl LanguageServer for Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_owned()]),
+                    trigger_characters: Some(
+                        // Not `(` or `{`: a list opened there would take
+                        // the Enter that ends the line.
+                        [".", ":", "@"].iter().map(|s| (*s).to_owned()).collect(),
+                    ),
                     ..Default::default()
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -263,6 +332,15 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> RpcResult<()> {
         Ok(())
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        self.apply_settings(&params.settings);
+        // An import that did not resolve before may now.
+        let uris: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
+        for uri in uris {
+            self.publish_diagnostics_for(&uri).await;
+        }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -313,78 +391,44 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let position = params.text_document_position_params.position;
-        let Some(text) = self.doc_text(&uri) else {
+        let p = params.text_document_position_params;
+        let Some((text, summary, offset)) = self.request(&p.text_document.uri, p.position) else {
             return Ok(None);
         };
-        let offset = line_index::position_to_offset(&text, position);
-        let Some(summary) = self.current_or_cached_summary(&uri) else {
-            return Ok(None);
-        };
-        Ok(hover_markdown(&summary, offset).map(|value| Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value,
-            }),
-            range: None,
-        }))
+        Ok(Ide::new(&text, &summary, offset)
+            .hover()
+            .map(|value| Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: None,
+            }))
     }
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri;
-        let is_method_position = params
-            .context
-            .as_ref()
-            .and_then(|c| c.trigger_character.as_deref())
-            == Some(".");
-
-        let mut items = Vec::new();
-        if is_method_position {
-            for (name, doc) in builtins::BUILTIN_METHODS {
-                items.push(completion_item(name, CompletionItemKind::METHOD, doc));
-            }
-        } else {
-            for kw in builtins::KEYWORDS {
-                items.push(CompletionItem {
-                    label: (*kw).to_owned(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..CompletionItem::default()
-                });
-            }
-            for (name, doc) in builtins::BUILTIN_FUNCTIONS {
-                items.push(completion_item(name, CompletionItemKind::FUNCTION, doc));
-            }
-            // The names the buffer can write as it stands: its own, the items
-            // its imports named, and `module::name` through each module an
-            // import bound.
-            if let Some(summary) = self.current_or_cached_summary(&uri) {
-                for entry in &summary.scope {
-                    let (kind, doc) = match entry.kind {
-                        ScopeKind::Function => {
-                            let params = entry
-                                .function
-                                .and_then(|id| summary.functions.get(id))
-                                .map(|f| f.params.join(", "))
-                                .unwrap_or_default();
-                            (
-                                CompletionItemKind::FUNCTION,
-                                format!("fn {}({params})", entry.label),
-                            )
-                        }
-                        ScopeKind::Struct => (
-                            CompletionItemKind::STRUCT,
-                            format!("struct {}", entry.label),
-                        ),
-                        ScopeKind::Enum => {
-                            (CompletionItemKind::ENUM, format!("enum {}", entry.label))
-                        }
-                    };
-                    items.push(completion_item(&entry.label, kind, &doc));
-                }
-            }
-        }
+        let p = params.text_document_position;
+        let Some(text) = self.doc_text(&p.text_document.uri) else {
+            return Ok(None);
+        };
+        // A buffer that never compiled still gets keywords and builtins.
+        let summary = self
+            .current_or_cached_summary(&p.text_document.uri)
+            .unwrap_or_default();
+        let offset = line_index::position_to_offset(&text, p.position) as usize;
+        let items = Ide::new(&text, &summary, offset).completions();
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> RpcResult<Option<SignatureHelp>> {
+        let p = params.text_document_position_params;
+        let Some((text, summary, offset)) = self.request(&p.text_document.uri, p.position) else {
+            return Ok(None);
+        };
+        Ok(Ide::new(&text, &summary, offset).signature_help())
     }
 
     async fn document_symbol(
@@ -392,48 +436,46 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> RpcResult<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
-        let Some(text) = self.doc_text(&uri) else {
-            return Ok(None);
-        };
         let Some(summary) = self.current_or_cached_summary(&uri) else {
             return Ok(None);
         };
-
+        let text = summary.sources.first().map_or("", |s| s.text.as_str());
         let mut symbols = Vec::new();
         for f in summary.own_functions() {
-            let range = Range::new(
-                line_index::offset_to_position(&text, f.name_span.start),
-                line_index::offset_to_position(&text, f.name_span.end),
-            );
-            #[allow(deprecated)]
-            symbols.push(DocumentSymbol {
-                name: f.name.clone(),
-                detail: Some(format!("fn {}({})", f.name, f.params.join(", "))),
-                kind: SymbolKind::FUNCTION,
-                tags: None,
-                deprecated: None,
-                range,
-                selection_range: range,
-                children: None,
-            });
+            let kind = if f.is_const {
+                SymbolKind::CONSTANT
+            } else {
+                SymbolKind::FUNCTION
+            };
+            symbols.push(document_symbol(
+                text,
+                &f.name,
+                f.header(),
+                kind,
+                f.name_span,
+            ));
         }
         for s in summary.own_structs() {
-            let range = Range::new(
-                line_index::offset_to_position(&text, s.name_span.start),
-                line_index::offset_to_position(&text, s.name_span.end),
-            );
-            #[allow(deprecated)]
-            symbols.push(DocumentSymbol {
-                name: s.name.clone(),
-                detail: Some(format!("struct {}", s.name)),
-                kind: SymbolKind::STRUCT,
-                tags: None,
-                deprecated: None,
-                range,
-                selection_range: range,
-                children: None,
-            });
+            let detail = format!("struct {}", s.name);
+            symbols.push(document_symbol(
+                text,
+                &s.name,
+                detail,
+                SymbolKind::STRUCT,
+                s.name_span,
+            ));
         }
+        for e in summary.own_enums() {
+            let detail = format!("enum {}", e.name);
+            symbols.push(document_symbol(
+                text,
+                &e.name,
+                detail,
+                SymbolKind::ENUM,
+                e.name_span,
+            ));
+        }
+        symbols.sort_by_key(|s| (s.range.start.line, s.range.start.character));
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
@@ -441,39 +483,16 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let position = params.text_document_position_params.position;
-        let Some(text) = self.doc_text(&uri) else {
+        let p = params.text_document_position_params;
+        let uri = p.text_document.uri;
+        let Some((text, summary, offset)) = self.request(&uri, p.position) else {
             return Ok(None);
         };
-        let offset = line_index::position_to_offset(&text, position);
-        let Some(summary) = self.current_or_cached_summary(&uri) else {
-            return Ok(None);
+        let location = match Ide::new(&text, &summary, offset).definition() {
+            Some(Ok(target)) => Self::location_for(&summary, target.src_file, target.span, &uri),
+            Some(Err(at)) => Some(Location::new(uri.clone(), range_of(&text, at, at))),
+            None => None,
         };
-        let Some(r) = summary.reference_at(offset) else {
-            return Ok(None);
-        };
-
-        // A free call goes to the function its path resolves to in its
-        // file's scope; a method call matches by name. See the crate README's
-        // "known simplifications".
-        let locations: Vec<Location> = match r.kind {
-            RefKind::Call => summary
-                .targets_of(r)
-                .into_iter()
-                .filter_map(|f| self.location_for(&summary, f.src_file, f.name_span, &uri))
-                .collect(),
-            RefKind::StructLiteral => summary
-                .structs_named(&r.target_name)
-                .filter_map(|s| {
-                    let src_file = s.src_file?;
-                    self.location_for(&summary, src_file, s.name_span, &uri)
-                })
-                .collect(),
-        };
-        if locations.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(GotoDefinitionResponse::Array(locations)))
+        Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 }
