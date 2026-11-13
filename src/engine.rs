@@ -170,9 +170,7 @@ impl Engine {
     /// ```
     #[must_use]
     pub fn with_import_root(mut self, name: &str, dir: impl Into<PathBuf>) -> Self {
-        let dir = dir.into();
-        let entry = package_entry(&dir);
-        self.resolver.add_root(name, dir, entry);
+        self.resolver.add_package(name, dir.into());
         self
     }
 
@@ -918,6 +916,16 @@ fn package_entry(dir: &Path) -> String {
         |_| String::from(DEFAULT_PACKAGE_ENTRY),
         |m| m.entry().to_owned(),
     )
+}
+
+impl ImportResolver {
+    /// Makes `dir` the root of the package imported as `name`, entered through
+    /// the file its `candela.toml` names as `entry`, or `src/main.cdl` when the
+    /// manifest names none or there is no manifest.
+    pub fn add_package(&mut self, name: &str, dir: PathBuf) {
+        let entry = package_entry(&dir);
+        self.add_root(name, dir, entry);
+    }
 }
 
 /// The wasm build carries no manifest reader, so every package enters at the
