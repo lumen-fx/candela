@@ -1,6 +1,7 @@
 // This file is derived from keel (https://github.com/horacehoff/keel),
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
+use super::super::coerce;
 use super::super::compiler_data::ReturnCheck;
 use super::super::compiler_data::TypeCodes;
 use super::super::expr::Expr;
@@ -169,7 +170,9 @@ pub fn handle_user_function(
         let expected_arg_types = fn_sig.args.clone();
         for (i, arg) in args.iter().enumerate() {
             let inferred = arg.infer_type(v, ctx, state);
-            if inferred != expected_arg_types[i] {
+            if inferred != expected_arg_types[i]
+                && coerce::numeric(&expected_arg_types[i], &inferred).is_none()
+            {
                 error_function_arg_invalid_type(
                     &inferred,
                     &expected_arg_types[i],
@@ -184,7 +187,15 @@ pub fn handle_user_function(
         }
         // The `StoreFuncArg` run goes directly before the call; see
         // `store_call_args`.
-        let arg_ids = compile_call_args(args, v, ctx, state, output);
+        let arg_ids = compile_call_args(
+            args,
+            &expected_arg_types,
+            args_indexes,
+            v,
+            ctx,
+            state,
+            output,
+        );
         store_call_args(&arg_ids, v, state, output);
 
         let register_id = if returns_null {
@@ -235,6 +246,14 @@ pub fn handle_user_function(
         if matches!(args[i], Expr::Array(..) | Expr::Map(..))
             && !param_type_matches(declared, &infered_arg_types[i], state.generics)
             && let_type_fits(declared, &infered_arg_types[i], true, state.generics)
+        {
+            infered_arg_types[i] = declared.clone();
+            continue;
+        }
+        // A number of the other type converts on the way in, and the body
+        // sees the declared type.
+        if !param_type_matches(declared, &infered_arg_types[i], state.generics)
+            && coerce::literal_fits(declared, &args[i], v, ctx, state)
         {
             infered_arg_types[i] = declared.clone();
             continue;
@@ -383,7 +402,18 @@ pub fn handle_user_function(
             if let Some(declared) = &declared_arg_types[i] {
                 state.mark_literal_target(&args[i], declared);
             }
-            let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+            let arg_id = if let Some(id) = converted_arg(
+                &args[i],
+                declared_arg_types[i].as_ref(),
+                args_indexes[i],
+                None,
+                v,
+                ctx,
+                state,
+                output,
+            ) {
+                id
+            } else if matches!(infered_arg_types[i], DataType::FnValue(_)) {
                 compile_fn_value(&args[i], v, ctx, state, output, None)
             } else {
                 args[i]
@@ -398,7 +428,18 @@ pub fn handle_user_function(
             if let Some(declared) = &declared_arg_types[i] {
                 state.mark_literal_target(&args[i], declared);
             }
-            let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+            let arg_id = if let Some(id) = converted_arg(
+                &args[i],
+                declared_arg_types[i].as_ref(),
+                args_indexes[i],
+                None,
+                v,
+                ctx,
+                state,
+                output,
+            ) {
+                id
+            } else if matches!(infered_arg_types[i], DataType::FnValue(_)) {
                 compile_fn_value(&args[i], v, ctx, state, output, None)
             } else {
                 args[i]
@@ -413,7 +454,18 @@ pub fn handle_user_function(
         if let Some(declared) = &declared_arg_types[i] {
             state.mark_literal_target(&args[i], declared);
         }
-        let arg_id = if matches!(infered_arg_types[i], DataType::FnValue(_)) {
+        let arg_id = if let Some(id) = converted_arg(
+            &args[i],
+            declared_arg_types[i].as_ref(),
+            args_indexes[i],
+            Some(tgt_id),
+            v,
+            ctx,
+            state,
+            output,
+        ) {
+            id
+        } else if matches!(infered_arg_types[i], DataType::FnValue(_)) {
             compile_fn_value(&args[i], v, ctx, state, output, Some(tgt_id))
         } else {
             args[i]
@@ -719,8 +771,11 @@ fn compile_function(
     // specialisation is checked separately, so an un-annotated parameter that
     // makes one call site return a different type is caught at that call site.
     let declared_return = specialized_return_type(function_id, ctx, state);
+    // A body that returns the other number type somewhere converts at each
+    // `return`, which reports a value that cannot be converted.
     if let Some((declared, declared_span)) = &declared_return
         && !return_type_fits(declared, &return_type, state.generics)
+        && !coerce::differs_only_in_numbers(declared, &return_type)
     {
         let (declared, declared_span) = (declared, *declared_span);
         let types = state.type_names();
@@ -787,9 +842,7 @@ fn compile_function(
         .as_ref()
         .and_then(|(declared, _)| return_check(declared, state));
     state.fn_returns.push((shown_name, body_returns));
-    state
-        .declared_returns
-        .push(declared_return.as_ref().map(|(t, _)| t.clone()));
+    state.declared_returns.push(declared_return);
     let parsed = {
         let _body = CompilingBody::enter(function_id);
         compile_expr(
@@ -1016,7 +1069,7 @@ pub fn handle_indirect_call(
     let callee_id = callee
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-    let arg_ids = compile_call_args(args, v, ctx, state, output);
+    let arg_ids = compile_call_args(args, &arg_types, args_indexes, v, ctx, state, output);
 
     let saveframe_loc = output.len();
     let callsite_id = state.callsite_registers.len() as u16;
@@ -1061,6 +1114,23 @@ pub fn handle_indirect_call(
     }
 }
 
+/// Compiles an argument for a parameter declared `declared` when getting it
+/// there converts a number; `None` for an argument that needs no conversion
+/// or a parameter that declares nothing.
+#[allow(clippy::too_many_arguments)]
+fn converted_arg(
+    arg: &Expr,
+    declared: Option<&DataType>,
+    span: Span,
+    tgt_id: Option<u16>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Option<u16> {
+    coerce::compile_converted(arg, declared?, span, tgt_id, v, ctx, state, output)
+}
+
 /// The types the functions behind a value are compiled at.
 ///
 /// A declared `fn(A, B) -> R` says them, and each argument is checked against
@@ -1093,7 +1163,9 @@ pub fn indirect_arg_types(
     let params = params.clone();
     for (i, declared) in params.iter().enumerate() {
         let inferred = args[i].infer_type(v, ctx, state);
-        if !param_type_matches(declared, &inferred, state.generics) {
+        if !param_type_matches(declared, &inferred, state.generics)
+            && !coerce::literal_fits(declared, &args[i], v, ctx, state)
+        {
             error_function_arg_invalid_type(
                 &inferred,
                 declared,

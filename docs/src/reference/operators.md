@@ -49,15 +49,15 @@ The prefix operators `-`, `!` and `~` bind tighter than `^` and looser than the
 postfix forms. `-a ^ 2` is `(-a) ^ 2` and `!ok == done` is `(!ok) == done`. Use
 parentheses when you want the other reading.
 
-## Types are never mixed
+## Mixing int and float
 
-Both operands of an arithmetic, bitwise or comparison operator must already have
-the same type. candela does not promote `int` to `float`, so `1 + 2.0` is a
-compile error. Convert first with `float()` or `int()`:
-
-```rust
-let total = float(count) + 2.0;
-```
+Both operands of an arithmetic or comparison operator have the same type, with
+one exception: an `int` next to a `float` is converted to a `float`, and the
+operator works in floats. `1 + 2.0` is `3.0`, and `count * 0.5` is a `float`
+for an `int` count. Any other pair of different types is a compile error.
+Bitwise operators take two ints and never convert. See
+[types](../language/types.md#numbers-convert-between-int-and-float) for where
+else the two number types convert.
 
 `int` is a signed 64-bit integer and `float` is a 64-bit binary floating-point
 number. Arithmetic on `int` wraps at the ends of that range. See
@@ -73,10 +73,12 @@ what an operator on it accepts, including a second operand of another type; see
 | --- | --- | --- |
 | `+` | `int`, `int` | `int` |
 | `+` | `float`, `float` | `float` |
+| `+` | `int`, `float` or `float`, `int` | `float` |
 | `+` | `string`, `string` | `string`, the two joined |
 | `+` | `T[]`, `T[]` | `T[]`, a new array holding both |
 | `-` `*` `/` `%` `^` | `int`, `int` | `int` |
 | `-` `*` `/` `%` `^` | `float`, `float` | `float` |
+| `-` `*` `/` `%` `^` | `int`, `float` or `float`, `int` | `float` |
 
 `+` on arrays builds a new array and leaves both operands untouched:
 
@@ -88,7 +90,8 @@ print(b);   // [1, 2, 3]
 ```
 
 Integer division truncates towards zero, and `%` takes the remainder with the
-sign of the left operand. Integer division or remainder by zero raises the
+sign of the left operand. Division and remainder stay integer operations only
+when both operands are ints: `7 / 2` is `3` and `7 / 2.0` is `3.5`. Integer division or remainder by zero raises the
 runtime errors `division_by_zero` and `modulo_by_zero`, both catchable; see
 [error handling](../language/error-handling.md). Float division and remainder
 follow IEEE 754 and produce infinities or `NaN` instead of raising.
@@ -118,9 +121,9 @@ way `&&` and `||` take theirs.
 | `<<` | `int`, `int` | `int`, the bits moved up |
 | `>>` | `int`, `int` | `int`, the bits moved down |
 
-No other operand type is accepted, and the types are never mixed: `1.5 & 1` is
-the same compile error `1.5 * 1` is, and an `any` value has to be narrowed with
-`v as int` first.
+No other operand type is accepted: a float is not converted for a bitwise
+operator, so `1.5 & 1` is a compile error, and an `any` value has to be narrowed
+with `v as int` first.
 
 ```rust
 let read = 4;
@@ -141,12 +144,13 @@ count only known at run time raises the catchable `shift_count_out_of_range`.
 ## Comparison
 
 `<`, `<=`, `>` and `>=` produce a `bool`. Both operands have to be the same
-type, and that type has to be one of three:
+type, one of three, or one `int` and one `float`, which compare as floats:
 
 | Operator | Operand types | Result |
 | --- | --- | --- |
 | `<` `<=` `>` `>=` | `int`, `int` | `bool` |
 | `<` `<=` `>` `>=` | `float`, `float` | `bool` |
+| `<` `<=` `>` `>=` | `int`, `float` or `float`, `int` | `bool` |
 | `<` `<=` `>` `>=` | `string`, `string` | `bool` |
 
 Strings order by their bytes, which is the order `sort` puts a list of strings
@@ -170,9 +174,11 @@ There is no ordering on arrays, maps, tuples, structs or enums.
 
 `==` and `!=` produce a `bool` and accept operands of any type. Two values of
 different types are never equal, so `"5" == 5` is false and `"5" != 5` is true.
-That holds whether the mismatch is visible at compile time or only shows up at
-run time through a parameter whose type comes from the call. Comparing values of
-the same type is the case worth writing.
+The exception is an `int` and a `float`, which compare as numbers: `1 == 1.0`
+is true. That is settled from the types the compiler sees, so it holds for a
+parameter whose type comes from the call, but an `int` and a `float` that only
+meet at run time as `any` values are not equal. Comparing values of the same
+type is the case worth writing.
 
 | Operand type | How it compares |
 | --- | --- |
@@ -270,6 +276,10 @@ point.x = 3;
 
 Assignment is a statement, not an expression, so it produces no value and cannot
 be chained.
+
+The value converts between `int` and `float` to the type of what it is
+assigned to: `point.x = 3` stores `3.0` in a `float` field, and a `float`
+assigned to an `int` variable is truncated toward zero, with a warning.
 
 The compound forms `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `^^=`, `<<=`
 and `>>=` apply the matching binary operator to the current value and assign the
@@ -393,8 +403,8 @@ See [control flow](../language/control-flow.md).
 
 An expression built only from literals is folded while the file is parsed, so it
 costs nothing at run time. Folding applies the same type rule as everything
-else: `2.0 ^ 3` is rejected for mixing a `float` with an `int`, exactly as it
-would be if the operands were variables.
+else: `2.0 ^ 3` is `8.0`, exactly as it would be if the operands were
+variables.
 
 Folding also turns four mistakes into compile errors rather than runtime ones:
 dividing by a literal `0`, taking the remainder by a literal `0`, raising an

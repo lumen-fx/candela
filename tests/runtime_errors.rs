@@ -626,7 +626,7 @@ fn a_report_after_non_ascii_text_points_at_the_code() {
         "after_accents_compile",
         r#"fn main() {
     let s = "héllo wörld";
-    let x = 1 + 0.5;
+    let x = 1 + true;
     print(s, x);
 }
 "#,

@@ -7,6 +7,7 @@ use super::super::type_system::DataType;
 use super::super::type_system::pin_pushed_element;
 use crate::cold_path;
 use crate::compiler::UnwrapId;
+use crate::compiler::coerce;
 use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
@@ -287,17 +288,24 @@ pub fn builtin_methods(
                 1
             );
 
+            // A number of the other type converts to the element type.
+            let mut converted = None;
             if let DataType::Array(Some(array_elem_type)) = &obj_type {
-                check_arg_type(
-                    name,
-                    v,
-                    ctx,
-                    state,
-                    args,
-                    args_indexes,
-                    0,
-                    std::slice::from_ref(array_elem_type),
-                );
+                let element = (**array_elem_type).clone();
+                if coerce::literal_fits(&element, &args[0], v, ctx, state) {
+                    converted = Some(element);
+                } else {
+                    check_arg_type(
+                        name,
+                        v,
+                        ctx,
+                        state,
+                        args,
+                        args_indexes,
+                        0,
+                        std::slice::from_ref(array_elem_type),
+                    );
+                }
             } else if obj_type == DataType::String {
                 check_arg_type(
                     name,
@@ -311,7 +319,13 @@ pub fn builtin_methods(
                 );
             }
 
-            add_args!();
+            if let Some(element) = &converted {
+                let arg_id =
+                    compile_number_arg(&args[0], element, args_indexes[0], v, ctx, state, output);
+                store_call_args(&[arg_id], v, state, output);
+            } else {
+                add_args!();
+            }
             let found = state.alloc_reg();
             output.push(Instr::CallLibFunc(LibFunc::Find, id, found));
             state.add_to_src(ctx, output, fn_span);
@@ -386,9 +400,22 @@ pub fn builtin_methods(
                 1
             );
 
-            check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
-
-            add_args!();
+            // A float count is truncated to an int, with a warning.
+            if coerce::literal_fits(&DataType::Int, &args[0], v, ctx, state) {
+                let arg_id = compile_number_arg(
+                    &args[0],
+                    &DataType::Int,
+                    args_indexes[0],
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
+                store_call_args(&[arg_id], v, state, output);
+            } else {
+                check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
+                add_args!();
+            }
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::Repeat, id, output_id));
             Some(output_id)
@@ -397,7 +424,17 @@ pub fn builtin_methods(
             check!(DataType::Array(_), &[DataType::Array(None)], name, 1);
 
             let arg_type = args[0].infer_type(v, ctx, state);
-            if let DataType::Array(Some(array_elem_type)) = &obj_type {
+            // A number of the other type converts to the element type.
+            let element = match &obj_type {
+                DataType::Array(Some(element)) => Some((**element).clone()),
+                _ => None,
+            };
+            let converts = element
+                .as_ref()
+                .is_some_and(|element| coerce::literal_fits(element, &args[0], v, ctx, state));
+            if let Some(array_elem_type) = &element
+                && !converts
+            {
                 check_arg_type(
                     name,
                     v,
@@ -414,9 +451,13 @@ pub fn builtin_methods(
             // downstream indexing resolves correctly.
             pin_pushed_element(obj, &arg_type, v);
 
-            let arg_id = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
+            let arg_id = if converts && let Some(element) = &element {
+                compile_number_arg(&args[0], element, args_indexes[0], v, ctx, state, output)
+            } else {
+                args[0]
+                    .compile(v, ctx, state, output, None, false, true)
+                    .unwrap_id()
+            };
             state.free_reg(arg_id, v);
             output.push(Instr::Push(id, arg_id));
             None
@@ -613,4 +654,24 @@ pub fn builtin_methods(
             state.sources,
         ),
     }
+}
+
+/// Compiles a method argument that [`coerce::literal_fits`] said converts to
+/// `expected`.
+fn compile_number_arg(
+    arg: &Expr,
+    expected: &DataType,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
+    state.mark_literal_target(arg, expected);
+    coerce::compile_converted(arg, expected, span, None, v, ctx, state, output).unwrap_or_else(
+        || {
+            arg.compile(v, ctx, state, output, None, false, true)
+                .unwrap_id()
+        },
+    )
 }
