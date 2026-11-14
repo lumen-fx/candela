@@ -10,6 +10,7 @@
 //! scratch loses everything that was not data.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use toml_edit::DocumentMut;
@@ -79,6 +80,7 @@ pub struct Manifest {
     description: Option<String>,
     entry: String,
     candela: Option<String>,
+    docs: Option<String>,
     dependencies: Vec<Dependency>,
     web_module: Option<String>,
 }
@@ -146,10 +148,10 @@ impl Manifest {
         for key in package.iter().map(|(key, _)| key) {
             if !matches!(
                 key,
-                "name" | "version" | "description" | "entry" | "candela"
+                "name" | "version" | "description" | "entry" | "candela" | "docs"
             ) {
                 return Err(invalid(format!(
-                    "unknown key {key} in [package]. Known keys are name, version, description, entry, candela"
+                    "unknown key {key} in [package]. Known keys are name, version, description, entry, candela, docs"
                 )));
             }
         }
@@ -192,6 +194,16 @@ impl Manifest {
             return Err(invalid(format!(
                 "candela in [package] is {requirement:?}, which is not a version requirement. \
                  Write the oldest candela that can compile this package, as >=0.0.7"
+            )));
+        }
+
+        let docs = string_key(package, "docs")?;
+        if let Some(url) = &docs
+            && let Some(unknown) = unknown_placeholder(url)
+        {
+            return Err(invalid(format!(
+                "docs in [package] names {{{unknown}}}, which is not a placeholder. \
+                 The placeholder is {{name}}, the item's name, as in https://example.com/api?name={{name}}"
             )));
         }
 
@@ -259,6 +271,7 @@ impl Manifest {
             description,
             entry,
             candela,
+            docs,
             dependencies,
             web_module,
         })
@@ -293,6 +306,14 @@ impl Manifest {
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
+    }
+
+    /// Where the package's documentation lives, as the URL template the
+    /// manifest writes, when it names one. `{name}` in it stands for the name
+    /// of a documented item; see [`docs_link`].
+    #[must_use]
+    pub fn docs(&self) -> Option<&str> {
+        self.docs.as_deref()
     }
 
     /// The file the project's verbs run, resolved against the project root.
@@ -387,6 +408,51 @@ impl Manifest {
         std::fs::write(&self.path, self.doc.to_string())
             .map_err(|e| ManifestError::Write(self.path.clone(), e))
     }
+}
+
+/// The first `{...}` in a docs URL template that is not `{name}`.
+fn unknown_placeholder(template: &str) -> Option<&str> {
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after.find('}')?;
+        let name = &after[..close];
+        if name != "name" {
+            return Some(name);
+        }
+        rest = &after[close + 1..];
+    }
+    None
+}
+
+/// The `{name}` placeholder of a docs URL template.
+const NAME_PLACEHOLDER: &str = "{name}";
+
+/// The link to an item's documentation.
+///
+/// It is the package's `docs` template with `{name}` replaced by `name`,
+/// percent-encoded so it is safe in a path or a query: `@system` becomes
+/// `%40system`, `Kind::A` becomes `Kind%3A%3AA`.
+#[must_use]
+pub fn docs_link(template: &str, name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(b));
+        } else {
+            let _ = write!(encoded, "%{b:02X}");
+        }
+    }
+    template.replace(NAME_PLACEHOLDER, &encoded)
+}
+
+/// The `docs` template of the package the file at `path` belongs to: the
+/// first `candela.toml` in the file's directory or one above it, when that
+/// manifest reads and names one.
+#[must_use]
+pub fn package_docs(path: &Path) -> Option<String> {
+    let dir = path.parent()?;
+    Manifest::discover(dir).ok()?.docs().map(str::to_owned)
 }
 
 /// Whether `text` is a version requirement.
@@ -749,5 +815,54 @@ mod tests {
         assert_eq!(manifest.name(), "demo");
         assert_eq!(manifest.version(), "0.1.0");
         assert_eq!(manifest.dependencies(), []);
+    }
+
+    #[test]
+    fn docs_names_where_the_package_documentation_lives() {
+        let manifest = parse(
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/api?name={name}\"\n",
+        )
+        .unwrap();
+        assert_eq!(manifest.docs(), Some("https://a.dev/api?name={name}"));
+        assert_eq!(
+            super::docs_link(manifest.docs().unwrap(), "Kind::Fast"),
+            "https://a.dev/api?name=Kind%3A%3AFast"
+        );
+        assert_eq!(
+            super::docs_link("https://a.dev/{name}.html", "@system"),
+            "https://a.dev/%40system.html"
+        );
+        assert_eq!(
+            super::docs_link("https://a.dev/", "Vec2.length"),
+            "https://a.dev/"
+        );
+        let none = parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\n").unwrap();
+        assert_eq!(none.docs(), None);
+    }
+
+    #[test]
+    fn docs_with_an_unknown_placeholder_is_an_error_naming_it() {
+        let Err(ManifestError::Invalid(_, message)) = parse(
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/{page}.html#{name}\"\n",
+        ) else {
+            panic!("a docs URL with {{page}} parsed");
+        };
+        assert!(message.contains("{page}"), "{message}");
+        assert!(message.contains("{name}"), "{message}");
+    }
+
+    #[test]
+    fn package_docs_reads_the_manifest_above_a_source_file() {
+        let root = std::env::temp_dir().join(format!("candela-docs-{}", std::process::id()));
+        let src = root.join("src").join("core");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            root.join("candela.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/{name}\"\n",
+        )
+        .unwrap();
+        let found = super::package_docs(&src.join("physics.cdl"));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(found.as_deref(), Some("https://a.dev/{name}"));
     }
 }

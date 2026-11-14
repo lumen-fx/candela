@@ -29,6 +29,14 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.line.documentation.candela",
+          "begin": "///(?!/)|//!",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.candela" }
+          }
+        },
+        {
           "name": "comment.line.double-slash.candela",
           "begin": "//",
           "end": "$",

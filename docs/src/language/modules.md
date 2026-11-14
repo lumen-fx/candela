@@ -259,3 +259,34 @@ can resolve against, not a new kind of import.
 
 Packages are listed in `candela.toml` and fetched by `candela add`. See
 [projects and packages](../getting-started/packages.md).
+
+## Documenting a module
+
+A `///` comment documents the item below it: a function, a method, a struct, a
+field, an enum, a variant, a constant, or an attribute a `host` block declares.
+A `//!` comment describes the file it is in. To the compiler both are
+comments; editors color them as documentation, and the language server shows
+an item's `///` comment when you hover it or pick it from a completion list.
+
+```rust
+/// A point on the plane, in pixels.
+///
+/// Make one with `vec2(x, y)`.
+struct Vec2 {
+    /// How far right of the origin.
+    x: float = 0.0,
+    /// How far below the origin.
+    y: float = 0.0,
+}
+```
+
+The first paragraph is the summary: a completion list shows it, and so does
+the list of fields or variants in a struct's or an enum's hover. The whole
+comment is Markdown and shows in full when you hover the item. Write it right
+above the item; attributes may sit between the two, but a blank line or a
+plain `//` comment leaves the item undocumented. Four slashes or more make a
+plain comment.
+
+A package says where its documentation is published with `docs` in its
+[`candela.toml`](../reference/candela-toml.md#package); a hover then ends in a
+link to the item's page.

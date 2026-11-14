@@ -10,7 +10,7 @@
 
 use crate::analysis::{
     AttrParam, AttrParamKind, AttributeSymbol, EnumSymbol, FieldSymbol, FunctionSymbol,
-    ProgramSummary, ScopeKind, StructSymbol, UseOn, VariantSymbol,
+    ProgramSummary, ScopeKind, StructSymbol, UseOn, VariantSymbol, summary,
 };
 use crate::builtins;
 use crate::syntax::{Infer, Scope, Source, Tokens, Ty, scope_at};
@@ -291,7 +291,7 @@ impl<'a> Ide<'a> {
                         label: f.name.clone(),
                         kind: Some(CompletionItemKind::FIELD),
                         detail: Some(f.ty.clone()),
-                        documentation: doc(&f.doc),
+                        documentation: summary_doc(&f.doc),
                         insert_text: Some(format!("{}: ", f.name)),
                         sort_text: Some(format!("0{}", f.name)),
                         ..CompletionItem::default()
@@ -414,7 +414,7 @@ impl<'a> Ide<'a> {
                 label: label.to_owned(),
                 kind: Some(CompletionItemKind::PROPERTY),
                 detail: Some(a.header()),
-                documentation: doc(&a.doc),
+                documentation: summary_doc(&a.doc),
                 insert_text_format: insert.as_ref().map(|_| InsertTextFormat::SNIPPET),
                 insert_text: insert,
                 ..CompletionItem::default()
@@ -475,7 +475,7 @@ impl<'a> Ide<'a> {
                         label: f.name.clone(),
                         kind: Some(CompletionItemKind::FIELD),
                         detail: Some(f.ty.clone()),
-                        documentation: doc(&f.doc),
+                        documentation: summary_doc(&f.doc),
                         sort_text: Some(format!("0{}", f.name)),
                         ..CompletionItem::default()
                     });
@@ -739,7 +739,7 @@ impl<'a> Ide<'a> {
                 label: format!("@{} {}", entry.label, a.target),
                 kind: Some(CompletionItemKind::SNIPPET),
                 detail: Some(a.header()),
-                documentation: doc(&a.doc),
+                documentation: summary_doc(&a.doc),
                 insert_text: Some(format!("{head}\n{body}")),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                 filter_text: Some(entry.label.clone()),
@@ -828,7 +828,7 @@ impl<'a> Ide<'a> {
                         label: label.to_owned(),
                         kind: Some(CompletionItemKind::ENUM),
                         detail: Some(enum_header(e)),
-                        documentation: doc(&e.doc),
+                        documentation: summary_doc(&e.doc),
                         sort_text: Some(format!("{rank}{label}")),
                         ..CompletionItem::default()
                     });
@@ -994,11 +994,47 @@ impl<'a> Ide<'a> {
         }
     }
 
-    /// The hover text for the identifier under the cursor.
+    /// The hover text for the identifier under the cursor, ending in a link
+    /// to the item's documentation when its package says where that lives.
     #[must_use]
     pub fn hover(&self) -> Option<String> {
         let sym = self.symbol()?;
-        Some(hover_markdown(&sym))
+        let mut text = hover_markdown(&sym);
+        if let Some(link) = self.docs_link(&sym) {
+            text.push_str(&format!("\n\n[Open docs]({link})"));
+        }
+        Some(text)
+    }
+
+    /// The link to a declaration's documentation: the `docs` template of the
+    /// package that declares it, filled with the item's name as a reader
+    /// writes it (`Type`, `Type.method`, `Type.field`, `Enum::Variant`,
+    /// `@attribute`, `function`).
+    fn docs_link(&self, sym: &Symbol<'_>) -> Option<String> {
+        let (file, name) = match sym {
+            Symbol::Function(f) => (
+                Some(f.src_file),
+                match &f.method {
+                    Some((ty, name)) => format!("{}.{name}", base_name(ty)),
+                    None => f.name.clone(),
+                },
+            ),
+            Symbol::Struct(s) => (s.src_file, base_name(&s.name).to_owned()),
+            Symbol::Enum(e) => (e.src_file, base_name(&e.name).to_owned()),
+            Symbol::Variant(e, v) => (e.src_file, format!("{}::{}", base_name(&e.name), v.name)),
+            Symbol::Field(s, f) => (s.src_file, format!("{}.{}", base_name(&s.name), f.name)),
+            Symbol::Attribute(a) | Symbol::AttrParam(a, _) => {
+                (Some(a.src_file), format!("@{}", a.name))
+            }
+            Symbol::Local { .. } | Symbol::Builtin(..) => return None,
+        };
+        let template = self
+            .summary
+            .sources
+            .get(usize::from(file?))?
+            .docs
+            .as_deref()?;
+        Some(candela::docs_link(template, &name))
     }
 
     /// Where the declaration under the cursor is written. A local's is in the
@@ -1167,6 +1203,16 @@ impl Items {
     }
 }
 
+/// A completion item's documentation: the summary line of a doc comment.
+fn summary_doc(text: &str) -> Option<Documentation> {
+    doc(&summary(text))
+}
+
+/// A generic type's name without its arguments: `Lookup` for `Lookup<T>`.
+fn base_name(name: &str) -> &str {
+    name.split('<').next().unwrap_or(name)
+}
+
 fn doc(text: &str) -> Option<Documentation> {
     (!text.is_empty()).then(|| {
         Documentation::MarkupContent(MarkupContent {
@@ -1216,7 +1262,7 @@ fn function_item(f: &FunctionSymbol, label: &str, rank: &str) -> CompletionItem 
             CompletionItemKind::FUNCTION
         }),
         detail: Some(f.header()),
-        documentation: doc(&f.doc),
+        documentation: summary_doc(&f.doc),
         insert_text: insert,
         insert_text_format: format,
         sort_text: Some(format!("{rank}{label}")),
@@ -1229,7 +1275,7 @@ fn struct_item(s: &StructSymbol, rank: &str) -> CompletionItem {
         label: s.name.clone(),
         kind: Some(CompletionItemKind::STRUCT),
         detail: Some(format!("struct {}", s.name)),
-        documentation: doc(&s.doc),
+        documentation: summary_doc(&s.doc),
         sort_text: Some(format!("{rank}{}", s.name)),
         ..CompletionItem::default()
     }
@@ -1245,7 +1291,7 @@ fn variant_item(e: &EnumSymbol, v: &VariantSymbol, label: &str, rank: &str) -> C
         label: label.to_owned(),
         kind: Some(CompletionItemKind::ENUM_MEMBER),
         detail: Some(detail),
-        documentation: doc(if v.doc.is_empty() { &e.doc } else { &v.doc }),
+        documentation: summary_doc(if v.doc.is_empty() { &e.doc } else { &v.doc }),
         // Declaration order.
         sort_text: Some(format!(
             "{rank}{:04}",
@@ -1343,16 +1389,23 @@ pub fn hover_markdown(sym: &Symbol<'_>) -> String {
             let fields: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| format!("    {}: {},", f.name, f.ty))
+                .map(|f| match &f.default {
+                    Some(d) => format!("    {}: {} = {d},", f.name, f.ty),
+                    None => format!("    {}: {},", f.name, f.ty),
+                })
                 .collect();
             let code = if fields.is_empty() {
                 format!("struct {} {{}}", s.name)
             } else {
                 format!("struct {} {{\n{}\n}}", s.name, fields.join("\n"))
             };
-            (code, s.doc.clone())
+            let members = s.fields.iter().map(|f| (f.name.as_str(), f.doc.as_str()));
+            (code, with_members(&s.doc, "Fields", members))
         }
-        Symbol::Enum(e) => (enum_header(e), e.doc.clone()),
+        Symbol::Enum(e) => {
+            let members = e.variants.iter().map(|v| (v.name.as_str(), v.doc.as_str()));
+            (enum_header(e), with_members(&e.doc, "Variants", members))
+        }
         Symbol::Variant(e, v) => {
             let code = if v.payload.is_empty() {
                 format!("{}::{}", e.name, v.name)
@@ -1368,7 +1421,13 @@ pub fn hover_markdown(sym: &Symbol<'_>) -> String {
                 },
             )
         }
-        Symbol::Field(s, f) => (format!("{}.{}: {}", s.name, f.name, f.ty), f.doc.clone()),
+        Symbol::Field(s, f) => (
+            match &f.default {
+                Some(d) => format!("{}.{}: {} = {d}", s.name, f.name, f.ty),
+                None => format!("{}.{}: {}", s.name, f.name, f.ty),
+            },
+            f.doc.clone(),
+        ),
         Symbol::Attribute(a) => (a.header(), a.doc.clone()),
         Symbol::AttrParam(a, p) => (format!("@{}({})", a.name, p.render()), a.doc.clone()),
         Symbol::Local { name, ty, .. } => (format!("{name}: {}", ty.render()), String::new()),
@@ -1378,6 +1437,36 @@ pub fn hover_markdown(sym: &Symbol<'_>) -> String {
         format!("```candela\n{code}\n```")
     } else {
         format!("```candela\n{code}\n```\n\n{d}")
+    }
+}
+
+/// A struct's or an enum's doc comment followed by a list of its members
+/// with the summary of each, when any member has a doc comment.
+fn with_members<'m>(
+    doc: &str,
+    heading: &str,
+    members: impl Iterator<Item = (&'m str, &'m str)>,
+) -> String {
+    let members: Vec<(&str, &str)> = members.collect();
+    if members.iter().all(|(_, d)| d.is_empty()) {
+        return doc.to_owned();
+    }
+    let lines: Vec<String> = members
+        .iter()
+        .map(|(name, d)| {
+            let line = summary(d);
+            if line.is_empty() {
+                format!("- `{name}`")
+            } else {
+                format!("- `{name}`: {line}")
+            }
+        })
+        .collect();
+    let list = format!("**{heading}**\n\n{}", lines.join("\n"));
+    if doc.is_empty() {
+        list
+    } else {
+        format!("{doc}\n\n{list}")
     }
 }
 
@@ -1506,10 +1595,10 @@ mod tests {
 
 enum Schedule { Startup, Update }
 
-// A point on the plane.
+/// A point on the plane.
 struct Vec2 { x: float = 0.0, y: float = 0.0 }
 impl Vec2 {
-    // How far from the origin.
+    /// How far from the origin.
     fn length(self) -> float { return (self.x * self.x + self.y * self.y).sqrt(); }
 }
 fn vec2(x: float, y: float) -> Vec2 { return Vec2 { x: x, y: y }; }
@@ -1831,9 +1920,9 @@ mod more_tests {
 
 const LIMIT: int = 3;
 
-// A shape on the board.
+/// A shape on the board.
 enum Shape {
-    // Round.
+    /// Round.
     Circle(float),
     Square(float, float),
     Dot,
@@ -1842,10 +1931,10 @@ impl Shape {
     fn area(self) -> float { return 1.0; }
 }
 
-// Tuning read from the settings.
+/// Tuning read from the settings.
 @settings(section: "board")
 struct Board {
-    // How wide.
+    /// How wide.
     width: int = 4,
     names: string[] = [],
     lookup: {string: int} = {},
@@ -2117,7 +2206,7 @@ fn run(board: Board, shape: Shape) {
         assert!(hover(anchor, "    s.upper$0case();").contains("(builtin)"));
         assert!(
             hover("    width: int = 4,", "    wid$0th: int = 4,")
-                .contains("Board.width: int\n```\n\nHow wide.")
+                .contains("Board.width: int = 4\n```\n\nHow wide.")
         );
         assert!(
             hover(anchor, "    let x = Board { wid$0th: 1, .. };").contains("Board.width: int")
@@ -2193,5 +2282,216 @@ fn run(board: Board, shape: Shape) {
         let sym = Ide::new(MORE, &s, at).symbol().expect("a local");
         assert_eq!(hover_markdown(&sym), "```candela\nn: int\n```");
         assert!(Ide::new(MORE, &s, 0).completions().is_empty() || MORE.starts_with("host"));
+    }
+}
+
+#[cfg(test)]
+mod doc_tests {
+    use super::Ide;
+    use crate::analysis::{ProgramSummary, analyze};
+    use candela::compiler::imports::ImportResolver;
+    use std::path::PathBuf;
+
+    const DOCS: &str = r#"host "app" {
+    /// Marks a struct the app keeps.
+    attribute kept on struct;
+}
+
+/// How a body moves.
+///
+/// The kinds differ in what moves them.
+enum Kind {
+    /// Never moves.
+    Fixed,
+    /// Moved by forces.
+    ///
+    /// Gravity included.
+    Free,
+    Scripted,
+}
+
+/// A physics body.
+///
+/// More detail that a completion list leaves out.
+@kept
+struct Body {
+    /// Fixed, free or scripted.
+    kind: Kind = Kind::Free,
+    /// Multiplies gravity.
+    gravity_scale: float = 1.0,
+    mass: float,
+}
+
+impl Body {
+    /// Pushes the body.
+    fn push(self, x: float) -> float { return x * self.mass; }
+}
+
+// A plain comment, which is not documentation.
+fn plain() -> int { return 1; }
+
+//// A rule line, which is not documentation either.
+fn ruled() -> int { return 2; }
+
+fn main() {
+    let b = Body { mass: 2.0, .. };
+    let k = Kind::Fixed;
+    b.push(1.0);
+    plain();
+    ruled();
+}
+"#;
+
+    /// A package in a temporary directory whose manifest has `docs` (when
+    /// given), with `DOCS` as its entry.
+    fn package(tag: &str, docs: Option<&str>) -> (PathBuf, ProgramSummary) {
+        let root =
+            std::env::temp_dir().join(format!("candela-lsp-docs-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).expect("a temporary directory");
+        let mut manifest = String::from("[package]\nname = \"app\"\nversion = \"0.1.0\"\n");
+        if let Some(docs) = docs {
+            manifest.push_str(&format!("docs = \"{docs}\"\n"));
+        }
+        std::fs::write(root.join("candela.toml"), manifest).expect("a manifest");
+        let path = root.join("src").join("main.cdl");
+        std::fs::write(&path, DOCS).expect("the entry");
+        let outcome = analyze(
+            DOCS,
+            path.to_str().expect("a UTF-8 path"),
+            &ImportResolver::new(),
+        );
+        assert!(
+            outcome.diagnostic.is_none(),
+            "{:?}",
+            outcome.diagnostic.map(|d| d.message)
+        );
+        (root, outcome.summary.expect("the program compiles"))
+    }
+
+    fn hover(s: &ProgramSummary, at: &str) -> String {
+        let marked = at.replace("$0", "");
+        let start = DOCS.find(&marked).unwrap_or_else(|| panic!("{marked}"));
+        let offset = start + at.find("$0").expect("a cursor");
+        Ide::new(DOCS, s, offset).hover().unwrap_or_default()
+    }
+
+    #[test]
+    fn hover_shows_an_enum_with_every_variant_and_its_summary() {
+        let (root, s) = package("enum", None);
+        let h = hover(&s, "enum K$0ind {");
+        std::fs::remove_dir_all(root).ok();
+        assert!(
+            h.starts_with("```candela\nenum Kind { Fixed, Free, Scripted }\n```"),
+            "{h}"
+        );
+        assert!(
+            h.contains("How a body moves.\n\nThe kinds differ in what moves them."),
+            "{h}"
+        );
+        assert!(
+            h.contains(
+                "**Variants**\n\n- `Fixed`: Never moves.\n- `Free`: Moved by forces.\n- `Scripted`"
+            ),
+            "{h}"
+        );
+        assert!(
+            !h.contains("Gravity included."),
+            "a variant shows its summary only: {h}"
+        );
+        assert!(!h.contains("Open docs"), "no docs URL, no link: {h}");
+    }
+
+    #[test]
+    fn hover_on_a_variant_shows_its_own_doc() {
+        let (root, s) = package("variant", None);
+        let h = hover(&s, "let k = Kind::Fi$0xed;");
+        std::fs::remove_dir_all(root).ok();
+        assert_eq!(h, "```candela\nKind::Fixed\n```\n\nNever moves.");
+    }
+
+    #[test]
+    fn hover_shows_a_struct_with_its_fields_defaults_and_summaries() {
+        let (root, s) = package("struct", None);
+        let h = hover(&s, "struct Bo$0dy {");
+        std::fs::remove_dir_all(root).ok();
+        assert!(
+            h.contains(
+                "struct Body {\n    kind: Kind = Kind::Free,\n    gravity_scale: float = 1.0,\n    mass: float,\n}"
+            ),
+            "{h}"
+        );
+        assert!(h.contains("A physics body.\n\nMore detail"), "{h}");
+        assert!(
+            h.contains(
+                "**Fields**\n\n- `kind`: Fixed, free or scripted.\n- `gravity_scale`: Multiplies gravity.\n- `mass`"
+            ),
+            "{h}"
+        );
+        let h = hover(&s, "    gravity_sc$0ale: float = 1.0,");
+        assert!(
+            h.contains("Body.gravity_scale: float = 1.0\n```\n\nMultiplies gravity."),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn only_triple_slash_comments_are_documentation() {
+        let (root, s) = package("plain", None);
+        let plain = hover(&s, "fn pla$0in()");
+        let ruled = hover(&s, "fn rul$0ed()");
+        let attr = hover(&s, "@ke$0pt");
+        std::fs::remove_dir_all(root).ok();
+        assert_eq!(plain, "```candela\nfn plain() -> int\n```");
+        assert_eq!(ruled, "```candela\nfn ruled() -> int\n```");
+        assert!(attr.ends_with("Marks a struct the app keeps."), "{attr}");
+    }
+
+    #[test]
+    fn completion_documentation_is_the_summary() {
+        let (root, s) = package("complete", None);
+        let at = DOCS.find("    plain();").expect("plain") + 4;
+        let items = Ide::new(DOCS, &s, at).completions();
+        std::fs::remove_dir_all(root).ok();
+        let body = items.iter().find(|i| i.label == "Body").expect("Body");
+        let Some(tower_lsp::lsp_types::Documentation::MarkupContent(m)) = &body.documentation
+        else {
+            panic!("Body has no documentation: {body:?}");
+        };
+        assert_eq!(m.value, "A physics body.");
+    }
+
+    #[test]
+    fn hover_links_to_the_documentation_the_package_names() {
+        let (root, s) = package("link", Some("https://example.com/api?name={name}"));
+        let links: Vec<String> = [
+            "enum K$0ind {",
+            "let k = Kind::Fi$0xed;",
+            "struct Bo$0dy {",
+            "    gravity_sc$0ale: float = 1.0,",
+            "    b.pu$0sh(1.0);",
+            "fn pla$0in()",
+            "@ke$0pt",
+        ]
+        .iter()
+        .map(|at| {
+            let h = hover(&s, at);
+            h.rsplit_once("[Open docs](")
+                .map_or_else(String::new, |(_, l)| l.trim_end_matches(')').to_owned())
+        })
+        .collect();
+        std::fs::remove_dir_all(root).ok();
+        let base = "https://example.com/api?name=";
+        assert_eq!(
+            links,
+            [
+                format!("{base}Kind"),
+                format!("{base}Kind%3A%3AFixed"),
+                format!("{base}Body"),
+                format!("{base}Body.gravity_scale"),
+                format!("{base}Body.push"),
+                format!("{base}plain"),
+                format!("{base}%40kept"),
+            ]
+        );
     }
 }

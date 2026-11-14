@@ -284,10 +284,18 @@
   "."
 ] @punctuation.delimiter
 
-; Comments. candela has one comment form, the line comment; a `///` comment is
-; an ordinary comment that the standard library uses to document what follows.
+; Comments. candela has one comment form, the line comment. A `///` comment
+; documents the item below it and a `//!` comment the module it is in; the
+; language server shows both. Four slashes or more make a plain comment.
 ((comment) @comment.documentation
-  (#match? @comment.documentation "^///"))
+  (#match? @comment.documentation "^///")
+  (#not-match? @comment.documentation "^////"))
+
+((comment) @comment.documentation
+  (#match? @comment.documentation "^//!"))
 
 ((comment) @comment
-  (#not-match? @comment "^///"))
+  (#not-match? @comment "^//[/!]"))
+
+((comment) @comment
+  (#match? @comment "^////"))

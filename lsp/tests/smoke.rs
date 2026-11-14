@@ -386,9 +386,15 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
     std::fs::write(
         package.join("src/main.cdl"),
         "host \"engine\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n\
-         // Where a thing is.\nstruct Spot {\n    // Across.\n    x: float = 0.0,\n    y: float = 0.0,\n}\n",
+         /// Where a thing is.\nstruct Spot {\n    /// Across.\n    x: float = 0.0,\n    y: float = 0.0,\n}\n",
     )
     .expect("write package");
+    // The package says where its documentation lives, so hover links to it.
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"engine\"\nversion = \"0.1.0\"\ndocs = \"https://engine.dev/api?name={name}\"\n",
+    )
+    .expect("write manifest");
     let game = dir.join("game.cdl");
     let compiles = "import \"engine\" { * };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, compiles).expect("write game");
@@ -483,7 +489,11 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        shown.contains("Spot.x: float") && shown.contains("Across."),
+        shown.contains("Spot.x: float = 0.0") && shown.contains("Across."),
+        "{shown}"
+    );
+    assert!(
+        shown.ends_with("[Open docs](https://engine.dev/api?name=Spot.x)"),
         "{shown}"
     );
 
