@@ -9322,7 +9322,7 @@ fn main() { print(add(1, \"two\")); }";
     assert_eq!(d.code, "argument_type_mismatch");
     assert_eq!(
         d.message,
-        "Function add expects this argument's type to be int, but this expression's type is string"
+        "Parameter b of add takes int, but this argument is string"
     );
 }
 
@@ -9332,7 +9332,11 @@ pub fn annotated_param_rejects_float_for_int() {
 fn main() { print(twice(1.5)); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_eq!(d.code, "argument_type_mismatch");
-    assert!(d.message.contains("this expression's type is float"));
+    assert!(
+        d.message.contains("this argument is float"),
+        "{}",
+        d.message
+    );
 }
 
 #[test]

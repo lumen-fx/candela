@@ -21,7 +21,11 @@ A message names a type the way you declared it, so a mismatch on a list of your
 own enum reads `Value[]` rather than the bare word `enum`.
 
 Compilation stops at the first error. Fixing one and recompiling is how you find
-the next; there is no list.
+the next. The language server and `Engine::check` go on
+past an error in a function body to the next statement and the next function,
+and a call whose arguments do not fit reports each of them, naming the
+parameter and pointing at its declaration, so the editor lists every mistake at
+once.
 
 candela emits no warnings. Everything it reports stops the program.
 

@@ -138,6 +138,37 @@ type LibHandle = ();
 thread_local! {
     /// Set while a check-only compile runs; see [`check_only_scope`].
     static CHECK_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Cleared by [`statement_recovery_scope`].
+    static STATEMENT_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Runs `f` with a check going on past a statement that does not compile,
+/// or not. On by default.
+///
+/// A check-only compile that reports into a sink drops a statement whose
+/// compile raised an error, keeps the error, and compiles the next one, so
+/// each statement's error is reported rather than only a body's first. A
+/// `let` that failed leaves its name declared as `any`, so what follows does
+/// not report it as unknown. A caller that wants a body's first error only,
+/// the way a build reports it, turns it off.
+pub fn statement_recovery_scope<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STATEMENT_RECOVERY.set(self.0);
+        }
+    }
+    let _restore = Restore(STATEMENT_RECOVERY.replace(enabled));
+    f()
+}
+
+/// Whether the compile running now goes on past a statement that does not
+/// compile; see [`statement_recovery_scope`].
+pub(crate) fn recovers_statements() -> bool {
+    STATEMENT_RECOVERY.get()
+        && is_check_only()
+        && crate::errors::diagnostics_enabled()
+        && cfg!(panic = "unwind")
 }
 
 /// Puts the previous check-only setting back when dropped, so a compile that
@@ -162,8 +193,7 @@ pub fn check_only_scope<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// Whether the compile running now is a check-only one.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_check_only() -> bool {
+pub(crate) fn is_check_only() -> bool {
     CHECK_ONLY.get()
 }
 
@@ -1330,11 +1360,14 @@ pub(crate) fn compile_enum_construction(
         let received = args[i].infer_type(v, ctx, state);
         if !param_type_matches(expected, &received, state.generics) {
             compiler_errors::error_function_arg_invalid_type(
-                &received,
-                expected,
-                args_indexes[i],
-                &variant_name,
-                None,
+                &compiler_errors::ArgMismatch {
+                    perceived_type: &received,
+                    expected_type: expected,
+                    arg_span: args_indexes[i],
+                    fn_name: &variant_name,
+                    fn_decl_span: None,
+                    param: None,
+                },
                 ctx.file_idx,
                 state.sources,
                 state.type_names(),
@@ -5328,23 +5361,61 @@ pub fn compile_expr(
     let v_len = v.len();
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let mut output: Vec<Instr> = Vec::with_capacity(input.len());
+    let recover = recovers_statements();
     for (idx, x) in input.iter().enumerate() {
         // Nothing reads the value of a statement, except where the form has no
         // statement arm to compile through: `x;` and `1 + 2;` are compiled as
         // values, and the register is freed again on the next line.
-        if let Some(id) = x.compile_with_code_context(
-            v,
-            ctx,
-            state,
-            &mut output,
-            None,
-            false,
-            &input[idx + 1..],
-            x.is_value_only(),
-        ) {
-            state.free_reg(id, v);
+        let statement = |v: &mut Vec<Variable>, state: &mut State<'_>, output: &mut Vec<Instr>| {
+            if let Some(id) = x.compile_with_code_context(
+                v,
+                ctx,
+                state,
+                output,
+                None,
+                false,
+                &input[idx + 1..],
+                x.is_value_only(),
+            ) {
+                state.free_reg(id, v);
+            }
+            state.check_instructions(usize::from(ctx.offset) + output.len());
+        };
+        if !recover {
+            statement(v, state, &mut output);
+            continue;
         }
-        state.check_instructions(usize::from(ctx.offset) + output.len());
+        // See `statement_recovery_scope`.
+        let checkpoint = state.checkpoint();
+        let (output_len, vars_len) = (output.len(), v.len());
+        let symbols = state.scope(ctx.file_idx).symbols.len();
+        let (done, errors) =
+            crate::errors::collect_diagnostics(|| statement(v, state, &mut output));
+        errors
+            .into_iter()
+            .for_each(crate::errors::record_diagnostic);
+        if done.is_none() {
+            state.rollback_to(&checkpoint);
+            output.truncate(output_len);
+            v.truncate(vars_len);
+            state.scope_mut(ctx.file_idx).symbols.truncate(symbols);
+            if let Expr::VarDeclare(name, value, _) = x {
+                // The type the value would have had, when that much can be
+                // worked out without the error, so what reads the name
+                // later is checked against it.
+                let checkpoint = state.checkpoint();
+                let (var_type, _) =
+                    crate::errors::collect_diagnostics(|| value.infer_type(v, ctx, state));
+                state.rollback_to(&checkpoint);
+                v.push(Variable {
+                    declared: None,
+                    name: name.clone(),
+                    register_id: state.alloc_reg(),
+                    cell: false,
+                    var_type: var_type.unwrap_or(DataType::Unknown),
+                });
+            }
+        }
     }
     v.truncate(v_len);
     // The block's variables and the names it declared go out of scope with it.
@@ -6577,12 +6648,29 @@ pub struct FileNamespaces {
     /// The files that are standard library modules, which are the only ones
     /// whose bodies reach the native primitives the library is written on.
     std_files: Vec<u16>,
+    /// The files a library import reached: standard library modules,
+    /// packages, and the files those import. The rest are the program's own.
+    library_files: Vec<u16>,
 }
 
 impl FileNamespaces {
     /// Records that `file_idx` is a standard library module.
     pub fn mark_std(&mut self, file_idx: u16) {
         self.std_files.push(file_idx);
+        self.mark_library(file_idx);
+    }
+    /// Records that `file_idx` was reached through a library import, or from
+    /// a file that was.
+    pub fn mark_library(&mut self, file_idx: u16) {
+        if !self.library_files.contains(&file_idx) {
+            self.library_files.push(file_idx);
+        }
+    }
+    /// Whether `file_idx` belongs to a library rather than to the program:
+    /// see [`FileNamespaces::mark_library`].
+    #[must_use]
+    pub fn is_library(&self, file_idx: u16) -> bool {
+        self.library_files.contains(&file_idx)
     }
     /// Whether `file_idx` is a standard library module.
     #[must_use]
@@ -7869,14 +7957,24 @@ fn parse_toplevel(
                         .unwrap_or_else(|| Path::new("."))
                         .join(path.as_str());
                     beside.canonicalize().unwrap_or_else(|_| {
-                        library_path.clone().unwrap_or_else(|| {
-                            error_cannot_read_file(
+                        // The library copy is the fallback only when it is
+                        // there; otherwise the error names the file beside
+                        // the importer first, which is the one meant.
+                        match library_path.clone() {
+                            Some(found)
+                                if found.is_file()
+                                    || resolver.overlay(&found).is_some()
+                                    || library.as_ref().is_some_and(|(_, text)| text.is_some()) =>
+                            {
+                                found
+                            }
+                            other => error_cannot_read_file(
                                 span,
                                 src_file_idx,
                                 sources,
-                                std::slice::from_ref(&beside),
-                            );
-                        })
+                                &tried_paths(&beside, other.as_deref()),
+                            ),
+                        }
                     })
                 };
 
@@ -7891,6 +7989,8 @@ fn parse_toplevel(
                         Some(text) => String::from(text),
                         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
                         None => String::new(),
+                        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                        None if let Some(text) = resolver.overlay(&file_path) => String::from(text),
                         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                         None => std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
                             error_cannot_read_file(
@@ -7908,6 +8008,11 @@ fn parse_toplevel(
                     };
 
                     let child_src_idx = sources.len() as u16;
+                    // Marked before the file's own imports are read, which
+                    // take the mark from it.
+                    if is_logical || file_namespaces.is_library(src_file_idx) {
+                        file_namespaces.mark_library(child_src_idx);
+                    }
 
                     sources.push(Source {
                         filename: file_name,

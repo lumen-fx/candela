@@ -167,7 +167,10 @@ export CANDELA_NO_UPDATE_CHECK=1
 
 The toolchain installs `candela-lsp`, a language server that runs candela's own
 parser and type checker, so an editor reports the same errors the compiler
-does. On top of diagnostics it gives completion that knows what the cursor is
+does, while you type: every error in the file and the files it imports, each
+where it is, and a call's arguments that do not fit named by their parameter.
+A package can add what only it knows with a [`check` command](../reference/candela-toml.md#package).
+On top of diagnostics it gives completion that knows what the cursor is
 on (a value's fields and methods, an enum's variants, a struct literal's
 missing fields, an attribute's parameters and values), hover with a
 declaration's [doc comment](../language/modules.md#documenting-a-module) and a
@@ -184,7 +187,9 @@ in the repository, under `editors/`.
   Set `candela.languageServerPath` to use a server that is not on your path,
   and `candela.importRoots` to name a package a script imports without a
   manifest, such as a host program's module:
-  `{ "engine": "~/engine/module" }`.
+  `{ "engine": "~/engine/module" }`. `candela.diagnosticsDelay` sets how long
+  after typing a file is checked, and `candela.packageChecks` turns package
+  checks off.
 - **IntelliJ IDEA and the other JetBrains IDEs.** Build `editors/jetbrains`
   with `./gradlew buildPlugin`, install [LSP4IJ] from the JetBrains
   Marketplace, then install the zip from `build/distributions/` with

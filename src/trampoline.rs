@@ -32,6 +32,7 @@ use crate::compiler::compiler_data::program_too_large;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::METHOD_SEP;
 use crate::compiler::imports::ImportResolver;
+use crate::compiler::is_check_only;
 use crate::compiler::type_system::ANON_FN_PREFIX;
 use crate::compiler::use_immediates;
 use crate::instr::Instr;
@@ -40,8 +41,11 @@ use crate::warnings::warn_unraisable_catch_kinds;
 use candela_vm::Diagnostic;
 use candela_vm::artifact::ExportImage;
 use candela_vm::collect_diagnostic;
+use candela_vm::collect_diagnostics;
 use candela_vm::data::NULL;
 use candela_vm::embed::is_host_callable_type;
+use candela_vm::errors::diagnostics_enabled;
+use candela_vm::errors::record_diagnostic;
 use candela_vm::rt::DataType;
 use candela_vm::rt::Span;
 use rustc_hash::FxHashSet;
@@ -172,12 +176,34 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
         out.const_registers.entry(NULL).or_insert(0);
     }
 
+    // A check that reports into a sink goes on past a function whose body
+    // does not compile: the attempt is undone, its errors are kept, and the
+    // next function is checked, so every broken body is reported at once. It
+    // also checks the program's own imported files, which a build leaves to
+    // the calls that reach them.
+    let recover = is_check_only() && diagnostics_enabled() && cfg!(panic = "unwind");
     let mut exports = Vec::new();
-    for (name, arg_types) in annotated_functions(out) {
-        let host_callable = arg_types
-            .iter()
-            .all(|ty| is_host_callable_type(ty, &out.structs));
-        let export = compile_entry_point(out, 0, &name, arg_types);
+    for (file, name, arg_types) in annotated_functions(out, recover) {
+        let host_callable = file == 0
+            && arg_types
+                .iter()
+                .all(|ty| is_host_callable_type(ty, &out.structs));
+        if recover {
+            let checkpoint = compiler_state(out).checkpoint();
+            match collect_diagnostics(|| compile_entry_point(out, file, &name, arg_types)) {
+                (Some(export), errors) if errors.is_empty() => {
+                    if host_callable {
+                        exports.push(export);
+                    }
+                }
+                (_, errors) => {
+                    compiler_state(out).rollback_to(&checkpoint);
+                    errors.into_iter().for_each(record_diagnostic);
+                }
+            }
+            continue;
+        }
+        let export = compile_entry_point(out, file, &name, arg_types);
         if host_callable {
             exports.push(export);
         }
@@ -219,6 +245,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
                         "Parameter {param} of {name} has no type, so a host calling {name} passes it as any. Annotate it with the type the host passes"
                     ),
                     code: String::from("unannotated_host_parameter"),
+                    related: Vec::new(),
                 },
             );
         }
@@ -253,6 +280,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
                             error.message
                         ),
                         code: String::from("no_host_entry_point"),
+                        related: error.related,
                     },
                 );
             }
@@ -317,26 +345,39 @@ fn host_called_bare_functions(out: &CompileOutput) -> Vec<(SmolStr, usize)> {
 /// parameter has no declared type to specialise on; such a function is first
 /// checked by the call that reaches it, or, when nothing in the program calls
 /// it, by the `any` entry point [`compile_entry_points`] tries for a host.
-fn annotated_functions(out: &CompileOutput) -> Vec<(SmolStr, Vec<DataType>)> {
-    let mut seen: FxHashSet<SmolStr> = FxHashSet::default();
+///
+/// With `every_file`, the functions of the program's other files come after
+/// the entry file's, each paired with its file: every file a library import
+/// did not reach.
+fn annotated_functions(
+    out: &CompileOutput,
+    every_file: bool,
+) -> Vec<(u16, SmolStr, Vec<DataType>)> {
     let mut annotated = Vec::new();
-    for (name, kind) in out.namespaces.root().fns() {
-        let SymbolKind::Fn(fn_id) = kind else {
-            continue;
-        };
-        // A name resolves to the first symbol carrying it, so a later shadowed
-        // definition is not the one a call would reach.
-        if name.as_str() == "main" || !seen.insert(name.clone()) {
+    let files = if every_file { out.sources.len() } else { 1 };
+    for file in 0..files as u16 {
+        if file != 0 && out.namespaces.is_library(file) {
             continue;
         }
-        let function = &out.functions[*fn_id as usize];
-        if function.src_file != 0 {
-            continue;
-        }
-        let arg_types: Option<Vec<DataType>> =
-            function.args.iter().map(|(_, ty)| ty.clone()).collect();
-        if let Some(arg_types) = arg_types {
-            annotated.push((name.clone(), arg_types));
+        let mut seen: FxHashSet<SmolStr> = FxHashSet::default();
+        for (name, kind) in out.namespaces.get(file).fns() {
+            let SymbolKind::Fn(fn_id) = kind else {
+                continue;
+            };
+            // A name resolves to the first symbol carrying it, so a later
+            // shadowed definition is not the one a call would reach.
+            if name.as_str() == "main" || !seen.insert(name.clone()) {
+                continue;
+            }
+            let function = &out.functions[*fn_id as usize];
+            if function.src_file != file {
+                continue;
+            }
+            let arg_types: Option<Vec<DataType>> =
+                function.args.iter().map(|(_, ty)| ty.clone()).collect();
+            if let Some(arg_types) = arg_types {
+                annotated.push((file, name.clone(), arg_types));
+            }
         }
     }
     annotated

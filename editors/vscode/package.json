@@ -1,8 +1,8 @@
 {
   "name": "candela",
   "displayName": "Candela",
-  "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics, hover, completion, signature help, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
-  "version": "0.4.0",
+  "description": "Syntax highlighting, language configuration, snippets, and language server (diagnostics while you type, hover, completion, signature help, go-to-definition, outline) for the Candela language (.cdl), the Lumen framework's scripting language.",
+  "version": "0.5.0",
   "publisher": "lumen-fx",
   "license": "Apache-2.0",
   "engines": {
@@ -30,6 +30,16 @@
   "activationEvents": [
     "onLanguage:candela"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In an untrusted workspace the check commands packages name in their candela.toml do not run.",
+      "restrictedConfigurations": [
+        "candela.packageChecks",
+        "candela.languageServerPath"
+      ]
+    }
+  },
   "dependencies": {
     "vscode-languageclient": "^10.1.0"
   },
@@ -84,6 +94,17 @@
           "type": "string",
           "default": "",
           "markdownDescription": "The directory holding the standard library (`std/`), what `CANDELA_LIB_PATH` names. Leave empty to use `CANDELA_LIB_PATH`, or the library installed beside `candela-lsp`."
+        },
+        "candela.diagnosticsDelay": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "markdownDescription": "How long after you stop typing, in milliseconds, a file and the files that import it are checked again."
+        },
+        "candela.packageChecks": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the `check` command a package names in its `candela.toml` after each save, for the programs that import it, and show what it reports. An engine package uses this to report mistakes only it can see, such as a settings file entry of the wrong type or an asset path that names no file. Only runs in a trusted workspace."
         }
       }
     }

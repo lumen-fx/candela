@@ -24,7 +24,7 @@ use super::super::type_system::return_type_fits;
 use super::super::type_system::specialization_key;
 use super::super::type_system::specialized_arg_types;
 use super::super::type_system::specialized_return_type;
-use super::super::type_system::track_returns;
+use super::super::type_system::track_returns_or_give_up;
 use crate::compiler::SymbolKind;
 use crate::compiler::UnwrapId;
 use crate::compiler::compile_expr;
@@ -33,11 +33,13 @@ use crate::compiler::compiler_data::Ctx;
 use crate::compiler::compiler_data::FunctionImpl;
 use crate::compiler::compiler_data::State;
 use crate::compiler::compiler_data::Variable;
+use crate::compiler::compiler_errors::ArgMismatch;
 use crate::compiler::compiler_errors::check_args;
 use crate::compiler::compiler_errors::check_args_user_fn;
 use crate::compiler::compiler_errors::error_enum;
 use crate::compiler::compiler_errors::error_function_arg_invalid_type;
 use crate::compiler::compiler_errors::error_invalid_type;
+use crate::compiler::compiler_errors::report_function_arg_invalid_type;
 use crate::compiler::flow::body as flow_body;
 use crate::compiler::flow::branch_target;
 use crate::compiler::flow::ends_straight_run;
@@ -83,6 +85,75 @@ impl Drop for CompilingBody {
 #[must_use]
 pub fn body_being_compiled() -> Option<usize> {
     COMPILING_BODIES.with(|bodies| bodies.borrow().last().copied())
+}
+
+/// Whether an argument of type `received` can fit a parameter declared
+/// `declared`, before the call's own rules for literals and functions are
+/// applied: the test a call fails at its argument rather than inside the body
+/// it would specialise.
+#[must_use]
+pub(crate) fn argument_may_fit(
+    declared: &DataType,
+    received: &DataType,
+    state: &State<'_>,
+) -> bool {
+    declared_holds_fn_signature(declared)
+        || param_type_matches(declared, received, state.generics)
+        || let_type_fits(declared, received, true, state.generics)
+}
+
+/// Reports argument `i` of a call to `fn_id` as not fitting its parameter.
+#[allow(clippy::too_many_arguments)]
+fn report_arg_mismatch(
+    fn_id: usize,
+    fn_name: &str,
+    i: usize,
+    infered: &[DataType],
+    declared: &[Option<DataType>],
+    args_indexes: &[Span],
+    ctx: Ctx,
+    state: &State<'_>,
+    fatal: bool,
+) {
+    report_arg_mismatch_at(
+        fn_id,
+        fn_name,
+        i,
+        &infered[i],
+        declared[i].as_ref(),
+        args_indexes[i],
+        ctx,
+        state,
+        fatal,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn report_arg_mismatch_at(
+    fn_id: usize,
+    fn_name: &str,
+    i: usize,
+    infered: &DataType,
+    declared: Option<&DataType>,
+    arg_span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+    fatal: bool,
+) {
+    let Some(declared) = declared else { return };
+    let param = state.fns[fn_id].args[i].0.clone();
+    let mismatch = ArgMismatch {
+        perceived_type: infered,
+        expected_type: declared,
+        arg_span,
+        fn_name,
+        fn_decl_span: Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
+        param: Some((&param, i)),
+    };
+    if fatal {
+        error_function_arg_invalid_type(&mismatch, ctx.file_idx, state.sources, state.type_names());
+    }
+    report_function_arg_invalid_type(&mismatch, ctx.file_idx, state.sources, state.type_names());
 }
 
 /// The register holding the closure value a call by name reaches: the variable
@@ -132,6 +203,33 @@ pub fn handle_user_function(
 
     // Check if the arguments are correct
     let args_len = state.fns[fn_id].args.len();
+    if args.len() != args_len {
+        // The arguments that line up with a parameter and do not fit it are
+        // reported beside the count, which is often what got them out of line.
+        let declared = specialized_arg_types(fn_id, type_args, ctx, state);
+        for (i, arg) in args.iter().enumerate().take(args_len) {
+            let Some(expected) = &declared[i] else {
+                continue;
+            };
+            if declared_holds_fn_signature(expected) {
+                continue;
+            }
+            let inferred = arg.infer_type(v, ctx, state);
+            if !argument_may_fit(expected, &inferred, state) {
+                report_arg_mismatch_at(
+                    fn_id,
+                    fn_name,
+                    i,
+                    &inferred,
+                    Some(expected),
+                    args_indexes[i],
+                    ctx,
+                    state,
+                    false,
+                );
+            }
+        }
+    }
     check_args_user_fn(
         args,
         args_len,
@@ -170,12 +268,16 @@ pub fn handle_user_function(
         for (i, arg) in args.iter().enumerate() {
             let inferred = arg.infer_type(v, ctx, state);
             if inferred != expected_arg_types[i] {
+                let param = state.fns[fn_id].args[i].0.clone();
                 error_function_arg_invalid_type(
-                    &inferred,
-                    &expected_arg_types[i],
-                    args_indexes[i],
-                    fn_name,
-                    Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
+                    &ArgMismatch {
+                        perceived_type: &inferred,
+                        expected_type: &expected_arg_types[i],
+                        arg_span: args_indexes[i],
+                        fn_name,
+                        fn_decl_span: Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
+                        param: Some((&param, i)),
+                    },
                     ctx.file_idx,
                     state.sources,
                     state.type_names(),
@@ -227,6 +329,7 @@ pub fn handle_user_function(
             }
         }
     }
+    let mut mismatched = Vec::new();
     for (i, declared) in declared_arg_types.iter().enumerate() {
         let Some(declared) = declared else { continue };
         // A list or map literal written at the call is held by nothing else,
@@ -240,17 +343,36 @@ pub fn handle_user_function(
             continue;
         }
         if !param_type_matches(declared, &infered_arg_types[i], state.generics) {
-            error_function_arg_invalid_type(
-                &infered_arg_types[i],
-                declared,
-                args_indexes[i],
+            mismatched.push(i);
+        }
+    }
+    // Every argument that does not fit is reported, the last one ending the
+    // compile, so a call with its arguments out of order shows each of them.
+    if let Some((&last, rest)) = mismatched.split_last() {
+        for &i in rest {
+            report_arg_mismatch(
+                fn_id,
                 fn_name,
-                Some((state.fns[fn_id].name_span, state.fns[fn_id].src_file)),
-                ctx.file_idx,
-                state.sources,
-                state.type_names(),
+                i,
+                &infered_arg_types,
+                &declared_arg_types,
+                args_indexes,
+                ctx,
+                state,
+                false,
             );
         }
+        report_arg_mismatch(
+            fn_id,
+            fn_name,
+            last,
+            &infered_arg_types,
+            &declared_arg_types,
+            args_indexes,
+            ctx,
+            state,
+            true,
+        );
     }
 
     // A constructor names only the type parameters its payload mentions, so an
@@ -712,8 +834,8 @@ fn compile_function(
         file_idx: fn_file_idx,
         ..ctx
     };
-    let return_type =
-        track_returns(fn_code, v, fn_ctx, state, fn_name, function_id).body_type(fn_code);
+    let return_type = track_returns_or_give_up(fn_code, v, fn_ctx, state, fn_name, function_id)
+        .map_or(DataType::Unknown, |flow| flow.body_type(fn_code));
 
     // A `-> Type` annotation pins what the body may hand back. Each
     // specialisation is checked separately, so an un-annotated parameter that
@@ -1095,11 +1217,14 @@ pub fn indirect_arg_types(
         let inferred = args[i].infer_type(v, ctx, state);
         if !param_type_matches(declared, &inferred, state.generics) {
             error_function_arg_invalid_type(
-                &inferred,
-                declared,
-                args_indexes[i],
-                "this function",
-                None,
+                &ArgMismatch {
+                    perceived_type: &inferred,
+                    expected_type: declared,
+                    arg_span: args_indexes[i],
+                    fn_name: "this function",
+                    fn_decl_span: None,
+                    param: None,
+                },
                 ctx.file_idx,
                 state.sources,
                 state.type_names(),
