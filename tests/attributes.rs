@@ -218,7 +218,7 @@ fn main() {}
 "#;
     Engine::new()
         .check(src, "fns.cdl")
-        .unwrap_or_else(|d| panic!("{}", d.message));
+        .unwrap_or_else(|d| panic!("{}", d[0].message));
 }
 
 /// The attribute table reads out of a `.cdlb` with nothing registered, and a

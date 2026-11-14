@@ -43,6 +43,8 @@ what is wrong with it.
 | `description` | string | no | One line about the package, sent to the registry when it is published. |
 | `entry` | string | no | The file `run`, `check` and `build` compile when no file is named, and the file another project reads when it imports this package by name. Defaults to `src/main.cdl`. |
 | `candela` | string | no | The oldest candela the package compiles on, as a version requirement. A release records it. With no key here, a release records the version of the candela that checked the package. |
+| `docs` | string | no | Where the package's documentation is published, as a URL with `{name}` where an item's name goes. Editors link each item's hover to it. |
+| `check` | list of strings | no | A command an editor runs after a save, for a program that imports the package, and shows what it reports. `{file}` is replaced by the file being checked. |
 
 The entry is the package's front door twice over: the verbs start there, and
 `import "name"` in a project that depends on the package reads it. A library
@@ -66,6 +68,52 @@ channel from demanding the in-development version no release carries yet.
 Nothing compares the running compiler against the requirement; it travels to
 the registry with the release. `0.0.7` is the oldest candela that reads the key
 at all, so a floor below it says nothing any toolchain acts on.
+
+`docs` is how an editor finds an item's page. The language server fills
+`{name}` with the item's name as code writes it, `Type`, `Type.method`,
+`Type.field`, `Enum::Variant`, `@attribute` or `function`, percent-encoded, and
+ends the item's hover with an "Open docs" link to the result. `{name}` is the
+only placeholder; any other `{...}` is an error naming it.
+
+```toml
+[package]
+name = "engine"
+version = "1.0.0"
+docs = "https://engine.example/api?name={name}"
+```
+
+A site whose pages follow other rules than a name per page serves one lookup
+page that reads the name and goes on to the right place, as above.
+
+`check` is how a package reports mistakes the compiler cannot see, such as an
+engine that reads attributes, settings files and asset paths when it loads a
+program. The language server runs it after a save, for each open program that
+imports the package, from the directory of the file being checked, and shows
+what it prints beside the compiler's errors. The first word is a program on the
+`PATH`, or a path inside the package when it starts with `./`; it cannot climb
+out of the package. `{file}` in any word is the file being checked, and is the
+only placeholder.
+
+```toml
+[package]
+name = "engine"
+version = "1.0.0"
+check = ["engine", "check", "--json", "{file}"]
+```
+
+The command prints JSON on stdout: a list of findings, or an object whose
+`diagnostics` key holds one. Each finding has a `file` (absolute, or relative to
+the directory the command ran in) and a `message`, and may have a `line` and a
+`column` counted from 1 in characters, an `end_line` and `end_column`, a
+`severity` (`error`, the default, `warning`, `information` or `hint`), a `code`,
+and a `related` list of places, each with a `file`, a position and a
+`message`. A finding with no `column` covers its whole line; one with no end
+runs to the end of its line.
+
+```json
+[{ "file": "/game/settings.toml", "line": 4, "severity": "warning",
+   "code": "bad_setting", "message": "gravity needs two numbers, [x, y]" }]
+```
 
 ## [dependencies]
 

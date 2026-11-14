@@ -70,6 +70,7 @@ use candela_vm::embed::value_matches_type;
 use candela_vm::errors::Diagnostic;
 use candela_vm::errors::ErrorCtx;
 use candela_vm::errors::collect_diagnostic;
+use candela_vm::errors::collect_diagnostics;
 use candela_vm::instr::Instr;
 use candela_vm::rt::DataType;
 use candela_vm::rt::DynamicLibFn;
@@ -315,21 +316,28 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns the [`Diagnostic`] of the first error: a parse or type error, a
-    /// body that does not compile at its declared parameter types, or a `dylib`
-    /// signature naming a type C cannot represent.
-    pub fn check(&self, src: &str, filename: &str) -> Result<Vec<Diagnostic>, Diagnostic> {
+    /// Returns every error the check found, in the order it found them: parse
+    /// and type errors, bodies that do not compile at their declared parameter
+    /// types, and `dylib` signatures naming a type C cannot represent. The
+    /// check goes on past an error in a function body to the next statement
+    /// and the next function, so one run lists them all; an error outside a
+    /// body, such as a parse error, ends it.
+    pub fn check(&self, src: &str, filename: &str) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
         let resolver = &self.resolver;
-        self.cfg.scope(|| {
+        let (warnings, errors) = self.cfg.scope(|| {
             self.macros.scope(|| {
-                collect_diagnostic(|| {
+                collect_diagnostics(|| {
                     collect_warnings(|| {
                         let _ = check_only(src.to_owned(), filename, resolver);
                     })
                     .1
                 })
             })
-        })
+        });
+        match warnings {
+            Some(warnings) if errors.is_empty() => Ok(warnings),
+            _ => Err(errors),
+        }
     }
 
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
@@ -390,6 +398,7 @@ impl Engine {
                 span: 0..0,
                 message: e.to_string(),
                 code: e.code().to_owned(),
+                related: Vec::new(),
             })?;
 
         let mut program = Program {
@@ -567,6 +576,7 @@ impl Program {
             span: 0..0,
             message: format!("argument {} of '{fn_name}' {why}", index + 1),
             code: String::from("argument_type_mismatch"),
+            related: Vec::new(),
         }
     }
 

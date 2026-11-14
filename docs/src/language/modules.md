@@ -182,7 +182,30 @@ fn main() {
 
 What a module imports stays its own. `main.cdl` above sees `area` through
 `geometry`, but not the modules `geometry.cdl` imports or the items it named in
-a list; `main.cdl` imports those itself when it needs them.
+a list; `main.cdl` imports those itself when it needs them, unless
+`geometry.cdl` passes them on with `export import`.
+
+## Passing items on
+
+`export` in front of an import with a list or `{ * }` passes the items it
+brings in on to every file that imports this one, as if the file declared
+them itself. One module can then be written as several files and still be
+imported as one:
+
+`shapes/main.cdl`:
+
+```rust
+export import "./circle.cdl" { * };
+export import "./square.cdl" { * };
+```
+
+A file that writes `import "shapes" { * };` or `import "shapes";` reaches
+everything `circle.cdl` and `square.cdl` declare, and a definition still
+points at the file that declares it. A list passes on only the items it
+names, with the methods of a named type. A declaration of the file's own
+shadows a passed-on item of the same name, and a name two `{ * }` imports
+make ambiguous is passed on by neither. An `export import` always names
+items: write `{ * }` or a list, not `as`.
 
 Only the `main` of the file you run is the entry point. A `main` in an imported
 module is ignored, which lets a module keep one for its own checks.
@@ -195,7 +218,8 @@ bodies as much as in a signature, and it does not depend on how the file was
 imported, so a module written against its own declarations behaves the same
 whichever way a file imports it. Names travel one way: a module does not see
 the importing file's declarations or imports, and an importing file sees what a
-module declares, not what the module imports.
+module declares and what it passes on with `export import`, not the rest of
+what the module imports.
 
 A module that several files import is loaded once: it is read and its
 declarations registered a single time, however many files reach it and whether
@@ -235,3 +259,34 @@ can resolve against, not a new kind of import.
 
 Packages are listed in `candela.toml` and fetched by `candela add`. See
 [projects and packages](../getting-started/packages.md).
+
+## Documenting a module
+
+A `///` comment documents the item below it: a function, a method, a struct, a
+field, an enum, a variant, a constant, or an attribute a `host` block declares.
+A `//!` comment describes the file it is in. To the compiler both are
+comments; editors color them as documentation, and the language server shows
+an item's `///` comment when you hover it or pick it from a completion list.
+
+```rust
+/// A point on the plane, in pixels.
+///
+/// Make one with `vec2(x, y)`.
+struct Vec2 {
+    /// How far right of the origin.
+    x: float = 0.0,
+    /// How far below the origin.
+    y: float = 0.0,
+}
+```
+
+The first paragraph is the summary: a completion list shows it, and so does
+the list of fields or variants in a struct's or an enum's hover. The whole
+comment is Markdown and shows in full when you hover the item. Write it right
+above the item; attributes may sit between the two, but a blank line or a
+plain `//` comment leaves the item undocumented. Four slashes or more make a
+plain comment.
+
+A package says where its documentation is published with `docs` in its
+[`candela.toml`](../reference/candela-toml.md#package); a hover then ends in a
+link to the item's page.

@@ -17,17 +17,20 @@
 //! no script side effects (no `print` output, no host calls, no infinite loops
 //! from the user's own code).
 //!
-//! candela's error funnel (parser + compiler + runtime) is fatal-on-first-
-//! error: `collect_diagnostic` yields at most one `Diagnostic` per call, not
-//! a full list. That is a property of the underlying compiler, not a
-//! limitation added here; see the crate README for what this means for
-//! `publishDiagnostics`.
+//! The compile goes on past a function whose body does not compile, and
+//! past each argument of a call that does not fit its parameter, so
+//! `collect_diagnostics` returns every error it found. An error outside a
+//! function body (a parse error, a bad declaration) still ends the compile
+//! there, and inside one body the first error ends that body.
 //!
 //! `candela::compiler::compiler_data::Struct` and `EnumType` (unlike
 //! `Function`) are not tagged with the source file that declared them. This
 //! module places one in the first source file whose text at the declaration's
 //! `name_span` is its name (see `declaring_file`), a heuristic rather than a
 //! compiler-guaranteed invariant.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use candela::check_only;
 use candela::compiler::attributes::{AttrParamTypeExpr, AttrValueExpr, AttributeTargetKind};
@@ -37,8 +40,9 @@ use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::{ANON_FN_PREFIX, TypeExpr};
 use candela::compiler::{CompileOutput, Namespace, SymbolKind};
 use candela::macros::MacroEnv;
+use candela::package_docs;
 use candela::{AttributeTarget, AttributeValue};
-use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
+use candela::{Diagnostic, TypeNames, collect_diagnostics, collect_warnings};
 
 /// One file the compile read: the buffer (index 0) or a module it imports.
 #[derive(Debug, Clone)]
@@ -49,6 +53,9 @@ pub struct SourceFile {
     pub text: String,
     /// Whether the file is a standard library module.
     pub is_std: bool,
+    /// The `docs` URL template of the package the file belongs to, from the
+    /// nearest `candela.toml` above it.
+    pub docs: Option<String>,
 }
 
 /// A function parameter, with its declared type when it has one.
@@ -87,7 +94,7 @@ pub struct FunctionSymbol {
     pub signatures: Vec<String>,
     /// Index into `ProgramSummary::sources`.
     pub src_file: u16,
-    /// The `//` comment lines written right above the declaration.
+    /// The `///` doc comment written right above the declaration.
     pub doc: String,
     /// Declared with `const NAME: T = expr;`.
     pub is_const: bool,
@@ -132,6 +139,8 @@ impl FunctionSymbol {
 pub struct FieldSymbol {
     pub name: String,
     pub ty: String,
+    /// The `= value` the field is declared with, as written.
+    pub default: Option<String>,
     pub span: Span,
     pub doc: String,
 }
@@ -311,13 +320,14 @@ pub struct ProgramSummary {
     pub scope: Vec<ScopeEntry>,
 }
 
-/// The result of analyzing one buffer: a `Diagnostic` on failure (parse or
-/// type error), or a `ProgramSummary` on success. Never both; candela's
-/// compiler does not currently support returning partial results alongside
-/// an error.
+/// The result of analyzing one buffer: the errors the compile found, and a
+/// `ProgramSummary` when the compile got past the program's declarations.
+/// Errors inside function bodies come with a summary; a parse error or a bad
+/// declaration comes without one.
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisOutcome {
-    pub diagnostic: Option<Diagnostic>,
+    /// Every error the compile found, in the order it found them.
+    pub errors: Vec<Diagnostic>,
     pub summary: Option<ProgramSummary>,
     /// The warnings a compile that succeeded raised. A warning does not stop
     /// the compile, so these come with a summary, never with a diagnostic.
@@ -326,7 +336,7 @@ pub struct AnalysisOutcome {
 
 /// Runs candela's compiler (parse + type-check + codegen, no execution) over
 /// `text` as if it were the file at `path`, and extracts a `ProgramSummary`
-/// or the first `Diagnostic` produced.
+/// and every `Diagnostic` produced.
 ///
 /// The compile is the one `candela check` runs, entry points included, so the
 /// editor reports the errors the command line reports and no others.
@@ -354,16 +364,17 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
     // exists only on another target is not.
     // Warnings are collected, never printed: the server talks to the editor
     // over stdio, where a report would corrupt the protocol.
-    match macros.scope(move || {
-        collect_diagnostic(move || collect_warnings(move || check_only(owned, &path, &resolver)))
-    }) {
-        Err(diagnostic) => AnalysisOutcome {
-            diagnostic: Some(diagnostic),
+    let (checked, errors) = macros.scope(move || {
+        collect_diagnostics(move || collect_warnings(move || check_only(owned, &path, &resolver)))
+    });
+    match checked {
+        None => AnalysisOutcome {
+            errors,
             summary: None,
             warnings: Vec::new(),
         },
-        Ok((out, warnings)) => AnalysisOutcome {
-            diagnostic: None,
+        Some((out, warnings)) => AnalysisOutcome {
+            errors,
             summary: Some(build_summary(&out)),
             warnings,
         },
@@ -371,14 +382,26 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
 }
 
 fn build_summary(out: &CompileOutput) -> ProgramSummary {
+    // Files of one package share a manifest; read each directory's once.
+    let mut docs_by_dir: HashMap<PathBuf, Option<String>> = HashMap::new();
     let sources: Vec<SourceFile> = out
         .sources
         .iter()
         .enumerate()
-        .map(|(i, s)| SourceFile {
-            path: s.filename.to_string(),
-            text: s.contents.clone(),
-            is_std: u16::try_from(i).is_ok_and(|i| out.namespaces.is_std(i)),
+        .map(|(i, s)| {
+            let path = Path::new(&*s.filename);
+            let docs = path.parent().and_then(|dir| {
+                docs_by_dir
+                    .entry(dir.to_path_buf())
+                    .or_insert_with(|| package_docs(path))
+                    .clone()
+            });
+            SourceFile {
+                path: s.filename.to_string(),
+                text: s.contents.clone(),
+                is_std: u16::try_from(i).is_ok_and(|i| out.namespaces.is_std(i)),
+                docs,
+            }
         })
         .collect();
 
@@ -398,31 +421,34 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
     let structs = out
         .structs
         .iter()
-        .map(|s| {
-            let src_file = if s.is_tuple() {
-                None
+        .enumerate()
+        .map(|(id, s)| {
+            let (src_file, name_span) = if s.is_tuple() {
+                (None, s.name_span)
             } else {
-                declaring_file(&sources, &s.name, s.name_span)
+                declaration(&sources, "struct", &s.name, s.name_span)
             };
             let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
             StructSymbol {
                 name: s.name.to_string(),
-                name_span: s.name_span,
+                name_span,
                 fields: s
                     .fields
                     .iter()
-                    .map(|(name, ty, span)| {
+                    .enumerate()
+                    .map(|(k, (name, ty, span))| {
                         let span = field_name_span(text, name, *span);
                         FieldSymbol {
                             name: name.to_string(),
                             ty: types.of(ty).to_string(),
+                            default: field_default(out, &sources, id, k),
                             span,
                             doc: own_line_doc(text, span.start as usize),
                         }
                     })
                     .collect(),
                 src_file,
-                doc: doc_above(text, s.name_span.start as usize),
+                doc: doc_above(text, name_span.start as usize),
             }
         })
         .collect();
@@ -431,11 +457,11 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
         .enums
         .iter()
         .map(|e| {
-            let src_file = declaring_file(&sources, &e.name, e.name_span);
+            let (src_file, name_span) = declaration(&sources, "enum", &e.name, e.name_span);
             let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
             EnumSymbol {
                 name: e.name.to_string(),
-                name_span: e.name_span,
+                name_span,
                 variants: e
                     .variants
                     .iter()
@@ -447,7 +473,7 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                     })
                     .collect(),
                 src_file,
-                doc: doc_above(text, e.name_span.start as usize),
+                doc: doc_above(text, name_span.start as usize),
             }
         })
         .collect();
@@ -720,6 +746,24 @@ fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -
     }
 }
 
+/// The value field `field` of struct `id` is declared with, as its source
+/// writes it.
+fn field_default(
+    out: &CompileOutput,
+    sources: &[SourceFile],
+    id: usize,
+    field: usize,
+) -> Option<String> {
+    let (file, _, span) = out
+        .generics
+        .struct_default(u16::try_from(id).ok()?, field)?;
+    let text = sources
+        .get(file as usize)?
+        .text
+        .get(span.start as usize..span.end as usize)?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 /// Where a field's name is written. The compiler records the span of the
 /// field's type; the name is the last occurrence of it before that.
 fn field_name_span(text: &str, name: &str, type_span: Span) -> Span {
@@ -732,6 +776,43 @@ fn field_name_span(text: &str, name: &str, type_span: Span) -> Span {
             })
         })
         .unwrap_or(type_span)
+}
+
+/// Where a struct or an enum is declared: its file and the span of its name.
+///
+/// The compiler records an instantiation of a generic, `Lookup<Health>`, at
+/// the place it was first written, so one is placed at its template instead:
+/// the first `keyword Name<` written at the start of a line, after any
+/// attributes, in the program's files. That is what its doc comment, its
+/// fields' comments and go-to-definition read.
+fn declaration(
+    sources: &[SourceFile],
+    keyword: &str,
+    name: &str,
+    span: Span,
+) -> (Option<u16>, Span) {
+    let Some((base, _)) = name.split_once('<') else {
+        return (declaring_file(sources, name, span), span);
+    };
+    let needle = format!("{keyword} {base}<");
+    for (i, source) in sources.iter().enumerate() {
+        for (at, _) in source.text.match_indices(&needle) {
+            let line_start = source.text[..at].rfind('\n').map_or(0, |n| n + 1);
+            let before = source.text[line_start..at].trim();
+            if !(before.is_empty() || before.starts_with('@')) {
+                continue;
+            }
+            let start = at + keyword.len() + 1;
+            if let (Ok(file), Ok(start), Ok(end)) = (
+                u16::try_from(i),
+                u32::try_from(start),
+                u32::try_from(start + base.len()),
+            ) {
+                return (Some(file), Span { start, end });
+            }
+        }
+    }
+    (declaring_file(sources, name, span), span)
 }
 
 /// The source file a struct or an enum was declared in: the first whose text
@@ -747,15 +828,26 @@ fn declaring_file(sources: &[SourceFile], name: &str, span: Span) -> Option<u16>
         .and_then(|i| u16::try_from(i).ok())
 }
 
-/// The `//` comment lines right above the declaration that starts on the line
-/// holding `offset`, without their markers. Attribute lines between the
-/// comment and the declaration are skipped; a blank line ends the comment.
+/// The `///` doc comment right above the declaration that starts on the line
+/// holding `offset`, without its markers. Attribute lines between the comment
+/// and the declaration are skipped; any other line, a blank one or a plain
+/// `//` comment included, ends it.
 #[must_use]
 pub fn doc_above(text: &str, offset: usize) -> String {
     comment_above(text, offset, true)
 }
 
-/// The comment lines above `offset`. With `attributes`, the lines of an
+/// The text of a `///` doc comment line, or `None` for any other line. Four
+/// slashes or more make a plain comment, as a `////` rule line often is.
+fn doc_line(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("///")?;
+    if rest.starts_with('/') {
+        return None;
+    }
+    Some(rest.strip_prefix(' ').unwrap_or(rest).trim_end())
+}
+
+/// The doc comment above `offset`. With `attributes`, the lines of an
 /// attribute written in front of the declaration are stepped over, including
 /// one written across several lines, read bottom up until the line that opens
 /// it with `@`.
@@ -782,8 +874,8 @@ fn comment_above(text: &str, offset: usize, attributes: bool) -> String {
         if in_attribute {
             continue;
         }
-        if let Some(comment) = t.strip_prefix("//") {
-            doc.push(comment.strip_prefix(' ').unwrap_or(comment));
+        if let Some(comment) = doc_line(line) {
+            doc.push(comment);
         } else if attributes
             && doc.is_empty()
             && (t.ends_with(',') || t.ends_with(')') || t.ends_with(']'))
@@ -797,8 +889,8 @@ fn comment_above(text: &str, offset: usize, attributes: bool) -> String {
     doc.join("\n").trim().to_owned()
 }
 
-/// The comment above a member (a field or a variant), which only has one of
-/// its own when the member starts its own line.
+/// The doc comment above a member (a field or a variant), which only has one
+/// of its own when the member starts its own line.
 fn own_line_doc(text: &str, offset: usize) -> String {
     let Some(before) = text.get(..offset) else {
         return String::new();
@@ -809,6 +901,21 @@ fn own_line_doc(text: &str, offset: usize) -> String {
     } else {
         String::new()
     }
+}
+
+/// The first paragraph of a doc comment on one line: the summary a
+/// completion list and a member list show.
+#[must_use]
+pub fn summary(doc: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in doc.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("```") {
+            break;
+        }
+        out.push(t);
+    }
+    out.join(" ")
 }
 
 /// Whether `name` is one the buffer wrote, as opposed to one the compiler made
@@ -948,9 +1055,9 @@ mod tests {
         let source = format!("fn main() {{\n    let a = 1;\n    print({chain});\n}}\n");
         let outcome = analyze_buffer(&source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
@@ -961,9 +1068,9 @@ mod tests {
         let source = "fn main() {\n    let markup = lmn!(<p>hi</p>);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
@@ -977,9 +1084,9 @@ mod tests {
         let source = "@cfg(web)\nimport \"js\";\n\n@cfg(web)\nfn track(e: string) { js::call(\"gtag\", [e]); }\n@cfg(not(web))\nfn track(e: string) {}\n\nfn main() {\n    @cfg(web)\n    let x = only_on_web();\n    track(\"open\");\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
     }
 
@@ -989,7 +1096,11 @@ mod tests {
     fn a_bad_attribute_argument_is_reported() {
         let source = "host \"ecs\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n@system(after: [movment])\nfn spawn() {}\n\nfn movement() {}\n\nfn main() {}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        let diagnostic = outcome.diagnostic.expect("movment is no function");
+        let diagnostic = outcome
+            .errors
+            .first()
+            .cloned()
+            .expect("movment is no function");
         assert_eq!(diagnostic.code, "attribute_bad_argument");
     }
 
@@ -1001,9 +1112,9 @@ mod tests {
         let source = "fn swap(t: (int, int)) -> (int, int) {\n    let (a, b) = t;\n    return (b, a);\n}\n\nfn main() {\n    print(swap((1, 2)).0);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.structs.iter().any(|s| s.name == "(int, int)"));
@@ -1015,7 +1126,7 @@ mod tests {
     fn a_real_error_beside_a_macro_is_still_reported() {
         let source = "fn main() {\n    let markup = lmn!(<p/>);\n    let broken = 1 +\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        assert!(outcome.diagnostic.is_some());
+        assert!(!outcome.errors.is_empty());
     }
 
     /// A fully annotated function nothing calls is compiled at its declared
@@ -1026,7 +1137,9 @@ mod tests {
         let source = "fn broken(a: int) -> int {\n    return a + \"nope\";\n}\n\nfn main() {\n    print(1);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         let diagnostic = outcome
-            .diagnostic
+            .errors
+            .first()
+            .cloned()
             .expect("the uncalled function's body is checked");
         assert!(
             diagnostic.message.contains("int") && diagnostic.message.contains("string"),
@@ -1052,9 +1165,9 @@ mod tests {
                       }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(
@@ -1079,9 +1192,9 @@ mod tests {
                       }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let width = summary
@@ -1111,9 +1224,9 @@ mod tests {
                       struct Holder { first: Value, rest: Value[] }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let holder = summary
@@ -1142,9 +1255,9 @@ mod tests {
         let source = "fn pick(a: any) -> int {\n    return 1;\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let pick = summary
@@ -1162,9 +1275,9 @@ mod tests {
         let source = "struct Point { x: int }\n                      impl Point { fn twice(self) -> int { return self.x * 2; } }\n                      fn apply(f, n) { return f(n); }\n                      fn main() {\n                          print(apply(fn(v) { return v + 1; }, Point{ x: 1 }.twice()));\n                      }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let names: Vec<&str> = summary.own_functions().map(|f| f.name.as_str()).collect();
@@ -1189,9 +1302,9 @@ mod tests {
         let source = "fn double(a: int) -> int {\n    return a * 2;\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let double = summary
@@ -1209,7 +1322,7 @@ mod tests {
     fn a_warning_comes_back_with_the_summary() {
         let source = "fn on_click(id) {\n    print(id);\n}\n\nfn main() {}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        assert!(outcome.diagnostic.is_none());
+        assert!(outcome.errors.is_empty());
         assert!(outcome.summary.is_some());
         assert_eq!(outcome.warnings.len(), 1);
         assert_eq!(outcome.warnings[0].code, "unannotated_host_parameter");
@@ -1227,9 +1340,9 @@ mod tests {
         let source = "enum Light { Stop, Slow, Go }\n\nfn word(l: Light) -> string => match l {\n    Stop | Slow => \"wait\",\n    Go => \"go\",\n};\n\nfn main() {\n    let xs = [1, 2, 3].map(fn(x) => x * 2);\n    print(word(Light::Go), xs[1..]);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.own_functions().any(|f| f.name == "word"));
@@ -1242,9 +1355,9 @@ mod tests {
         let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
     }
 
@@ -1270,9 +1383,9 @@ mod tests {
         let outcome = analyze_buffer(source, path.to_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let area = summary

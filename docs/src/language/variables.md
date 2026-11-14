@@ -24,7 +24,10 @@ The value decides the type, so most declarations need no annotation. See
 
 Write `: Type` after the name to declare what the variable holds. The value has
 to be of that type, and so does every value assigned to the variable later; a
-value of another type is a compile error.
+value of another type is a compile error. Numbers are the exception: an `int`
+written into a `float` variable becomes a float, and a `float` written into an
+`int` one is truncated toward zero, with a warning. See
+[Types](types.md#numbers-convert-between-int-and-float).
 
 ```rust
 fn main() {
@@ -126,6 +129,13 @@ An assignment can change the type of a variable declared without an
 annotation. The name keeps whatever type the most recent value gave it, and
 later code is checked against that type. A variable declared with one keeps its
 type.
+
+The two number types are the exception: a variable that holds an `int` keeps
+holding ints, and one that holds a `float` keeps holding floats. A number of
+the other type assigned to it converts, the way it would into a declared
+variable, so `let total = 0;` followed by `total += 0.5;` leaves `total` at `0`
+and warns at the assignment. Start the variable as `0.0` when it is meant to
+hold floats.
 
 ```rust
 fn main() {

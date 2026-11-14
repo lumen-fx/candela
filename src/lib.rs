@@ -69,6 +69,9 @@ mod lpm;
 // `candela.toml`, the project manifest.
 #[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
 mod manifest;
+// Where a package's documentation lives, for an editor's docs links.
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+pub use manifest::{PackageCheck, docs_link, package_check, package_docs};
 // The flags `@cfg(...)` attributes test, which the embedder supplies.
 #[cfg(feature = "compiler")]
 pub mod cfg;
@@ -103,7 +106,9 @@ mod util;
 mod warnings;
 
 pub use candela_vm::Diagnostic;
+pub use candela_vm::Related;
 pub use candela_vm::collect_diagnostic;
+pub use candela_vm::collect_diagnostics;
 
 pub use candela_vm::FromHostValue;
 pub use candela_vm::HostError;
