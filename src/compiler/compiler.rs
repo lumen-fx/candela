@@ -6785,7 +6785,36 @@ impl Namespace {
 /// one module. A path with no real file behind it is kept as written, so the
 /// error that follows names the place that was tried.
 fn loaded_file_key(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
+    real_path(&path).unwrap_or(path)
+}
+
+/// The real path of the file at `path`, failing when there is none.
+#[cfg(not(target_os = "emscripten"))]
+fn real_path(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize()
+}
+
+/// The real path of the file at `path`, failing when there is none.
+///
+/// Emscripten's in-memory file system holds no symbolic links a program's
+/// files arrive through, and resolving a path the way `canonicalize` does
+/// asks it about one component at a time, a call into JavaScript each. Making
+/// the path absolute and dropping its `.` and `..` lands on the same file.
+#[cfg(target_os = "emscripten")]
+fn real_path(path: &Path) -> std::io::Result<PathBuf> {
+    use std::path::Component;
+    std::fs::metadata(path)?;
+    let mut real = PathBuf::new();
+    for component in std::path::absolute(path)?.components() {
+        match component {
+            Component::ParentDir => {
+                real.pop();
+            }
+            Component::CurDir => {}
+            other => real.push(other),
+        }
+    }
+    Ok(real)
 }
 
 /// The standard library modules every program has without an import.
@@ -7915,7 +7944,7 @@ fn parse_toplevel(
                         .parent()
                         .unwrap_or_else(|| Path::new("."))
                         .join(path.as_str());
-                    beside.canonicalize().unwrap_or_else(|_| {
+                    real_path(&beside).unwrap_or_else(|_| {
                         library_path.clone().unwrap_or_else(|| {
                             error_cannot_read_file(
                                 span,
