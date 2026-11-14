@@ -65,6 +65,7 @@ use candela_vm::embed::describe_value;
 use candela_vm::embed::holds_enum;
 use candela_vm::embed::marshal_args;
 use candela_vm::embed::struct_id;
+use candela_vm::embed::unmarshal_into;
 use candela_vm::embed::unmarshal_value;
 use candela_vm::embed::value_matches_type;
 use candela_vm::errors::Diagnostic;
@@ -541,7 +542,7 @@ impl Program {
         let call = self.run_call(fn_name, args)?;
         for (arg, &register) in args.iter_mut().zip(call.arg_registers.iter()) {
             if passed_by_reference(arg) {
-                *arg = self.read_register(register);
+                self.read_register_into(register, arg);
             }
         }
         Ok(self.read_register(call.ret_register))
@@ -564,6 +565,20 @@ impl Program {
             &self.structs,
             &self.enums,
         )
+    }
+
+    /// [`Self::read_register`], written over `out`, which keeps what of it
+    /// has the same shape.
+    fn read_register_into(&self, register: u16, out: &mut Value) {
+        unmarshal_into(
+            out,
+            self.registers[register as usize],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+            &self.enums,
+        );
     }
 
     /// An argument-type diagnostic for argument `index` of `fn_name`.

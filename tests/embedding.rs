@@ -2748,6 +2748,48 @@ fn a_struct_that_does_not_match_its_declaration_is_refused() {
     );
 }
 
+/// What a script writes into a struct argument comes back in it, strings,
+/// nested structs and lists included, call after call.
+#[test]
+fn call_in_out_reads_back_what_a_script_wrote_into_a_struct() {
+    let src = r#"
+struct Tag { label: string, hits: int[] }
+struct Holder { tag: Tag, name: string }
+fn touch(h: Holder) {
+    h.name = h.name + "!";
+    h.tag.label = "seen";
+    h.tag.hits.push(h.tag.hits.len());
+    h.tag = Tag { label: h.tag.label + " " + h.name, hits: h.tag.hits };
+}
+fn main() {}
+"#;
+    let holder = |name: &str, label: &str, hits: &[i64]| Value::Struct {
+        name: String::from("Holder"),
+        fields: vec![
+            (
+                String::from("tag"),
+                Value::Struct {
+                    name: String::from("Tag"),
+                    fields: vec![
+                        (String::from("label"), Value::String(label.to_owned())),
+                        (
+                            String::from("hits"),
+                            Value::Array(hits.iter().map(|h| Value::Int(*h)).collect()),
+                        ),
+                    ],
+                },
+            ),
+            (String::from("name"), Value::String(name.to_owned())),
+        ],
+    };
+    let mut program = Engine::new().compile(src, "touch.cdl").expect("compiles");
+    let mut args = [holder("a", "new", &[])];
+    program.call_in_out("touch", &mut args).unwrap();
+    assert_eq!(args[0], holder("a!", "seen a!", &[0]));
+    program.call_in_out("touch", &mut args).unwrap();
+    assert_eq!(args[0], holder("a!!", "seen a!!", &[0, 1]));
+}
+
 /// A host may name a struct's fields in any order; what comes back is in
 /// declaration order, whichever order went in.
 #[test]
