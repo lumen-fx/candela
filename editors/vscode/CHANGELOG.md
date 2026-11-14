@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- `///` and `//!` comments color as documentation.
+- With a `candela-lsp` from the same release: hover renders an item's `///`
+  doc comment as Markdown, lists a struct's fields with their defaults and an
+  enum's variants with the summary of each, and ends in an "Open docs" link
+  when the item's package names a `docs` URL in its `candela.toml`.
+  Completion items show the summary line of the doc comment. A plain `//`
+  comment above a declaration is no longer shown.
+
 ## 0.3.0
 
 - The `candela.importRoots` setting names the packages `import "name";` reads,

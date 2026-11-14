@@ -386,9 +386,15 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
     std::fs::write(
         package.join("src/main.cdl"),
         "host \"engine\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n\
-         // Where a thing is.\nstruct Spot {\n    // Across.\n    x: float = 0.0,\n    y: float = 0.0,\n}\n",
+         /// Where a thing is.\nstruct Spot {\n    /// Across.\n    x: float = 0.0,\n    y: float = 0.0,\n}\n",
     )
     .expect("write package");
+    // The package says where its documentation lives, so hover links to it.
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"engine\"\nversion = \"0.1.0\"\ndocs = \"https://engine.dev/api?name={name}\"\n",
+    )
+    .expect("write manifest");
     let game = dir.join("game.cdl");
     let compiles = "import \"engine\" { * };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, compiles).expect("write game");
@@ -483,7 +489,11 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        shown.contains("Spot.x: float") && shown.contains("Across."),
+        shown.contains("Spot.x: float = 0.0") && shown.contains("Across."),
+        "{shown}"
+    );
+    assert!(
+        shown.ends_with("[Open docs](https://engine.dev/api?name=Spot.x)"),
         "{shown}"
     );
 
@@ -634,6 +644,90 @@ async fn settings_changed_later_apply_to_open_buffers() {
     let closed = next_diagnostics(&mut stdout).await;
     assert!(diagnostics(&closed).is_empty(), "{closed}");
     let _ = std::fs::remove_dir_all(&dir);
+
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// A package whose entry gathers its other files with `export import` keeps
+/// each name's definition in the file that declares it.
+#[tokio::test]
+async fn a_definition_through_an_export_import_lands_in_the_declaring_file() {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_export_{}", std::process::id()));
+    let package = dir.join("engine");
+    std::fs::create_dir_all(package.join("src/parts")).expect("create package dir");
+    std::fs::write(
+        package.join("src/main.cdl"),
+        "export import \"engine/parts/spot\" { * };\n",
+    )
+    .expect("write package entry");
+    std::fs::write(
+        package.join("src/parts/spot.cdl"),
+        "// Where a thing is.\nstruct Spot {\n    x: float = 0.0,\n}\n",
+    )
+    .expect("write package part");
+    let game = dir.join("game.cdl");
+    let text = "import \"engine\" { * };\n\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
+    std::fs::write(&game, text).expect("write game");
+    let uri = format!("file://{}", game.display());
+
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": null,
+                "capabilities": {},
+                "initializationOptions": { "importRoots": { "engine": package } }
+            }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": text } }
+        }),
+    )
+    .await;
+    let request = |id: i64, line: u32, character: u32| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }
+        })
+    };
+    // The type in the signature, then the field it is used through.
+    write_message(&mut stdin, &request(2, 2, 12)).await;
+    let ty = response(&mut stdout, 2).await;
+    write_message(&mut stdin, &request(3, 3, 6)).await;
+    let field = response(&mut stdout, 3).await;
+    let _ = std::fs::remove_dir_all(&dir);
+    for (def, line) in [(&ty, 1), (&field, 2)] {
+        assert!(
+            def["result"]["uri"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("engine/src/parts/spot.cdl"),
+            "{def}"
+        );
+        assert_eq!(def["result"]["range"]["start"]["line"], line, "{def}");
+    }
 
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }

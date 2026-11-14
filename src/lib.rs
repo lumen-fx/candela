@@ -69,6 +69,9 @@ mod lpm;
 // `candela.toml`, the project manifest.
 #[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
 mod manifest;
+// Where a package's documentation lives, for an editor's docs links.
+#[cfg(all(feature = "compiler", not(target_arch = "wasm32")))]
+pub use manifest::{docs_link, package_docs};
 // The flags `@cfg(...)` attributes test, which the embedder supplies.
 #[cfg(feature = "compiler")]
 pub mod cfg;

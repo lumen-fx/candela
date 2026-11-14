@@ -29,6 +29,14 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.line.documentation.candela",
+          "begin": "///(?!/)|//!",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.candela" }
+          }
+        },
+        {
           "name": "comment.line.double-slash.candela",
           "begin": "//",
           "end": "$",
@@ -77,12 +85,13 @@
     "import": {
       "patterns": [
         {
-          "match": "\\b(import)\\b(?:\\s+(\"(?:[^\"\\\\]|\\\\.)*\"))?(?:\\s+(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+          "match": "(?:\\b(export)\\s+)?\\b(import)\\b(?:\\s+(\"(?:[^\"\\\\]|\\\\.)*\"))?(?:\\s+(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?",
           "captures": {
             "1": { "name": "keyword.control.import.candela" },
-            "2": { "name": "string.quoted.double.candela" },
-            "3": { "name": "keyword.control.import.candela" },
-            "4": { "name": "entity.name.namespace.candela" }
+            "2": { "name": "keyword.control.import.candela" },
+            "3": { "name": "string.quoted.double.candela" },
+            "4": { "name": "keyword.control.import.candela" },
+            "5": { "name": "entity.name.namespace.candela" }
           }
         }
       ]
