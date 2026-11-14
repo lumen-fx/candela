@@ -329,16 +329,20 @@ impl HostType {
 /// This is the gate `candela build` applies when it decides which functions get
 /// a host-callable export, and it admits exactly the types
 /// [`value_matches_type`] can check an argument against. A struct is admitted
-/// when every field is, read from `structs`, the program's struct table. Enum
-/// and function parameters are left out: a host has no way to build one.
+/// when every field is, read from `structs`, the program's struct table. A
+/// function parameter is left out, and so is an enum parameter: an enum goes in
+/// only where a struct field or a list element declares its type, as it does
+/// through the compiler's `Program::call`, so a struct whose field is an enum
+/// is admitted.
 #[must_use]
 pub fn is_host_callable_type(ty: &DataType, structs: &[Struct]) -> bool {
-    host_callable_in(ty, structs, &mut Vec::new())
+    host_callable_in(ty, structs, &mut Vec::new(), false)
 }
 
 /// [`is_host_callable_type`], with the structs being checked on the way down:
 /// a struct that holds itself has no finite value a host could build.
-fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> bool {
+/// `inside` is whether `ty` is a field or element rather than the parameter.
+fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>, inside: bool) -> bool {
     match ty {
         DataType::Int
         | DataType::Float
@@ -348,15 +352,17 @@ fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> b
         | DataType::Unknown => true,
         DataType::Array(element) => element
             .as_deref()
-            .is_none_or(|el| host_callable_in(el, structs, open)),
+            .is_none_or(|el| host_callable_in(el, structs, open, true)),
         DataType::Map(kv) => {
             matches!(&kv.0, None | Some(DataType::String))
                 && kv
                     .1
                     .as_ref()
-                    .is_none_or(|v| host_callable_in(v, structs, open))
+                    .is_none_or(|v| host_callable_in(v, structs, open, true))
         }
-        DataType::Union(members) => members.iter().all(|m| host_callable_in(m, structs, open)),
+        DataType::Union(members) => members
+            .iter()
+            .all(|m| host_callable_in(m, structs, open, inside)),
         DataType::Struct(id) => {
             let Some(declared) = structs.get(*id as usize) else {
                 return false;
@@ -368,11 +374,12 @@ fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> b
             let callable = declared
                 .fields
                 .iter()
-                .all(|(_, t, _)| host_callable_in(t, structs, open));
+                .all(|(_, t, _)| host_callable_in(t, structs, open, true));
             open.pop();
             callable
         }
-        DataType::Fn(_) | DataType::FnValue(_) | DataType::Enum(_) => false,
+        DataType::Enum(_) => inside,
+        DataType::Fn(_) | DataType::FnValue(_) => false,
     }
 }
 
