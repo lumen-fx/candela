@@ -17,7 +17,10 @@ fn main() {
 }
 ```
 
-Mixing types in one list is a compile error: `[1, "a"]` does not compile. A
+Mixing types in one list is a compile error: `[1, "a"]` does not compile.
+Numbers are the exception: `[1, 2.5]` is a `float[]`, its ints converted, and a
+literal written where a `float[]` is declared, such as `let xs: float[] = [1,
+2];`, builds its elements as floats. A
 literal written straight into a place declared `any[]`, a `let` or a parameter,
 is the exception: `let row: any[] = [1, "a"];` compiles, and so does
 `spawn([Spark { ttl: 0.5 }, Position { x: 1.0 }])` for `fn spawn(bundle:

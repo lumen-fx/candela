@@ -31,8 +31,11 @@ fn main() {
 ```
 
 Writing `name: type` instead pins that parameter, and an argument of any other
-type is a compile error. Pin the ones you want fixed and leave the rest open;
-the two styles mix freely in one signature.
+type is a compile error. A number of the other type converts: `fn half(x:
+float)` takes `half(3)` as `3.0`, and an `int` parameter takes a `float`
+truncated toward zero, with a warning. A declared return type converts what
+each `return` hands back the same way. Pin the ones you want fixed and leave
+the rest open; the two styles mix freely in one signature.
 
 A parameter that names `any` inside a list or map, such as `any[]` or
 `{string: any}`, takes only a value declared that way, since the callee may put
