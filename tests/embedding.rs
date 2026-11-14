@@ -2747,3 +2747,32 @@ fn a_struct_that_does_not_match_its_declaration_is_refused() {
         Value::Float(1.0)
     );
 }
+
+/// A host may name a struct's fields in any order; what comes back is in
+/// declaration order, whichever order went in.
+#[test]
+fn a_struct_with_its_fields_out_of_order_is_built_by_name() {
+    let mut program = Engine::new()
+        .compile(STRUCT_CALLS, "points.cdl")
+        .expect("compiles");
+    let swapped = |x: f64, y: f64| Value::Struct {
+        name: String::from("Point"),
+        fields: vec![
+            (String::from("y"), Value::Float(y)),
+            (String::from("x"), Value::Float(x)),
+        ],
+    };
+    assert_eq!(
+        program.call("length2", &[swapped(3.0, 4.0)]).unwrap(),
+        Value::Float(25.0)
+    );
+    let mut args = [
+        Value::Array(vec![swapped(1.0, 2.0), point(3.0, 4.0)]),
+        Value::Float(0.5),
+    ];
+    program.call_in_out("shift", &mut args).unwrap();
+    assert_eq!(
+        args[0],
+        Value::Array(vec![point(1.5, 2.0), point(3.5, 4.0)])
+    );
+}
