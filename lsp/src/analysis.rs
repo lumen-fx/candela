@@ -421,15 +421,15 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
         .iter()
         .enumerate()
         .map(|(id, s)| {
-            let src_file = if s.is_tuple() {
-                None
+            let (src_file, name_span) = if s.is_tuple() {
+                (None, s.name_span)
             } else {
-                declaring_file(&sources, &s.name, s.name_span)
+                declaration(&sources, "struct", &s.name, s.name_span)
             };
             let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
             StructSymbol {
                 name: s.name.to_string(),
-                name_span: s.name_span,
+                name_span,
                 fields: s
                     .fields
                     .iter()
@@ -446,7 +446,7 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                     })
                     .collect(),
                 src_file,
-                doc: doc_above(text, s.name_span.start as usize),
+                doc: doc_above(text, name_span.start as usize),
             }
         })
         .collect();
@@ -455,11 +455,11 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
         .enums
         .iter()
         .map(|e| {
-            let src_file = declaring_file(&sources, &e.name, e.name_span);
+            let (src_file, name_span) = declaration(&sources, "enum", &e.name, e.name_span);
             let text = src_file.map_or("", |f| sources[f as usize].text.as_str());
             EnumSymbol {
                 name: e.name.to_string(),
-                name_span: e.name_span,
+                name_span,
                 variants: e
                     .variants
                     .iter()
@@ -471,7 +471,7 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                     })
                     .collect(),
                 src_file,
-                doc: doc_above(text, e.name_span.start as usize),
+                doc: doc_above(text, name_span.start as usize),
             }
         })
         .collect();
@@ -774,6 +774,43 @@ fn field_name_span(text: &str, name: &str, type_span: Span) -> Span {
             })
         })
         .unwrap_or(type_span)
+}
+
+/// Where a struct or an enum is declared: its file and the span of its name.
+///
+/// The compiler records an instantiation of a generic, `Lookup<Health>`, at
+/// the place it was first written, so one is placed at its template instead:
+/// the first `keyword Name<` written at the start of a line, after any
+/// attributes, in the program's files. That is what its doc comment, its
+/// fields' comments and go-to-definition read.
+fn declaration(
+    sources: &[SourceFile],
+    keyword: &str,
+    name: &str,
+    span: Span,
+) -> (Option<u16>, Span) {
+    let Some((base, _)) = name.split_once('<') else {
+        return (declaring_file(sources, name, span), span);
+    };
+    let needle = format!("{keyword} {base}<");
+    for (i, source) in sources.iter().enumerate() {
+        for (at, _) in source.text.match_indices(&needle) {
+            let line_start = source.text[..at].rfind('\n').map_or(0, |n| n + 1);
+            let before = source.text[line_start..at].trim();
+            if !(before.is_empty() || before.starts_with('@')) {
+                continue;
+            }
+            let start = at + keyword.len() + 1;
+            if let (Ok(file), Ok(start), Ok(end)) = (
+                u16::try_from(i),
+                u32::try_from(start),
+                u32::try_from(start + base.len()),
+            ) {
+                return (Some(file), Span { start, end });
+            }
+        }
+    }
+    (declaring_file(sources, name, span), span)
 }
 
 /// The source file a struct or an enum was declared in: the first whose text

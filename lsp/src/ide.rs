@@ -2327,6 +2327,14 @@ impl Body {
     fn push(self, x: float) -> float { return x * self.mass; }
 }
 
+/// A value in a box.
+struct Boxed<T> {
+    /// What the box holds.
+    value: T,
+}
+
+fn open(b: Boxed<int>) -> int { return b.value; }
+
 // A plain comment, which is not documentation.
 fn plain() -> int { return 1; }
 
@@ -2432,6 +2440,17 @@ fn main() {
             h.contains("Body.gravity_scale: float = 1.0\n```\n\nMultiplies gravity."),
             "{h}"
         );
+    }
+
+    #[test]
+    fn hover_on_a_generic_instance_shows_its_template_doc() {
+        let (root, s) = package("generic", Some("https://example.com/{name}"));
+        let h = hover(&s, "fn open(b: Box$0ed<int>)");
+        std::fs::remove_dir_all(root).ok();
+        assert!(h.contains("struct Boxed<int> {\n    value: int,\n}"), "{h}");
+        assert!(h.contains("A value in a box."), "{h}");
+        assert!(h.contains("- `value`: What the box holds."), "{h}");
+        assert!(h.ends_with("[Open docs](https://example.com/Boxed)"), "{h}");
     }
 
     #[test]
