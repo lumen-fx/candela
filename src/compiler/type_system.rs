@@ -1676,7 +1676,12 @@ pub fn struct_literal_id(
         let (params, declared) = state.generics.struct_params_and_fields(template_idx);
         let mut bound: Vec<Option<DataType>> = vec![None; params.len()];
         for (field_name, field_type) in &declared {
-            if bound.iter().all(Option::is_some) {
+            // A parameter bound to `int` can still widen to `float` at a
+            // later field, so only the other types end the walk early.
+            if bound
+                .iter()
+                .all(|b| b.as_ref().is_some_and(|t| *t != DataType::Int))
+            {
                 break;
             }
             if !field_type.mentions_any(&params) {
@@ -2044,9 +2049,16 @@ fn bind_params_from_payload(
         TypeExpr::Identifier(name, _) => {
             if *found != DataType::Unknown
                 && let Some(i) = params.iter().position(|p| p == name)
-                && bound[i].is_none()
             {
-                bound[i] = Some(found.clone());
+                match &bound[i] {
+                    None => bound[i] = Some(found.clone()),
+                    // A parameter one position binds to `int` and another to
+                    // `float` is `float`, and the int converts.
+                    Some(DataType::Int) if *found == DataType::Float => {
+                        bound[i] = Some(DataType::Float);
+                    }
+                    Some(_) => {}
+                }
             }
         }
         TypeExpr::Array(inner) => {
@@ -4011,12 +4023,15 @@ impl Expr {
                     .iter()
                     .map(|elem| elem.infer_type(v, ctx, state))
                     .collect::<Vec<DataType>>();
-                let elem_type = merge_fn_types(&elem_types).unwrap_or_else(|| {
-                    elem_types
-                        .into_iter()
-                        .find(|elem_type| *elem_type != DataType::Unknown)
-                        .unwrap_or(DataType::Unknown)
-                });
+                // Numbers of both types make a `float[]`; the ints convert.
+                let elem_type = merge_fn_types(&elem_types)
+                    .or_else(|| super::coerce::merged_number_type(&elem_types))
+                    .unwrap_or_else(|| {
+                        elem_types
+                            .into_iter()
+                            .find(|elem_type| *elem_type != DataType::Unknown)
+                            .unwrap_or(DataType::Unknown)
+                    });
                 Some(Box::from(elem_type))
             }),
             Self::Map(kv_pairs, _) => {
@@ -4049,7 +4064,9 @@ impl Expr {
                         );
                     // A map whose values are two different functions holds a
                     // function value, the same as a list does.
-                    let kv_type = match merge_fn_types(&value_types) {
+                    let kv_type = match merge_fn_types(&value_types)
+                        .or_else(|| super::coerce::merged_number_type(&value_types))
+                    {
                         Some(merged) => (kv_type.0, Some(merged)),
                         None => kv_type,
                     };
@@ -4062,7 +4079,9 @@ impl Expr {
                     y.infer_type(v, ctx, state),
                 ) {
                     (DataType::Unknown, t) | (t, DataType::Unknown) => t,
-                    (DataType::Float, DataType::Float) => DataType::Float,
+                    // One `int` and one `float` add as floats.
+                    (DataType::Float, DataType::Float | DataType::Int)
+                    | (DataType::Int, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
                     (DataType::String, DataType::String) => DataType::String,
                     (DataType::Array(t1), DataType::Array(t2)) => DataType::Array(t1.or(t2)),
@@ -4094,7 +4113,9 @@ impl Expr {
                     {
                         t
                     }
-                    (DataType::Float, DataType::Float) => DataType::Float,
+                    // One `int` and one `float` work in floats.
+                    (DataType::Float, DataType::Float | DataType::Int)
+                    | (DataType::Int, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
                     (l, r) => operator_result_type(
                         symbol_of_expr(self),
@@ -4147,10 +4168,11 @@ impl Expr {
                     left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
                     y.infer_type(v, ctx, state),
                 ) {
-                    (DataType::Unknown, DataType::Float | DataType::Int)
+                    (
+                        DataType::Unknown | DataType::Float | DataType::Int,
+                        DataType::Float | DataType::Int,
+                    )
                     | (DataType::Float | DataType::Int, DataType::Unknown)
-                    | (DataType::Float, DataType::Float)
-                    | (DataType::Int, DataType::Int)
                     | (DataType::String, DataType::String) => DataType::Bool,
                     (l, r) => operator_result_type(
                         symbol_of_expr(self),
