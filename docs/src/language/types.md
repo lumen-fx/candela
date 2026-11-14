@@ -148,18 +148,75 @@ Where the static type already is a `T`, `as` does nothing. Where it can never
 be one, such as `3 as string`, the downcast is a compile error: that is a
 conversion, `string(3)`.
 
-## No implicit conversion
+## Numbers convert between int and float
 
-Candela never converts a value behind your back. Mixing an `int` and a `float`
-in the same arithmetic, or adding a number to a string, is a compile error.
-Convert first by calling the type you want: `int`, `float`, `string`, or
-`bool`.
+An `int` goes wherever a `float` is expected and becomes that float: a
+parameter, a variable declared `float`, a struct field, a return value, an
+element of a list or a map, an enum payload. One `int` and one `float` in the
+same arithmetic or comparison work in floats, and the result is a `float`.
+
+```rust
+fn area(r: float) -> float {
+    return 3.14159 * r * r;
+}
+
+fn main() {
+    let count = 3;
+    let speed: float = 10;
+    print(count * 1.5, area(2), speed);
+    print([1, 2.5], 1 == 1.0);
+}
+```
+
+A `float` goes where an `int` is expected too, truncated toward zero the way
+`int(x)` truncates it: `2.9` becomes `2` and `-2.9` becomes `-2`. That drops
+the fraction, so the compiler warns at each place it happens, with the code
+`implicit_float_to_int`. Write `int(x)` there to say the truncation is meant.
+
+The conversion is settled when the program compiles, from the types the
+compiler sees, and costs nothing for code that does not mix the two. A few
+rules decide the corners:
+
+- A literal's type is the one it is written with: `5` is an `int` and `5.0` a
+  `float`. Where a `float` is expected, `5` is compiled as `5.0`.
+- `/` and `%` on two ints stay integer division and remainder: `7 / 2` is `3`.
+  Write one side as a float, `7 / 2.0`, to divide as floats. A float divided by
+  an int zero divides as floats too: `2.0 / 0` is an infinity.
+- The bitwise operators `&`, `|`, `^^`, `~`, `<<` and `>>` take ints only. A
+  float operand is a compile error, not a conversion.
+- `==`, `!=`, `<`, `<=`, `>` and `>=` compare the numbers, so `1 == 1.0` is
+  true. Values typed `any` are compared as they are, so an `int` and a `float`
+  that only meet at run time are not equal.
+- A list or map literal that mixes the two holds floats: `[1, 2.5]` is a
+  `float[]`. A literal written where a `float[]` or a `{string: float}` is
+  declared builds its elements as floats. A list or map held in a variable keeps
+  its type: an `int[]` is not a `float[]`, since converting it would mean
+  copying it.
+- A variable declared without a type keeps the number type of its first value.
+  `let total = 0;` is an `int`, and a float written into it later is truncated,
+  with the warning; start it as `0.0` to hold floats. An assignment still
+  changes the type of such a variable to anything other than the other number
+  type. See [Variables](variables.md#assigning).
+- A struct field default converts like any other value: `x: float = 5` starts
+  at `5.0`.
+- A generic value converts where its instantiation is declared:
+  `Cell { value: 3 }` where a `Cell<float>` is expected is built as a
+  `Cell<float>`, and `Some(1)` where an `Option<float>` is expected is
+  `Some(1.0)`. A type parameter one position binds to `int` and another to
+  `float` is `float`, so `Pair { a: 1, b: 2.5 }` is a `Pair<float>`.
+- The value in front of a method call is not converted: a method is found by
+  the type its receiver has, so `3.sqrt()` is a compile error.
+- List indexes, slice bounds, range bounds and map keys are not converted:
+  `xs[1.5]` is a compile error, since a fractional index names no element.
+
+## Other conversions
+
+Every other conversion is written out, by calling the type you want: `int`,
+`float`, `string`, or `bool`. Adding a number to a string is a compile error.
 
 ```rust
 fn main() {
     let count = 3;
-    let rate = 1.5;
-    print(float(count) * rate);
     print("count: " + string(count));
 }
 ```
@@ -401,7 +458,9 @@ struct Options {
 }
 ```
 
-`Options::default()` builds a value from those declarations. A field that
+`Options::default()` builds a value from those declarations, each converted
+to its field's type the way any value written into the field is, so
+`speed: float = 5` starts at `5.0`. A field that
 declares none starts empty: `0`, `0.0`, `false`, `""`, `[]`, `{}`, `null` for an
 `any`, and the default of its own type for a
 struct field. An enum or a function has no empty value, so a field of one needs
