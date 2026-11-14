@@ -398,9 +398,10 @@ pub struct State<'a> {
     /// diagnostic uses and the type the body returns, which is what a `?`
     /// in it has to hand back.
     pub fn_returns: Vec<(SmolStr, DataType)>,
-    /// The `-> Type` each body in `fn_returns` declares, as written, so a list
-    /// or map literal it returns can take `any` from it.
-    pub declared_returns: Vec<Option<DataType>>,
+    /// The `-> Type` each body in `fn_returns` declares, as written, with the
+    /// span of the annotation, so a list or map literal it returns can take
+    /// `any` from it and a number it returns converts to it.
+    pub declared_returns: Vec<Option<(DataType, Span)>>,
     /// The names an `is` being compiled binds that a closure in their scope
     /// captures, so each is bound in a cell. Set by whatever compiles the
     /// condition, which is what knows the scope.

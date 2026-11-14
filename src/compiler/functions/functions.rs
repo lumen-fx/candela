@@ -41,26 +41,42 @@ mod builtin_functions;
 mod fs_lib_functions;
 
 /// Compiles each argument expression and returns the register holding each
-/// result, in argument order.
+/// result, in argument order. `expected` holds the callee's parameter types,
+/// or nothing where it declares none: a number of the other type converts on
+/// the way in, and a list or map literal is built at the declared type.
 ///
 /// The registers stay allocated: freeing one before the rest are compiled lets
 /// the allocator hand the same register to a later argument, which overwrites
 /// the earlier value. [`store_call_args`] frees them once the operands are
 /// stored.
-//
-// `pub(crate)` (not private) so the sibling `methods` module lowers its
-// argument runs the same way. clippy's `redundant_pub_crate` does not account
-// for that cross-module access.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn compile_call_args(
     args: &[Expr],
+    expected: &[DataType],
+    args_indexes: &[Span],
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> Vec<u16> {
     args.iter()
-        .map(|arg| {
+        .enumerate()
+        .map(|(i, arg)| {
+            if let Some(expected) = expected.get(i) {
+                state.mark_literal_target(arg, expected);
+                if let Some(id) = super::coerce::compile_converted(
+                    arg,
+                    expected,
+                    args_indexes[i],
+                    None,
+                    v,
+                    ctx,
+                    state,
+                    output,
+                ) {
+                    return id;
+                }
+            }
             arg.compile(v, ctx, state, output, None, false, true)
                 .unwrap_id()
         })
@@ -423,6 +439,10 @@ pub fn handle_functions(
                 ctx.file_idx,
             );
             for (i, a) in fn_args.iter().enumerate() {
+                // A number of the other type converts on the way in.
+                if super::coerce::literal_fits(a, &args[i], v, ctx, state) {
+                    continue;
+                }
                 check_arg_type(
                     fn_name,
                     v,
@@ -442,7 +462,8 @@ pub fn handle_functions(
         // call must not run between the outer call's first stored operand and
         // the call itself. Registers stay allocated until the run is emitted so
         // one argument cannot reuse the register of an earlier one.
-        let arg_ids = compile_call_args(args, v, ctx, state, output);
+        let expected: &[DataType] = if is_variadic { &[] } else { &fn_args };
+        let arg_ids = compile_call_args(args, expected, args_indexes, v, ctx, state, output);
         store_call_args(&arg_ids, v, state, output);
 
         let register_id = if returns_null {

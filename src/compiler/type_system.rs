@@ -49,6 +49,7 @@ use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::reject_default_default;
 use crate::compiler::functions::resolve_callee;
+use crate::compiler::functions::user_functions::argument_may_fit;
 use crate::compiler::methods::check_receiver;
 use crate::compiler::methods::infer_operator_method;
 use crate::compiler::methods::reject_block_dot_call;
@@ -1675,7 +1676,12 @@ pub fn struct_literal_id(
         let (params, declared) = state.generics.struct_params_and_fields(template_idx);
         let mut bound: Vec<Option<DataType>> = vec![None; params.len()];
         for (field_name, field_type) in &declared {
-            if bound.iter().all(Option::is_some) {
+            // A parameter bound to `int` can still widen to `float` at a
+            // later field, so only the other types end the walk early.
+            if bound
+                .iter()
+                .all(|b| b.as_ref().is_some_and(|t| *t != DataType::Int))
+            {
                 break;
             }
             if !field_type.mentions_any(&params) {
@@ -2043,9 +2049,16 @@ fn bind_params_from_payload(
         TypeExpr::Identifier(name, _) => {
             if *found != DataType::Unknown
                 && let Some(i) = params.iter().position(|p| p == name)
-                && bound[i].is_none()
             {
-                bound[i] = Some(found.clone());
+                match &bound[i] {
+                    None => bound[i] = Some(found.clone()),
+                    // A parameter one position binds to `int` and another to
+                    // `float` is `float`, and the int converts.
+                    Some(DataType::Int) if *found == DataType::Float => {
+                        bound[i] = Some(DataType::Float);
+                    }
+                    Some(_) => {}
+                }
             }
         }
         TypeExpr::Array(inner) => {
@@ -3064,6 +3077,40 @@ pub fn track_returns(
     flow
 }
 
+/// [`track_returns`], in a check that goes on past errors: one the walk
+/// raises is kept, everything the walk wrote is undone, and the answer is
+/// `None`, a body whose type is not known. The body's compile reports the
+/// rest, statement by statement; the sink keeps one of each. Elsewhere the
+/// error ends the compile as usual.
+pub(crate) fn track_returns_or_give_up(
+    content: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    fn_name: &str,
+    fn_id: usize,
+) -> Option<FnReturnFlow> {
+    if !crate::compiler::recovers_statements() {
+        return Some(track_returns(content, v, ctx, state, fn_name, fn_id));
+    }
+    let checkpoint = state.checkpoint();
+    let vars = v.len();
+    let (flow, errors) = crate::errors::collect_diagnostics(|| {
+        track_returns(content, v, ctx, state, fn_name, fn_id)
+    });
+    if let Some(flow) = flow
+        && errors.is_empty()
+    {
+        return Some(flow);
+    }
+    errors
+        .into_iter()
+        .for_each(crate::errors::record_diagnostic);
+    state.rollback_to(&checkpoint);
+    v.truncate(vars);
+    None
+}
+
 /// The types a body hands back, and whether every path through it ends in a
 /// `return` or in a statement that never comes back.
 pub struct FnReturnFlow {
@@ -3545,6 +3592,22 @@ pub fn infer_user_fn_return_type(
     if infered_arg_types.len() != state.fns[fn_id].args.len() {
         return declared_return.unwrap_or(DataType::Unknown);
     }
+    // An argument that cannot fit the parameter it lands on is reported where
+    // the call compiles, at the argument and naming the parameter. Walking the
+    // body with it first would report the mismatch inside the callee instead,
+    // as an error about a body that is not wrong.
+    let declared_arg_types = specialized_arg_types(fn_id, type_args, ctx, state);
+    if declared_arg_types
+        .iter()
+        .zip(infered_arg_types)
+        .any(|(declared, arg)| {
+            declared
+                .as_ref()
+                .is_some_and(|d| !argument_may_fit(d, arg, state))
+        })
+    {
+        return declared_return.unwrap_or(DataType::Unknown);
+    }
 
     let func = &state.fns[fn_id];
     let fn_args = func.args.clone();
@@ -3563,17 +3626,32 @@ pub fn infer_user_fn_return_type(
         });
     }
 
+    // Taken off again on the way out of a compile error too, so a check that
+    // goes on past the error still infers this function.
+    struct Inferring(usize);
+    impl Drop for Inferring {
+        fn drop(&mut self) {
+            RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&self.0));
+        }
+    }
     RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().insert(fn_id));
+    let inferring = Inferring(fn_id);
 
     // The body is walked whether or not a type is declared: the errors it holds
     // are reported here, in the same order either way.
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
-    let flow = track_returns(&fn_code, v, fn_ctx, state, function_name, fn_id);
+    let Some(flow) = track_returns_or_give_up(&fn_code, v, fn_ctx, state, function_name, fn_id)
+    else {
+        state.generics.pop_bindings();
+        drop(inferring);
+        v.truncate(v_len_before_args);
+        return declared_return.unwrap_or(DataType::Unknown);
+    };
     state.generics.pop_bindings();
 
-    RETURN_TYPE_INFERRING.with(|s| s.borrow_mut().remove(&fn_id));
+    drop(inferring);
 
     v.truncate(v_len_before_args);
 
@@ -3945,12 +4023,15 @@ impl Expr {
                     .iter()
                     .map(|elem| elem.infer_type(v, ctx, state))
                     .collect::<Vec<DataType>>();
-                let elem_type = merge_fn_types(&elem_types).unwrap_or_else(|| {
-                    elem_types
-                        .into_iter()
-                        .find(|elem_type| *elem_type != DataType::Unknown)
-                        .unwrap_or(DataType::Unknown)
-                });
+                // Numbers of both types make a `float[]`; the ints convert.
+                let elem_type = merge_fn_types(&elem_types)
+                    .or_else(|| super::coerce::merged_number_type(&elem_types))
+                    .unwrap_or_else(|| {
+                        elem_types
+                            .into_iter()
+                            .find(|elem_type| *elem_type != DataType::Unknown)
+                            .unwrap_or(DataType::Unknown)
+                    });
                 Some(Box::from(elem_type))
             }),
             Self::Map(kv_pairs, _) => {
@@ -3983,7 +4064,9 @@ impl Expr {
                         );
                     // A map whose values are two different functions holds a
                     // function value, the same as a list does.
-                    let kv_type = match merge_fn_types(&value_types) {
+                    let kv_type = match merge_fn_types(&value_types)
+                        .or_else(|| super::coerce::merged_number_type(&value_types))
+                    {
                         Some(merged) => (kv_type.0, Some(merged)),
                         None => kv_type,
                     };
@@ -3996,7 +4079,9 @@ impl Expr {
                     y.infer_type(v, ctx, state),
                 ) {
                     (DataType::Unknown, t) | (t, DataType::Unknown) => t,
-                    (DataType::Float, DataType::Float) => DataType::Float,
+                    // One `int` and one `float` add as floats.
+                    (DataType::Float, DataType::Float | DataType::Int)
+                    | (DataType::Int, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
                     (DataType::String, DataType::String) => DataType::String,
                     (DataType::Array(t1), DataType::Array(t2)) => DataType::Array(t1.or(t2)),
@@ -4028,7 +4113,9 @@ impl Expr {
                     {
                         t
                     }
-                    (DataType::Float, DataType::Float) => DataType::Float,
+                    // One `int` and one `float` work in floats.
+                    (DataType::Float, DataType::Float | DataType::Int)
+                    | (DataType::Int, DataType::Float) => DataType::Float,
                     (DataType::Int, DataType::Int) => DataType::Int,
                     (l, r) => operator_result_type(
                         symbol_of_expr(self),
@@ -4081,10 +4168,11 @@ impl Expr {
                     left.unwrap_or_else(|| x.infer_type(v, ctx, state)),
                     y.infer_type(v, ctx, state),
                 ) {
-                    (DataType::Unknown, DataType::Float | DataType::Int)
+                    (
+                        DataType::Unknown | DataType::Float | DataType::Int,
+                        DataType::Float | DataType::Int,
+                    )
                     | (DataType::Float | DataType::Int, DataType::Unknown)
-                    | (DataType::Float, DataType::Float)
-                    | (DataType::Int, DataType::Int)
                     | (DataType::String, DataType::String) => DataType::Bool,
                     (l, r) => operator_result_type(
                         symbol_of_expr(self),

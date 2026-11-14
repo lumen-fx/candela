@@ -1447,3 +1447,38 @@ fn call_in_out_hands_back_what_the_function_wrote() {
         assert_eq!(args[0], Value::Array(vec![point(f64::from(i) + 1.0, 0.0)]));
     }
 }
+
+/// A host function's parameters take the other number type: an `int` reaches
+/// a `float` parameter as a float, and a `float` reaches an `int` one
+/// truncated toward zero, with a warning at the argument.
+#[test]
+fn host_fn_arguments_convert_between_int_and_float() {
+    let src = r#"
+host "app" {
+    float scale(float);
+    int cells(int);
+}
+
+fn sizes() -> float {
+    return app::scale(500) + float(app::cells(2.9));
+}
+
+fn main() {}
+"#;
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("app", "scale", |x: f64| x / 2.0);
+    hosts.register_host_fn("app", "cells", |n: i64| n * 10);
+    let (bytes, warnings) = collect_warnings(|| {
+        build_bytecode(src.to_owned(), "sizes.cdl", &candela::ImportResolver::new())
+    });
+    let bytes = bytes.expect("source must build to an artifact");
+    let lossy: Vec<&str> = warnings
+        .iter()
+        .filter(|w| w.code == "implicit_float_to_int")
+        .map(|w| &src[w.span.clone()])
+        .collect();
+    assert_eq!(lossy, ["2.9"]);
+    let mut program = load_program(&bytes, &hosts).expect("artifact must load");
+    program.run();
+    assert_eq!(program.call("sizes", &[]).unwrap(), Value::Float(270.0));
+}

@@ -117,6 +117,7 @@ use type_system::param_type_matches;
 use type_system::pin_inserted_entry;
 use type_system::qualify_duplicate_type_names;
 use type_system::resolve_generic_variant;
+use type_system::return_type_fits;
 use type_system::struct_field_type_matches;
 use type_system::struct_of_default_fn;
 use type_system::variant_constructor_at;
@@ -138,6 +139,37 @@ type LibHandle = ();
 thread_local! {
     /// Set while a check-only compile runs; see [`check_only_scope`].
     static CHECK_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Cleared by [`statement_recovery_scope`].
+    static STATEMENT_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Runs `f` with a check going on past a statement that does not compile,
+/// or not. On by default.
+///
+/// A check-only compile that reports into a sink drops a statement whose
+/// compile raised an error, keeps the error, and compiles the next one, so
+/// each statement's error is reported rather than only a body's first. A
+/// `let` that failed leaves its name declared as `any`, so what follows does
+/// not report it as unknown. A caller that wants a body's first error only,
+/// the way a build reports it, turns it off.
+pub fn statement_recovery_scope<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STATEMENT_RECOVERY.set(self.0);
+        }
+    }
+    let _restore = Restore(STATEMENT_RECOVERY.replace(enabled));
+    f()
+}
+
+/// Whether the compile running now goes on past a statement that does not
+/// compile; see [`statement_recovery_scope`].
+pub(crate) fn recovers_statements() -> bool {
+    STATEMENT_RECOVERY.get()
+        && is_check_only()
+        && crate::errors::diagnostics_enabled()
+        && cfg!(panic = "unwind")
 }
 
 /// Puts the previous check-only setting back when dropped, so a compile that
@@ -162,8 +194,7 @@ pub fn check_only_scope<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// Whether the compile running now is a check-only one.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_check_only() -> bool {
+pub(crate) fn is_check_only() -> bool {
     CHECK_ONLY.get()
 }
 
@@ -180,6 +211,7 @@ type PendingDylib = (
     Span,
 );
 pub mod attributes;
+mod coerce;
 pub mod compiler_data;
 mod compiler_errors;
 pub mod imports;
@@ -624,14 +656,33 @@ fn holds_functions(types: &[DataType]) -> bool {
 
 /// Compiles one element of a collection literal, as a function value where the
 /// collection holds functions and as itself everywhere else.
+///
+/// `target` is the type the slot declares, with the span the element is
+/// written at: a number of the other type converts, and a list or map literal
+/// builds its own elements at the declared type.
 fn compile_element(
     elem: &Expr,
     as_fn_value: bool,
+    target: Option<(&DataType, Span)>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
+    if let Some((target, span)) = target {
+        if matches!(elem, Expr::Array(..) | Expr::Map(..)) {
+            let found = elem.infer_type(v, ctx, state);
+            if !param_type_matches(target, &found, state.generics)
+                && coerce::literal_fits(target, elem, v, ctx, state)
+            {
+                state.mark_literal_target(elem, target);
+            }
+        } else if let Some(id) =
+            coerce::compile_converted(elem, target, span, None, v, ctx, state, output)
+        {
+            return id;
+        }
+    }
     if as_fn_value {
         compile_fn_value(elem, v, ctx, state, output, None)
     } else {
@@ -645,20 +696,26 @@ fn compile_array_literal(
     array_items: &[Expr],
     spans: &[Span],
     mixed: bool,
+    // The type the elements are built at: the declared one, or `float` for a
+    // literal whose elements are numbers of both types.
+    element_target: Option<&DataType>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
     // A literal written into an `any[]` may hold elements of several types;
-    // any other holds one.
+    // any other holds one, up to numbers converted to the element type.
     if !mixed && let Some(first) = array_items.first() {
         let first_type = first.infer_type(v, ctx, state);
-        if let Some(failing_elem_idx) = array_items
-            .iter()
-            .skip(1)
-            .position(|x| x.infer_type(v, ctx, state) != first_type)
-        {
+        if let Some(failing_elem_idx) = array_items.iter().skip(1).position(|x| {
+            let x_type = x.infer_type(v, ctx, state);
+            x_type != first_type
+                && !element_target.is_some_and(|target| {
+                    param_type_matches(target, &x_type, state.generics)
+                        || coerce::literal_fits(target, x, v, ctx, state)
+                })
+        }) {
             let failing_elem_type = array_items[failing_elem_idx + 1].infer_type(v, ctx, state);
             let failing_elem_span = spans[failing_elem_idx + 2];
             compiler_errors::error_array_diff_types(
@@ -693,8 +750,17 @@ fn compile_array_literal(
         return array_reg;
     }
     if ctx.single_run {
-        for elem in array_items {
-            let id = compile_element(elem, as_fn_values, v, ctx, state, output);
+        for (i, elem) in array_items.iter().enumerate() {
+            let elem_span = spans.get(i + 1).copied().unwrap_or(spans[0]);
+            let id = compile_element(
+                elem,
+                as_fn_values,
+                element_target.map(|target| (target, elem_span)),
+                v,
+                ctx,
+                state,
+                output,
+            );
             if elem.is_constant_literal() {
                 state
                     .pools
@@ -716,8 +782,17 @@ fn compile_array_literal(
         // Check if all elements are constant (no instructions emitted)
         let mut constant_array = true;
         let mut elem_ids: Vec<u16> = Vec::with_capacity(array_items.len());
-        for elem in array_items {
-            let id = compile_element(elem, as_fn_values, v, ctx, state, output);
+        for (i, elem) in array_items.iter().enumerate() {
+            let elem_span = spans.get(i + 1).copied().unwrap_or(spans[0]);
+            let id = compile_element(
+                elem,
+                as_fn_values,
+                element_target.map(|target| (target, elem_span)),
+                v,
+                ctx,
+                state,
+                output,
+            );
             if elem.is_constant_literal() {
                 state
                     .pools
@@ -813,8 +888,11 @@ fn compile_struct_field_type(
     } else {
         field_type
     };
+    let declared = state.structs[struct_idx].fields[field_idx].1.clone();
+    let converts = !struct_field_type_matches(&declared, &field_type, state.generics)
+        && coerce::literal_fits(&declared, field_expr, v, ctx, state);
     let field = &state.structs[struct_idx].fields[field_idx];
-    if !struct_field_type_matches(&field.1, &field_type, state.generics) {
+    if !converts && !struct_field_type_matches(&field.1, &field_type, state.generics) {
         compiler_errors::error_struct_field_invalid_type(
             ctx.file_idx,
             name,
@@ -864,6 +942,31 @@ fn compile_struct_literal(
         ctx,
         state,
     ) as usize;
+    compile_struct_literal_at(
+        expected_struct_idx,
+        fields,
+        base,
+        span,
+        v,
+        ctx,
+        state,
+        output,
+    )
+}
+
+/// [`compile_struct_literal`] for a literal already resolved to the struct
+/// `expected_struct_idx`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_struct_literal_at(
+    expected_struct_idx: usize,
+    fields: &[(SmolStr, Expr, Span, Span)],
+    base: Option<&(StructRest, Span)>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> u16 {
     let name = state.structs[expected_struct_idx].name.clone();
     let expected_fields_len = state.structs[expected_struct_idx].fields.len();
     if base.is_some() {
@@ -1132,7 +1235,16 @@ fn build_struct(
                     state,
                     output,
                 );
-                let id = compile_element(field_expr, as_fn_value, v, ctx, state, output);
+                let declared = state.structs[struct_idx].fields[field_idx].1.clone();
+                let id = compile_element(
+                    field_expr,
+                    as_fn_value,
+                    Some((&declared, *field_value_span)),
+                    v,
+                    ctx,
+                    state,
+                    output,
+                );
                 (id, field_expr.is_constant_literal())
             }
             (None, StructFill::Base(base_reg)) => {
@@ -1180,8 +1292,15 @@ fn build_struct(
                     state,
                     output,
                 );
-                let id =
-                    compile_element(&value, as_fn_value, &mut scope, default_ctx, state, output);
+                let id = compile_element(
+                    &value,
+                    as_fn_value,
+                    Some((&field_type, value_span)),
+                    &mut scope,
+                    default_ctx,
+                    state,
+                    output,
+                );
                 (id, value.is_constant_literal())
             }
             (None, StructFill::Nothing) => {
@@ -1328,13 +1447,19 @@ pub(crate) fn compile_enum_construction(
     // reaches a slot declared `Tree<int>`.
     for (i, expected) in payload_types.iter().enumerate() {
         let received = args[i].infer_type(v, ctx, state);
-        if !param_type_matches(expected, &received, state.generics) {
+        // A number of the other type converts to the payload type.
+        if !param_type_matches(expected, &received, state.generics)
+            && !coerce::literal_fits(expected, &args[i], v, ctx, state)
+        {
             compiler_errors::error_function_arg_invalid_type(
-                &received,
-                expected,
-                args_indexes[i],
-                &variant_name,
-                None,
+                &compiler_errors::ArgMismatch {
+                    perceived_type: &received,
+                    expected_type: expected,
+                    arg_span: args_indexes[i],
+                    fn_name: &variant_name,
+                    fn_decl_span: None,
+                    param: None,
+                },
                 ctx.file_idx,
                 state.sources,
                 state.type_names(),
@@ -1354,9 +1479,15 @@ pub(crate) fn compile_enum_construction(
 
     let mut dynamic: Vec<(u16, u16)> = Vec::with_capacity(arity);
     for (i, arg) in args.iter().enumerate() {
-        let id = arg
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
+        let id = compile_element(
+            arg,
+            false,
+            Some((&payload_types[i], args_indexes[i])),
+            v,
+            ctx,
+            state,
+            output,
+        );
         if arg.is_constant_literal() {
             let d = state.registers[id as usize];
             state.pools.objs.get_mut(pool_idx).push(d);
@@ -2136,6 +2267,9 @@ fn compile_map_literal(
     kv_pairs: &[(Expr, Span, Expr, Span)],
     map_span: Span,
     (mixed_keys, mixed_values): (bool, bool),
+    // The type the values are built at: the declared one, or `float` for a
+    // literal whose values are numbers of both types.
+    value_target: Option<&DataType>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -2190,7 +2324,13 @@ fn compile_map_literal(
                         state.type_names(),
                     )
                 }
-                if val_t != global_val_type && !mixed_values {
+                if val_t != global_val_type
+                    && !mixed_values
+                    && !value_target.is_some_and(|target| {
+                        param_type_matches(target, &val_t, state.generics)
+                            || coerce::literal_fits(target, val, v, ctx, state)
+                    })
+                {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -2212,7 +2352,15 @@ fn compile_map_literal(
                 error_not_literal_map_key(*key_span, map_span, ctx.file_idx, state.sources);
             }
             let key_val = state.registers[key_val_id as usize];
-            let id = compile_element(val, as_fn_values, v, ctx, state, output);
+            let id = compile_element(
+                val,
+                as_fn_values,
+                value_target.map(|target| (target, *val_span)),
+                v,
+                ctx,
+                state,
+                output,
+            );
             if val.is_constant_literal() {
                 map_insert(
                     &mut state.pools.maps[map_id],
@@ -2269,7 +2417,13 @@ fn compile_map_literal(
                         state.type_names(),
                     )
                 }
-                if val_t != global_val_type && !mixed_values {
+                if val_t != global_val_type
+                    && !mixed_values
+                    && !value_target.is_some_and(|target| {
+                        param_type_matches(target, &val_t, state.generics)
+                            || coerce::literal_fits(target, val, v, ctx, state)
+                    })
+                {
                     error_map_diff_types(
                         ctx.file_idx,
                         state.sources,
@@ -2291,7 +2445,15 @@ fn compile_map_literal(
                 error_not_literal_map_key(*key_span, map_span, ctx.file_idx, state.sources);
             }
             let key_val = state.registers[key_val_id as usize];
-            let val_id = compile_element(val, as_fn_values, v, ctx, state, output);
+            let val_id = compile_element(
+                val,
+                as_fn_values,
+                value_target.map(|target| (target, *val_span)),
+                v,
+                ctx,
+                state,
+                output,
+            );
             if val.is_constant_literal() {
                 map_insert(
                     &mut state.pools.maps[map_id],
@@ -2679,7 +2841,10 @@ fn uniform_op2(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
-    if !((&t_l == t_1 && &t_r == t_1) || (&t_l == t_2 && &t_r == t_2)) {
+    // One `int` and one `float` work in floats, which every caller passes
+    // as `t_1`.
+    let mixed = coerce::mixed_numbers(&t_l, &t_r);
+    if !(mixed || (&t_l == t_1 && &t_r == t_1) || (&t_l == t_2 && &t_r == t_2)) {
         if let Some(id) = compile_operator_method(
             symbol,
             l,
@@ -2707,16 +2872,12 @@ fn uniform_op2(
             state.type_names(),
         );
     }
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let (id_l, id_r) =
+        coerce::compile_number_operands(l, r, &t_l, &t_r, span_l, span_r, v, ctx, state, output);
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
-    output.push(if &t_l == t_1 {
+    output.push(if mixed || &t_l == t_1 {
         instr(id_l, id_r, id)
     } else {
         instr2(id_l, id_r, id)
@@ -2745,7 +2906,10 @@ fn compile_cmp_op(
     output: &mut Vec<Instr>,
 ) -> u16 {
     let (t_l, t_r) = (l.infer_type(v, ctx, state), r.infer_type(v, ctx, state));
-    if t_l != t_r || !matches!(t_l, DataType::Float | DataType::Int | DataType::String) {
+    // One `int` and one `float` compare as floats.
+    let mixed = coerce::mixed_numbers(&t_l, &t_r);
+    if !mixed && (t_l != t_r || !matches!(t_l, DataType::Float | DataType::Int | DataType::String))
+    {
         if let Some(id) = compile_operator_method(
             symbol,
             l,
@@ -2773,18 +2937,14 @@ fn compile_cmp_op(
             state.type_names(),
         );
     }
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let (id_l, id_r) =
+        coerce::compile_number_operands(l, r, &t_l, &t_r, span_l, span_r, v, ctx, state, output);
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
     output.push(if t_l == DataType::String {
         str_instr(id_l, id_r, id)
-    } else if t_l == DataType::Float {
+    } else if mixed || t_l == DataType::Float {
         float_instr(id_l, id_r, id)
     } else {
         int_instr(id_l, id_r, id)
@@ -2803,8 +2963,8 @@ fn compile_div_op(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
-    // A float left operand next to an `int` zero is a type error, and naming it
-    // division by zero would report the wrong mistake. Every other left operand
+    // A float left operand next to an `int` zero divides as floats, which
+    // gives an infinity the way `2.0 / 0.0` does. Every other left operand
     // makes this integer division, which does not divide by zero.
     if let Expr::Int(n) = r
         && *n == 0
@@ -2849,11 +3009,14 @@ fn compile_add_op(
 ) -> u16 {
     let t_l = l.infer_type(v, ctx, state);
     let t_r = r.infer_type(v, ctx, state);
-    if t_l != t_r
-        || !matches!(
-            t_l,
-            DataType::String | DataType::Array(_) | DataType::Float | DataType::Int
-        )
+    // One `int` and one `float` add as floats.
+    let mixed = coerce::mixed_numbers(&t_l, &t_r);
+    if !mixed
+        && (t_l != t_r
+            || !matches!(
+                t_l,
+                DataType::String | DataType::Array(_) | DataType::Float | DataType::Int
+            ))
     {
         if let Some(id) = compile_operator_method(
             "+",
@@ -2905,12 +3068,8 @@ fn compile_add_op(
         });
         return id;
     }
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let (id_l, id_r) =
+        coerce::compile_number_operands(l, r, &t_l, &t_r, span_l, span_r, v, ctx, state, output);
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
@@ -2918,7 +3077,7 @@ fn compile_add_op(
         output.push(Instr::AddArray(id_l, id_r, id));
     } else if t_l == DataType::String {
         output.push(Instr::AddStr(id_l, id_r, id));
-    } else if t_l == DataType::Float {
+    } else if mixed || t_l == DataType::Float {
         output.push(Instr::AddFloat(id_l, id_r, id));
     } else {
         output.push(Instr::AddInt(id_l, id_r, id));
@@ -2939,7 +3098,10 @@ fn compile_sub_op(
 ) -> u16 {
     let t_l = l.infer_type(v, ctx, state);
     let t_r = r.infer_type(v, ctx, state);
-    if !((t_l == DataType::Float && t_r == DataType::Float)
+    // One `int` and one `float` subtract as floats.
+    let mixed = coerce::mixed_numbers(&t_l, &t_r);
+    if !(mixed
+        || (t_l == DataType::Float && t_r == DataType::Float)
         || (t_l == DataType::Int && t_r == DataType::Int))
     {
         if let Some(id) = compile_operator_method(
@@ -2985,16 +3147,12 @@ fn compile_sub_op(
         });
         return id;
     }
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let (id_l, id_r) =
+        coerce::compile_number_operands(l, r, &t_l, &t_r, span_l, span_r, v, ctx, state, output);
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
-    output.push(if t_l == DataType::Float {
+    output.push(if mixed || t_l == DataType::Float {
         Instr::SubFloat(id_l, id_r, id)
     } else {
         Instr::SubInt(id_l, id_r, id)
@@ -3013,8 +3171,8 @@ fn compile_mod_op(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) -> u16 {
-    // As in `compile_div_op`: a float left operand makes this a type error
-    // rather than a remainder by zero.
+    // As in `compile_div_op`: a float left operand makes this a float
+    // remainder rather than an integer one by zero.
     if let Expr::Int(n) = r
         && *n == 0
         && let t_l = l.infer_type(v, ctx, state)
@@ -3220,12 +3378,10 @@ fn compile_eq_op(
     }
     let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    // One `int` and one `float` compare as floats, so `1 == 1.0` holds.
+    let (id_l, id_r) = coerce::compile_number_operands(
+        l, r, &l_type, &r_type, span_l, span_r, v, ctx, state, output,
+    );
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
@@ -3272,12 +3428,10 @@ fn compile_neq_op(
     }
     let by_contents = compares_by_contents(&l_type, &r_type);
     let is_string = l_type == DataType::String || r_type == DataType::String;
-    let id_l = l
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let id_r = r
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    // One `int` and one `float` compare as floats, so `1 == 1.0` holds.
+    let (id_l, id_r) = coerce::compile_number_operands(
+        l, r, &l_type, &r_type, span_l, span_r, v, ctx, state, output,
+    );
     state.free_reg(id_l, v);
     state.free_reg(id_r, v);
     let id = state.alloc_reg_tgt(tgt_id);
@@ -3707,13 +3861,27 @@ fn compile_array_index_assignment(
         .unwrap_id();
 
     let elem_type = value.infer_type(v, ctx, state);
-    let elem_id = value
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    // A number of the other type converts to the element type.
+    let held = match &array_type {
+        DataType::Array(Some(held)) => Some((**held).clone()),
+        _ => None,
+    };
+    let converts = held
+        .as_ref()
+        .is_some_and(|held| coerce::literal_fits(held, value, v, ctx, state));
+    let elem_id = match &held {
+        Some(held) if converts => {
+            compile_element(value, false, Some((held, elem_span)), v, ctx, state, output)
+        }
+        _ => value
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id(),
+    };
     state.free_reg(elem_id, v);
     // An element takes the same rule a map entry and a `push` argument do: an
     // `any` slot, such as the elements of an `as_list` list, holds any value.
-    if matches!(&array_type, DataType::Array(Some(held))
+    if !converts
+        && matches!(&array_type, DataType::Array(Some(held))
             if !param_type_matches(held, &elem_type, state.generics))
         || (array_type == DataType::String && elem_type != DataType::String)
     {
@@ -3756,7 +3924,16 @@ fn compile_map_entry_assignment(
 ) {
     check_map_key(map_type, key, key_span, v, ctx, state);
     let value_type = value.infer_type(v, ctx, state);
-    if let DataType::Map(entry) = map_type
+    // A number of the other type converts to the value type.
+    let converted = match map_type {
+        DataType::Map(entry) => entry.1.clone().filter(|expected| {
+            !param_type_matches(expected, &value_type, state.generics)
+                && coerce::literal_fits(expected, value, v, ctx, state)
+        }),
+        _ => None,
+    };
+    if converted.is_none()
+        && let DataType::Map(entry) = map_type
         && let Some(expected) = &entry.1
         && !param_type_matches(expected, &value_type, state.generics)
     {
@@ -3784,9 +3961,15 @@ fn compile_map_entry_assignment(
     let key_id = key
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
-    let value_id = value
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
+    let value_id = compile_element(
+        value,
+        false,
+        converted.as_ref().map(|expected| (expected, value_span)),
+        v,
+        ctx,
+        state,
+        output,
+    );
     state.free_reg(key_id, v);
     state.free_reg(value_id, v);
     output.push(Instr::MapInsertReg(map_id, key_id, value_id));
@@ -3873,14 +4056,38 @@ fn compile_struct_field_assignment(
         && new_val_type == DataType::Float
         && calls_nothing(added, v, ctx, state)
     {
-        let added_id = added
-            .compile(v, ctx, state, output, None, false, true)
-            .unwrap_id();
+        // `s.f += 1` on a float field adds the int as a float.
+        let added_id = coerce::compile_converted(
+            added,
+            &DataType::Float,
+            value_span,
+            None,
+            v,
+            ctx,
+            state,
+            output,
+        )
+        .unwrap_or_else(|| {
+            added
+                .compile(v, ctx, state, output, None, false, true)
+                .unwrap_id()
+        });
         state.free_reg(added_id, v);
         output.push(Instr::AddFieldFloat(id, added_id, field_index));
         return;
     }
-    let new_elem_reg_id = compile_element(new_val, as_fn_value, v, ctx, state, output);
+    let declared = state.structs[struct_id as usize].fields[field_index as usize]
+        .1
+        .clone();
+    let new_elem_reg_id = compile_element(
+        new_val,
+        as_fn_value,
+        Some((&declared, value_span)),
+        v,
+        ctx,
+        state,
+        output,
+    );
     output.push(Instr::SetFieldStruct(id, new_elem_reg_id, field_index));
 }
 
@@ -4702,7 +4909,9 @@ fn check_declared_value(
     }
     let fresh = matches!(value, Expr::Array(..) | Expr::Map(..));
     state.mark_literal_target(value, declared);
-    if !let_type_fits(declared, &value_type, fresh, state.generics) {
+    if !let_type_fits(declared, &value_type, fresh, state.generics)
+        && !coerce::literal_fits(declared, value, v, ctx, state)
+    {
         compiler_errors::error_variable_type_mismatch(
             ctx.file_idx,
             name,
@@ -4744,7 +4953,7 @@ fn compile_var_declaration(
             name,
             value,
             declared.clone(),
-            Some(declared),
+            Some((declared, annotation.value_span)),
             remaining_code,
             v,
             ctx,
@@ -4793,7 +5002,8 @@ fn bind_variable(
     name: &SmolStr,
     value: &Expr,
     var_type: DataType,
-    declared: Option<DataType>,
+    // The type the `let` declares and where its value is written.
+    declared: Option<(DataType, Span)>,
     remaining_code: &[Expr],
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -4808,7 +5018,15 @@ fn bind_variable(
     let captured = code_captures_variable(name, remaining_code);
 
     let output_len = output.len();
-    let src_id = if as_fn_value {
+    let converted = match &declared {
+        Some((declared, value_span)) => {
+            coerce::compile_converted(value, declared, *value_span, None, v, ctx, state, output)
+        }
+        None => None,
+    };
+    let src_id = if let Some(converted) = converted {
+        converted
+    } else if as_fn_value {
         compile_fn_value(value, v, ctx, state, output, None)
     } else {
         value
@@ -4872,7 +5090,7 @@ fn bind_variable(
             .push((name.clone(), fn_symbol));
     }
     v.push(Variable {
-        declared,
+        declared: declared.map(|(declared, _)| declared),
         name: name.clone(),
         register_id: var_id,
         cell: captured,
@@ -4960,13 +5178,24 @@ fn compile_var_assignment(
     });
     // A variable its `let` declared a type for keeps that type: the value has
     // to fit it, and reads after the assignment see the declared type.
-    let var_type = if let Some(declared) = v[var_pos].declared.clone() {
+    let declared = v[var_pos].declared.clone();
+    // A number of the other type converts to the type the variable holds.
+    // Without an annotation that is the type it holds now: an assignment never
+    // turns an `int` variable into a `float` one or back, since code compiled
+    // earlier in a loop, or past a branch the assignment may skip, reads it at
+    // the type it had.
+    let conversion;
+    let var_type = if let Some(declared) = declared {
         check_declared_value(
             name, &declared, span, value, value_span, v, ctx, state, output,
         );
+        conversion = coerce::numeric(&declared, &value.infer_type(v, ctx, state));
         declared
     } else {
-        value.infer_type(v, ctx, state)
+        let value_type = value.infer_type(v, ctx, state);
+        conversion = coerce::numeric(&v[var_pos].var_type, &value_type)
+            .filter(|_| !matches!(v[var_pos].var_type, DataType::Union(_)));
+        conversion.map_or(value_type, coerce::Numeric::target)
     };
     let id = v[var_pos].register_id;
 
@@ -4983,7 +5212,9 @@ fn compile_var_assignment(
     // A captured variable is written through its cell, which is the slot the
     // closures that took it read.
     if v[var_pos].cell {
-        let value_id = if as_fn_value {
+        let value_id = if let Some(conversion) = conversion {
+            coerce::compile_conversion(value, conversion, value_span, None, v, ctx, state, output)
+        } else if as_fn_value {
             compile_fn_value(value, v, ctx, state, output, None)
         } else {
             value
@@ -5056,9 +5287,22 @@ fn compile_var_assignment(
     }
 
     let output_len = output.len();
-    let obj_id = value
-        .compile(v, ctx, state, output, Some(id), false, true)
-        .unwrap_id();
+    let obj_id = if let Some(conversion) = conversion {
+        coerce::compile_conversion(
+            value,
+            conversion,
+            value_span,
+            Some(id),
+            v,
+            ctx,
+            state,
+            output,
+        )
+    } else {
+        value
+            .compile(v, ctx, state, output, Some(id), false, true)
+            .unwrap_id()
+    };
     if output.len() != output_len {
         if !move_to_id(output, id, state.instr_src) && obj_id != id {
             output.push(Instr::Mov(obj_id, id));
@@ -5241,10 +5485,50 @@ fn compile_return(
     // A list or map literal returned from a function declared to return
     // `any[]` (or a map of `any`) may mix types, as one written into a `let`
     // declared that way may.
+    let declared_return = state.declared_returns.last().cloned().flatten();
     if matches!(x, Expr::Array(..) | Expr::Map(..))
-        && let Some(Some(declared)) = state.declared_returns.last().cloned()
+        && let Some((declared, _)) = &declared_return
     {
-        state.mark_literal_target(x, &declared);
+        state.mark_literal_target(x, declared);
+    }
+    // A number of the other type converts to the declared one. The check of
+    // the whole body lets through a value that differs from the declaration
+    // only in numbers inside it; one that cannot be converted, a list held
+    // elsewhere, is reported here.
+    if let Some((declared, declared_span)) = &declared_return {
+        let value_type = x.infer_type(v, ctx, state);
+        let conversion = coerce::numeric(declared, &value_type);
+        if conversion.is_none()
+            && coerce::differs_only_in_numbers(declared, &value_type)
+            && !return_type_fits(declared, &value_type, state.generics)
+            && !coerce::literal_fits(declared, x, v, ctx, state)
+        {
+            let types = state.type_names();
+            error_invalid_type(
+                declared,
+                &value_type,
+                coerce::span_of(x).unwrap_or(*declared_span),
+                None,
+                Some(format_args!(
+                    "The function is declared to return {}",
+                    types.of(declared)
+                )),
+                ctx.file_idx,
+                state.sources,
+                types,
+            );
+        }
+        if let Some(conversion) = conversion {
+            let span = coerce::span_of(x).unwrap_or(*declared_span);
+            let converted =
+                coerce::compile_conversion(x, conversion, span, None, v, ctx, state, output);
+            if ctx.is_compiling_recursive {
+                output.push(Instr::RecursiveReturn(converted));
+            } else {
+                output.push(Instr::Return(converted));
+            }
+            return;
+        }
     }
     let mut id = if matches!(declared_fn, Some(DataType::FnValue(_))) {
         compile_fn_value(x, v, ctx, state, output, None)
@@ -5328,23 +5612,61 @@ pub fn compile_expr(
     let v_len = v.len();
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let mut output: Vec<Instr> = Vec::with_capacity(input.len());
+    let recover = recovers_statements();
     for (idx, x) in input.iter().enumerate() {
         // Nothing reads the value of a statement, except where the form has no
         // statement arm to compile through: `x;` and `1 + 2;` are compiled as
         // values, and the register is freed again on the next line.
-        if let Some(id) = x.compile_with_code_context(
-            v,
-            ctx,
-            state,
-            &mut output,
-            None,
-            false,
-            &input[idx + 1..],
-            x.is_value_only(),
-        ) {
-            state.free_reg(id, v);
+        let statement = |v: &mut Vec<Variable>, state: &mut State<'_>, output: &mut Vec<Instr>| {
+            if let Some(id) = x.compile_with_code_context(
+                v,
+                ctx,
+                state,
+                output,
+                None,
+                false,
+                &input[idx + 1..],
+                x.is_value_only(),
+            ) {
+                state.free_reg(id, v);
+            }
+            state.check_instructions(usize::from(ctx.offset) + output.len());
+        };
+        if !recover {
+            statement(v, state, &mut output);
+            continue;
         }
-        state.check_instructions(usize::from(ctx.offset) + output.len());
+        // See `statement_recovery_scope`.
+        let checkpoint = state.checkpoint();
+        let (output_len, vars_len) = (output.len(), v.len());
+        let symbols = state.scope(ctx.file_idx).symbols.len();
+        let (done, errors) =
+            crate::errors::collect_diagnostics(|| statement(v, state, &mut output));
+        errors
+            .into_iter()
+            .for_each(crate::errors::record_diagnostic);
+        if done.is_none() {
+            state.rollback_to(&checkpoint);
+            output.truncate(output_len);
+            v.truncate(vars_len);
+            state.scope_mut(ctx.file_idx).symbols.truncate(symbols);
+            if let Expr::VarDeclare(name, value, _) = x {
+                // The type the value would have had, when that much can be
+                // worked out without the error, so what reads the name
+                // later is checked against it.
+                let checkpoint = state.checkpoint();
+                let (var_type, _) =
+                    crate::errors::collect_diagnostics(|| value.infer_type(v, ctx, state));
+                state.rollback_to(&checkpoint);
+                v.push(Variable {
+                    declared: None,
+                    name: name.clone(),
+                    register_id: state.alloc_reg(),
+                    cell: false,
+                    var_type: var_type.unwrap_or(DataType::Unknown),
+                });
+            }
+        }
     }
     v.truncate(v_len);
     // The block's variables and the names it declared go out of scope with it.
@@ -5703,14 +6025,26 @@ impl Expr {
             }
             Self::Array(array_items, spans) => {
                 debug_assert!(uses_id);
+                let target = state.take_literal_target(self);
                 let mixed = matches!(
-                    state.take_literal_target(self),
-                    Some(DataType::Array(Some(element))) if *element == DataType::Unknown
+                    &target,
+                    Some(DataType::Array(Some(element))) if **element == DataType::Unknown
                 );
+                let element_target = match target {
+                    Some(DataType::Array(Some(element))) if !mixed => Some(*element),
+                    _ => {
+                        let types: Vec<DataType> = array_items
+                            .iter()
+                            .map(|item| item.infer_type(v, ctx, state))
+                            .collect();
+                        coerce::merged_number_type(&types)
+                    }
+                };
                 Some(compile_array_literal(
                     array_items,
                     spans,
                     mixed,
+                    element_target.as_ref(),
                     v,
                     ctx,
                     state,
@@ -5739,17 +6073,29 @@ impl Expr {
             }
             Self::Map(kv_pairs, span) => {
                 debug_assert!(uses_id);
-                let (mixed_keys, mixed_values) = match state.take_literal_target(self) {
+                let target = state.take_literal_target(self);
+                let (mixed_keys, mixed_values) = match &target {
                     Some(DataType::Map(slots)) => (
                         slots.0 == Some(DataType::Unknown),
                         slots.1 == Some(DataType::Unknown),
                     ),
                     _ => (false, false),
                 };
+                let value_target = match target {
+                    Some(DataType::Map(slots)) if !mixed_values => slots.1,
+                    _ => {
+                        let types: Vec<DataType> = kv_pairs
+                            .iter()
+                            .map(|(_, _, value, _)| value.infer_type(v, ctx, state))
+                            .collect();
+                        coerce::merged_number_type(&types)
+                    }
+                };
                 Some(compile_map_literal(
                     kv_pairs,
                     *span,
                     (mixed_keys, mixed_values),
+                    value_target.as_ref(),
                     v,
                     ctx,
                     state,
@@ -6577,12 +6923,29 @@ pub struct FileNamespaces {
     /// The files that are standard library modules, which are the only ones
     /// whose bodies reach the native primitives the library is written on.
     std_files: Vec<u16>,
+    /// The files a library import reached: standard library modules,
+    /// packages, and the files those import. The rest are the program's own.
+    library_files: Vec<u16>,
 }
 
 impl FileNamespaces {
     /// Records that `file_idx` is a standard library module.
     pub fn mark_std(&mut self, file_idx: u16) {
         self.std_files.push(file_idx);
+        self.mark_library(file_idx);
+    }
+    /// Records that `file_idx` was reached through a library import, or from
+    /// a file that was.
+    pub fn mark_library(&mut self, file_idx: u16) {
+        if !self.library_files.contains(&file_idx) {
+            self.library_files.push(file_idx);
+        }
+    }
+    /// Whether `file_idx` belongs to a library rather than to the program:
+    /// see [`FileNamespaces::mark_library`].
+    #[must_use]
+    pub fn is_library(&self, file_idx: u16) -> bool {
+        self.library_files.contains(&file_idx)
     }
     /// Whether `file_idx` is a standard library module.
     #[must_use]
@@ -7945,14 +8308,24 @@ fn parse_toplevel(
                         .unwrap_or_else(|| Path::new("."))
                         .join(path.as_str());
                     real_path(&beside).unwrap_or_else(|_| {
-                        library_path.clone().unwrap_or_else(|| {
-                            error_cannot_read_file(
+                        // The library copy is the fallback only when it is
+                        // there; otherwise the error names the file beside
+                        // the importer first, which is the one meant.
+                        match library_path.clone() {
+                            Some(found)
+                                if found.is_file()
+                                    || resolver.overlay(&found).is_some()
+                                    || library.as_ref().is_some_and(|(_, text)| text.is_some()) =>
+                            {
+                                found
+                            }
+                            other => error_cannot_read_file(
                                 span,
                                 src_file_idx,
                                 sources,
-                                std::slice::from_ref(&beside),
-                            );
-                        })
+                                &tried_paths(&beside, other.as_deref()),
+                            ),
+                        }
                     })
                 };
 
@@ -7967,6 +8340,8 @@ fn parse_toplevel(
                         Some(text) => String::from(text),
                         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
                         None => String::new(),
+                        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                        None if let Some(text) = resolver.overlay(&file_path) => String::from(text),
                         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                         None => std::fs::read_to_string(&file_path).unwrap_or_else(|_| {
                             error_cannot_read_file(
@@ -7984,6 +8359,11 @@ fn parse_toplevel(
                     };
 
                     let child_src_idx = sources.len() as u16;
+                    // Marked before the file's own imports are read, which
+                    // take the mark from it.
+                    if is_logical || file_namespaces.is_library(src_file_idx) {
+                        file_namespaces.mark_library(child_src_idx);
+                    }
 
                     sources.push(Source {
                         filename: file_name,
@@ -8597,6 +8977,7 @@ pub fn compile_profile(
     // A previous compilation on this thread may have been aborted mid-inference
     // by an error unwind; make sure its bookkeeping doesn't leak into this one.
     type_system::reset_inference_state();
+    coerce::reset();
     std_index::set_lib_dir(resolver.lib_dir().map(Path::to_path_buf));
 
     let main_src = Source {
