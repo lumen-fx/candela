@@ -51,8 +51,8 @@ the shape of the text and not the compiler's view of it.
 Everything else comes from `candela-lsp`, which runs the real compiler over
 your buffer:
 
-- Diagnostics, pushed as you type. candela reports one error per compile, so
-  fix the first and the next appears.
+- Diagnostics, pushed as you type: every error the compile finds, on the file
+  each is in, and what a package's `check` command reports after a save.
 - Hover on a struct, a function, or a built-in.
 - Completion of keywords, built-ins, and the functions and structs in the
   compiled program, with `.` as a trigger character.

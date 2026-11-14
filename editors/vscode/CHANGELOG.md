@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+- With a `candela-lsp` from the same release: errors show while you type,
+  every one the compiler finds rather than the first, on the file each is in.
+  A call with arguments of the wrong type shows each one, naming its
+  parameter and linking to its declaration. Files that import a changed file
+  are checked again, against unsaved text too.
+- `candela.diagnosticsDelay` sets how long after typing the check runs.
+- A package's `check` command (`candela.toml`) runs after each save, and what
+  it reports shows beside the compiler's errors. `candela.packageChecks`
+  turns it off; it does not run in an untrusted workspace.
+- The extension watches `.toml` files as well as `.cdl` files, so a changed
+  settings file is checked again.
+
 ## 0.4.0
 
 - `///` and `//!` comments color as documentation.

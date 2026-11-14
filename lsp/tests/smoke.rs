@@ -618,7 +618,7 @@ async fn settings_changed_later_apply_to_open_buffers() {
     let outline = response(&mut stdout, 4).await;
     assert_eq!(outline["result"][0]["name"], "run", "{outline}");
 
-    // An error in the imported file is reported at the top, naming it.
+    // An error in the imported file is published on that file, at its span.
     std::fs::write(
         &module,
         "host \"kit\" {\n    attribute tag(n: int = 0) on fn;\n}\n\nfn add(a: int, b: int) -> int { return a + \"x\"; }\n",
@@ -629,20 +629,32 @@ async fn settings_changed_later_apply_to_open_buffers() {
         &json!({ "jsonrpc": "2.0", "method": "textDocument/didSave", "params": { "textDocument": { "uri": uri } } }),
     )
     .await;
-    let saved = next_diagnostics(&mut stdout).await;
-    let message = diagnostics(&saved)[0]["message"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
-    assert!(message.contains("kit.cdl"), "{saved}");
+    let module_uri = format!("file://{}", module.display());
+    let saved = loop {
+        let saved = next_diagnostics(&mut stdout).await;
+        if saved["params"]["uri"] == module_uri.as_str() {
+            break saved;
+        }
+    };
+    assert_eq!(
+        diagnostics(&saved)[0]["range"]["start"]["line"],
+        4,
+        "{saved}"
+    );
 
     write_message(
         &mut stdin,
         &json!({ "jsonrpc": "2.0", "method": "textDocument/didClose", "params": { "textDocument": { "uri": uri } } }),
     )
     .await;
-    let closed = next_diagnostics(&mut stdout).await;
-    assert!(diagnostics(&closed).is_empty(), "{closed}");
+    // What the save published for the buffer may still be on its way; the
+    // close clears it after.
+    loop {
+        let closed = next_diagnostics(&mut stdout).await;
+        if closed["params"]["uri"] == uri.as_str() && diagnostics(&closed).is_empty() {
+            break;
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
@@ -729,5 +741,203 @@ async fn a_definition_through_an_export_import_lands_in_the_declaring_file() {
         assert_eq!(def["result"]["range"]["start"]["line"], line, "{def}");
     }
 
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Starts a server with `options`, opens `files` in order, and returns it.
+async fn open_files(
+    options: Value,
+    files: &[(&str, &str)],
+) -> (
+    Child,
+    tokio::process::ChildStdin,
+    BufReader<tokio::process::ChildStdout>,
+) {
+    let (child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {}, "initializationOptions": options }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    )
+    .await;
+    for (uri, text) in files {
+        write_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "method": "textDocument/didOpen",
+                "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": text } }
+            }),
+        )
+        .await;
+    }
+    (child, stdin, stdout)
+}
+
+/// Reads publications until one for `uri` satisfies `done`, and returns its
+/// diagnostics.
+async fn diagnostics_for(
+    stdout: &mut BufReader<tokio::process::ChildStdout>,
+    uri: &str,
+    done: impl Fn(&[Value]) -> bool,
+) -> Vec<Value> {
+    loop {
+        let msg = timeout(TIMEOUT, read_message(stdout))
+            .await
+            .unwrap_or_else(|_| panic!("no diagnostics for {uri}"));
+        if msg["method"] == "textDocument/publishDiagnostics" && msg["params"]["uri"] == uri {
+            let list = msg["params"]["diagnostics"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if done(&list) {
+                return list;
+            }
+        }
+    }
+}
+
+/// A call with its arguments out of order shows each one that does not fit,
+/// naming its parameter and pointing at the declaration, and a second error in
+/// another statement of the same body shows too.
+#[tokio::test]
+async fn every_error_of_a_buffer_shows_at_once() {
+    let text = "struct A { id: int = 0 }\nstruct B { width: float = 0.0 }\n\
+                fn take(a: A, b: B) -> float { return b.width; }\n\
+                fn run(a: A, b: B) {\n    let w = take(b, a);\n    let h = b.height;\n}\n";
+    let uri = "file:///tmp/candela-lsp-every-error.cdl";
+    let (mut child, stdin, mut stdout) = open_files(json!({}), &[(uri, text)]).await;
+    let found = diagnostics_for(&mut stdout, uri, |d| !d.is_empty()).await;
+    let messages: Vec<&str> = found.iter().filter_map(|d| d["message"].as_str()).collect();
+    assert_eq!(found.len(), 3, "{messages:#?}");
+    assert_eq!(
+        found[0]["message"],
+        "Parameter a of take takes A, but this argument is B"
+    );
+    assert_eq!(
+        found[0]["range"]["start"],
+        json!({ "line": 4, "character": 17 })
+    );
+    let related = &found[0]["relatedInformation"][0];
+    assert_eq!(
+        related["location"]["range"]["start"],
+        json!({ "line": 2, "character": 8 }),
+        "{related}"
+    );
+    assert_eq!(
+        found[1]["message"],
+        "Parameter b of take takes B, but this argument is A"
+    );
+    assert!(messages[2].contains("height"), "{messages:#?}");
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Editing an imported file, without saving it, checks the open file that
+/// imports it again, against the edited text; the error shows on the file
+/// it is in.
+#[tokio::test]
+async fn an_unsaved_change_to_an_import_checks_its_importer() {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_dependents_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let lib = dir.join("lib.cdl");
+    let lib_text = "fn half(x: float) -> float { return x / 2.0; }\n";
+    std::fs::write(&lib, lib_text).expect("write lib");
+    let game = dir.join("game.cdl");
+    let game_text = "import \"lib.cdl\" { * };\n\nfn main() {\n    print(half(3.0));\n}\n";
+    std::fs::write(&game, game_text).expect("write game");
+    let lib_uri = format!("file://{}", lib.canonicalize().unwrap().display());
+    let game_uri = format!("file://{}", game.canonicalize().unwrap().display());
+    let (mut child, mut stdin, mut stdout) = open_files(
+        json!({ "diagnosticsDelay": 50 }),
+        &[(&game_uri, game_text), (&lib_uri, lib_text)],
+    )
+    .await;
+    let clean = diagnostics_for(&mut stdout, &game_uri, |_| true).await;
+    assert!(clean.is_empty(), "{clean:?}");
+
+    // `half` now takes a string; the importer's call no longer fits.
+    let broken = "fn half(x: string) -> float { return 1.0; }\n";
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": { "textDocument": { "uri": lib_uri, "version": 2 }, "contentChanges": [{ "text": broken }] }
+        }),
+    )
+    .await;
+    let found = diagnostics_for(&mut stdout, &game_uri, |d| !d.is_empty()).await;
+    assert_eq!(found[0]["code"], "argument_type_mismatch", "{found:?}");
+    assert_eq!(
+        found[0]["relatedInformation"][0]["location"]["uri"],
+        lib_uri.as_str(),
+        "{found:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// A package whose candela.toml names a `check` command has it run after a
+/// save of a program that imports it, and what it prints shows, on the file
+/// it names, labelled with the package.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_package_check_runs_after_a_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("candela_lsp_check_{}", std::process::id()));
+    let package = dir.join("engine");
+    std::fs::create_dir_all(package.join("src")).expect("create package");
+    std::fs::write(
+        package.join("src/main.cdl"),
+        "fn speed() -> float { return 1.0; }\n",
+    )
+    .expect("write entry");
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"engine\"\nversion = \"0.1.0\"\ncheck = [\"./check.sh\", \"{file}\"]\n",
+    )
+    .expect("write manifest");
+    // Reports one problem in settings.toml beside the checked file, and
+    // names the file it was given.
+    let script = package.join("check.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf '[{\"file\": \"settings.toml\", \"line\": 2, \"severity\": \"warning\", \"code\": \"bad\", \"message\": \"checked %s\"}]' \"$1\"\n",
+    )
+    .expect("write check");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let game = dir.join("game.cdl");
+    let text = "import \"engine\" { * };\n\nfn main() {\n    print(speed());\n}\n";
+    std::fs::write(&game, text).expect("write game");
+    std::fs::write(dir.join("settings.toml"), "[a]\nb = 1\n").expect("write settings");
+    let uri = format!("file://{}", game.display());
+    let settings_uri = format!("file://{}", dir.join("settings.toml").display());
+    let options = json!({ "importRoots": { "engine": package } });
+    let (mut child, mut stdin, mut stdout) = open_files(options, &[(&uri, text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "textDocument/didSave", "params": { "textDocument": { "uri": uri } } }),
+    )
+    .await;
+    let found = diagnostics_for(&mut stdout, &settings_uri, |d| !d.is_empty()).await;
+    assert_eq!(found[0]["source"], "engine", "{found:?}");
+    assert_eq!(found[0]["severity"], 2, "{found:?}");
+    assert_eq!(found[0]["code"], "bad", "{found:?}");
+    assert_eq!(found[0]["message"], format!("checked {}", game.display()));
+    assert_eq!(
+        found[0]["range"]["start"],
+        json!({ "line": 1, "character": 0 })
+    );
+    assert_eq!(
+        found[0]["range"]["end"],
+        json!({ "line": 1, "character": 5 })
+    );
+    std::fs::remove_dir_all(&dir).ok();
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }

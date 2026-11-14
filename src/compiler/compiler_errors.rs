@@ -20,7 +20,9 @@ use crate::errors::blue;
 use crate::errors::bold;
 use crate::errors::green;
 use crate::errors::red;
+use crate::errors::report_compiler_error;
 use crate::errors::throw_compiler_error;
+use crate::errors::throw_compiler_error_related;
 use ariadne::Label;
 use candela_vm::errors::build_report;
 use smol_strc::SmolStr;
@@ -3133,54 +3135,203 @@ pub fn error_not_literal_map_key(
     );
 }
 
+/// An argument a call passes that does not fit the parameter it lands on.
+///
+/// `param` is that parameter's index, when the function's declaration is
+/// known: the message names the parameter and the error points at where it is
+/// declared.
+pub struct ArgMismatch<'a> {
+    pub perceived_type: &'a DataType,
+    pub expected_type: &'a DataType,
+    pub arg_span: Span,
+    pub fn_name: &'a str,
+    pub fn_decl_span: Option<(Span, u16)>,
+    pub param: Option<(&'a str, usize)>,
+}
+
 #[cold]
 #[inline(never)]
 pub fn error_function_arg_invalid_type(
-    perceived_type: &DataType,
-    expected_type: &DataType,
-    arg_span: Span,
-    fn_name: &str,
-    fn_decl_span: Option<(Span, u16)>,
+    mismatch: &ArgMismatch<'_>,
     file_idx: u16,
     sources: &[Source],
     types: TypeNames<'_>,
 ) -> ! {
+    function_arg_invalid_type(mismatch, file_idx, sources, types, true);
+    unreachable!("a fatal argument error unwinds")
+}
+
+/// [`error_function_arg_invalid_type`] for an argument of a call that has more
+/// than one: every one but the last is reported this way and the compile goes
+/// on to the next, so each shows.
+#[cold]
+#[inline(never)]
+pub fn report_function_arg_invalid_type(
+    mismatch: &ArgMismatch<'_>,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) {
+    function_arg_invalid_type(mismatch, file_idx, sources, types, false);
+}
+
+fn function_arg_invalid_type(
+    mismatch: &ArgMismatch<'_>,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+    fatal: bool,
+) {
+    let ArgMismatch {
+        perceived_type,
+        expected_type,
+        arg_span,
+        fn_name,
+        fn_decl_span,
+        param,
+    } = *mismatch;
     let expected = types.of(expected_type);
     let perceived = types.of(perceived_type);
-    throw_compiler_error(
-        &|| {
-            let src = &sources[file_idx as usize];
-            let mut report = build_report(
-                ariadne::ReportKind::Error,
-                (src.filename.as_str(), arg_span.into()),
-            )
-            .with_message(format_args!("Invalid argument type"));
+    // Where the parameter is declared, found in the declaration's text.
+    let param_decl = param.and_then(|(name, index)| {
+        let (fn_span, fn_file) = fn_decl_span?;
+        let span = param_spans(&sources[fn_file as usize].contents, fn_span)
+            .get(index)
+            .copied()?;
+        Some((name, span, fn_file))
+    });
+    let message = match param {
+        Some((name, _)) => format!(
+            "Parameter {name} of {fn_name} takes {expected}, but this argument is {perceived}"
+        ),
+        None => format!(
+            "Function {fn_name} expects this argument's type to be {expected}, but this expression's type is {perceived}"
+        ),
+    };
+    let related: Vec<crate::errors::RelatedSpan> = match (param_decl, fn_decl_span) {
+        (Some((name, span, file)), _) => {
+            vec![(file, span, format!("{name}: {expected} is declared here"))]
+        }
+        (None, Some((span, file))) => vec![(file, span, format!("{fn_name} is declared here"))],
+        (None, None) => Vec::new(),
+    };
+    let report = || {
+        let src = &sources[file_idx as usize];
+        let mut report = build_report(
+            ariadne::ReportKind::Error,
+            (src.filename.as_str(), arg_span.into()),
+        )
+        .with_message(format_args!("Invalid argument type"));
 
-            if let Some((fn_span, fn_file_idx)) = fn_decl_span {
-                let fn_src = &sources[fn_file_idx as usize];
-                report = report.with_label(
-                    Label::new((fn_src.filename.as_str(), fn_span.into()))
-                        .with_message("Function is defined here")
-                        .with_color(ariadne::Color::Blue),
-                );
-            }
-
+        if let Some((name, span, file)) = param_decl {
+            let fn_src = &sources[file as usize];
             report = report.with_label(
-                Label::new((src.filename.as_str(), arg_span.into()))
-                    .with_message(format_args!("Function {} expects this argument's type to be {}, but this expression's type is {}", blue(fn_name), green(&expected), red(&perceived)))
-                    .with_color(ariadne::Color::Red),
+                Label::new((fn_src.filename.as_str(), span.into()))
+                    .with_message(format_args!("Parameter {} is declared here", blue(name)))
+                    .with_color(ariadne::Color::Blue),
             );
+        } else if let Some((fn_span, fn_file_idx)) = fn_decl_span {
+            let fn_src = &sources[fn_file_idx as usize];
+            report = report.with_label(
+                Label::new((fn_src.filename.as_str(), fn_span.into()))
+                    .with_message("Function is defined here")
+                    .with_color(ariadne::Color::Blue),
+            );
+        }
 
-            report.finish()
-        },
+        report = report.with_label(
+            Label::new((src.filename.as_str(), arg_span.into()))
+                .with_message(match param {
+                    Some((name, _)) => format!(
+                        "Parameter {} of {} takes {}, but this argument is {}",
+                        blue(name),
+                        blue(fn_name),
+                        green(&expected),
+                        red(&perceived)
+                    ),
+                    None => format!(
+                        "Function {} expects this argument's type to be {}, but this expression's type is {}",
+                        blue(fn_name),
+                        green(&expected),
+                        red(&perceived)
+                    ),
+                })
+                .with_color(ariadne::Color::Red),
+        );
+
+        report.finish()
+    };
+    if fatal {
+        throw_compiler_error_related(
+            &report,
+            sources,
+            file_idx,
+            arg_span,
+            &message,
+            "argument_type_mismatch",
+            &related,
+        );
+    }
+    report_compiler_error(
+        &report,
         sources,
         file_idx,
         arg_span,
-        &format!(
-            "Function {fn_name} expects this argument's type to be {expected}, but this expression's type is {perceived}"
-        ),
+        &message,
         "argument_type_mismatch",
+        &related,
     );
+}
+
+/// The span of each parameter in the declaration whose name is at `name_span`
+/// in `text`: `a: int` in `fn f(a: int, b)`. Read from the text because the
+/// function table keeps no span per parameter; only an error reads it.
+#[must_use]
+pub fn param_spans(text: &str, name_span: Span) -> Vec<Span> {
+    let bytes = text.as_bytes();
+    let mut i = name_span.end as usize;
+    // Past the type parameters, `fn first<T>(...)`, to the opening paren.
+    let mut angle = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => angle += 1,
+            b'>' => angle = angle.saturating_sub(1),
+            b'(' if angle == 0 => break,
+            b'{' | b';' => return Vec::new(),
+            _ => {}
+        }
+        i += 1;
+    }
+    let mut spans = Vec::new();
+    let mut depth = 0usize;
+    let mut start = i + 1;
+    let push = |spans: &mut Vec<Span>, from: usize, to: usize| {
+        let segment = &text[from..to];
+        let lead = segment.len() - segment.trim_start().len();
+        let trimmed = segment.trim();
+        if !trimmed.is_empty() {
+            let at = (from + lead) as u32;
+            spans.push((at, at + trimmed.len() as u32).into());
+        }
+    };
+    i += 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            b')' if depth == 0 => {
+                push(&mut spans, start, i);
+                return spans;
+            }
+            b')' | b']' | b'}' | b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                push(&mut spans, start, i);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    spans
 }
 
 #[cold]

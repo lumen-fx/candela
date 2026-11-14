@@ -404,8 +404,12 @@ let warnings = engine.check(source, filename)?;
 ```
 
 Type-checks the source the way `compile` does and stops there: no `Program`
-comes back and nothing runs. It returns the warnings the compile raised, or the
-first error as a `Diagnostic`.
+comes back and nothing runs. It returns the warnings the compile raised, or
+every error it found as a list of `Diagnostic`s. The check goes on past an
+error in a function body to the next statement and the next function, so one
+run lists each mistake; an error outside a body, such as a parse error, ends it
+there. An argument that does not fit its parameter names the parameter, and its
+`related` list points at the parameter's declaration.
 
 A check needs less than a compile. A `dylib` block binds the signatures it
 declares without opening its library, so a script whose C library a build step

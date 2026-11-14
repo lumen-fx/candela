@@ -95,6 +95,24 @@ workspace folder. `candela.libPath` points the server at a standard library
 other than the one installed beside it, the directory `CANDELA_LIB_PATH` would
 name. Changing either re-checks the open files.
 
+### Diagnostics
+
+Errors show while you type, a moment after you stop: every type and name
+error the compiler finds, each where it is, in the file it is in. A call whose
+arguments are out of order shows each argument that does not fit, naming the
+parameter it lands on, with a link to where that parameter is declared. A
+change to a file re-checks the open files that import it, using the text in
+the editor even before it is saved. `candela.diagnosticsDelay` sets the wait,
+in milliseconds (250 by default).
+
+A package can report what only it knows: an engine that reads attributes,
+settings files and asset paths when it loads a program. It names a command
+as `check` in its `candela.toml`, and after each save the server runs it for
+the programs that import the package and shows what it prints beside the
+compiler's errors, on any file it names, including settings files. Set
+`candela.packageChecks` to `false` to turn this off; it is off in a workspace
+you have not trusted.
+
 If `candela-lsp` cannot be started, the extension shows an error message
 instead of failing silently; the syntax highlighting/snippets/language
 configuration above keep working either way, since those do not depend on the

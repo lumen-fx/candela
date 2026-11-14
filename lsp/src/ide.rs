@@ -1636,9 +1636,9 @@ fn reset(birds: (Bird, Transform)[], game: Game, state: State<Phase>) {
     fn summary() -> ProgramSummary {
         let outcome = analyze(GAME, "game.cdl", &ImportResolver::new());
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         outcome.summary.expect("the game compiles")
     }
@@ -1992,9 +1992,9 @@ fn run(board: Board, shape: Shape) {
     fn summary() -> ProgramSummary {
         let outcome = analyze(MORE, "more.cdl", &ImportResolver::new());
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         outcome.summary.expect("the program compiles")
     }
@@ -2369,9 +2369,9 @@ fn main() {
             &ImportResolver::new(),
         );
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         (root, outcome.summary.expect("the program compiles"))
     }
