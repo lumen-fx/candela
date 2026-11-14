@@ -17,6 +17,17 @@ use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The `file://` URI the server names the file at `path` by. Imports reach a
+/// file by its canonical path, so this canonicalizes first: a temporary
+/// folder behind a symlink (macOS) and a verbatim `\\?\C:` path (Windows)
+/// then compare equal to what the server publishes.
+fn file_uri(path: &std::path::Path) -> String {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    tower_lsp::lsp_types::Url::from_file_path(&path)
+        .expect("an absolute path")
+        .to_string()
+}
+
 async fn write_message(writer: &mut (impl AsyncWriteExt + Unpin), msg: &Value) {
     let body = serde_json::to_string(msg).expect("serialize LSP message");
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
@@ -398,7 +409,7 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
     let game = dir.join("game.cdl");
     let compiles = "import \"engine\" { * };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, compiles).expect("write game");
-    let uri = format!("file://{}", game.display());
+    let uri = file_uri(&game);
 
     let (mut child, mut stdin, mut stdout) = spawn_server().await;
     write_message(
@@ -530,7 +541,7 @@ async fn settings_changed_later_apply_to_open_buffers() {
     let game = dir.join("game.cdl");
     let text = "import \"kit\" { * };\n\n@tag\n@tag\nfn run() {\n    print(add(1, 2));\n}\n";
     std::fs::write(&game, text).expect("write game");
-    let uri = format!("file://{}", game.display());
+    let uri = file_uri(&game);
 
     let (mut child, mut stdin, mut stdout) = spawn_server().await;
     write_message(
@@ -629,7 +640,7 @@ async fn settings_changed_later_apply_to_open_buffers() {
         &json!({ "jsonrpc": "2.0", "method": "textDocument/didSave", "params": { "textDocument": { "uri": uri } } }),
     )
     .await;
-    let module_uri = format!("file://{}", module.display());
+    let module_uri = file_uri(&module);
     let saved = loop {
         let saved = next_diagnostics(&mut stdout).await;
         if saved["params"]["uri"] == module_uri.as_str() {
@@ -680,7 +691,7 @@ async fn a_definition_through_an_export_import_lands_in_the_declaring_file() {
     let game = dir.join("game.cdl");
     let text = "import \"engine\" { * };\n\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, text).expect("write game");
-    let uri = format!("file://{}", game.display());
+    let uri = file_uri(&game);
 
     let (mut child, mut stdin, mut stdout) = spawn_server().await;
     write_message(
@@ -852,8 +863,8 @@ async fn an_unsaved_change_to_an_import_checks_its_importer() {
     let game = dir.join("game.cdl");
     let game_text = "import \"lib.cdl\" { * };\n\nfn main() {\n    print(half(3.0));\n}\n";
     std::fs::write(&game, game_text).expect("write game");
-    let lib_uri = format!("file://{}", lib.canonicalize().unwrap().display());
-    let game_uri = format!("file://{}", game.canonicalize().unwrap().display());
+    let lib_uri = file_uri(&lib);
+    let game_uri = file_uri(&game);
     let (mut child, mut stdin, mut stdout) = open_files(
         json!({ "diagnosticsDelay": 50 }),
         &[(&game_uri, game_text), (&lib_uri, lib_text)],
