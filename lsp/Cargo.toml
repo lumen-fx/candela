@@ -22,7 +22,7 @@ publish = false
 # `package = "candela-lang"` is the crates.io name; the import stays `candela`.
 candela = { package = "candela-lang", path = ".." }
 tower-lsp = "0.20.0"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync", "process", "time"] }
 serde_json = "1"
 dashmap = "6"
 smol_strc = "0.3.6"

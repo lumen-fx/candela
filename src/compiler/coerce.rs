@@ -298,6 +298,7 @@ pub fn warn_float_to_int(span: Span, ctx: Ctx, state: &State<'_>) {
                 "This float becomes an int here (truncated toward zero). Write int(x) to make that explicit",
             ),
             code: String::from("implicit_float_to_int"),
+            related: Vec::new(),
         },
     );
 }

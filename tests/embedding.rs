@@ -1979,14 +1979,62 @@ fn check_reports_what_a_compile_reports() {
         dylib \"nosuch_lib_xyz\" { int f(int); }
         fn g() -> int { return nosuch_lib_xyz::f(\"s\"); }
     ";
-    let error = engine.check(wrong_argument, "arg.cdl").unwrap_err();
-    assert_eq!(error.code, "argument_type_mismatch", "{}", error.message);
+    let errors = engine.check(wrong_argument, "arg.cdl").unwrap_err();
+    assert_eq!(
+        errors[0].code, "argument_type_mismatch",
+        "{}",
+        errors[0].message
+    );
 
     for signature in ["bool f(int);", "f({string: int});"] {
         let src = format!("dylib \"nosuch_lib_xyz\" {{ {signature} }}\n");
-        let error = engine.check(&src, "c.cdl").unwrap_err();
-        assert_eq!(error.code, "no_c_representation", "{}", error.message);
+        let errors = engine.check(&src, "c.cdl").unwrap_err();
+        assert_eq!(
+            errors[0].code, "no_c_representation",
+            "{}",
+            errors[0].message
+        );
     }
+}
+
+/// A check lists every error it finds: each argument of a call that does not
+/// fit its parameter, naming the parameter and pointing at its declaration,
+/// and an error in each function and each statement after the first.
+#[test]
+fn check_reports_every_error() {
+    let engine = Engine::new();
+    let src = "struct A { id: int = 0 }
+struct B { width: float = 0.0 }
+fn take(a: A, b: B) -> float { return b.width; }
+fn swapped(a: A, b: B) {
+    let w = take(b, a);
+}
+fn two(b: B) {
+    let x = b.height;
+    let y = b.depth;
+}
+";
+    let mut errors = engine.check(src, "every.cdl").unwrap_err();
+    errors.sort_by_key(|e| e.span.start);
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(errors.len(), 4, "{messages:#?}");
+    assert_eq!(errors[0].code, "argument_type_mismatch");
+    assert_eq!(
+        errors[0].message,
+        "Parameter a of take takes A, but this argument is B"
+    );
+    assert_eq!(&src[errors[0].span.clone()], "b");
+    assert_eq!(&src[errors[0].related[0].span.clone()], "a: A");
+    assert_eq!(
+        errors[1].message,
+        "Parameter b of take takes B, but this argument is A"
+    );
+    assert!(
+        errors[2].message.contains("height"),
+        "{}",
+        errors[2].message
+    );
+    assert!(errors[3].message.contains("depth"), "{}", errors[3].message);
 }
 
 /// A check binds no `host` block to a closure and hands back the warnings the

@@ -57,11 +57,12 @@ function expandPath(value) {
 }
 
 /**
- * The settings the server resolves imports with: `candela.importRoots` and
- * `candela.libPath`, with their paths expanded. Sent as the initialization
- * options and again whenever either changes.
+ * The settings the server reads: `candela.importRoots` and `candela.libPath`,
+ * with their paths expanded, `candela.diagnosticsDelay`, and
+ * `candela.packageChecks`, which an untrusted workspace turns off. Sent as
+ * the initialization options and again whenever one changes.
  */
-function importSettings() {
+function serverSettings() {
   const config = workspace.getConfiguration('candela');
   const importRoots = {};
   const roots = config.get('importRoots') || {};
@@ -72,8 +73,19 @@ function importSettings() {
   }
   const lib = config.get('libPath');
   const libPath = typeof lib === 'string' && lib.trim().length > 0 ? expandPath(lib) : '';
-  return { importRoots, libPath };
+  const delay = config.get('diagnosticsDelay');
+  const diagnosticsDelay = typeof delay === 'number' && delay >= 0 ? Math.round(delay) : 250;
+  const packageChecks = config.get('packageChecks') !== false && workspace.isTrusted !== false;
+  return { importRoots, libPath, diagnosticsDelay, packageChecks };
 }
+
+/** The settings `serverSettings` reads. */
+const SETTINGS = [
+  'candela.importRoots',
+  'candela.libPath',
+  'candela.diagnosticsDelay',
+  'candela.packageChecks',
+];
 
 function activate(context) {
   const command = resolveServerCommand();
@@ -87,10 +99,12 @@ function activate(context) {
   /** @type {import('vscode-languageclient/node').LanguageClientOptions} */
   const clientOptions = {
     documentSelector: [{ scheme: 'file', language: 'candela' }],
+    // A change to a script or a settings file on disk checks the programs
+    // that read it again, and runs the package checks.
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher('**/*.cdl'),
+      fileEvents: workspace.createFileSystemWatcher('**/*.{cdl,toml}'),
     },
-    initializationOptions: importSettings(),
+    initializationOptions: serverSettings(),
   };
 
   client = new LanguageClient(
@@ -104,18 +118,20 @@ function activate(context) {
   // surface that instead of leaving the extension silently inert. `client`
   // itself is stopped in `deactivate()`, not registered as a disposable
   // here, since `LanguageClient` does not implement `vscode.Disposable`.
+  const sendSettings = () => {
+    if (client) {
+      client.sendNotification(DidChangeConfigurationNotification.type, {
+        settings: serverSettings(),
+      });
+    }
+  };
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((event) => {
-      if (
-        client &&
-        (event.affectsConfiguration('candela.importRoots') ||
-          event.affectsConfiguration('candela.libPath'))
-      ) {
-        client.sendNotification(DidChangeConfigurationNotification.type, {
-          settings: importSettings(),
-        });
+      if (SETTINGS.some((name) => event.affectsConfiguration(name))) {
+        sendSettings();
       }
     }),
+    workspace.onDidGrantWorkspaceTrust(sendSettings),
   );
 
   client.start().then(undefined, (err) => {

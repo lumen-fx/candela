@@ -17,11 +17,11 @@
 //! no script side effects (no `print` output, no host calls, no infinite loops
 //! from the user's own code).
 //!
-//! candela's error funnel (parser + compiler + runtime) is fatal-on-first-
-//! error: `collect_diagnostic` yields at most one `Diagnostic` per call, not
-//! a full list. That is a property of the underlying compiler, not a
-//! limitation added here; see the crate README for what this means for
-//! `publishDiagnostics`.
+//! The compile goes on past a function whose body does not compile, and
+//! past each argument of a call that does not fit its parameter, so
+//! `collect_diagnostics` returns every error it found. An error outside a
+//! function body (a parse error, a bad declaration) still ends the compile
+//! there, and inside one body the first error ends that body.
 //!
 //! `candela::compiler::compiler_data::Struct` and `EnumType` (unlike
 //! `Function`) are not tagged with the source file that declared them. This
@@ -42,7 +42,7 @@ use candela::compiler::{CompileOutput, Namespace, SymbolKind};
 use candela::macros::MacroEnv;
 use candela::package_docs;
 use candela::{AttributeTarget, AttributeValue};
-use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
+use candela::{Diagnostic, TypeNames, collect_diagnostics, collect_warnings};
 
 /// One file the compile read: the buffer (index 0) or a module it imports.
 #[derive(Debug, Clone)]
@@ -320,13 +320,14 @@ pub struct ProgramSummary {
     pub scope: Vec<ScopeEntry>,
 }
 
-/// The result of analyzing one buffer: a `Diagnostic` on failure (parse or
-/// type error), or a `ProgramSummary` on success. Never both; candela's
-/// compiler does not currently support returning partial results alongside
-/// an error.
+/// The result of analyzing one buffer: the errors the compile found, and a
+/// `ProgramSummary` when the compile got past the program's declarations.
+/// Errors inside function bodies come with a summary; a parse error or a bad
+/// declaration comes without one.
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisOutcome {
-    pub diagnostic: Option<Diagnostic>,
+    /// Every error the compile found, in the order it found them.
+    pub errors: Vec<Diagnostic>,
     pub summary: Option<ProgramSummary>,
     /// The warnings a compile that succeeded raised. A warning does not stop
     /// the compile, so these come with a summary, never with a diagnostic.
@@ -335,7 +336,7 @@ pub struct AnalysisOutcome {
 
 /// Runs candela's compiler (parse + type-check + codegen, no execution) over
 /// `text` as if it were the file at `path`, and extracts a `ProgramSummary`
-/// or the first `Diagnostic` produced.
+/// and every `Diagnostic` produced.
 ///
 /// The compile is the one `candela check` runs, entry points included, so the
 /// editor reports the errors the command line reports and no others.
@@ -363,16 +364,17 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
     // exists only on another target is not.
     // Warnings are collected, never printed: the server talks to the editor
     // over stdio, where a report would corrupt the protocol.
-    match macros.scope(move || {
-        collect_diagnostic(move || collect_warnings(move || check_only(owned, &path, &resolver)))
-    }) {
-        Err(diagnostic) => AnalysisOutcome {
-            diagnostic: Some(diagnostic),
+    let (checked, errors) = macros.scope(move || {
+        collect_diagnostics(move || collect_warnings(move || check_only(owned, &path, &resolver)))
+    });
+    match checked {
+        None => AnalysisOutcome {
+            errors,
             summary: None,
             warnings: Vec::new(),
         },
-        Ok((out, warnings)) => AnalysisOutcome {
-            diagnostic: None,
+        Some((out, warnings)) => AnalysisOutcome {
+            errors,
             summary: Some(build_summary(&out)),
             warnings,
         },
@@ -1053,9 +1055,9 @@ mod tests {
         let source = format!("fn main() {{\n    let a = 1;\n    print({chain});\n}}\n");
         let outcome = analyze_buffer(&source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
@@ -1066,9 +1068,9 @@ mod tests {
         let source = "fn main() {\n    let markup = lmn!(<p>hi</p>);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
@@ -1082,9 +1084,9 @@ mod tests {
         let source = "@cfg(web)\nimport \"js\";\n\n@cfg(web)\nfn track(e: string) { js::call(\"gtag\", [e]); }\n@cfg(not(web))\nfn track(e: string) {}\n\nfn main() {\n    @cfg(web)\n    let x = only_on_web();\n    track(\"open\");\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
     }
 
@@ -1094,7 +1096,11 @@ mod tests {
     fn a_bad_attribute_argument_is_reported() {
         let source = "host \"ecs\" {\n    attribute system(after: fn[] = []) on fn;\n}\n\n@system(after: [movment])\nfn spawn() {}\n\nfn movement() {}\n\nfn main() {}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        let diagnostic = outcome.diagnostic.expect("movment is no function");
+        let diagnostic = outcome
+            .errors
+            .first()
+            .cloned()
+            .expect("movment is no function");
         assert_eq!(diagnostic.code, "attribute_bad_argument");
     }
 
@@ -1106,9 +1112,9 @@ mod tests {
         let source = "fn swap(t: (int, int)) -> (int, int) {\n    let (a, b) = t;\n    return (b, a);\n}\n\nfn main() {\n    print(swap((1, 2)).0);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.structs.iter().any(|s| s.name == "(int, int)"));
@@ -1120,7 +1126,7 @@ mod tests {
     fn a_real_error_beside_a_macro_is_still_reported() {
         let source = "fn main() {\n    let markup = lmn!(<p/>);\n    let broken = 1 +\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        assert!(outcome.diagnostic.is_some());
+        assert!(!outcome.errors.is_empty());
     }
 
     /// A fully annotated function nothing calls is compiled at its declared
@@ -1131,7 +1137,9 @@ mod tests {
         let source = "fn broken(a: int) -> int {\n    return a + \"nope\";\n}\n\nfn main() {\n    print(1);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         let diagnostic = outcome
-            .diagnostic
+            .errors
+            .first()
+            .cloned()
             .expect("the uncalled function's body is checked");
         assert!(
             diagnostic.message.contains("int") && diagnostic.message.contains("string"),
@@ -1157,9 +1165,9 @@ mod tests {
                       }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(
@@ -1184,9 +1192,9 @@ mod tests {
                       }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let width = summary
@@ -1216,9 +1224,9 @@ mod tests {
                       struct Holder { first: Value, rest: Value[] }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let holder = summary
@@ -1247,9 +1255,9 @@ mod tests {
         let source = "fn pick(a: any) -> int {\n    return 1;\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let pick = summary
@@ -1267,9 +1275,9 @@ mod tests {
         let source = "struct Point { x: int }\n                      impl Point { fn twice(self) -> int { return self.x * 2; } }\n                      fn apply(f, n) { return f(n); }\n                      fn main() {\n                          print(apply(fn(v) { return v + 1; }, Point{ x: 1 }.twice()));\n                      }\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let names: Vec<&str> = summary.own_functions().map(|f| f.name.as_str()).collect();
@@ -1294,9 +1302,9 @@ mod tests {
         let source = "fn double(a: int) -> int {\n    return a * 2;\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let double = summary
@@ -1314,7 +1322,7 @@ mod tests {
     fn a_warning_comes_back_with_the_summary() {
         let source = "fn on_click(id) {\n    print(id);\n}\n\nfn main() {}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
-        assert!(outcome.diagnostic.is_none());
+        assert!(outcome.errors.is_empty());
         assert!(outcome.summary.is_some());
         assert_eq!(outcome.warnings.len(), 1);
         assert_eq!(outcome.warnings[0].code, "unannotated_host_parameter");
@@ -1332,9 +1340,9 @@ mod tests {
         let source = "enum Light { Stop, Slow, Go }\n\nfn word(l: Light) -> string => match l {\n    Stop | Slow => \"wait\",\n    Go => \"go\",\n};\n\nfn main() {\n    let xs = [1, 2, 3].map(fn(x) => x * 2);\n    print(word(Light::Go), xs[1..]);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.own_functions().any(|f| f.name == "word"));
@@ -1347,9 +1355,9 @@ mod tests {
         let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
     }
 
@@ -1375,9 +1383,9 @@ mod tests {
         let outcome = analyze_buffer(source, path.to_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
-            outcome.diagnostic.is_none(),
+            outcome.errors.is_empty(),
             "{:?}",
-            outcome.diagnostic.map(|d| d.message)
+            outcome.errors.first().map(|d| d.message.clone())
         );
         let summary = outcome.summary.expect("a summary is produced");
         let area = summary

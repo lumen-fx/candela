@@ -119,6 +119,7 @@ pub fn warn_unraisable_catch_kinds(sources: &[Source], std_files: &[bool]) {
                         "No built-in error has the kind {kind:?} and nothing in the program throws it, so this catch never runs. Check the spelling"
                     ),
                     code: String::from("unraisable_catch_kind"),
+                    related: Vec::new(),
                 },
             );
         }
