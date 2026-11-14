@@ -5223,13 +5223,11 @@ fn run_diag_profile_with(
     resolver: &crate::compiler::imports::ImportResolver,
 ) -> Result<(), Diagnostic> {
     collect_diagnostic(|| {
-        let out = crate::compiler::compile_profile(
-            String::from(src),
-            filename,
-            false,
-            resolver,
-            optimize,
-        );
+        // Warnings are not what the program prints; they are checked on
+        // their own, with `checked_with_warnings`.
+        let (out, _) = crate::warnings::collect_warnings(|| {
+            crate::compiler::compile_profile(String::from(src), filename, false, resolver, optimize)
+        });
         let mut arrays = out.pools;
         run_vm(
             &out.instructions,
@@ -9327,12 +9325,12 @@ fn main() { print(add(1, \"two\")); }";
 }
 
 #[test]
-pub fn annotated_param_rejects_float_for_int() {
+pub fn annotated_param_rejects_bool_for_int() {
     let src = "fn twice(n: int) { return n * 2; }
-fn main() { print(twice(1.5)); }";
+fn main() { print(twice(true)); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_eq!(d.code, "argument_type_mismatch");
-    assert!(d.message.contains("this expression's type is float"));
+    assert!(d.message.contains("this expression's type is bool"));
 }
 
 #[test]
@@ -9811,20 +9809,13 @@ pub fn bool_neg_names_the_bang_operator() {
 // ---------------------------------------------------------------------------
 
 #[test]
-pub fn folded_pow_rejects_mixed_operands() {
-    let src = "fn main() { print(2.0 ^ 3); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_wellformed(&d, src);
-    assert_eq!(d.code, "invalid_operation");
-    assert_eq!(d.message, "Cannot perform operation float ^ int");
+pub fn folded_pow_of_mixed_operands_is_a_float() {
+    run_and_check_registers!("fn main() { print(2.0 ^ 3); }", 8.0.into());
 }
 
 #[test]
-pub fn unfolded_pow_rejects_mixed_operands() {
-    let src = "fn main() { let f = 2.0; print(f ^ 3); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_eq!(d.code, "invalid_operation");
-    assert_eq!(d.message, "Cannot perform operation float ^ int");
+pub fn unfolded_pow_of_mixed_operands_is_a_float() {
+    run_and_check_registers!("fn main() { let f = 2.0; print(f ^ 3); }", 8.0.into());
 }
 
 #[test]
@@ -9986,11 +9977,8 @@ pub fn remainder_by_literal_int_zero_is_a_parse_error() {
 }
 
 #[test]
-pub fn float_literal_divided_by_int_zero_is_a_type_error() {
-    let src = "fn main() { print(2.0 / 0); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_eq!(d.code, "invalid_operation");
-    assert_eq!(d.message, "Cannot perform operation float / int");
+pub fn float_literal_divided_by_int_zero_divides_as_floats() {
+    assert_eq!(run_output("fn main() { print(2.0 / 0); }"), "inf\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -10812,10 +10800,10 @@ pub fn generic_function_without_type_arguments_still_infers() {
 pub fn an_explicit_type_argument_pins_the_parameter() {
     let err = compile_diag(
         "fn first<T>(items: T[]) -> T { return items[0]; }
-         fn main() { print(first<int>([1.5, 2.5])); }",
+         fn main() { print(first<int>([true, false])); }",
         "generics.cdl",
     )
-    .expect_err("a float[] where int[] was named");
+    .expect_err("a bool[] where int[] was named");
     assert_eq!(err.code, "argument_type_mismatch");
 }
 
@@ -16251,7 +16239,7 @@ pub fn let_annotation_union_narrows() {
 pub fn let_annotation_rejects_other_types() {
     for (src, wanted) in [
         ("fn main() { let n: int = \"a\"; }", "n is declared as int"),
-        ("fn main() { let n: int = 1; n = 2.0; }", "of type float"),
+        ("fn main() { let n: int = 1; n = true; }", "of type bool"),
         ("fn main() { let xs: int[] = [\"a\"]; }", "of type string[]"),
         (
             "fn main() { let t: int = 0; let f = fn(x) { t = \"s\"; }; f(1); }",
@@ -17024,4 +17012,322 @@ pub fn a_literal_into_any_may_mix_types() {
         let d = compile_diag(src, "diag.kl").unwrap_err();
         assert_wellformed(&d, src);
     }
+}
+
+// ---------------------------------------------------------------------------
+// INT AND FLOAT CONVERT TO EACH OTHER
+// ---------------------------------------------------------------------------
+
+/// The warnings a compile of `src` raises with the code
+/// `implicit_float_to_int`, each as the text it points at.
+fn float_to_int_sites(src: &str) -> Vec<String> {
+    let (_, warnings) = checked_with_warnings(src, "numbers.cdl");
+    warnings
+        .iter()
+        .filter(|w| w.code == "implicit_float_to_int")
+        .map(|w| src[w.span.clone()].to_owned())
+        .collect()
+}
+
+/// One `int` and one `float` work in floats, in either order, for every
+/// arithmetic operator; two ints keep integer division and remainder.
+#[test]
+pub fn mixed_arithmetic_is_float_arithmetic() {
+    let src = "
+        fn main() {
+            let i = 3;
+            let f = 0.5;
+            print(i + f, f + i, i - f, f - i, i * f, f * i);
+            print(i / 2.0, 7.5 / 2, 7 % 2.5, 7.5 % 2, 2 ^ 0.5, 4.0 ^ 2);
+            print(type(i + f), type(1 + 2.0));
+            print(7 / 2, 7 % 2, type(7 / 2));
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "3.5\n3.5\n2.5\n-2.5\n1.5\n1.5\n1.5\n3.75\n2.0\n1.5\n1.4142135623730951\n16.0\nfloat\nfloat\n3\n1\nint\n"
+    );
+    assert!(
+        float_to_int_sites(src).is_empty(),
+        "widening is not reported"
+    );
+}
+
+/// A chain of operators widens where it meets the first float and stays float
+/// from there.
+#[test]
+pub fn a_mixed_chain_widens_at_the_float() {
+    let src = "
+        fn main() {
+            let n = 2;
+            print(n + n + 0.5 + n, 1 + 2 * 1.5, n * n / 8.0);
+        }
+    ";
+    assert_eq!(run_output(src), "6.5\n4.0\n0.5\n");
+}
+
+/// Comparisons and equality between an `int` and a `float` compare the
+/// numbers, as a value and as the condition of an `if` and a `while`.
+#[test]
+pub fn mixed_comparison_compares_the_numbers() {
+    let src = "
+        fn main() {
+            let i = 3;
+            let f = 0.5;
+            print(1 == 1.0, 1.0 != 1, 2 == 2.5, i < f, f < i, i >= 3.0, 2.5 <= i);
+            if i > 2.5 { print(\"gt\"); }
+            if 1.0 == 1 { print(\"eq\"); }
+            while f < i { f = f + 1; }
+            print(f);
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "true\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\ngt\neq\n3.5\n"
+    );
+}
+
+/// Bitwise operators take two ints; a float is not converted for them.
+#[test]
+pub fn bitwise_operators_do_not_take_a_float() {
+    for src in [
+        "fn main() { print(5 & 1.5); }",
+        "fn main() { print(1.5 | 2); }",
+        "fn main() { print(1 << 2.0); }",
+        "fn main() { print(~1.5); }",
+    ] {
+        let d = compile_diag(src, "bits.cdl").unwrap_err();
+        assert_eq!(d.code, "invalid_operation", "{src}");
+    }
+}
+
+/// A declared `let` converts an initial value and every later assignment, and
+/// a declaration that admits a float takes an int.
+#[test]
+pub fn a_declared_variable_converts_what_is_written_into_it() {
+    let src = "
+        fn main() {
+            let x: float = 5;
+            let n = 2;
+            let y: float = n;
+            y = n + 1;
+            let k: int = 2.9;
+            k = -2.9;
+            let u: float | string = 3;
+            print(x, y, type(y), k, u);
+        }
+    ";
+    assert_eq!(run_output(src), "5.0\n3.0\nfloat\n-2\n3.0\n");
+    assert_eq!(float_to_int_sites(src), ["2.9", "-2.9"]);
+}
+
+/// A variable declared without a type keeps the number type it started with:
+/// a float written into an int variable is truncated and reported, and an int
+/// written into a float variable is widened. A loop that reads the variable
+/// before writing it sees the same type on every turn.
+#[test]
+pub fn an_unannotated_variable_keeps_its_number_type() {
+    let src = "
+        fn main() {
+            let total = 0;
+            for x in [0.5, 0.75, 1.0] { total += x; }
+            let sum = 0.0;
+            for x in [1, 2] { sum += x; }
+            let r = 1.5;
+            r = 4;
+            print(total, sum, r, type(total), type(r));
+        }
+    ";
+    assert_eq!(run_output(src), "1\n3.0\n4.0\nint\nfloat\n");
+    assert_eq!(float_to_int_sites(src), ["x"]);
+}
+
+/// Function arguments, return values, generic type arguments and calls
+/// through a declared `fn(...)` value convert to the declared types.
+#[test]
+pub fn calls_convert_arguments_and_returns() {
+    let src = "
+        fn half(x: float) -> float { return x / 2; }
+        fn index(i: int) -> int { return i; }
+        fn widen(n: int) -> float { return n; }
+        fn pick(n: int) -> float { if n > 0 { return n; } return 0.5; }
+        fn truncate(f: float) -> int { return f * 2; }
+        fn first<T>(a: T, b: T) -> T { return a; }
+        fn main() {
+            let n = 7;
+            print(half(3), half(n), index(2.7));
+            print(widen(4), pick(3), pick(-1), truncate(1.3));
+            print(first<float>(1, 2), first(1, 2.5));
+            let g: fn(float) -> float = half;
+            print(g(9));
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "1.5\n3.5\n2\n4.0\n3.0\n0.5\n2\n1.0\n1\n4.5\n"
+    );
+    assert_eq!(float_to_int_sites(src), ["2.7", "f * 2"]);
+}
+
+/// A function declared to return a `float[]` cannot hand back an `int[]` it
+/// holds: the list is shared, so it is not converted.
+#[test]
+pub fn a_held_list_is_not_converted() {
+    let src = "
+        fn floats(xs: int[]) -> float[] { return xs; }
+        fn main() { print(floats([1])); }
+    ";
+    let d = compile_diag(src, "lists.cdl").unwrap_err();
+    assert_eq!(d.code, "invalid_type", "{d:?}");
+    let src = "
+        fn total(xs: float[]) -> float { return 0.0; }
+        fn main() { let xs = [1, 2]; print(total(xs)); }
+    ";
+    let d = compile_diag(src, "lists.cdl").unwrap_err();
+    assert_eq!(d.code, "argument_type_mismatch");
+}
+
+/// Methods, operator methods and enum payloads take the other number type.
+#[test]
+pub fn methods_and_enum_payloads_convert() {
+    let src = "
+        struct V { x: float, y: float }
+        impl V {
+            fn scale(self, k: float) -> V { return V { x: self.x * k, y: self.y * k }; }
+            fn *(self, k: float) -> V { return V { x: self.x * k, y: self.y * k }; }
+        }
+        enum Shape { Circle(float), Rect(float, float) }
+        fn main() {
+            let v = V { x: 1, y: 2 };
+            print(v.scale(2), v * 3);
+            print(Shape::Circle(2), Shape::Rect(1, 2.5));
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "V {x:2.0,y:4.0}\nV {x:3.0,y:6.0}\nCircle(2.0)\nRect(1.0,2.5)\n"
+    );
+}
+
+/// Struct literal fields, field defaults, field assignment and `+=` on a
+/// field convert to the field's type.
+#[test]
+pub fn struct_fields_convert() {
+    let src = "
+        struct P { x: float, y: float = 5, n: int = 2.5 }
+        fn main() {
+            let p = P { x: 1, y: 2, n: 3 };
+            let q = P { x: 4, .. };
+            let k = 3;
+            p.x = k;
+            p.x += 1;
+            p.y += k;
+            p.n = 9.9;
+            print(p, q, P::default());
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "P {x:4.0,y:5.0,n:9}\nP {x:4.0,y:5.0,n:2}\nP {x:0.0,y:5.0,n:2}\n"
+    );
+    assert_eq!(float_to_int_sites(src), ["2.5", "9.9"]);
+}
+
+/// A list or map literal of both number types holds floats, and a literal
+/// written where a list or map of one number type is declared builds its
+/// elements at that type, nested literals too. `push`, `index_of`, element
+/// writes and map entry writes convert to the element type.
+#[test]
+pub fn collection_elements_convert() {
+    let src = "
+        fn total(xs: float[]) -> float { let t = 0.0; for x in xs { t += x; } return t; }
+        struct Bag { items: float[], m: {string: float} }
+        fn main() {
+            let xs: float[] = [1, 2];
+            xs.push(3);
+            let n = 4;
+            xs.push(n);
+            xs[0] = 10;
+            print(xs, total(xs), total([1, 2, 3]));
+            let mixed = [1, 2.5];
+            print(mixed, type(mixed));
+            let m: {string: float} = {\"a\": 1};
+            m[\"b\"] = 2;
+            let mm = {\"a\": 1, \"b\": 0.5};
+            print(m, mm, type(mm));
+            let grid: float[][] = [[1, 2], [3]];
+            grid.push([4, 5]);
+            print(grid, xs.index_of(2));
+            print(Bag { items: [1, 2.5], m: {\"a\": 1} });
+            let ys: int[] = [1, 2.9];
+            print(ys);
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "[10.0,2.0,3.0,4.0]\n19.0\n6.0\n[1.0,2.5]\nfloat[]\n{\"a\":1.0,\"b\":2.0}\n{\"a\":1.0,\"b\":0.5}\n{string: float}\n[[1.0,2.0],[3.0],[4.0,5.0]]\nSome(1)\nBag {items:[1.0,2.5],m:{\"a\":1.0}}\n[1,2]\n"
+    );
+    assert_eq!(float_to_int_sites(src), ["2.9"]);
+}
+
+/// A generic value built where an instantiation at `float` is declared is
+/// built at it, and a type parameter two positions bind to `int` and `float`
+/// is `float`.
+#[test]
+pub fn generic_instantiations_take_the_float() {
+    let src = "
+        struct Cell<T> { value: T }
+        struct Pair<T> { a: T, b: T }
+        enum Two<T> { Both(T, T) }
+        fn unwrap(o: Option<float>) -> float { if o is Some(x) { return x; } return 0.0; }
+        fn main() {
+            let c: Cell<float> = Cell { value: 3 };
+            let d = Cell<float> { value: 4 };
+            let o: Option<float> = Some(1);
+            print(type(c), c.value, type(d), d.value, o, unwrap(Some(2)));
+            print(Pair { a: 1, b: 2.5 }, Two::Both(1, 2.5));
+        }
+    ";
+    assert_eq!(
+        run_output(src),
+        "Cell<float>\n3.0\nCell<float>\n4.0\nSome(1.0)\n2.0\nPair<float> {a:1.0,b:2.5}\nBoth(1.0,2.5)\n"
+    );
+    assert_eq!(float_to_int_sites(src), Vec::<String>::new());
+}
+
+/// The warning is raised once per place, however many times the body holding
+/// it is compiled, and never for code that writes `int(x)`.
+#[test]
+pub fn a_float_to_int_conversion_is_reported_once_per_place() {
+    let src = "
+        fn cells(n: int) -> int { return n; }
+        fn twice(x) { return cells(x * 2.0); }
+        fn main() {
+            print(twice(1), twice(1.5), twice(2));
+            print(cells(int(2.5)));
+        }
+    ";
+    assert_eq!(run_output(src), "2\n3\n4\n2\n");
+    assert_eq!(float_to_int_sites(src), ["x * 2.0"]);
+    let (_, warnings) = checked_with_warnings(src, "numbers.cdl");
+    let warning = warnings
+        .iter()
+        .find(|w| w.code == "implicit_float_to_int")
+        .unwrap();
+    assert!(
+        warning.message.contains("int(x)"),
+        "the warning says how to make it explicit: {}",
+        warning.message
+    );
+}
+
+/// `int(x)` and `float(x)` keep converting as they did.
+#[test]
+pub fn explicit_conversions_still_work() {
+    assert_eq!(
+        run_output(
+            "fn main() { print(int(2.9), int(-2.9), float(3), int(\"7\"), float(\"0.5\")); }"
+        ),
+        "2\n-2\n3.0\n7\n0.5\n"
+    );
 }

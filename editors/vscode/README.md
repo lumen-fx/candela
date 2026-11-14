@@ -49,6 +49,8 @@ attribution details.
 ## Language facts
 
 - Comments: line comments only (`// ...`). There is no block comment syntax.
+  `///` documents the item below it and `//!` the file it is in; both color as
+  documentation.
 - Strings: double-quoted, with the escapes listed above. No string
   interpolation.
 - Numbers: integers are `i64` (`[0-9]+`); floats are `f64` and must be written

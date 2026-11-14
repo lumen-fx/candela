@@ -454,15 +454,17 @@ pub enum Expr {
         Box<[AttributeDecl]>,
     ),
 
-    /// ImportFile(path, binding, is_logical, (start, end))
+    /// ImportFile(path, binding, is_logical, (start, end), exported)
     ///
     /// `is_logical` marks a library import (`import "std/string";`, an
     /// extensionless path): the resolver maps it straight to the shipped
     /// library directory and never looks source-relative. A `.cdl` file import
     /// (`import "./local.cdl";`) has `is_logical` false and resolves
     /// source-relative first. `binding` says what the import adds to the
-    /// importing file's scope; see [`ImportBinding`].
-    ImportFile(SmolStr, ImportBinding, bool, Span),
+    /// importing file's scope; see [`ImportBinding`]. `exported` marks an
+    /// `export import`, whose items the importing file also shows the files
+    /// that import it.
+    ImportFile(SmolStr, ImportBinding, bool, Span, bool),
 
     Break,
     Continue,
@@ -1132,7 +1134,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::FunctionDecl(_, _, _, _, _, _)
         | Expr::ImportDylib(_, _, _)
         | Expr::HostBlock(..)
-        | Expr::ImportFile(_, _, _, _)
+        | Expr::ImportFile(..)
         | Expr::Break
         | Expr::Continue => {}
     }
