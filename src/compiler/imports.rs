@@ -7,9 +7,11 @@
 //! to look instead of reading the answer out of the environment each time it
 //! needs one.
 
+use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The entry a package uses when its manifest names none, relative to the
 /// package root. The same default `candela new` writes.
@@ -26,6 +28,9 @@ pub const DEFAULT_PACKAGE_ENTRY: &str = "src/main.cdl";
 pub struct ImportResolver {
     lib_dir: Option<PathBuf>,
     packages: Vec<PackageRoot>,
+    /// Text an import reads in place of the file at that path: an editor's
+    /// unsaved buffer.
+    overlays: FxHashMap<PathBuf, Arc<str>>,
 }
 
 /// One package a program can import from.
@@ -56,6 +61,7 @@ impl Default for ImportResolver {
         Self {
             lib_dir: default_lib_dir(),
             packages: Vec::new(),
+            overlays: FxHashMap::default(),
         }
     }
 }
@@ -95,6 +101,20 @@ impl ImportResolver {
             dir,
             entry,
         });
+    }
+
+    /// Makes an import of the file at `path` read `text` instead of the file,
+    /// the way an editor checks a program against buffers not saved yet.
+    /// `path` is matched as the import resolves it, which is canonical for a
+    /// file beside the importer.
+    pub fn set_overlay(&mut self, path: PathBuf, text: Arc<str>) {
+        self.overlays.insert(path, text);
+    }
+
+    /// The text [`ImportResolver::set_overlay`] gave for `path`.
+    #[must_use]
+    pub fn overlay(&self, path: &Path) -> Option<&str> {
+        self.overlays.get(path).map(|text| &**text)
     }
 
     /// The standard library directory in effect.
@@ -168,6 +188,7 @@ fn default_lib_dir() -> Option<PathBuf> {
 mod tests {
     use super::DEFAULT_PACKAGE_ENTRY;
     use super::ImportResolver;
+    use rustc_hash::FxHashMap;
     use std::path::Path;
     use std::path::PathBuf;
 
@@ -175,6 +196,7 @@ mod tests {
         let mut resolver = ImportResolver {
             lib_dir: Some(PathBuf::from("/toolchain/libs")),
             packages: Vec::new(),
+            overlays: FxHashMap::default(),
         };
         resolver.add_root(
             "shapes",
@@ -270,6 +292,7 @@ mod tests {
         let mut resolver = ImportResolver {
             lib_dir: None,
             packages: Vec::new(),
+            overlays: FxHashMap::default(),
         };
         assert_eq!(resolver.library_path("std/string.cdl"), None);
         resolver.add_root(

@@ -31,6 +31,7 @@ use crate::embed::HostRegistry;
 use crate::embed::Value;
 use crate::embed::describe_value;
 use crate::embed::marshal_args;
+use crate::embed::unmarshal_into;
 use crate::embed::unmarshal_value;
 use crate::embed::value_matches_type;
 use crate::errors::Diagnostic;
@@ -585,7 +586,7 @@ impl RuntimeProgram {
         let export = self.run_export(name, args)?;
         for (arg, &register) in args.iter_mut().zip(export.arg_registers.iter()) {
             if passed_by_reference(arg) {
-                *arg = self.read_register(register);
+                self.read_register_into(register, arg);
             }
         }
         Ok(self.read_register(export.ret_register))
@@ -648,6 +649,20 @@ impl RuntimeProgram {
             &self.structs,
             &self.enums,
         )
+    }
+
+    /// [`Self::read_register`], written over `out`, which keeps what of it
+    /// has the same shape.
+    fn read_register_into(&self, register: u16, out: &mut Value) {
+        unmarshal_into(
+            out,
+            self.registers[register as usize],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+            &self.enums,
+        );
     }
 
     /// Every attribute the program's scripts wrote, with the struct and enum

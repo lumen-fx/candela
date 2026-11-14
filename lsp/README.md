@@ -27,12 +27,13 @@ be run interactively from a terminal.
 
 ## Settings
 
-The server reads where imports resolve from in the `initializationOptions`
-the client sends, and again in every `workspace/didChangeConfiguration`. The
-object may sit under a `candela` key:
+The server reads its settings from the `initializationOptions` the client
+sends, and again from every `workspace/didChangeConfiguration`. The object may
+sit under a `candela` key:
 
 ```json
-{ "importRoots": { "engine": "/opt/engine/module" }, "libPath": "/opt/candela/libs" }
+{ "importRoots": { "engine": "/opt/engine/module" }, "libPath": "/opt/candela/libs",
+  "diagnosticsDelay": 250, "packageChecks": true }
 ```
 
 - `importRoots` names the packages `import "name";` reads. A directory is a
@@ -43,8 +44,14 @@ object may sit under a `candela` key:
   Without it the server reads `CANDELA_LIB_PATH`, then the `libs/` beside its
   own executable.
 
-The VS Code extension sends both from its `candela.importRoots` and
-`candela.libPath` settings.
+- `diagnosticsDelay` is how long after the last change a buffer is checked, in
+  milliseconds. 250 by default.
+- `packageChecks: false` stops the server running the `check` commands
+  packages declare (see Diagnostics below).
+
+The VS Code extension sends all four from its `candela.importRoots`,
+`candela.libPath`, `candela.diagnosticsDelay` and `candela.packageChecks`
+settings.
 
 ## Features
 
@@ -56,14 +63,32 @@ buffer is mid-edit and not yet compiling. What the cursor is on is read from
 the current text, so `bird.` completes while the line around it is unfinished.
 
 - **Diagnostics.** Parse and type errors are pushed as
-  `textDocument/publishDiagnostics`. candela reports one error per compile, so
-  fix the first and re-type to see the next, the same flow as the `candela` CLI.
-  The compile is the one `candela check` runs, so a buffer that fails on the
-  command line fails in the editor: an error in the body of a function `main`
-  never calls is reported here too, as long as that function annotates every
-  parameter. A `main` is not required, so a library buffer analyses like any
-  other. The warnings that command prints, such as a bare parameter on a
-  function nothing calls, are pushed alongside at warning severity. Two more
+  `textDocument/publishDiagnostics`, a moment after the last change
+  (`diagnosticsDelay`), off the request path. Every open buffer is checked as
+  the root of a program, and each error is published on the file it is in,
+  imported files included. The check goes on past an error in a function body
+  to the next statement and the next function, so the editor lists every
+  mistake; an error outside a body, such as a parse error, still ends it there.
+  A call whose arguments do not fit reports each of them, naming the parameter,
+  with the parameter's declaration as related information. A change to a
+  buffer checks it and every open buffer whose program reads it again, against
+  the text of every open buffer, saved or not; a `.cdl` or `.toml` file
+  changed on disk (`workspace/didChangeWatchedFiles`) does the same. The
+  compile is the one `candela check` runs: an error in the body of a function
+  `main` never calls is reported here too, as long as that function annotates
+  every parameter, and so is one in a function of a file the program imports,
+  other than a library's. A `main` is not required, so a library buffer
+  analyses like any other. The warnings that command prints, such as a bare
+  parameter on a function nothing calls, are pushed alongside at warning
+  severity.
+- **Package checks.** A package whose `candela.toml` names a `check` command
+  (see the candela.toml reference) has it run after a save of an open buffer
+  whose program imports the package, from the buffer's directory, with
+  `{file}` filled in as the buffer's path. What it prints as JSON is published
+  beside the compiler's diagnostics, labelled with the package's name, on
+  whatever files it names; `src/checks.rs` describes the format. A command that
+  does not start, runs past a minute, or prints something else is logged to the
+  editor's output and shows nothing. Two more
   warnings cover attributes the compiler accepts but a host is unlikely to
   mean: the same attribute written twice on one item, and a variant passed for
   an `enum` parameter from an enum the declaring host marks with none of its
@@ -97,11 +122,18 @@ the current text, so `bird.` completes while the line around it is unfinished.
   `.`, `:` and `@` are trigger characters.
 
 - **Hover.** The declaration under the cursor, written the way it reads in the
-  source, with the `//` comment above it: a function's or method's signature,
-  a struct's fields, an enum's variants, a field's type, an attribute's
-  parameters, and a local's or parameter's type. Types are written the way a
-  compiler error writes them. A function with an unannotated parameter also
-  lists the signatures its call sites gave it.
+  source, with its `///` doc comment rendered as Markdown: a function's or
+  method's signature, a struct's fields with their defaults, an enum's
+  variants, a field's type and default, an attribute's parameters, and a
+  local's or parameter's type. A struct's hover lists each field with the
+  summary line of its doc comment, and an enum's each variant. Types are
+  written the way a compiler error writes them. A function with an
+  unannotated parameter also lists the signatures its call sites gave it.
+  When the package that declares the item names a `docs` URL in its
+  `candela.toml`, the hover ends in an "Open docs" link to the item.
+
+- **Completion documentation.** Each item carries the summary line of its doc
+  comment: the first paragraph.
 
 - **Signature help.** Inside a call's parentheses, the function's or method's
   parameters, with the one being written highlighted; inside `@name(...)`, the
@@ -126,8 +158,10 @@ These are deliberate, and the source refers here for them.
   found by matching its name at its recorded position in each file.
 - A method of a generic struct is known once the program uses an
   instantiation of the struct (`State<Phase>`).
-- The server handles `didSave` but does not advertise it, so a client that sends
-  only what is advertised never delivers one.
+- Inside one function body, an error in a statement drops that statement, and a
+  `let` it declared takes the type its value would have had, or `any` when that
+  cannot be worked out either. A later error that follows only from the dropped
+  statement can show.
 
 ## Testing
 
@@ -144,13 +178,16 @@ These are deliberate, and the source refers here for them.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
+- `src/checks.rs` unit-tests reading a package check's output: both JSON
+  shapes, relative files, whole-line findings, character columns and bad
+  output.
 - `tests/smoke.rs` is a headless integration test: it spawns the built
   `candela-lsp` binary as a subprocess and drives it over the LSP JSON-RPC
   protocol, once with a broken `.cdl` snippet (expects a diagnostic), once with
   a well-typed one (expects none), once for hover on a function whose
   parameter is a user enum, and once with a package given in
   `initializationOptions`: completion on a buffer that does not compile,
-  hover, and go-to-definition into the package. A last one changes the
+  hover with the package's docs link, and go-to-definition into the package. A last one changes the
   settings after start-up and checks that the open buffer is checked again,
   then asks for signature help and the outline, saves with an error in the
   imported file, and closes the buffer.

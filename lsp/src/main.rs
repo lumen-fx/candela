@@ -8,6 +8,7 @@
 mod analysis;
 mod backend;
 mod builtins;
+mod checks;
 mod ide;
 mod line_index;
 mod syntax;

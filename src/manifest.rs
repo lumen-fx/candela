@@ -10,6 +10,7 @@
 //! scratch loses everything that was not data.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use toml_edit::DocumentMut;
@@ -79,6 +80,8 @@ pub struct Manifest {
     description: Option<String>,
     entry: String,
     candela: Option<String>,
+    docs: Option<String>,
+    check: Option<Vec<String>>,
     dependencies: Vec<Dependency>,
     web_module: Option<String>,
 }
@@ -146,10 +149,10 @@ impl Manifest {
         for key in package.iter().map(|(key, _)| key) {
             if !matches!(
                 key,
-                "name" | "version" | "description" | "entry" | "candela"
+                "name" | "version" | "description" | "entry" | "candela" | "docs" | "check"
             ) {
                 return Err(invalid(format!(
-                    "unknown key {key} in [package]. Known keys are name, version, description, entry, candela"
+                    "unknown key {key} in [package]. Known keys are name, version, description, entry, candela, docs, check"
                 )));
             }
         }
@@ -194,6 +197,45 @@ impl Manifest {
                  Write the oldest candela that can compile this package, as >=0.0.7"
             )));
         }
+
+        let docs = string_key(package, "docs")?;
+        if let Some(url) = &docs
+            && let Some(unknown) = unknown_placeholder(url)
+        {
+            return Err(invalid(format!(
+                "docs in [package] names {{{unknown}}}, which is not a placeholder. \
+                 The placeholder is {{name}}, the item's name, as in https://example.com/api?name={{name}}"
+            )));
+        }
+
+        let check = match package.get("check") {
+            None => None,
+            Some(item) => {
+                let words: Option<Vec<String>> = item
+                    .as_array()
+                    .and_then(|a| a.iter().map(|v| v.as_str().map(str::to_owned)).collect());
+                let words = words.filter(|w| !w.is_empty()).ok_or_else(|| {
+                    invalid(String::from(
+                        "check in [package] must be a list of strings: the command and its arguments, \
+                         as [\"tool\", \"check\", \"{file}\"]",
+                    ))
+                })?;
+                if let Some(unknown) = words.iter().find_map(|w| unknown_check_placeholder(w)) {
+                    return Err(invalid(format!(
+                        "check in [package] names {{{unknown}}}, which is not a placeholder. \
+                         The placeholder is {{file}}, the file being checked"
+                    )));
+                }
+                if words[0].split(['/', '\\']).any(|part| part == "..") {
+                    return Err(invalid(format!(
+                        "check in [package] runs {:?}, which climbs out of the package. \
+                         Name a program on the PATH, or one inside the package as ./tools/check",
+                        words[0]
+                    )));
+                }
+                Some(words)
+            }
+        };
 
         let mut dependencies = Vec::new();
         if let Some(table) = doc.get("dependencies") {
@@ -259,6 +301,8 @@ impl Manifest {
             description,
             entry,
             candela,
+            docs,
+            check,
             dependencies,
             web_module,
         })
@@ -293,6 +337,22 @@ impl Manifest {
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
+    }
+
+    /// Where the package's documentation lives, as the URL template the
+    /// manifest writes, when it names one. `{name}` in it stands for the name
+    /// of a documented item; see [`docs_link`].
+    #[must_use]
+    pub fn docs(&self) -> Option<&str> {
+        self.docs.as_deref()
+    }
+
+    /// The command an editor runs to check a program that imports this
+    /// package, as the manifest writes it: the program and its arguments,
+    /// with `{file}` where the file being checked goes.
+    #[must_use]
+    pub fn check(&self) -> Option<&[String]> {
+        self.check.as_deref()
     }
 
     /// The file the project's verbs run, resolved against the project root.
@@ -387,6 +447,107 @@ impl Manifest {
         std::fs::write(&self.path, self.doc.to_string())
             .map_err(|e| ManifestError::Write(self.path.clone(), e))
     }
+}
+
+/// The first `{...}` in a docs URL template that is not `{name}`.
+fn unknown_placeholder(template: &str) -> Option<&str> {
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after.find('}')?;
+        let name = &after[..close];
+        if name != "name" {
+            return Some(name);
+        }
+        rest = &after[close + 1..];
+    }
+    None
+}
+
+/// The first `{...}` in a word of a check command that is not `{file}`.
+fn unknown_check_placeholder(word: &str) -> Option<&str> {
+    let mut rest = word;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after.find('}')?;
+        let name = &after[..close];
+        if name != "file" {
+            return Some(name);
+        }
+        rest = &after[close + 1..];
+    }
+    None
+}
+
+/// The `{file}` placeholder of a check command.
+const FILE_PLACEHOLDER: &str = "{file}";
+
+/// A package's check command, ready to run for one file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageCheck {
+    /// The package's name, which the diagnostics it reports are labelled with.
+    pub package: String,
+    /// The package root, the directory its `candela.toml` sits in.
+    pub root: PathBuf,
+    /// The program to run: a name looked up on the `PATH`, or a path inside
+    /// the package when the manifest writes it as `./...`.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// The check command of the package the file at `package_file` belongs to.
+///
+/// The package is the first `candela.toml` in the file's directory or one
+/// above it, when that manifest reads and names a command. `{file}` in the
+/// command is filled in as `checked`.
+#[must_use]
+pub fn package_check(package_file: &Path, checked: &Path) -> Option<PackageCheck> {
+    let dir = package_file.parent()?;
+    let manifest = Manifest::discover(dir).ok()?;
+    let words = manifest.check()?;
+    let fill = |w: &String| w.replace(FILE_PLACEHOLDER, &checked.to_string_lossy());
+    let program = &words[0];
+    let program = if program.starts_with("./") || program.starts_with(".\\") {
+        manifest.root.join(program)
+    } else {
+        PathBuf::from(fill(program))
+    };
+    Some(PackageCheck {
+        package: manifest.name.clone(),
+        root: manifest.root.clone(),
+        program,
+        args: words[1..].iter().map(fill).collect(),
+    })
+}
+
+/// The `{name}` placeholder of a docs URL template.
+const NAME_PLACEHOLDER: &str = "{name}";
+
+/// The link to an item's documentation.
+///
+/// It is the package's `docs` template with `{name}` replaced by `name`,
+/// percent-encoded so it is safe in a path or a query: `@system` becomes
+/// `%40system`, `Kind::A` becomes `Kind%3A%3AA`.
+#[must_use]
+pub fn docs_link(template: &str, name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(b));
+        } else {
+            let _ = write!(encoded, "%{b:02X}");
+        }
+    }
+    template.replace(NAME_PLACEHOLDER, &encoded)
+}
+
+/// The `docs` template of the package the file at `path` belongs to: the
+/// first `candela.toml` in the file's directory or one above it, when that
+/// manifest reads and names one.
+#[must_use]
+pub fn package_docs(path: &Path) -> Option<String> {
+    let dir = path.parent()?;
+    Manifest::discover(dir).ok()?.docs().map(str::to_owned)
 }
 
 /// Whether `text` is a version requirement.
@@ -749,5 +910,108 @@ mod tests {
         assert_eq!(manifest.name(), "demo");
         assert_eq!(manifest.version(), "0.1.0");
         assert_eq!(manifest.dependencies(), []);
+    }
+
+    #[test]
+    fn docs_names_where_the_package_documentation_lives() {
+        let manifest = parse(
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/api?name={name}\"\n",
+        )
+        .unwrap();
+        assert_eq!(manifest.docs(), Some("https://a.dev/api?name={name}"));
+        assert_eq!(
+            super::docs_link(manifest.docs().unwrap(), "Kind::Fast"),
+            "https://a.dev/api?name=Kind%3A%3AFast"
+        );
+        assert_eq!(
+            super::docs_link("https://a.dev/{name}.html", "@system"),
+            "https://a.dev/%40system.html"
+        );
+        assert_eq!(
+            super::docs_link("https://a.dev/", "Vec2.length"),
+            "https://a.dev/"
+        );
+        let none = parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\n").unwrap();
+        assert_eq!(none.docs(), None);
+    }
+
+    #[test]
+    fn docs_with_an_unknown_placeholder_is_an_error_naming_it() {
+        let Err(ManifestError::Invalid(_, message)) = parse(
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/{page}.html#{name}\"\n",
+        ) else {
+            panic!("a docs URL with {{page}} parsed");
+        };
+        assert!(message.contains("{page}"), "{message}");
+        assert!(message.contains("{name}"), "{message}");
+    }
+
+    #[test]
+    fn check_names_the_command_an_editor_runs() {
+        let manifest = parse(
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ncheck = [\"tool\", \"check\", \"--json\", \"{file}\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.check(),
+            Some(&["tool", "check", "--json", "{file}"].map(String::from)[..])
+        );
+        assert_eq!(
+            parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\n")
+                .unwrap()
+                .check(),
+            None
+        );
+    }
+
+    #[test]
+    fn check_must_be_a_list_of_strings_with_known_placeholders() {
+        for (check, names) in [
+            ("\"tool check\"", "list of strings"),
+            ("[]", "list of strings"),
+            ("[\"tool\", 3]", "list of strings"),
+            ("[\"tool\", \"{dir}\"]", "{dir}"),
+            ("[\"../tool\"]", "climbs out"),
+        ] {
+            let Err(ManifestError::Invalid(_, message)) = parse(&format!(
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\ncheck = {check}\n"
+            )) else {
+                panic!("check = {check} parsed");
+            };
+            assert!(message.contains(names), "{check}: {message}");
+        }
+    }
+
+    #[test]
+    fn package_check_fills_in_the_file_and_finds_a_program_in_the_package() {
+        let root = std::env::temp_dir().join(format!("candela-check-{}", std::process::id()));
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            root.join("candela.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ncheck = [\"./tools/check\", \"--file={file}\"]\n",
+        )
+        .unwrap();
+        let found =
+            super::package_check(&src.join("main.cdl"), Path::new("/game/main.cdl")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(found.package, "a");
+        assert_eq!(found.program, root.join("./tools/check"));
+        assert_eq!(found.args, vec![String::from("--file=/game/main.cdl")]);
+    }
+
+    #[test]
+    fn package_docs_reads_the_manifest_above_a_source_file() {
+        let root = std::env::temp_dir().join(format!("candela-docs-{}", std::process::id()));
+        let src = root.join("src").join("core");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            root.join("candela.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\ndocs = \"https://a.dev/{name}\"\n",
+        )
+        .unwrap();
+        let found = super::package_docs(&src.join("physics.cdl"));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(found.as_deref(), Some("https://a.dev/{name}"));
     }
 }

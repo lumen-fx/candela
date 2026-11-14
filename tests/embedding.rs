@@ -1979,14 +1979,62 @@ fn check_reports_what_a_compile_reports() {
         dylib \"nosuch_lib_xyz\" { int f(int); }
         fn g() -> int { return nosuch_lib_xyz::f(\"s\"); }
     ";
-    let error = engine.check(wrong_argument, "arg.cdl").unwrap_err();
-    assert_eq!(error.code, "argument_type_mismatch", "{}", error.message);
+    let errors = engine.check(wrong_argument, "arg.cdl").unwrap_err();
+    assert_eq!(
+        errors[0].code, "argument_type_mismatch",
+        "{}",
+        errors[0].message
+    );
 
     for signature in ["bool f(int);", "f({string: int});"] {
         let src = format!("dylib \"nosuch_lib_xyz\" {{ {signature} }}\n");
-        let error = engine.check(&src, "c.cdl").unwrap_err();
-        assert_eq!(error.code, "no_c_representation", "{}", error.message);
+        let errors = engine.check(&src, "c.cdl").unwrap_err();
+        assert_eq!(
+            errors[0].code, "no_c_representation",
+            "{}",
+            errors[0].message
+        );
     }
+}
+
+/// A check lists every error it finds: each argument of a call that does not
+/// fit its parameter, naming the parameter and pointing at its declaration,
+/// and an error in each function and each statement after the first.
+#[test]
+fn check_reports_every_error() {
+    let engine = Engine::new();
+    let src = "struct A { id: int = 0 }
+struct B { width: float = 0.0 }
+fn take(a: A, b: B) -> float { return b.width; }
+fn swapped(a: A, b: B) {
+    let w = take(b, a);
+}
+fn two(b: B) {
+    let x = b.height;
+    let y = b.depth;
+}
+";
+    let mut errors = engine.check(src, "every.cdl").unwrap_err();
+    errors.sort_by_key(|e| e.span.start);
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(errors.len(), 4, "{messages:#?}");
+    assert_eq!(errors[0].code, "argument_type_mismatch");
+    assert_eq!(
+        errors[0].message,
+        "Parameter a of take takes A, but this argument is B"
+    );
+    assert_eq!(&src[errors[0].span.clone()], "b");
+    assert_eq!(&src[errors[0].related[0].span.clone()], "a: A");
+    assert_eq!(
+        errors[1].message,
+        "Parameter b of take takes B, but this argument is A"
+    );
+    assert!(
+        errors[2].message.contains("height"),
+        "{}",
+        errors[2].message
+    );
+    assert!(errors[3].message.contains("depth"), "{}", errors[3].message);
 }
 
 /// A check binds no `host` block to a closure and hands back the warnings the
@@ -2745,5 +2793,76 @@ fn a_struct_that_does_not_match_its_declaration_is_refused() {
     assert_eq!(
         program.call("length2", &[point(1.0, 0.0)]).unwrap(),
         Value::Float(1.0)
+    );
+}
+
+/// What a script writes into a struct argument comes back in it, strings,
+/// nested structs and lists included, call after call.
+#[test]
+fn call_in_out_reads_back_what_a_script_wrote_into_a_struct() {
+    let src = r#"
+struct Tag { label: string, hits: int[] }
+struct Holder { tag: Tag, name: string }
+fn touch(h: Holder) {
+    h.name = h.name + "!";
+    h.tag.label = "seen";
+    h.tag.hits.push(h.tag.hits.len());
+    h.tag = Tag { label: h.tag.label + " " + h.name, hits: h.tag.hits };
+}
+fn main() {}
+"#;
+    let holder = |name: &str, label: &str, hits: &[i64]| Value::Struct {
+        name: String::from("Holder"),
+        fields: vec![
+            (
+                String::from("tag"),
+                Value::Struct {
+                    name: String::from("Tag"),
+                    fields: vec![
+                        (String::from("label"), Value::String(label.to_owned())),
+                        (
+                            String::from("hits"),
+                            Value::Array(hits.iter().map(|h| Value::Int(*h)).collect()),
+                        ),
+                    ],
+                },
+            ),
+            (String::from("name"), Value::String(name.to_owned())),
+        ],
+    };
+    let mut program = Engine::new().compile(src, "touch.cdl").expect("compiles");
+    let mut args = [holder("a", "new", &[])];
+    program.call_in_out("touch", &mut args).unwrap();
+    assert_eq!(args[0], holder("a!", "seen a!", &[0]));
+    program.call_in_out("touch", &mut args).unwrap();
+    assert_eq!(args[0], holder("a!!", "seen a!!", &[0, 1]));
+}
+
+/// A host may name a struct's fields in any order; what comes back is in
+/// declaration order, whichever order went in.
+#[test]
+fn a_struct_with_its_fields_out_of_order_is_built_by_name() {
+    let mut program = Engine::new()
+        .compile(STRUCT_CALLS, "points.cdl")
+        .expect("compiles");
+    let swapped = |x: f64, y: f64| Value::Struct {
+        name: String::from("Point"),
+        fields: vec![
+            (String::from("y"), Value::Float(y)),
+            (String::from("x"), Value::Float(x)),
+        ],
+    };
+    assert_eq!(
+        program.call("length2", &[swapped(3.0, 4.0)]).unwrap(),
+        Value::Float(25.0)
+    );
+    let mut args = [
+        Value::Array(vec![swapped(1.0, 2.0), point(3.0, 4.0)]),
+        Value::Float(0.5),
+    ];
+    program.call_in_out("shift", &mut args).unwrap();
+    assert_eq!(
+        args[0],
+        Value::Array(vec![point(1.5, 2.0), point(3.5, 4.0)])
     );
 }

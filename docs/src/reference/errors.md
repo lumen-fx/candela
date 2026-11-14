@@ -21,9 +21,14 @@ A message names a type the way you declared it, so a mismatch on a list of your
 own enum reads `Value[]` rather than the bare word `enum`.
 
 Compilation stops at the first error. Fixing one and recompiling is how you find
-the next; there is no list.
+the next. The language server and `Engine::check` go on
+past an error in a function body to the next statement and the next function,
+and a call whose arguments do not fit reports each of them, naming the
+parameter and pointing at its declaration, so the editor lists every mistake at
+once.
 
-candela emits no warnings. Everything it reports stops the program.
+A [warning](#warnings) does not stop the compile; everything else it reports
+does.
 
 ## Parse errors
 
@@ -46,7 +51,7 @@ Raised while the file is read, before any type is known.
 | Tuple | A tuple of one element, `(a,)`, in a value, a type or a `let` pattern (`tuple_of_one`); a place in a `let` pattern that is not a name, `_` or a nested pattern (`tuple_pattern_element`) |
 | `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
-| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`) |
+| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`); an `export import` with no items (`export_import_without_items`) |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
@@ -116,7 +121,7 @@ reaches an `impl` function declaring a receiver, is `path_call_with_receiver`,
 and the help names the dot call.
 
 **Operator errors.** An operator applied to operand types it does not accept,
-including mixed `int` and `float` arithmetic and a non-`bool` operand of `&&`,
+including a `float` operand of a bitwise operator and a non-`bool` operand of `&&`,
 `||` or `!`. The report names the operator it is complaining about, and where an
 operand is a struct or an enum it also names the method that type would define
 to accept the expression. `==` and `!=` take any pair of built-in values and are
@@ -235,7 +240,7 @@ file the program reads instead.
 
 ## Warnings
 
-A warning reports something the compile could not check, without stopping it.
+A warning reports something worth a second look, without stopping the compile.
 `candela check` and `candela build` print each one as a report and still
 succeed; an embedding host reads them from `Program::warnings`, and the language
 server shows them in the editor. Each carries a code like an error does.
@@ -244,6 +249,7 @@ server shows them in the editor. Each carries a code like an error does.
 | --- | --- |
 | `unannotated_host_parameter` | A function in the file being built that nothing in the program calls leaves a parameter bare, and the file declares `main`. A file with no `main` is a library, whose importers call its functions, so it gets no such warning. A host calling it by name passes that parameter as `any`, so its body is checked that way. The warning points at the function's name; annotate the parameter with the type the host passes |
 | `no_host_entry_point` | The body of such a function does not compile with its bare parameters typed `any`. The message carries the error the body raised and the span points at it. A packaged `.cdlb` has no entry point for the function, so a host call to it fails as an unknown function |
+| `implicit_float_to_int` | A `float` goes where an `int` is expected (an argument, a declared variable, a field, a return value, an element) and is truncated toward zero there, dropping its fraction. The warning points at the value; write `int(x)` to make the truncation explicit. Standard library code is not warned about. See [types](../language/types.md#numbers-convert-between-int-and-float) |
 | `unraisable_catch_kind` | A `catch "kind"` in the program's own files names a kind that no built-in error carries and no string literal anywhere in the program, a `throw` or otherwise, spells. Such a clause never runs, which is what a misspelt kind looks like. The check reads literals only: a kind built at run time and caught by a name the program never writes as a literal is warned about |
 
 ## Runtime errors

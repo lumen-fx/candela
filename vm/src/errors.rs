@@ -37,6 +37,18 @@ pub struct Diagnostic {
     pub span: Range<usize>,
     pub message: String,
     pub code: String,
+    /// Other places the error is about, such as the declaration of the
+    /// parameter an argument does not fit.
+    pub related: Vec<Related>,
+}
+
+/// A place a [`Diagnostic`] points at besides its own span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Related {
+    pub filename: String,
+    /// A byte range into the source named by `filename`.
+    pub span: Range<usize>,
+    pub message: String,
 }
 
 /// Panic payload used to unwind out of compilation/execution once a
@@ -44,7 +56,7 @@ pub struct Diagnostic {
 struct FatalError;
 
 thread_local! {
-    static DIAGNOSTIC_SINK: RefCell<Option<Diagnostic>> = const { RefCell::new(None) };
+    static DIAGNOSTIC_SINK: RefCell<Vec<Diagnostic>> = const { RefCell::new(Vec::new()) };
     static SINK_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static SUPPRESS_PANIC_HOOK: Cell<bool> = const { Cell::new(false) };
 }
@@ -134,20 +146,49 @@ pub fn diagnostics_enabled() -> bool {
 /// Records `Diagnostic` data in the active sink and unwinds to the enclosing
 /// `collect_diagnostic` call. Must only be called when `diagnostics_enabled()`.
 ///
-/// The three error funnels are fatal-on-first-error (they return `!`), so a
-/// single slot is enough: the first error to fire is the one reported.
+/// The error funnels are fatal (they return `!`): the compile stops at the
+/// error. An error recorded before it with [`record_diagnostic`] stays in the
+/// sink beside it.
 #[cold]
 #[inline(never)]
 pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code: &str) -> ! {
-    DIAGNOSTIC_SINK.with(|sink| {
-        *sink.borrow_mut() = Some(Diagnostic {
-            filename: filename.to_owned(),
-            span,
-            message,
-            code: code.to_owned(),
-        });
+    emit_diagnostic_related(filename, span, message, code, Vec::new())
+}
+
+/// [`emit_diagnostic`] with the other places the error is about.
+#[cold]
+#[inline(never)]
+pub fn emit_diagnostic_related(
+    filename: &str,
+    span: Range<usize>,
+    message: String,
+    code: &str,
+    related: Vec<Related>,
+) -> ! {
+    record_diagnostic(Diagnostic {
+        filename: filename.to_owned(),
+        span,
+        message,
+        code: code.to_owned(),
+        related,
     });
     std::panic::panic_any(FatalError);
+}
+
+/// Records an error in the active sink and carries on, for an error the
+/// compile can see past: the next argument of the same call, or the next
+/// function once one has failed. Must only be called when
+/// `diagnostics_enabled()`.
+///
+/// The same error recorded twice, which a compile that reaches one body
+/// twice finds, is kept once.
+pub fn record_diagnostic(diagnostic: Diagnostic) {
+    DIAGNOSTIC_SINK.with(|sink| {
+        let mut sink = sink.borrow_mut();
+        if !sink.contains(&diagnostic) {
+            sink.push(diagnostic);
+        }
+    });
 }
 
 /// Runs `f` with a diagnostic sink installed.
@@ -177,30 +218,41 @@ pub fn emit_diagnostic(filename: &str, span: Range<usize>, message: String, code
 /// Returns the [`Diagnostic`] recorded by the first error funnel that fired
 /// while `f` was running (parser, compiler or runtime).
 pub fn collect_diagnostic<R>(f: impl FnOnce() -> R) -> Result<R, Diagnostic> {
+    let (value, mut recorded) = collect_diagnostics(f);
+    match value {
+        Some(value) if recorded.is_empty() => Ok(value),
+        _ if recorded.is_empty() => Err(Diagnostic {
+            filename: String::new(),
+            span: 0..0,
+            message: String::from("unknown error"),
+            code: String::from("unknown"),
+            related: Vec::new(),
+        }),
+        _ => Err(recorded.swap_remove(0)),
+    }
+}
+
+/// [`collect_diagnostic`], keeping every error the run recorded: the one it
+/// stopped at and those it saw past (see [`record_diagnostic`]), in the order
+/// they were found.
+///
+/// The value is `None` when an error stopped the run. A run that saw past
+/// every error it found returns its value beside them.
+pub fn collect_diagnostics<R>(f: impl FnOnce() -> R) -> (Option<R>, Vec<Diagnostic>) {
     enter_silencing_hook();
     let previous_active = SINK_ACTIVE.replace(true);
-    let previous_sink = DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take());
+    let previous_sink = DIAGNOSTIC_SINK.with(|sink| std::mem::take(&mut *sink.borrow_mut()));
     let previous_suppress = SUPPRESS_PANIC_HOOK.replace(true);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    let recorded = DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take());
+    let recorded = DIAGNOSTIC_SINK.with(|sink| std::mem::take(&mut *sink.borrow_mut()));
     DIAGNOSTIC_SINK.with(|sink| *sink.borrow_mut() = previous_sink);
     SINK_ACTIVE.set(previous_active);
     SUPPRESS_PANIC_HOOK.set(previous_suppress);
     leave_silencing_hook();
     match outcome {
-        Ok(value) => Ok(value),
-        Err(payload) => {
-            if payload.is::<FatalError>() {
-                Err(recorded.unwrap_or_else(|| Diagnostic {
-                    filename: String::new(),
-                    span: 0..0,
-                    message: String::from("unknown error"),
-                    code: String::from("unknown"),
-                }))
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        Ok(value) => (Some(value), recorded),
+        Err(payload) if payload.is::<FatalError>() => (None, recorded),
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -575,6 +627,7 @@ impl RuntimeError {
             span,
             message: strip_ansi(self.message.as_str()),
             code: self.code.to_string(),
+            related: Vec::new(),
         }
     }
 
@@ -639,16 +692,80 @@ pub fn throw_compiler_error<'a>(
     message: &str,
     code: &'static str,
 ) -> ! {
+    throw_compiler_error_related(report, sources, file_idx, span, message, code, &[])
+}
+
+/// A place a compile error points at besides its own span: the file, the
+/// span in it and what is there.
+pub type RelatedSpan = (u16, Span, String);
+
+/// [`throw_compiler_error`] with the other places the error is about, which a
+/// [`Diagnostic`] carries as its `related` list. The printed report shows
+/// them as the labels `report` adds.
+#[cold]
+#[inline(never)]
+pub fn throw_compiler_error_related<'a>(
+    report: &dyn Fn() -> Report<'a, (&'a str, core::ops::Range<usize>)>,
+    sources: &'a [Source],
+    file_idx: u16,
+    span: Span,
+    message: &str,
+    code: &'static str,
+    related: &[RelatedSpan],
+) -> ! {
     if diagnostics_enabled() {
-        emit_diagnostic(
+        emit_diagnostic_related(
             sources[file_idx as usize].filename.as_str(),
             (span.start as usize)..(span.end as usize),
             strip_ansi(message),
             code,
+            related_of(sources, related),
         );
     }
-    let report = report();
+    print_report(report(), sources);
+    crash();
+}
 
+/// Reports a compile error and carries on, for an error the compiler can see
+/// past without stopping: into the active sink when there is one, printed
+/// otherwise. A caller that found several errors at once reports all but the
+/// last this way and throws the last.
+#[cold]
+#[inline(never)]
+pub fn report_compiler_error<'a>(
+    report: &dyn Fn() -> Report<'a, (&'a str, core::ops::Range<usize>)>,
+    sources: &'a [Source],
+    file_idx: u16,
+    span: Span,
+    message: &str,
+    code: &'static str,
+    related: &[RelatedSpan],
+) {
+    if diagnostics_enabled() {
+        record_diagnostic(Diagnostic {
+            filename: sources[file_idx as usize].filename.to_string(),
+            span: (span.start as usize)..(span.end as usize),
+            message: strip_ansi(message),
+            code: code.to_owned(),
+            related: related_of(sources, related),
+        });
+        return;
+    }
+    print_report(report(), sources);
+}
+
+fn related_of(sources: &[Source], related: &[RelatedSpan]) -> Vec<Related> {
+    related
+        .iter()
+        .map(|(file, span, message)| Related {
+            filename: sources[*file as usize].filename.to_string(),
+            span: (span.start as usize)..(span.end as usize),
+            message: strip_ansi(message),
+        })
+        .collect()
+}
+
+fn print_report<'a>(report: Report<'a, (&'a str, core::ops::Range<usize>)>, sources: &'a [Source]) {
     let _ = report.write(
         FnCache::new((move |id| Err(format!("Failed to fetch source {id}"))) as fn(&_) -> _)
             .with_sources(
@@ -661,8 +778,6 @@ pub fn throw_compiler_error<'a>(
             ),
         crate::captured_output::stderr(),
     );
-
-    crash();
 }
 
 #[cold]

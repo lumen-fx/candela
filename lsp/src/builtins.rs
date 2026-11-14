@@ -15,10 +15,10 @@ pub const STATEMENT_KEYWORDS: &[&str] = &[
     "try", "catch", "throw", "true", "false", "null", "fn", "as", "is",
 ];
 
-/// Reserved words a top-level declaration starts with. `const` is read by the
+/// Words a top-level declaration starts with. `const` and `export` are read by the
 /// parser as a name in that position rather than lexed as a keyword.
 pub const ITEM_KEYWORDS: &[&str] = &[
-    "fn", "struct", "enum", "impl", "import", "const", "host", "dylib",
+    "fn", "struct", "enum", "impl", "import", "export", "const", "host", "dylib",
 ];
 
 /// Free-standing built-in functions, from

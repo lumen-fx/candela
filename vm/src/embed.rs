@@ -329,16 +329,20 @@ impl HostType {
 /// This is the gate `candela build` applies when it decides which functions get
 /// a host-callable export, and it admits exactly the types
 /// [`value_matches_type`] can check an argument against. A struct is admitted
-/// when every field is, read from `structs`, the program's struct table. Enum
-/// and function parameters are left out: a host has no way to build one.
+/// when every field is, read from `structs`, the program's struct table. A
+/// function parameter is left out, and so is an enum parameter: an enum goes in
+/// only where a struct field or a list element declares its type, as it does
+/// through the compiler's `Program::call`, so a struct whose field is an enum
+/// is admitted.
 #[must_use]
 pub fn is_host_callable_type(ty: &DataType, structs: &[Struct]) -> bool {
-    host_callable_in(ty, structs, &mut Vec::new())
+    host_callable_in(ty, structs, &mut Vec::new(), false)
 }
 
 /// [`is_host_callable_type`], with the structs being checked on the way down:
 /// a struct that holds itself has no finite value a host could build.
-fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> bool {
+/// `inside` is whether `ty` is a field or element rather than the parameter.
+fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>, inside: bool) -> bool {
     match ty {
         DataType::Int
         | DataType::Float
@@ -348,15 +352,17 @@ fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> b
         | DataType::Unknown => true,
         DataType::Array(element) => element
             .as_deref()
-            .is_none_or(|el| host_callable_in(el, structs, open)),
+            .is_none_or(|el| host_callable_in(el, structs, open, true)),
         DataType::Map(kv) => {
             matches!(&kv.0, None | Some(DataType::String))
                 && kv
                     .1
                     .as_ref()
-                    .is_none_or(|v| host_callable_in(v, structs, open))
+                    .is_none_or(|v| host_callable_in(v, structs, open, true))
         }
-        DataType::Union(members) => members.iter().all(|m| host_callable_in(m, structs, open)),
+        DataType::Union(members) => members
+            .iter()
+            .all(|m| host_callable_in(m, structs, open, inside)),
         DataType::Struct(id) => {
             let Some(declared) = structs.get(*id as usize) else {
                 return false;
@@ -368,11 +374,12 @@ fn host_callable_in(ty: &DataType, structs: &[Struct], open: &mut Vec<u16>) -> b
             let callable = declared
                 .fields
                 .iter()
-                .all(|(_, t, _)| host_callable_in(t, structs, open));
+                .all(|(_, t, _)| host_callable_in(t, structs, open, true));
             open.pop();
             callable
         }
-        DataType::Fn(_) | DataType::FnValue(_) | DataType::Enum(_) => false,
+        DataType::Enum(_) => inside,
+        DataType::Fn(_) | DataType::FnValue(_) => false,
     }
 }
 
@@ -481,12 +488,14 @@ fn matches_in(value: &Value, ty: &DataType, structs: &[Struct], enums: &[EnumTyp
             };
             *name == *declared.name
                 && fields.len() == declared.fields.len()
-                && declared.fields.iter().all(|(field, field_ty, _)| {
-                    fields
-                        .iter()
-                        .find(|(n, _)| *n == **field)
-                        .is_some_and(|(_, v)| matches_in(v, field_ty, structs, enums))
-                })
+                && declared
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .all(|(index, (field, field_ty, _))| {
+                        field_value(fields, index, field)
+                            .is_some_and(|v| matches_in(v, field_ty, structs, enums))
+                    })
         }
         // An enum value names its variant; the declared type says which enum,
         // so the variant has to be one of its own, with its payload.
@@ -520,6 +529,16 @@ pub fn struct_id(name: &str, structs: &[Struct]) -> Option<u16> {
         .iter()
         .position(|s| s.name == name)
         .map(|i| i as u16)
+}
+
+/// The value of the struct field named `name`, which the declaration puts at
+/// `index`. A host builds a struct with its fields in declaration order, so
+/// that slot is tried before the others are searched.
+fn field_value<'v>(fields: &'v [(String, Value)], index: usize, name: &str) -> Option<&'v Value> {
+    match fields.get(index) {
+        Some((n, v)) if n == name => Some(v),
+        _ => fields.iter().find(|(n, _)| n == name).map(|(_, v)| v),
+    }
 }
 
 /// The type-erased closure the VM dispatches a `host` call to.
@@ -1222,18 +1241,36 @@ pub fn marshal_args(
 }
 
 /// The declared struct a [`Value::Struct`] is built as: the one named `name`,
-/// when `fields` names exactly its fields.
+/// when `fields` names exactly its fields. `ty` is the type the position
+/// declares; when it is the struct named `name`, that is the one, and the
+/// table is not searched.
 fn declared_struct<'s>(
     name: &str,
     fields: &[(String, Value)],
+    ty: &DataType,
     structs: &'s [Struct],
 ) -> Option<&'s Struct> {
-    let declared = &structs[struct_id(name, structs)? as usize];
-    (declared.fields.len() == fields.len()
-        && declared
+    let declared = match ty {
+        DataType::Struct(id) => structs.get(*id as usize).filter(|s| s.name == name),
+        _ => None,
+    };
+    let declared = match declared {
+        Some(declared) => declared,
+        None => &structs[struct_id(name, structs)? as usize],
+    };
+    let in_order = || {
+        declared
             .fields
             .iter()
-            .all(|(field, _, _)| fields.iter().any(|(n, _)| *n == **field)))
+            .zip(fields)
+            .all(|((field, _, _), (n, _))| *n == **field)
+    };
+    (declared.fields.len() == fields.len()
+        && (in_order()
+            || declared
+                .fields
+                .iter()
+                .all(|(field, _, _)| fields.iter().any(|(n, _)| *n == **field))))
     .then_some(declared)
 }
 
@@ -1254,7 +1291,7 @@ fn shell(
         Value::String(s) => heap.string(s),
         Value::Array(_) => heap.array(),
         Value::Map(_) => heap.map(),
-        Value::Struct { name, fields } => match declared_struct(name, fields, structs) {
+        Value::Struct { name, fields } => match declared_struct(name, fields, ty, structs) {
             Some(declared) => {
                 let id = heap.array().as_array() as u32;
                 Data::struct_instance(declared.id, id)
@@ -1322,8 +1359,8 @@ fn fill(
             let id = d.as_struct();
             let declared = &structs[d.struct_type_id() as usize];
             heap.objs[id].reserve(declared.fields.len());
-            for (field, field_ty, _) in &declared.fields {
-                let Some((_, val)) = fields.iter().find(|(n, _)| *n == **field) else {
+            for (index, (field, field_ty, _)) in declared.fields.iter().enumerate() {
+                let Some(val) = field_value(fields, index, field) else {
                     continue;
                 };
                 let child = shell(heap, val, field_ty, structs, enums);
@@ -1362,37 +1399,93 @@ pub fn unmarshal_value(
     structs: &[Struct],
     enums: &[EnumType],
 ) -> Value {
+    let mut value = Value::Null;
+    unmarshal_into(&mut value, d, objs, maps, strings, structs, enums);
+    value
+}
+
+/// [`unmarshal_value`], written over `out`: afterwards `out` equals what
+/// [`unmarshal_value`] answers for `d`. What `out` already holds is reused
+/// where it has the same shape, so reading a struct back into the value that
+/// was passed in keeps its name and field names rather than building them
+/// again.
+pub fn unmarshal_into(
+    out: &mut Value,
+    d: Data,
+    objs: &ObjectPool,
+    maps: &MapPool,
+    strings: &StringPool,
+    structs: &[Struct],
+    enums: &[EnumType],
+) {
     if d.is_int() {
-        Value::Int(d.as_int())
+        *out = Value::Int(d.as_int());
     } else if d.is_bool() {
-        Value::Bool(d.as_bool())
+        *out = Value::Bool(d.as_bool());
     } else if d.is_string() {
-        Value::String(d.as_str(strings).to_owned())
+        let text = d.as_str(strings);
+        if let Value::String(s) = out {
+            s.clear();
+            s.push_str(text);
+        } else {
+            *out = Value::String(text.to_owned());
+        }
     } else if d.is_null() {
-        Value::Null
+        *out = Value::Null;
     } else if d.is_array() {
-        let items = objs[d.as_array()]
-            .iter()
-            .map(|e| unmarshal_value(*e, objs, maps, strings, structs, enums))
-            .collect();
-        Value::Array(items)
+        let source = &objs[d.as_array()];
+        if let Value::Array(items) = out {
+            items.truncate(source.len());
+            for (item, e) in items.iter_mut().zip(source.iter()) {
+                unmarshal_into(item, *e, objs, maps, strings, structs, enums);
+            }
+            for e in &source[items.len()..] {
+                items.push(unmarshal_value(*e, objs, maps, strings, structs, enums));
+            }
+        } else {
+            *out = Value::Array(
+                source
+                    .iter()
+                    .map(|e| unmarshal_value(*e, objs, maps, strings, structs, enums))
+                    .collect(),
+            );
+        }
     } else if d.is_struct() {
         let declared = &structs[d.struct_type_id() as usize];
         let values = &objs[d.as_struct()];
-        let fields = declared
-            .fields
-            .iter()
-            .zip(values.iter())
-            .map(|((name, _, _), val)| {
-                (
-                    name.to_string(),
-                    unmarshal_value(*val, objs, maps, strings, structs, enums),
-                )
-            })
-            .collect();
-        Value::Struct {
-            name: declared.name.to_string(),
-            fields,
+        let len = declared.fields.len().min(values.len());
+        // The fields are reused when `out` is already this struct, field for
+        // field; anything else is built afresh.
+        match out {
+            Value::Struct { name, fields }
+                if *name == *declared.name
+                    && fields.len() == len
+                    && fields
+                        .iter()
+                        .zip(declared.fields.iter())
+                        .all(|((n, _), (field, _, _))| *n == **field) =>
+            {
+                for ((_, field), val) in fields.iter_mut().zip(values.iter()) {
+                    unmarshal_into(field, *val, objs, maps, strings, structs, enums);
+                }
+            }
+            _ => {
+                let fields = declared
+                    .fields
+                    .iter()
+                    .zip(values.iter())
+                    .map(|((name, _, _), val)| {
+                        (
+                            String::from(name.as_str()),
+                            unmarshal_value(*val, objs, maps, strings, structs, enums),
+                        )
+                    })
+                    .collect();
+                *out = Value::Struct {
+                    name: String::from(declared.name.as_str()),
+                    fields,
+                };
+            }
         }
     } else if d.is_enum() {
         // An enum instance is `[tag, payload...]` in the object pool; the tag
@@ -1400,13 +1493,13 @@ pub fn unmarshal_value(
         let variants = &enums[d.enum_type_id() as usize].variants;
         let entry = &objs[d.as_enum()];
         let tag = entry[0].as_int() as usize;
-        Value::Enum {
-            variant: variants[tag].name.to_string(),
+        *out = Value::Enum {
+            variant: String::from(variants[tag].name.as_str()),
             payload: entry[1..]
                 .iter()
                 .map(|val| unmarshal_value(*val, objs, maps, strings, structs, enums))
                 .collect(),
-        }
+        };
     } else if d.is_map() {
         let record = maps[d.as_map()]
             .iter()
@@ -1418,10 +1511,10 @@ pub fn unmarshal_value(
                 )
             })
             .collect();
-        Value::Map(record)
+        *out = Value::Map(record);
     } else if d.is_float() {
-        Value::Float(d.as_float())
+        *out = Value::Float(d.as_float());
     } else {
-        Value::Null
+        *out = Value::Null;
     }
 }

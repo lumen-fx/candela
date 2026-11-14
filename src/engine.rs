@@ -65,11 +65,13 @@ use candela_vm::embed::describe_value;
 use candela_vm::embed::holds_enum;
 use candela_vm::embed::marshal_args;
 use candela_vm::embed::struct_id;
+use candela_vm::embed::unmarshal_into;
 use candela_vm::embed::unmarshal_value;
 use candela_vm::embed::value_matches_type;
 use candela_vm::errors::Diagnostic;
 use candela_vm::errors::ErrorCtx;
 use candela_vm::errors::collect_diagnostic;
+use candela_vm::errors::collect_diagnostics;
 use candela_vm::instr::Instr;
 use candela_vm::rt::DataType;
 use candela_vm::rt::DynamicLibFn;
@@ -87,6 +89,7 @@ use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 // `Engine::compile` and `Program::call` recover from a compile error by
 // catching the unwind the error funnel raises, so this API exists only under an
@@ -315,21 +318,28 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns the [`Diagnostic`] of the first error: a parse or type error, a
-    /// body that does not compile at its declared parameter types, or a `dylib`
-    /// signature naming a type C cannot represent.
-    pub fn check(&self, src: &str, filename: &str) -> Result<Vec<Diagnostic>, Diagnostic> {
+    /// Returns every error the check found, in the order it found them: parse
+    /// and type errors, bodies that do not compile at their declared parameter
+    /// types, and `dylib` signatures naming a type C cannot represent. The
+    /// check goes on past an error in a function body to the next statement
+    /// and the next function, so one run lists them all; an error outside a
+    /// body, such as a parse error, ends it.
+    pub fn check(&self, src: &str, filename: &str) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
         let resolver = &self.resolver;
-        self.cfg.scope(|| {
+        let (warnings, errors) = self.cfg.scope(|| {
             self.macros.scope(|| {
-                collect_diagnostic(|| {
+                collect_diagnostics(|| {
                     collect_warnings(|| {
                         let _ = check_only(src.to_owned(), filename, resolver);
                     })
                     .1
                 })
             })
-        })
+        });
+        match warnings {
+            Some(warnings) if errors.is_empty() => Ok(warnings),
+            _ => Err(errors),
+        }
     }
 
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
@@ -390,6 +400,7 @@ impl Engine {
                 span: 0..0,
                 message: e.to_string(),
                 code: e.code().to_owned(),
+                related: Vec::new(),
             })?;
 
         let mut program = Program {
@@ -415,9 +426,11 @@ impl Engine {
             generics: out.generics,
             warnings,
             calls: FxHashMap::default(),
+            struct_ids: FxHashMap::default(),
+            arg_types: Vec::new(),
             event_entry: out.event_entry.map(|entry| CompiledCall {
                 start: entry.entry as usize,
-                arg_registers: entry.arg_registers.into_boxed_slice(),
+                arg_registers: Rc::from(entry.arg_registers),
                 ret_register: entry.ret_register,
             }),
             attributes: out.attributes,
@@ -464,8 +477,13 @@ pub struct Program {
     /// The warnings the compile raised, in the order it raised them.
     warnings: Vec<Diagnostic>,
     /// The trampoline compiled for each function and argument types a host
-    /// has called with.
-    calls: FxHashMap<(String, String), CompiledCall>,
+    /// has called with, by function name.
+    calls: FxHashMap<String, Vec<(Box<[DataType]>, CompiledCall)>>,
+    /// The struct id a host value's struct name was last found at, so a call
+    /// does not search the struct table for it again.
+    struct_ids: FxHashMap<SmolStr, u16>,
+    /// The argument types of the call being made, kept to reuse the buffer.
+    arg_types: Vec<DataType>,
     /// The trampoline event handlers run through, when the program imports
     /// `std/event`.
     event_entry: Option<CompiledCall>,
@@ -478,8 +496,9 @@ pub struct Program {
 struct CompiledCall {
     /// Where the trampoline starts.
     start: usize,
-    /// The registers it reads its arguments from, in order.
-    arg_registers: Box<[u16]>,
+    /// The registers it reads its arguments from, in order. Shared, since
+    /// every call hands them back to read the arguments out of.
+    arg_registers: Rc<[u16]>,
     /// The register the call's value lands in.
     ret_register: u16,
 }
@@ -532,7 +551,7 @@ impl Program {
         let call = self.run_call(fn_name, args)?;
         for (arg, &register) in args.iter_mut().zip(call.arg_registers.iter()) {
             if passed_by_reference(arg) {
-                *arg = self.read_register(register);
+                self.read_register_into(register, arg);
             }
         }
         Ok(self.read_register(call.ret_register))
@@ -557,6 +576,20 @@ impl Program {
         )
     }
 
+    /// [`Self::read_register`], written over `out`, which keeps what of it
+    /// has the same shape.
+    fn read_register_into(&self, register: u16, out: &mut Value) {
+        unmarshal_into(
+            out,
+            self.registers[register as usize],
+            &self.pools.objs,
+            &self.pools.maps,
+            &self.pools.strings,
+            &self.structs,
+            &self.enums,
+        );
+    }
+
     /// An argument-type diagnostic for argument `index` of `fn_name`.
     fn argument_error(&self, fn_name: &str, index: usize, why: &str) -> Diagnostic {
         Diagnostic {
@@ -567,6 +600,7 @@ impl Program {
             span: 0..0,
             message: format!("argument {} of '{fn_name}' {why}", index + 1),
             code: String::from("argument_type_mismatch"),
+            related: Vec::new(),
         }
     }
 
@@ -597,11 +631,12 @@ impl Program {
         // A call is compiled once per function and argument types, into a
         // trampoline that reads its arguments from registers of its own, and
         // every later call with the same types writes them and runs it again.
-        // The key renders the types, since `DataType` equality lets an empty
-        // list stand for a list of anything.
-        let mut types: Vec<DataType> = Vec::with_capacity(args.len());
+        // The types are compared with `same_type`, since `DataType` equality
+        // lets an empty list stand for a list of anything.
+        let mut types = std::mem::take(&mut self.arg_types);
+        types.clear();
         for (index, arg) in args.iter().enumerate() {
-            let ty = value_datatype(arg, &self.structs);
+            let ty = value_datatype(arg, &self.structs, &mut self.struct_ids);
             // A struct is built field by field from the declaration it names,
             // so it has to match that declaration before anything is built.
             if (holds_struct(arg) || holds_enum(arg))
@@ -618,8 +653,13 @@ impl Program {
             }
             types.push(ty);
         }
-        let key = (fn_name.to_owned(), format!("{types:?}"));
-        let call = if let Some(call) = self.calls.get(&key) {
+        let compiled = self.calls.get(fn_name).and_then(|calls| {
+            calls
+                .iter()
+                .find(|(key, _)| same_types(key, &types))
+                .map(|(_, call)| call.clone())
+        });
+        let call = if let Some(call) = compiled {
             marshal_args(
                 args,
                 &types,
@@ -629,10 +669,15 @@ impl Program {
                 &self.structs,
                 &self.enums,
             );
-            call.clone()
+            self.arg_types = types;
+            call
         } else {
+            let key: Box<[DataType]> = types.as_slice().into();
             let call = self.compile_call(fn_name, args, types)?;
-            self.calls.insert(key, call.clone());
+            self.calls
+                .entry(fn_name.to_owned())
+                .or_default()
+                .push((key, call.clone()));
             call
         };
 
@@ -666,7 +711,7 @@ impl Program {
             })
             .unwrap_err());
         }
-        let arg_registers: Box<[u16]> = args
+        let arg_registers: Rc<[u16]> = args
             .iter()
             .map(|_| {
                 self.registers.push(NULL);
@@ -876,23 +921,86 @@ impl Program {
 /// and [`Program::call`] refuses an argument holding one before it gets here, so
 /// that arm is what keeps the match exhaustive rather than a type anything is
 /// given.
-fn value_datatype(v: &Value, structs: &[Struct]) -> DataType {
+///
+/// `ids` remembers where each struct name was found. A remembered id is used
+/// only while the struct there still has that name, and struct names are
+/// unique within a program, so it is the id a search would find.
+fn value_datatype(v: &Value, structs: &[Struct], ids: &mut FxHashMap<SmolStr, u16>) -> DataType {
     match v {
         Value::Null | Value::Enum { .. } => DataType::Null,
         Value::Int(_) => DataType::Int,
         Value::Float(_) => DataType::Float,
         Value::Bool(_) => DataType::Bool,
         Value::String(_) => DataType::String,
-        Value::Array(items) => {
-            DataType::Array(items.first().map(|e| Box::new(value_datatype(e, structs))))
-        }
+        Value::Array(items) => DataType::Array(
+            items
+                .first()
+                .map(|e| Box::new(value_datatype(e, structs, ids))),
+        ),
         Value::Map(entries) => {
-            let value = entries.values().next().map(|e| value_datatype(e, structs));
+            let value = entries
+                .values()
+                .next()
+                .map(|e| value_datatype(e, structs, ids));
             DataType::Map(Box::new((Some(DataType::String), value)))
         }
         Value::Struct { name, .. } => {
-            struct_id(name, structs).map_or(DataType::Unknown, DataType::Struct)
+            if let Some(&id) = ids.get(name.as_str())
+                && structs.get(id as usize).is_some_and(|s| s.name == *name)
+            {
+                return DataType::Struct(id);
+            }
+            struct_id(name, structs).map_or(DataType::Unknown, |id| {
+                ids.insert(SmolStr::from(name.as_str()), id);
+                DataType::Struct(id)
+            })
         }
+    }
+}
+
+/// Whether two argument type lists are the same types, exactly: unlike
+/// `DataType` equality, an empty list type is not a list of ints, so each
+/// gets a trampoline of its own.
+fn same_types(a: &[DataType], b: &[DataType]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_type(a, b))
+}
+
+/// [`same_types`] for one type: equal in every part, the way the two would
+/// render.
+fn same_type(a: &DataType, b: &DataType) -> bool {
+    let same_opt = |a: &Option<DataType>, b: &Option<DataType>| match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => same_type(a, b),
+        _ => false,
+    };
+    match (a, b) {
+        (DataType::Array(a), DataType::Array(b)) => match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => same_type(a, b),
+            _ => false,
+        },
+        (DataType::Float, DataType::Float)
+        | (DataType::Int, DataType::Int)
+        | (DataType::Bool, DataType::Bool)
+        | (DataType::String, DataType::String)
+        | (DataType::Null, DataType::Null)
+        | (DataType::Unknown, DataType::Unknown) => true,
+        (DataType::Union(a), DataType::Union(b)) => same_types(a, b),
+        (DataType::Fn(a), DataType::Fn(b))
+        | (DataType::Struct(a), DataType::Struct(b))
+        | (DataType::Enum(a), DataType::Enum(b)) => a == b,
+        (DataType::FnValue(a), DataType::FnValue(b)) => {
+            let same_sig = match (&a.sig, &b.sig) {
+                (None, None) => true,
+                (Some((a_args, a_ret)), Some((b_args, b_ret))) => {
+                    same_types(a_args, b_args) && same_type(a_ret, b_ret)
+                }
+                _ => false,
+            };
+            same_sig && a.candidates == b.candidates && a.set == b.set
+        }
+        (DataType::Map(a), DataType::Map(b)) => same_opt(&a.0, &b.0) && same_opt(&a.1, &b.1),
+        _ => false,
     }
 }
 

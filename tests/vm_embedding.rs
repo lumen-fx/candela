@@ -224,6 +224,55 @@ fn an_enum_argument_is_refused() {
     );
 }
 
+/// An enum goes in where a struct field declares its type, as it does
+/// through `Program::call`: a function taking such a struct is exported, and
+/// the field arrives as the variant the host named.
+#[test]
+fn an_enum_in_a_struct_argument_goes_in() {
+    let src = "
+        enum Shape { Dot, Square }
+        struct Tile { shape: Shape = Shape::Dot, size: int = 1 }
+
+        fn area(t: Tile) -> int {
+            return match t.shape { Shape::Dot => t.size, Shape::Square => t.size * t.size };
+        }
+        fn grow(t: Tile) { t.size = t.size + 1; t.shape = Shape::Square; }
+
+        fn main() {}
+    ";
+    let mut program = load(src, "tiles.cdl", &HostRegistry::new());
+    program.run();
+    assert!(program.exports().any(|name| name == "area"));
+    let tile = |shape: &str, size: i64| Value::Struct {
+        name: "Tile".into(),
+        fields: vec![
+            (
+                "shape".into(),
+                Value::Enum {
+                    variant: shape.into(),
+                    payload: Vec::new(),
+                },
+            ),
+            ("size".into(), Value::Int(size)),
+        ],
+    };
+    assert_eq!(
+        program.call("area", &[tile("Square", 3)]).unwrap(),
+        Value::Int(9)
+    );
+    assert_eq!(
+        program.call("area", &[tile("Dot", 3)]).unwrap(),
+        Value::Int(3)
+    );
+    let mut args = [tile("Dot", 4)];
+    program.call_in_out("grow", &mut args).unwrap();
+    assert_eq!(args[0], tile("Square", 5));
+    match program.call("area", &[tile("Circle", 3)]) {
+        Err(CallError::ArgType { .. }) => {}
+        other => panic!("a variant the enum does not have is refused, got: {other:?}"),
+    }
+}
+
 /// A variadic `host` declaration binds to a variadic closure through the
 /// artifact exactly as it does through `Engine`.
 #[test]
@@ -1397,4 +1446,39 @@ fn call_in_out_hands_back_what_the_function_wrote() {
         program.call_in_out("shift", &mut args).unwrap();
         assert_eq!(args[0], Value::Array(vec![point(f64::from(i) + 1.0, 0.0)]));
     }
+}
+
+/// A host function's parameters take the other number type: an `int` reaches
+/// a `float` parameter as a float, and a `float` reaches an `int` one
+/// truncated toward zero, with a warning at the argument.
+#[test]
+fn host_fn_arguments_convert_between_int_and_float() {
+    let src = r#"
+host "app" {
+    float scale(float);
+    int cells(int);
+}
+
+fn sizes() -> float {
+    return app::scale(500) + float(app::cells(2.9));
+}
+
+fn main() {}
+"#;
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("app", "scale", |x: f64| x / 2.0);
+    hosts.register_host_fn("app", "cells", |n: i64| n * 10);
+    let (bytes, warnings) = collect_warnings(|| {
+        build_bytecode(src.to_owned(), "sizes.cdl", &candela::ImportResolver::new())
+    });
+    let bytes = bytes.expect("source must build to an artifact");
+    let lossy: Vec<&str> = warnings
+        .iter()
+        .filter(|w| w.code == "implicit_float_to_int")
+        .map(|w| &src[w.span.clone()])
+        .collect();
+    assert_eq!(lossy, ["2.9"]);
+    let mut program = load_program(&bytes, &hosts).expect("artifact must load");
+    program.run();
+    assert_eq!(program.call("sizes", &[]).unwrap(), Value::Float(270.0));
 }

@@ -3631,6 +3631,16 @@
           }
         ]
       },
+      "export": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "export",
+            "named": false
+          }
+        ]
+      },
       "items": {
         "multiple": false,
         "required": false,
@@ -7658,6 +7668,10 @@
   {
     "type": "escape_sequence",
     "named": true
+  },
+  {
+    "type": "export",
+    "named": false
   },
   {
     "type": "false",
