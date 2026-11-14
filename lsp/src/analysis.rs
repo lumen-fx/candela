@@ -29,6 +29,9 @@
 //! `name_span` is its name (see `declaring_file`), a heuristic rather than a
 //! compiler-guaranteed invariant.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use candela::check_only;
 use candela::compiler::attributes::{AttrParamTypeExpr, AttrValueExpr, AttributeTargetKind};
 use candela::compiler::compiler_data::Function;
@@ -37,6 +40,7 @@ use candela::compiler::imports::ImportResolver;
 use candela::compiler::type_system::{ANON_FN_PREFIX, TypeExpr};
 use candela::compiler::{CompileOutput, Namespace, SymbolKind};
 use candela::macros::MacroEnv;
+use candela::package_docs;
 use candela::{AttributeTarget, AttributeValue};
 use candela::{Diagnostic, TypeNames, collect_diagnostic, collect_warnings};
 
@@ -49,6 +53,9 @@ pub struct SourceFile {
     pub text: String,
     /// Whether the file is a standard library module.
     pub is_std: bool,
+    /// The `docs` URL template of the package the file belongs to, from the
+    /// nearest `candela.toml` above it.
+    pub docs: Option<String>,
 }
 
 /// A function parameter, with its declared type when it has one.
@@ -87,7 +94,7 @@ pub struct FunctionSymbol {
     pub signatures: Vec<String>,
     /// Index into `ProgramSummary::sources`.
     pub src_file: u16,
-    /// The `//` comment lines written right above the declaration.
+    /// The `///` doc comment written right above the declaration.
     pub doc: String,
     /// Declared with `const NAME: T = expr;`.
     pub is_const: bool,
@@ -132,6 +139,8 @@ impl FunctionSymbol {
 pub struct FieldSymbol {
     pub name: String,
     pub ty: String,
+    /// The `= value` the field is declared with, as written.
+    pub default: Option<String>,
     pub span: Span,
     pub doc: String,
 }
@@ -371,14 +380,26 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
 }
 
 fn build_summary(out: &CompileOutput) -> ProgramSummary {
+    // Files of one package share a manifest; read each directory's once.
+    let mut docs_by_dir: HashMap<PathBuf, Option<String>> = HashMap::new();
     let sources: Vec<SourceFile> = out
         .sources
         .iter()
         .enumerate()
-        .map(|(i, s)| SourceFile {
-            path: s.filename.to_string(),
-            text: s.contents.clone(),
-            is_std: u16::try_from(i).is_ok_and(|i| out.namespaces.is_std(i)),
+        .map(|(i, s)| {
+            let path = Path::new(&*s.filename);
+            let docs = path.parent().and_then(|dir| {
+                docs_by_dir
+                    .entry(dir.to_path_buf())
+                    .or_insert_with(|| package_docs(path))
+                    .clone()
+            });
+            SourceFile {
+                path: s.filename.to_string(),
+                text: s.contents.clone(),
+                is_std: u16::try_from(i).is_ok_and(|i| out.namespaces.is_std(i)),
+                docs,
+            }
         })
         .collect();
 
@@ -398,7 +419,8 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
     let structs = out
         .structs
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(id, s)| {
             let src_file = if s.is_tuple() {
                 None
             } else {
@@ -411,11 +433,13 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                 fields: s
                     .fields
                     .iter()
-                    .map(|(name, ty, span)| {
+                    .enumerate()
+                    .map(|(k, (name, ty, span))| {
                         let span = field_name_span(text, name, *span);
                         FieldSymbol {
                             name: name.to_string(),
                             ty: types.of(ty).to_string(),
+                            default: field_default(out, &sources, id, k),
                             span,
                             doc: own_line_doc(text, span.start as usize),
                         }
@@ -720,6 +744,24 @@ fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -
     }
 }
 
+/// The value field `field` of struct `id` is declared with, as its source
+/// writes it.
+fn field_default(
+    out: &CompileOutput,
+    sources: &[SourceFile],
+    id: usize,
+    field: usize,
+) -> Option<String> {
+    let (file, _, span) = out
+        .generics
+        .struct_default(u16::try_from(id).ok()?, field)?;
+    let text = sources
+        .get(file as usize)?
+        .text
+        .get(span.start as usize..span.end as usize)?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 /// Where a field's name is written. The compiler records the span of the
 /// field's type; the name is the last occurrence of it before that.
 fn field_name_span(text: &str, name: &str, type_span: Span) -> Span {
@@ -747,15 +789,26 @@ fn declaring_file(sources: &[SourceFile], name: &str, span: Span) -> Option<u16>
         .and_then(|i| u16::try_from(i).ok())
 }
 
-/// The `//` comment lines right above the declaration that starts on the line
-/// holding `offset`, without their markers. Attribute lines between the
-/// comment and the declaration are skipped; a blank line ends the comment.
+/// The `///` doc comment right above the declaration that starts on the line
+/// holding `offset`, without its markers. Attribute lines between the comment
+/// and the declaration are skipped; any other line, a blank one or a plain
+/// `//` comment included, ends it.
 #[must_use]
 pub fn doc_above(text: &str, offset: usize) -> String {
     comment_above(text, offset, true)
 }
 
-/// The comment lines above `offset`. With `attributes`, the lines of an
+/// The text of a `///` doc comment line, or `None` for any other line. Four
+/// slashes or more make a plain comment, as a `////` rule line often is.
+fn doc_line(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("///")?;
+    if rest.starts_with('/') {
+        return None;
+    }
+    Some(rest.strip_prefix(' ').unwrap_or(rest).trim_end())
+}
+
+/// The doc comment above `offset`. With `attributes`, the lines of an
 /// attribute written in front of the declaration are stepped over, including
 /// one written across several lines, read bottom up until the line that opens
 /// it with `@`.
@@ -782,8 +835,8 @@ fn comment_above(text: &str, offset: usize, attributes: bool) -> String {
         if in_attribute {
             continue;
         }
-        if let Some(comment) = t.strip_prefix("//") {
-            doc.push(comment.strip_prefix(' ').unwrap_or(comment));
+        if let Some(comment) = doc_line(line) {
+            doc.push(comment);
         } else if attributes
             && doc.is_empty()
             && (t.ends_with(',') || t.ends_with(')') || t.ends_with(']'))
@@ -797,8 +850,8 @@ fn comment_above(text: &str, offset: usize, attributes: bool) -> String {
     doc.join("\n").trim().to_owned()
 }
 
-/// The comment above a member (a field or a variant), which only has one of
-/// its own when the member starts its own line.
+/// The doc comment above a member (a field or a variant), which only has one
+/// of its own when the member starts its own line.
 fn own_line_doc(text: &str, offset: usize) -> String {
     let Some(before) = text.get(..offset) else {
         return String::new();
@@ -809,6 +862,21 @@ fn own_line_doc(text: &str, offset: usize) -> String {
     } else {
         String::new()
     }
+}
+
+/// The first paragraph of a doc comment on one line: the summary a
+/// completion list and a member list show.
+#[must_use]
+pub fn summary(doc: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in doc.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("```") {
+            break;
+        }
+        out.push(t);
+    }
+    out.join(" ")
 }
 
 /// Whether `name` is one the buffer wrote, as opposed to one the compiler made

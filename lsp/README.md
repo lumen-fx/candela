@@ -97,11 +97,18 @@ the current text, so `bird.` completes while the line around it is unfinished.
   `.`, `:` and `@` are trigger characters.
 
 - **Hover.** The declaration under the cursor, written the way it reads in the
-  source, with the `//` comment above it: a function's or method's signature,
-  a struct's fields, an enum's variants, a field's type, an attribute's
-  parameters, and a local's or parameter's type. Types are written the way a
-  compiler error writes them. A function with an unannotated parameter also
-  lists the signatures its call sites gave it.
+  source, with its `///` doc comment rendered as Markdown: a function's or
+  method's signature, a struct's fields with their defaults, an enum's
+  variants, a field's type and default, an attribute's parameters, and a
+  local's or parameter's type. A struct's hover lists each field with the
+  summary line of its doc comment, and an enum's each variant. Types are
+  written the way a compiler error writes them. A function with an
+  unannotated parameter also lists the signatures its call sites gave it.
+  When the package that declares the item names a `docs` URL in its
+  `candela.toml`, the hover ends in an "Open docs" link to the item.
+
+- **Completion documentation.** Each item carries the summary line of its doc
+  comment: the first paragraph.
 
 - **Signature help.** Inside a call's parentheses, the function's or method's
   parameters, with the one being written highlighted; inside `@name(...)`, the
@@ -150,7 +157,7 @@ These are deliberate, and the source refers here for them.
   a well-typed one (expects none), once for hover on a function whose
   parameter is a user enum, and once with a package given in
   `initializationOptions`: completion on a buffer that does not compile,
-  hover, and go-to-definition into the package. A last one changes the
+  hover with the package's docs link, and go-to-definition into the package. A last one changes the
   settings after start-up and checks that the open buffer is checked again,
   then asks for signature help and the outline, saves with an error in the
   imported file, and closes the buffer.
