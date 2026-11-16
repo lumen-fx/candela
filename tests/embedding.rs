@@ -1795,7 +1795,9 @@ fn main() {}
 /// that passed the name to a higher-order function then took it for a function
 /// reference, and the id it carried had since been handed to an unrelated
 /// closure, so `probe` returned that closure's value instead of reporting a
-/// name nothing declares.
+/// name nothing declares. Each of the module's functions takes a parameter
+/// without a type, so the call that reaches it compiles it, as the scenario
+/// needs; `compile` checks the fully annotated ones up front.
 #[test]
 fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
     let dir =
@@ -1811,7 +1813,7 @@ fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
          fn apply(f) {\n    \
              return f(1);\n\
          }\n\
-         fn probe() {\n    \
+         fn probe(lazy) {\n    \
              return apply(sneaky);\n\
          }\n",
     )
@@ -1849,7 +1851,7 @@ fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
     // declares, so looking it up has to fail rather than reach whichever
     // function has landed on that id since.
     assert!(
-        program.call("probe", &[]).is_err(),
+        program.call("probe", &[Value::Null]).is_err(),
         "the aborted call left `sneaky` in the module's scope"
     );
 
@@ -2865,4 +2867,122 @@ fn a_struct_with_its_fields_out_of_order_is_built_by_name() {
         args[0],
         Value::Array(vec![point(1.5, 2.0), point(3.5, 4.0)])
     );
+}
+
+/// A host that gives its error a kind lets a script catch it by that kind,
+/// and the diagnostic carries the kind too.
+#[test]
+fn a_script_catches_a_host_error_by_the_kind_the_host_gave() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("assets", "load", |path: String| {
+        Err::<i64, HostError>(HostError::with_kind(
+            "file_missing",
+            format!("no file {path}"),
+        ))
+    });
+
+    let src = r#"
+host "assets" {
+    int load(string);
+}
+fn tolerant(path: string) -> int {
+    try {
+        return assets::load(path);
+    } catch "file_missing" {
+        return -1;
+    }
+}
+fn strict(path: string) -> int {
+    return assets::load(path);
+}
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "assets.cdl").unwrap();
+    assert_eq!(
+        program.call("tolerant", &["a.png".into()]).unwrap(),
+        Value::Int(-1)
+    );
+    let err = program.call("strict", &["a.png".into()]).unwrap_err();
+    assert_eq!(err.code, "file_missing");
+    assert!(err.message.contains("no file a.png"), "{}", err.message);
+}
+
+/// An error in the body of a function an imported file declares comes back
+/// from `compile`, with its place in that file, not from the first call that
+/// reaches it.
+#[test]
+fn compile_reports_an_error_in_an_imported_function() {
+    let dir = std::env::temp_dir().join(format!(
+        "candela_embed_imported_body_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    std::fs::write(
+        dir.join("systems.cdl"),
+        "fn glow(radius: float) -> float {\n    return radius * glow_scale;\n}\n",
+    )
+    .expect("write module");
+    let entry = dir.join("game.cdl");
+    let err = Engine::new()
+        .compile(
+            "import \"systems.cdl\" { * };\nfn main() {}\n",
+            entry.to_str().expect("utf-8 scratch path"),
+        )
+        .err()
+        .expect("the imported body does not compile");
+    assert!(err.filename.ends_with("systems.cdl"), "{}", err.filename);
+    let src = std::fs::read_to_string(dir.join("systems.cdl")).unwrap();
+    assert_eq!(&src[err.span.clone()], "glow_scale", "{err:?}");
+}
+
+/// An error in a body compiled for a call that gave its untyped parameters
+/// their types names that call too, where the mistake usually is.
+#[test]
+fn an_error_in_an_untyped_body_names_the_call() {
+    let src = "struct Window { width: float }\n\
+               struct Card { scale: float }\n\
+               fn card_width(card, window) {\n    return card.scale * window.width;\n}\n\
+               fn measure(w: Window, c: Card) -> float {\n    return card_width(w, c);\n}\n\
+               fn main() {}\n";
+    let err = Engine::new()
+        .compile(src, "cards.cdl")
+        .err()
+        .expect("swapped arguments do not compile");
+    assert_eq!(err.code, "struct_field_not_defined");
+    assert_eq!(&src[err.span.clone()], "scale");
+    let call = err
+        .related
+        .iter()
+        .find(|r| r.message.contains("card_width is called here"))
+        .unwrap_or_else(|| panic!("the call is named: {err:?}"));
+    assert_eq!(&src[call.span.clone()], "card_width", "{call:?}");
+    assert!(
+        call.message.contains("card: Window") && call.message.contains("window: Card"),
+        "{}",
+        call.message
+    );
+}
+
+/// A run-time error names the calls it was reached through, innermost
+/// first, so a host can point at the caller's line when the error is raised
+/// inside a helper or a library.
+#[test]
+fn a_runtime_error_lists_the_calls_it_came_through() {
+    let src = "fn pick(items: int[], i: int) -> int {\n    return items[i];\n}\n\
+               fn middle(i: int) -> int {\n    return pick([1, 2], i);\n}\n\
+               fn top() -> int {\n    return middle(5);\n}\n\
+               fn main() {}\n";
+    let mut program = Engine::new().compile(src, "calls.cdl").unwrap();
+    let err = program.call("top", &[]).unwrap_err();
+    assert_eq!(err.code, "index_out_of_bounds");
+    assert_eq!(&src[err.span.clone()], "items[i]");
+    let calls: Vec<&str> = err
+        .related
+        .iter()
+        .filter(|r| r.message == "called from here")
+        .map(|r| &src[r.span.clone()])
+        .collect();
+    assert!(calls.len() >= 2, "{err:?}");
+    assert!(calls[0].starts_with("pick"), "{calls:?}");
+    assert!(calls[1].starts_with("middle"), "{calls:?}");
 }

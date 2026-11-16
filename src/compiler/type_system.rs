@@ -3537,6 +3537,9 @@ pub fn infer_user_fn_return_type(
     infered_arg_types: &[DataType],
     type_args: &[DataType],
     function_name: &str,
+    // The call being typed, which an error in the body also names when the
+    // function leaves a parameter without a type.
+    call: Option<Span>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -3639,6 +3642,20 @@ pub fn infer_user_fn_return_type(
 
     // The body is walked whether or not a type is declared: the errors it holds
     // are reported here, in the same order either way.
+    let names: Vec<SmolStr> = fn_args.iter().map(|(n, _)| n.clone()).collect();
+    let _call = call
+        .and_then(|span| {
+            crate::compiler::functions::user_functions::untyped_call_place(
+                function_name,
+                &names,
+                &declared_arg_types,
+                infered_arg_types,
+                span,
+                ctx.file_idx,
+                state,
+            )
+        })
+        .map(candela_vm::RelatedScope::enter);
     state
         .generics
         .push_frame(fn_bindings(fn_id, type_args, state));
@@ -4378,6 +4395,7 @@ impl Expr {
                             &infered_arg_types,
                             &[],
                             &fn_name,
+                            Some(*span),
                             v,
                             ctx,
                             state,
@@ -4406,6 +4424,7 @@ impl Expr {
                         &arg_types,
                         &[],
                         &fn_name,
+                        Some(*span),
                         v,
                         ctx,
                         state,
@@ -4440,6 +4459,7 @@ impl Expr {
                         &infered_arg_types,
                         &call_type_args,
                         &fn_name,
+                        Some(*span),
                         v,
                         ctx,
                         state,
@@ -4492,6 +4512,7 @@ impl Expr {
                         &infered_arg_types,
                         &[],
                         fn_name,
+                        Some(*span),
                         v,
                         ctx,
                         state,
@@ -4522,6 +4543,7 @@ impl Expr {
                         &infered_arg_types,
                         &[],
                         fn_name,
+                        Some(*span),
                         v,
                         ctx,
                         state,
@@ -4534,6 +4556,7 @@ impl Expr {
                         &infered_arg_types,
                         &[],
                         fn_name,
+                        Some(*span),
                         v,
                         ctx,
                         state,
@@ -4605,6 +4628,7 @@ impl Expr {
                             &arg_types,
                             &call_type_args,
                             &mangled,
+                            Some(*fn_span),
                             v,
                             ctx,
                             state,
@@ -4659,6 +4683,7 @@ impl Expr {
                             &arg_types,
                             &call_type_args,
                             &mangled,
+                            Some(*fn_span),
                             v,
                             ctx,
                             state,
@@ -4704,6 +4729,7 @@ impl Expr {
                         &arg_types,
                         &call_type_args,
                         method,
+                        Some(*fn_span),
                         v,
                         ctx,
                         state,
@@ -5138,7 +5164,16 @@ pub fn indirect_return_type(
         .map(|fn_id| {
             let fn_id = fn_id as usize;
             let fn_name = state.fns[fn_id].name.clone();
-            infer_user_fn_return_type(fn_id, &infered_arg_types, &[], &fn_name, v, ctx, state)
+            infer_user_fn_return_type(
+                fn_id,
+                &infered_arg_types,
+                &[],
+                &fn_name,
+                None,
+                v,
+                ctx,
+                state,
+            )
         })
         .collect::<Vec<DataType>>();
     let mut return_types = return_types.into_iter();

@@ -361,12 +361,13 @@ Parses and type-checks the source, binds every `host` function it declares to a
 registered closure, and runs `main` once so top-level setup is done before the
 host makes its first call. The filename is what error reports name.
 
-It also compiles the body of every function in the file you pass whose
-parameters are all annotated, at those declared types, whether or not anything
-calls it. An error in a function `main` never calls comes back from `compile`
-rather than from the first `call`. A function an import brought in is left for
-the call. The check runs before `main`, so a broken body is reported before any
-top-level setup has run.
+It also compiles the body of every function in the file you pass and in the
+files it imports whose parameters are all annotated, at those declared types,
+whether or not anything calls it. An error in a function `main` never calls, or
+in a function of an imported file, comes back from `compile` rather than from
+the first `call` that reaches it. Functions of a library (the standard library,
+a package, an import root) are left for the call. The check runs before `main`,
+so a broken body is reported before any top-level setup has run.
 
 A function with a bare parameter that nothing in the script calls is one the
 host calls, so `compile` warns about each bare parameter and checks the body

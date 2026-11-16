@@ -57,6 +57,7 @@ pub mod captured_output;
 pub use errors::Diagnostic;
 pub use errors::ErrorCtx;
 pub use errors::Related;
+pub use errors::RelatedScope;
 pub use errors::RuntimeError;
 pub use errors::collect_diagnostic;
 pub use errors::collect_diagnostics;

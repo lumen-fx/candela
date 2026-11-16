@@ -444,6 +444,19 @@ pub fn handle_user_function(
             .map(|(a, _)| a.clone())
             .collect::<Vec<SmolStr>>();
         let fn_code: Rc<[Expr]> = Rc::clone(&state.fns[fn_id].code);
+        // A parameter written without a type takes the type of what this
+        // call passes, so an error in the body may be this call's mistake,
+        // such as arguments out of order: the error names the call too.
+        let _call = untyped_call_place(
+            fn_name,
+            &fn_args,
+            &declared_arg_types,
+            &infered_arg_types,
+            span,
+            ctx.file_idx,
+            state,
+        )
+        .map(candela_vm::RelatedScope::enter);
         compile_function(
             output,
             v,
@@ -739,6 +752,42 @@ fn push_type_codes(declared: &DataType, state: &State<'_>, codes: &mut Vec<i64>)
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The call site a body compiled for a call is also about, when the function
+/// leaves a parameter without a type: the call, and the types it gave each such
+/// parameter.
+pub(crate) fn untyped_call_place(
+    fn_name: &str,
+    fn_args: &[SmolStr],
+    declared: &[Option<DataType>],
+    passed: &[DataType],
+    span: Span,
+    file_idx: u16,
+    state: &State<'_>,
+) -> Option<candela_vm::Related> {
+    let types = state.type_names();
+    let bare: Vec<String> = fn_args
+        .iter()
+        .zip(declared)
+        .zip(passed)
+        .filter(|((_, d), _)| d.is_none())
+        .map(|((name, _), ty)| format!("{name}: {}", types.of(ty)))
+        .collect();
+    if bare.is_empty() {
+        return None;
+    }
+    let shown = fn_name
+        .rsplit_once(crate::compiler::expr::METHOD_SEP)
+        .map_or(fn_name, |(_, m)| m);
+    Some(candela_vm::Related {
+        filename: state.sources[file_idx as usize].filename.to_string(),
+        span: span.into(),
+        message: format!(
+            "{shown} is called here with {}; a parameter written without a type takes the type of what the call passes",
+            bare.join(", ")
+        ),
+    })
+}
+
 fn compile_function(
     output: &mut Vec<Instr>,
     v: &mut Vec<Variable>,
@@ -1392,7 +1441,7 @@ pub fn check_declared_fn(
     }
     ensure_indirect_impl(fn_id, params, span, output, v, ctx, state);
     let fn_name = state.fns[fn_id].name.clone();
-    let return_type = infer_user_fn_return_type(fn_id, params, &[], &fn_name, v, ctx, state);
+    let return_type = infer_user_fn_return_type(fn_id, params, &[], &fn_name, None, v, ctx, state);
     if !param_type_matches(declared_return, &return_type, state.generics) {
         let inferred = DataType::FnValue(Box::new(FnValue {
             sig: Some((params.clone(), return_type)),

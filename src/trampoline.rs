@@ -111,7 +111,7 @@ pub fn compile_checked(
     filename: &str,
     resolver: &ImportResolver,
 ) -> (CompileOutput, Vec<ExportImage>) {
-    compile_checked_profile(source, filename, resolver, false)
+    compile_checked_files(source, filename, resolver, false, true)
 }
 
 /// [`compile_checked`] as a check only, which opens no library.
@@ -137,8 +137,27 @@ pub fn compile_checked_profile(
     resolver: &ImportResolver,
     optimize: bool,
 ) -> (CompileOutput, Vec<ExportImage>) {
+    compile_checked_files(source, filename, resolver, optimize, false)
+}
+
+/// [`compile_checked_profile`], checking the annotated functions of every file
+/// of the program, not only the one being built, when `every_file` is set.
+///
+/// A program that keeps the compiler beside it ([`Engine::compile`]
+/// (crate::Engine::compile)) checks them all, so an error in an imported
+/// file's function comes back from the compile instead of from the first call
+/// that reaches it, halfway through a run. A build leaves them to the calls
+/// that reach them, which keeps entry points nothing calls out of the
+/// artifact. Library files are never checked here.
+fn compile_checked_files(
+    source: String,
+    filename: &str,
+    resolver: &ImportResolver,
+    optimize: bool,
+    every_file: bool,
+) -> (CompileOutput, Vec<ExportImage>) {
     let mut out = compile_profile(source, filename, false, resolver, optimize);
-    let exports = compile_entry_points(&mut out);
+    let exports = compile_entry_points(&mut out, every_file);
     let std_files: Vec<bool> = (0..out.sources.len())
         .map(|file| out.namespaces.is_std(file as u16))
         .collect();
@@ -147,7 +166,8 @@ pub fn compile_checked_profile(
 }
 
 /// Compiles the entry point of every fully annotated function in the file being
-/// built, and returns the export table describing the host-callable ones.
+/// built, or with `every_file` in every file of the program, and returns the
+/// export table describing the host-callable ones.
 ///
 /// A function a host would call that leaves a parameter bare gets a warning per
 /// bare parameter and an entry point with those parameters typed `any`. A body
@@ -165,7 +185,7 @@ pub fn compile_checked_profile(
 /// only lists the functions a host `Value` can be marshalled into, so a
 /// function with an enum- or function-typed parameter is compiled here and gets
 /// no entry.
-pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
+pub fn compile_entry_points(out: &mut CompileOutput, every_file: bool) -> Vec<ExportImage> {
     // Register 0 is candela's void-return / null sink: a call whose result is
     // discarded writes `null` there. A normal program has register 0 occupied by
     // a constant, but an empty `main` can leave it free, which would let a
@@ -183,7 +203,7 @@ pub fn compile_entry_points(out: &mut CompileOutput) -> Vec<ExportImage> {
     // the calls that reach them.
     let recover = is_check_only() && diagnostics_enabled() && cfg!(panic = "unwind");
     let mut exports = Vec::new();
-    for (file, name, arg_types) in annotated_functions(out, recover) {
+    for (file, name, arg_types) in annotated_functions(out, recover || every_file) {
         let host_callable = file == 0
             && arg_types
                 .iter()

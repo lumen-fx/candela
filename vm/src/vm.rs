@@ -1288,7 +1288,22 @@ pub fn execute(
     {
         std::panic::resume_unwind(payload);
     }
-    m.failure.map_or(Ok(()), Err)
+    match m.failure.take() {
+        None => Ok(()),
+        Some(mut failure) => {
+            // The frames still stand where the run stopped: each holds the
+            // call it was entered by. A host's call enters through a
+            // trampoline whose call is the host's, not the program's.
+            failure.calls = m
+                .call_frames
+                .iter()
+                .skip(usize::from(start != 0))
+                .filter(|frame| (frame.return_addr as usize) < m.instructions.len())
+                .map(|frame| m.instr_at(frame.return_addr as usize))
+                .collect();
+            Err(failure)
+        }
+    }
 }
 
 /// [`run`] out of line, for a run native code starts. [`execute`] has the
@@ -2558,7 +2573,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                             || format!("#{fn_id}"),
                             |sig| crate::embed::qualified_name(&sig.namespace, &sig.name),
                         );
-                        error_with_catch!(ErrType::HostFn(&function, err.message()));
+                        error_with_catch!(ErrType::HostFn(&function, err.message(), err.kind()));
                     }
                 }
             }

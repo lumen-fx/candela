@@ -56,6 +56,9 @@ pub struct Related {
 struct FatalError;
 
 thread_local! {
+    /// Places every error recorded while they are open is also about,
+    /// innermost last (see [`RelatedScope`]).
+    static RELATED_CONTEXT: RefCell<Vec<Related>> = const { RefCell::new(Vec::new()) };
     static DIAGNOSTIC_SINK: RefCell<Vec<Diagnostic>> = const { RefCell::new(Vec::new()) };
     static SINK_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static SUPPRESS_PANIC_HOOK: Cell<bool> = const { Cell::new(false) };
@@ -182,13 +185,41 @@ pub fn emit_diagnostic_related(
 ///
 /// The same error recorded twice, which a compile that reaches one body
 /// twice finds, is kept once.
-pub fn record_diagnostic(diagnostic: Diagnostic) {
+pub fn record_diagnostic(mut diagnostic: Diagnostic) {
+    RELATED_CONTEXT.with(|context| {
+        for place in context.borrow().iter().rev() {
+            if !diagnostic.related.contains(place) {
+                diagnostic.related.push(place.clone());
+            }
+        }
+    });
     DIAGNOSTIC_SINK.with(|sink| {
         let mut sink = sink.borrow_mut();
         if !sink.contains(&diagnostic) {
             sink.push(diagnostic);
         }
     });
+}
+
+/// A place every error recorded while this lives is also about, such as the
+/// call whose arguments chose the types a function body is being compiled
+/// with: an error inside that body is the caller's as much as the body's.
+/// Scopes nest; an error lists the innermost place first.
+#[must_use = "the place is only attached while the scope lives"]
+pub struct RelatedScope(());
+
+impl RelatedScope {
+    /// Opens a scope that adds `place` to every error recorded inside it.
+    pub fn enter(place: Related) -> Self {
+        RELATED_CONTEXT.with(|context| context.borrow_mut().push(place));
+        Self(())
+    }
+}
+
+impl Drop for RelatedScope {
+    fn drop(&mut self) {
+        RELATED_CONTEXT.with(|context| context.borrow_mut().pop());
+    }
 }
 
 /// Runs `f` with a diagnostic sink installed.
@@ -419,8 +450,9 @@ pub enum ErrType<'a> {
     /// requested one. Carries (requested, found) type names.
     BadDowncast(&'a str, &'static str),
     /// A registered host function returned an error. Carries the name the
-    /// script calls it by and the message the host reported.
-    HostFn(&'a str, &'a str),
+    /// script calls it by, the message the host reported and the kind it
+    /// gave the error (`host_fn_error` unless it named one).
+    HostFn(&'a str, &'a str, &'a str),
     /// A string operation, a join or an ordering comparison, reached a value
     /// that is not a string, which only happens when a value arrived typed as
     /// a string and is not one. Carries the type name it turned out to have.
@@ -471,7 +503,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::UnknownMapKey(key) => format_args!("Unknown key {RED}{BOLD}{key}{RESET}").to_smolstr(),
             ErrType::JsonParse(reason) => format_args!("Invalid JSON: {RED}{BOLD}{reason}{RESET}").to_smolstr(),
             ErrType::BadDowncast(want, got) => format_args!("Cannot read this {RED}{BOLD}{got}{RESET} value as {BLUE}{BOLD}{want}{RESET}").to_smolstr(),
-            ErrType::HostFn(function, message) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
+            ErrType::HostFn(function, message, _) => format_args!("Host function {BLUE}{BOLD}{function}{RESET} failed: {RED}{BOLD}{message}{RESET}").to_smolstr(),
             ErrType::NotAString(got) => format_args!("Cannot use this {RED}{BOLD}{got}{RESET} value as a {BLUE}{BOLD}string{RESET}").to_smolstr(),
             ErrType::CallDepthExceeded(name, limit) => format_args!("The call to {RED}{BOLD}{name}{RESET} stands {BLUE}{BOLD}{limit}{RESET} calls deep, which is the call depth limit").to_smolstr(),
             ErrType::SortWithoutOrder(first, other) if first == other => format_args!("Cannot sort a list of {RED}{BOLD}{first}{RESET} values, which have no order sort knows").to_smolstr(),
@@ -556,7 +588,7 @@ impl ErrType<'_> {
             ErrType::UnknownMapKey(_) => "unknown_map_key",
             ErrType::JsonParse(_) => "json_parse_error",
             ErrType::BadDowncast(_, _) => "bad_downcast",
-            ErrType::HostFn(_, _) => "host_fn_error",
+            ErrType::HostFn(_, _, kind) => kind,
             ErrType::NotAString(_) => "not_a_string",
             ErrType::CallDepthExceeded(_, _) => "call_depth_exceeded",
             ErrType::SortWithoutOrder(_, _) => "sort_without_order",
@@ -579,6 +611,10 @@ pub struct RuntimeError {
     pub code: SmolStr,
     /// The message, with the terminal colors the printed report shows.
     pub message: SmolStr,
+    /// The calls the failing instruction was reached through, outermost
+    /// first: what [`Self::diagnostic`] lists as the places it was called
+    /// from.
+    pub calls: Vec<Instr>,
 }
 
 impl RuntimeError {
@@ -591,6 +627,7 @@ impl RuntimeError {
             instr,
             code,
             message: t.into(),
+            calls: Vec::new(),
         }
     }
 
@@ -622,12 +659,27 @@ impl RuntimeError {
     #[must_use]
     pub fn diagnostic(&self, ctx: &ErrorCtx<'_>) -> Diagnostic {
         let (src, span) = self.place(ctx);
+        // Innermost call first, so the list reads outward from the error.
+        let mut related: Vec<Related> = Vec::new();
+        for call in self.calls.iter().rev() {
+            let Some(at) = ctx.instr_src.iter().find(|s| s.instr == *call) else {
+                continue;
+            };
+            let place = Related {
+                filename: ctx.sources[at.file_id as usize].filename.to_string(),
+                span: (at.span.start as usize)..(at.span.end as usize),
+                message: String::from("called from here"),
+            };
+            if !related.contains(&place) {
+                related.push(place);
+            }
+        }
         Diagnostic {
             filename: src.filename.to_string(),
             span,
             message: strip_ansi(self.message.as_str()),
             code: self.code.to_string(),
-            related: Vec::new(),
+            related,
         }
     }
 

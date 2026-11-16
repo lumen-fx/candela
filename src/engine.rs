@@ -345,13 +345,14 @@ impl Engine {
     /// Compiles `src` into a reusable [`Program`], binding every `host` function
     /// it declares to the matching registered closure.
     ///
-    /// Every function in `src` whose parameters are all annotated is compiled at
-    /// those declared types, whether or not anything calls it, so an error in
-    /// the body of a function `main` never calls comes back from here rather
-    /// than from the first [`Program::call`]. A function with a bare parameter
-    /// that nothing in the script calls is checked with that parameter typed
-    /// `any`, and warned about; the warnings come back on
-    /// [`Program::warnings`]. A function an import brought in stays lazy.
+    /// Every function in `src` and in the files it imports whose parameters are
+    /// all annotated is compiled at those declared types, whether or not
+    /// anything calls it, so an error in the body of a function `main` never
+    /// calls comes back from here rather than from the first
+    /// [`Program::call`]. A function with a bare parameter that nothing in the
+    /// script calls is checked with that parameter typed `any`, and warned
+    /// about; the warnings come back on [`Program::warnings`]. Functions of a
+    /// library (the standard library, a package, an import root) stay lazy.
     ///
     /// `main` is executed once here (module instantiation), so any top-level
     /// setup runs before the host makes its first [`Program::call`]. The

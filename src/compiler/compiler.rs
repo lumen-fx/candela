@@ -1085,7 +1085,7 @@ fn call_user_struct_default(
     let (returned, returned_span) = match state.fns[fn_id].return_type.clone() {
         Some(declared) => declared,
         None => (
-            infer_user_fn_return_type(fn_id, &[], &[], &name, v, ctx, state),
+            infer_user_fn_return_type(fn_id, &[], &[], &name, None, v, ctx, state),
             state.fns[fn_id].name_span,
         ),
     };

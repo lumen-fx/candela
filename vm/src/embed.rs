@@ -549,13 +549,15 @@ pub type HostDispatch = Rc<dyn Fn(&[Value]) -> Result<Value, HostError>>;
 /// A closure returns this in place of a value to raise inside the script that
 /// called it. The VM reports it the way it reports its own runtime failures,
 /// naming the function and pointing at the call, and a script can catch it
-/// under the kind `host_fn_error`.
+/// under the kind `host_fn_error`, or under the kind the host gave it with
+/// [`HostError::with_kind`].
 ///
 /// [`HostError::new`] takes anything that renders, so an error from the work
 /// the closure was doing propagates with `map_err(HostError::new)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostError {
     message: String,
+    kind: Option<String>,
 }
 
 impl HostError {
@@ -563,6 +565,17 @@ impl HostError {
     pub fn new(message: impl fmt::Display) -> Self {
         Self {
             message: message.to_string(),
+            kind: None,
+        }
+    }
+
+    /// Builds an error a script catches as `kind`, such as
+    /// `catch "file_missing"`, in place of `host_fn_error`. The message is
+    /// what the diagnostic reads.
+    pub fn with_kind(kind: impl Into<String>, message: impl fmt::Display) -> Self {
+        Self {
+            message: message.to_string(),
+            kind: Some(kind.into()),
         }
     }
 
@@ -571,19 +584,24 @@ impl HostError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The kind a script catches the error as: the one
+    /// [`HostError::with_kind`] gave, else `host_fn_error`.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        self.kind.as_deref().unwrap_or("host_fn_error")
+    }
 }
 
 impl From<String> for HostError {
     fn from(message: String) -> Self {
-        Self { message }
+        Self::new(message)
     }
 }
 
 impl From<&str> for HostError {
     fn from(message: &str) -> Self {
-        Self {
-            message: message.to_owned(),
-        }
+        Self::new(message)
     }
 }
 

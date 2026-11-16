@@ -648,7 +648,8 @@ pub fn resolve_operator_method(
         (Some(_), OperatorForm::Swapped) => vec![t_r.clone(), t_l.clone()],
         (Some(_), _) => vec![t_l.clone(), t_r.clone()],
     };
-    let return_type = infer_user_fn_return_type(fn_id, &arg_types, &[], &mangled, v, ctx, state);
+    let return_type =
+        infer_user_fn_return_type(fn_id, &arg_types, &[], &mangled, None, v, ctx, state);
     if operator_method_answers_bool(method) && return_type != DataType::Bool {
         cold_path();
         let actual = state.type_names().of(&return_type);
