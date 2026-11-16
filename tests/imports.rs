@@ -1501,6 +1501,49 @@ fn an_export_import_without_items_is_an_error() {
     assert!(stderr.contains("{ * }"), "stderr: {stderr}");
 }
 
+/// `export` in front of anything but an import is an error that shows the
+/// form to write.
+#[test]
+fn export_in_front_of_a_declaration_is_an_error() {
+    let output = check_program(
+        "export_fn",
+        &[("prog.cdl", "export fn f() -> int { return 1; }\n")],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("export goes in front of an import"),
+        "stderr: {stderr}"
+    );
+}
+
+/// A list that names a type passes on the type's methods with it.
+#[test]
+fn an_export_import_list_passes_on_a_named_types_methods() {
+    let output = run_program(
+        "export_type_methods",
+        &[
+            (
+                "shapes.cdl",
+                "struct Vec2 { x: float = 0.0 }\n\
+                 impl Vec2 { fn len(self) -> float { return self.x; } }\n\
+                 fn other() -> int { return 1; }\n",
+            ),
+            ("lib.cdl", "export import \"./shapes.cdl\" { Vec2 };\n"),
+            (
+                "prog.cdl",
+                "import \"lib.cdl\" { * };\nfn main() { print(Vec2 { x: 2.5 }.len()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2.5\n");
+}
+
 /// `export` is a word only in front of `import`, so a function named
 /// `export` still compiles.
 #[test]
