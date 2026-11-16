@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+- The extension warns when the `candela-lsp` it starts is older than itself,
+  naming the file and how to install the matching server, and lists the
+  server's version and path in its output channel.
+- With a `candela-lsp` from the same release: a save runs a package's `check`
+  command once for the open program that holds the saved file rather than
+  once per open file, one check at a time, and the file watcher's report of
+  the same save no longer runs it again. Hover, completion and the outline
+  reuse the last check of a file that has not changed.
+
 ## 0.5.0
 
 - With a `candela-lsp` from the same release: errors show while you type,

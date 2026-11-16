@@ -23,7 +23,9 @@ diagnostic.
 
 The binary speaks LSP over stdin and stdout and expects to be launched by an
 editor (see `../editors/vscode/` for the reference client). It is not meant to
-be run interactively from a terminal.
+be run interactively from a terminal. It reports its version in `initialize`'s
+`serverInfo`; the crate's version is the VS Code extension's, so the extension
+can tell an older server apart.
 
 ## Settings
 
@@ -57,7 +59,9 @@ settings.
 
 Every feature re-analyses the buffer by calling candela's compiler (parse,
 type-check, and codegen, without running `main`, so editing has no script side
-effects) and reads the symbol tables it returns. A per-document cache keeps the
+effects) and reads the symbol tables it returns; a request on a buffer that
+has not changed, nor any file it imports, since its last check reuses that
+check's tables. A per-document cache keeps the
 last successful compile's tables, so the features below keep working while a
 buffer is mid-edit and not yet compiling. What the cursor is on is read from
 the current text, so `bird.` completes while the line around it is unfinished.
@@ -73,7 +77,8 @@ the current text, so `bird.` completes while the line around it is unfinished.
   with the parameter's declaration as related information. A change to a
   buffer checks it and every open buffer whose program reads it again, against
   the text of every open buffer, saved or not; a `.cdl` or `.toml` file
-  changed on disk (`workspace/didChangeWatchedFiles`) does the same. The
+  changed on disk (`workspace/didChangeWatchedFiles`) does the same; a report
+  for a file open in the editor is left to `didSave`. The
   compile is the one `candela check` runs: an error in the body of a function
   `main` never calls is reported here too, as long as that function annotates
   every parameter, and so is one in a function of a file the program imports,
@@ -84,7 +89,9 @@ the current text, so `bird.` completes while the line around it is unfinished.
 - **Package checks.** A package whose `candela.toml` names a `check` command
   (see the candela.toml reference) has it run after a save of an open buffer
   whose program imports the package, from the buffer's directory, with
-  `{file}` filled in as the buffer's path. What it prints as JSON is published
+  `{file}` filled in as the buffer's path. One check runs at a time, and an
+  open buffer that another open program imports gets none of its own: that
+  program's check covers it. What it prints as JSON is published
   beside the compiler's diagnostics, labelled with the package's name, on
   whatever files it names; `src/checks.rs` describes the format. A command that
   does not start, runs past a minute, or prints something else is logged to the
@@ -190,6 +197,9 @@ These are deliberate, and the source refers here for them.
   hover with the package's docs link, and go-to-definition into the package. A last one changes the
   settings after start-up and checks that the open buffer is checked again,
   then asks for signature help and the outline, saves with an error in the
-  imported file, and closes the buffer.
+  imported file, and closes the buffer. Two more check that the server
+  reports the extension's version, and that a save runs a package's check
+  once for the program holding the saved file, not again for the watcher's
+  report of it.
 
 Run both with `cargo test -p candela-lsp`.

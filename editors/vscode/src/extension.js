@@ -5,9 +5,10 @@
 // CommonJS, `require`-ing the prebuilt `vscode-languageclient` package
 // directly instead of importing a TypeScript source tree.
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { workspace } = require('vscode');
+const { window, workspace } = require('vscode');
 const {
   DidChangeConfigurationNotification,
   LanguageClient,
@@ -32,6 +33,59 @@ function resolveServerCommand() {
     return configured;
   }
   return process.platform === 'win32' ? 'candela-lsp.exe' : 'candela-lsp';
+}
+
+/** This extension's version: the `candela-lsp` it needs reports the same. */
+const VERSION = require('../package.json').version;
+
+/** `a` compared with `b`, as dotted version numbers: negative when older. */
+function compareVersions(a, b) {
+  const pa = String(a).split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) {
+      return (pa[i] || 0) - (pb[i] || 0);
+    }
+  }
+  return 0;
+}
+
+/** The file a command runs: itself when it names a path, else its PATH entry. */
+function whichCommand(command) {
+  if (command.includes('/') || command.includes('\\')) {
+    return command;
+  }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    const candidate = path.join(dir, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (_) {
+      // not in this directory
+    }
+  }
+  return command;
+}
+
+/**
+ * Warns when the server that started is older than this extension: an old
+ * server can report only the first error of a file and misread newer
+ * syntax, so what the editor shows would be wrong without saying so.
+ */
+function checkServerVersion(command) {
+  const info = client && client.initializeResult && client.initializeResult.serverInfo;
+  const found = info && info.version ? info.version : '(no version reported)';
+  const where = whichCommand(command);
+  client.outputChannel.appendLine(`candela-lsp ${found} at ${where}`);
+  if (info && info.version && compareVersions(info.version, VERSION) >= 0) {
+    return;
+  }
+  window.showWarningMessage(
+    `Candela: ${where} is candela-lsp ${found}, older than this extension (${VERSION}), ` +
+      'so errors and completions may be missing or wrong. Install the matching server: ' +
+      `cargo install --locked --git https://github.com/lumen-fx/candela candela-lsp, ` +
+      'or point "candela.languageServerPath" at one.',
+  );
 }
 
 /**
@@ -134,9 +188,8 @@ function activate(context) {
     workspace.onDidGrantWorkspaceTrust(sendSettings),
   );
 
-  client.start().then(undefined, (err) => {
-    const vscode = require('vscode');
-    vscode.window.showErrorMessage(
+  client.start().then(() => checkServerVersion(command), (err) => {
+    window.showErrorMessage(
       `Candela: failed to start candela-lsp ("${command}"). Install it or set ` +
         `"candela.languageServerPath" in your settings. (${err && err.message ? err.message : err})`,
     );

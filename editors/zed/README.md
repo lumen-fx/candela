@@ -11,8 +11,9 @@ open the Extensions view, choose "Install Dev Extension", and pick
 `editors/zed`. Zed clones the grammar, compiles it, and builds the extension
 itself, so a Rust toolchain and a C compiler have to be available.
 
-`candela-lsp` has to be on `$PATH`. The toolchain installs it there; to use a
-server you built yourself, point Zed at it in settings:
+`candela-lsp` has to be on `$PATH`. The release does not include it; install
+it with `cargo install --locked --git https://github.com/lumen-fx/candela
+candela-lsp`, or point Zed at a server you built yourself in settings:
 
 ```json
 {
@@ -26,9 +27,7 @@ server you built yourself, point Zed at it in settings:
 }
 ```
 
-Build that server with `cargo build -p candela-lsp`. The release profile
-aborts on panic, which turns the first error in a buffer into a crashed
-server, so use the default profile or the repository's `embed` profile.
+Build that server with `cargo build --release -p candela-lsp`.
 
 ## Grammar
 
