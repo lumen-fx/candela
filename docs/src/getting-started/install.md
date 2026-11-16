@@ -169,8 +169,10 @@ The toolchain installs `candela-lsp`, a language server that runs candela's own
 parser and type checker, so an editor reports the same errors the compiler
 does. On top of diagnostics it gives completion that knows what the cursor is
 on (a value's fields and methods, an enum's variants, a struct literal's
-missing fields, an attribute's parameters and values), hover with the comment
-above a declaration, signature help, go-to-definition, and a document outline.
+missing fields, an attribute's parameters and values), hover with a
+declaration's [doc comment](../language/modules.md#documenting-a-module) and a
+link to its documentation, signature help, go-to-definition, and a document
+outline.
 Every editor below finds it as `candela-lsp` on your path.
 
 Highlighting comes from one of two grammars. VS Code and the IntelliJ-based
