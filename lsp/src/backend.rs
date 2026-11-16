@@ -44,6 +44,10 @@ struct Document {
     /// Counts the changes that asked for a compile, so a compile that
     /// finishes after a newer one was asked for is dropped.
     generation: u64,
+    /// The generation whose text was last compiled. While it equals
+    /// `generation`, nothing the buffer reads has changed since, and a
+    /// request answers from `last_good` instead of compiling again.
+    compiled_generation: u64,
     /// The same for the package checks.
     check_generation: u64,
 }
@@ -180,6 +184,9 @@ struct Inner {
     /// The files diagnostics were last published for with any in them, so a
     /// file whose last one went away is cleared.
     published: Mutex<HashSet<Url>>,
+    /// Held while a package check runs: one runs at a time, and a check
+    /// waiting for it that a newer one replaced by then does not run.
+    checking: tokio::sync::Mutex<()>,
 }
 
 impl Backend {
@@ -192,6 +199,7 @@ impl Backend {
                 settings: RwLock::new(ImportSettings::default()),
                 roots: Mutex::new(HashMap::new()),
                 published: Mutex::new(HashSet::new()),
+                checking: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -238,14 +246,24 @@ impl Inner {
         analysis::analyze(text, &uri_to_path(uri), &self.resolver_for(uri))
     }
 
-    /// Re-analyzes the document's current text. On success, refreshes the
-    /// cached `last_good` summary and returns it; on failure, falls back to
-    /// whatever was last cached (which may be `None` if the document has
-    /// never compiled successfully).
+    /// The summary of the document's current text. When nothing it reads
+    /// changed since its last compile, that compile's summary; otherwise the
+    /// text is compiled again, refreshing the cached `last_good` summary on
+    /// success and falling back to it on failure (`None` if the document
+    /// has never compiled).
     fn current_or_cached_summary(&self, uri: &Url) -> Option<ProgramSummary> {
-        let text = self.doc_text(uri)?;
+        let (text, generation) = {
+            let doc = self.docs.get(uri)?;
+            if doc.compiled_generation == doc.generation {
+                return doc.last_good.clone();
+            }
+            (doc.text.clone(), doc.generation)
+        };
         let outcome = self.analyze(uri, &text);
         let mut doc = self.docs.get_mut(uri)?;
+        if doc.generation == generation {
+            doc.compiled_generation = generation;
+        }
         if let Some(summary) = outcome.summary {
             doc.last_good = Some(summary.clone());
             Some(summary)
@@ -349,11 +367,16 @@ impl Inner {
         };
         // An older text's summary still serves hover and completion while
         // the newer one is being checked.
-        if let Some(summary) = &outcome.summary
-            && let Some(mut doc) = self.docs.get_mut(uri)
-            && (doc.generation == generation || doc.last_good.is_none())
-        {
-            doc.last_good = Some(summary.clone());
+        if let Some(mut doc) = self.docs.get_mut(uri) {
+            let current = doc.generation == generation;
+            if let Some(summary) = &outcome.summary
+                && (current || doc.last_good.is_none())
+            {
+                doc.last_good = Some(summary.clone());
+            }
+            if current {
+                doc.compiled_generation = generation;
+            }
         }
         if self.generation(uri) != Some(generation) {
             return;
@@ -392,18 +415,48 @@ impl Inner {
         self.publish(affected, Some(uri)).await;
     }
 
+    /// Whether another open program reads `uri`'s file while `uri`'s does
+    /// not read that program's: its checks then see all `uri`'s does, so
+    /// running them for `uri` too would only repeat their findings.
+    fn covered(&self, uri: &Url) -> bool {
+        let Some(path) = self.docs.get(uri).map(|d| d.path.clone()) else {
+            return false;
+        };
+        let Ok(roots) = self.roots.lock() else {
+            return false;
+        };
+        let own = roots.get(uri).map(|s| s.files.as_slice()).unwrap_or(&[]);
+        roots.iter().any(|(other, state)| {
+            other != uri
+                && state.files.contains(&path)
+                && self.docs.get(other).is_some_and(|d| !own.contains(&d.path))
+        })
+    }
+
     async fn run_package_checks(self: &Arc<Self>, uri: &Url, generation: u64) {
-        if self.docs.get(uri).map(|d| d.check_generation) != Some(generation)
-            || !self.settings().package_checks
-        {
+        let stale = |inner: &Self| {
+            inner.docs.get(uri).map(|d| d.check_generation) != Some(generation)
+                || !inner.settings().package_checks
+        };
+        if stale(self) {
             return;
         }
-        let checks = self
-            .roots
-            .lock()
-            .ok()
-            .and_then(|roots| roots.get(uri).map(|s| s.checks.clone()))
-            .unwrap_or_default();
+        // One check at a time: a package's check is a program of its own
+        // (`drift check` is a second or more of CPU), and a save of a file
+        // many open programs read asks each of them for one.
+        let _running = self.checking.lock().await;
+        if stale(self) {
+            return;
+        }
+        let checks = if self.covered(uri) {
+            Vec::new()
+        } else {
+            self.roots
+                .lock()
+                .ok()
+                .and_then(|roots| roots.get(uri).map(|s| s.checks.clone()))
+                .unwrap_or_default()
+        };
         let cwd = uri
             .to_file_path()
             .ok()
@@ -802,6 +855,7 @@ impl LanguageServer for Backend {
                 path,
                 last_good: None,
                 generation: 0,
+                compiled_generation: 0,
                 check_generation: 0,
             },
         );
@@ -812,9 +866,13 @@ impl LanguageServer for Backend {
             d.generation
         });
         self.inner.compile(&uri, generation, false).await;
+        // The programs that read the file read the buffer from now on. Their
+        // checks wait a moment, so opening several of their files (a
+        // restored session) checks each once.
+        let delay = self.inner.settings().delay;
         if let Some(path) = self.inner.docs.get(&uri).map(|d| d.path.clone()) {
             for dependent in self.inner.dependents(&path, &uri) {
-                self.inner.schedule_compile(&dependent, Duration::ZERO);
+                self.inner.schedule_compile(&dependent, delay);
             }
         }
         self.inner.schedule_package_checks(&uri, CHECK_DELAY);
@@ -838,6 +896,7 @@ impl LanguageServer for Backend {
                     path,
                     last_good: None,
                     generation: 0,
+                    compiled_generation: 0,
                     check_generation: 0,
                 },
             );
@@ -864,18 +923,29 @@ impl LanguageServer for Backend {
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         // A file changed outside the editor: the programs that read it are
         // checked again, and the package checks of every open program run,
-        // since what they read is theirs to know.
+        // since what they read is theirs to know. A file open in the editor
+        // is left out: the client watches the files it saves too, and
+        // `didSave` has already checked what a save changed.
+        let open: HashSet<PathBuf> = self.inner.docs.iter().map(|d| d.path.clone()).collect();
         let mut compile: HashSet<Url> = HashSet::new();
+        let mut outside = false;
         for change in &params.changes {
             let Ok(path) = change.uri.to_file_path() else {
                 continue;
             };
             let path = canonical(&path);
+            if open.contains(&path) {
+                continue;
+            }
+            outside = true;
             let none = Url::parse("file:///").expect("a URL");
             compile.extend(self.inner.dependents(&path, &none));
         }
         for uri in &compile {
             self.inner.schedule_compile(uri, Duration::ZERO);
+        }
+        if !outside {
+            return;
         }
         let open: Vec<Url> = self.inner.docs.iter().map(|d| d.key().clone()).collect();
         for uri in open {
