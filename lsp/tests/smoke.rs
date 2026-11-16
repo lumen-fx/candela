@@ -952,3 +952,88 @@ async fn a_package_check_runs_after_a_save() {
     std::fs::remove_dir_all(&dir).ok();
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// A package's check runs for the open program that reads the saved file,
+/// not again for each open file that program contains, and the client's
+/// file watcher reporting the same save starts no second run.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_save_runs_the_package_check_once_per_program() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = canonical_dir(&format!("candela_lsp_check_once_{}", std::process::id()));
+    let package = dir.join("engine");
+    std::fs::create_dir_all(package.join("src")).expect("create package");
+    std::fs::write(
+        package.join("src/main.cdl"),
+        "fn speed() -> float { return 1.0; }\n",
+    )
+    .expect("write entry");
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"engine\"\nversion = \"0.1.0\"\ncheck = [\"./check.sh\", \"{file}\"]\n",
+    )
+    .expect("write manifest");
+    // Notes each file it is given, and reports one finding naming it.
+    let runs = dir.join("runs");
+    let script = package.join("check.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$1\" >> '{}'\nprintf '[{{\"file\": \"settings.toml\", \"line\": 1, \"message\": \"checked %s\"}}]' \"$1\"\n",
+            runs.display()
+        ),
+    )
+    .expect("write check");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let part_text =
+        "import \"engine\" { * };\n\nfn twice() -> float {\n    return speed() * 2.0;\n}\n";
+    let game_text = "import \"engine\" { * };\nimport \"part.cdl\" { * };\n\nfn main() {\n    print(twice());\n}\n";
+    let part = dir.join("part.cdl");
+    let game = dir.join("game.cdl");
+    std::fs::write(&part, part_text).expect("write part");
+    std::fs::write(&game, game_text).expect("write game");
+    std::fs::write(dir.join("settings.toml"), "[a]\n").expect("write settings");
+    let part_uri = format!("file://{}", part.display());
+    let game_uri = format!("file://{}", game.display());
+    let settings_uri = format!("file://{}", dir.join("settings.toml").display());
+    let options = json!({ "importRoots": { "engine": package } });
+    let (mut child, mut stdin, mut stdout) =
+        open_files(options, &[(&game_uri, game_text), (&part_uri, part_text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "textDocument/didSave", "params": { "textDocument": { "uri": part_uri } } }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles",
+                 "params": { "changes": [{ "uri": part_uri, "type": 2 }] } }),
+    )
+    .await;
+    let found = diagnostics_for(&mut stdout, &settings_uri, |d| !d.is_empty()).await;
+    assert_eq!(found[0]["message"], format!("checked {}", game.display()));
+    // Long enough for a check scheduled by the watcher event to have run.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let ran = std::fs::read_to_string(&runs).expect("read runs");
+    let lines: Vec<&str> = ran.lines().collect();
+    assert!(
+        !lines.is_empty() && lines.len() <= 2,
+        "the check ran {} times: {lines:?}",
+        lines.len()
+    );
+    assert!(
+        lines.iter().all(|l| *l == game.display().to_string()),
+        "{lines:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// A fresh temporary folder named `name`, by its canonical path (the one
+/// the server names files by).
+fn canonical_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).expect("create dir");
+    dir.canonicalize().expect("canonical dir")
+}
