@@ -15,7 +15,7 @@ artifact path and nothing else, plus `--version` and `--help`.
 
 The full `candela` toolchain runs on this same runtime, so a program behaves the
 same whether run from source or from a `.cdlb`. The goal is to keep the
-standalone binary under 1 MiB.
+standalone binary at about 1 MiB.
 
 ## What a .cdlb holds
 

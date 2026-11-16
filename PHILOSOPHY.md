@@ -14,7 +14,7 @@ one that taxes programs that never use it does not land.
 ## Small footprint
 
 Programs use little memory, and so does the runtime that hosts them. The
-shipping VM stays small enough to embed anywhere; the budget is under 1 MiB.
+shipping VM stays small enough to embed anywhere; the budget is about 1 MiB.
 Values carry no hidden baggage, and the standard library is written in
 candela on a small set of native primitives, so nothing heavy hides under a
 builtin.
