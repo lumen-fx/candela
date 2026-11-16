@@ -75,11 +75,21 @@ attribution details.
 
 This extension launches `candela-lsp` (a separate crate at `../../lsp/`
 in this repo) as a subprocess over stdio, the same transport every LSP client
-uses. It looks for a `candela-lsp` (or `candela-lsp.exe` on Windows) binary on
-`PATH` by default; set `candela.languageServerPath` in your settings to point
-at a specific binary instead (for example, one built locally with
-`cargo build -p candela-lsp` from the repo root; see that crate's README for why
-to avoid `--release`).
+uses. The extension does not include the server. Install the one that matches
+it:
+
+```sh
+cargo install --locked --git https://github.com/lumen-fx/candela candela-lsp
+```
+
+That puts `candela-lsp` (or `candela-lsp.exe` on Windows) on `PATH`, where the
+extension looks by default; set `candela.languageServerPath` to use a specific
+binary instead, such as one built with `cargo build --release -p candela-lsp`
+from the repo root. The server reports its version, the extension's own: when
+it is older, the extension says so and names the file it started, since an
+old server can show only the first error of a file or misread newer syntax.
+The Output panel's "Candela Language Server" channel lists the version and
+path of the server running.
 
 A script that imports a package no manifest lists, such as the module a host
 program ships (`import "engine" { * };`), needs the server to know where it

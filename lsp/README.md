@@ -23,7 +23,9 @@ diagnostic.
 
 The binary speaks LSP over stdin and stdout and expects to be launched by an
 editor (see `../editors/vscode/` for the reference client). It is not meant to
-be run interactively from a terminal.
+be run interactively from a terminal. It reports its version in `initialize`'s
+`serverInfo`; the crate's version is the VS Code extension's, so the extension
+can tell an older server apart.
 
 ## Settings
 
@@ -195,8 +197,9 @@ These are deliberate, and the source refers here for them.
   hover with the package's docs link, and go-to-definition into the package. A last one changes the
   settings after start-up and checks that the open buffer is checked again,
   then asks for signature help and the outline, saves with an error in the
-  imported file, and closes the buffer. Another checks that a save
-  runs a package's check once for the program holding the saved file, not
-  again for the watcher's report of it.
+  imported file, and closes the buffer. Two more check that the server
+  reports the extension's version, and that a save runs a package's check
+  once for the program holding the saved file, not again for the watcher's
+  report of it.
 
 Run both with `cargo test -p candela-lsp`.
