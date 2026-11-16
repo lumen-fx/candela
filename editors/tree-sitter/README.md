@@ -27,7 +27,8 @@ checkout instead of fetching it), `grammar_url` and `grammar_revision` (where
 and what to fetch, tracking the default branch by default), `server_path`
 (absolute path to `candela-lsp`), and `treesitter`/`lsp` toggles to skip
 either half. With `server_path` unset the server is found the way the VS Code
-extension finds it: `candela-lsp` on `$PATH`, where the toolchain installs it.
+extension finds it: `candela-lsp` on `$PATH` (`cargo install --locked --git
+https://github.com/lumen-fx/candela candela-lsp` puts it there).
 
 On the `nvim-treesitter` main branch the queries install with the parser; on
 master, copy them yourself:
