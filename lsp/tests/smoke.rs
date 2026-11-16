@@ -953,6 +953,29 @@ async fn a_package_check_runs_after_a_save() {
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
 
+/// The server reports the version of the VS Code extension it ships with,
+/// which the extension compares to its own to warn about an old server.
+#[tokio::test]
+async fn the_server_reports_the_extension_version() {
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../editors/vscode/package.json")).expect("json");
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} }
+        }),
+    )
+    .await;
+    let init = response(&mut stdout, 1).await;
+    assert_eq!(
+        init["result"]["serverInfo"]["version"], manifest["version"],
+        "bump lsp/Cargo.toml and editors/vscode/package.json together"
+    );
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
 /// A package's check runs for the open program that reads the saved file,
 /// not again for each open file that program contains, and the client's
 /// file watcher reporting the same save starts no second run.
