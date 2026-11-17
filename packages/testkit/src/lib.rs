@@ -10,9 +10,10 @@
 //! records each call, so a test reads what the handlers saw as a list of
 //! strings.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use candela::Engine;
@@ -45,14 +46,30 @@ fn nested_target_dir() -> PathBuf {
 /// `candela-<name>`, and answers where it landed.
 ///
 /// A workspace test run does not promise to have built another member's
-/// cdylib before the tests start, so each test builds what it loads. A warm
-/// tree makes this a no-op check.
+/// cdylib before the tests start, so the first test that loads a library
+/// builds it. Later tests in the process reuse that build: a second cargo
+/// run replaces the library file, and a test reading it meanwhile finds
+/// nothing there.
 ///
 /// # Panics
 ///
 /// When the build fails.
 #[must_use]
 pub fn build_library(name: &str) -> PathBuf {
+    static BUILT: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let mut built = BUILT
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(path) = built.get(name) {
+        return path.clone();
+    }
+    let path = build_once(name);
+    built.insert(name.to_owned(), path.clone());
+    path
+}
+
+fn build_once(name: &str) -> PathBuf {
     let target = nested_target_dir();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
