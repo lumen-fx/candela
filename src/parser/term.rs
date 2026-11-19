@@ -10,9 +10,11 @@ use super::parser_expr::PREFIX_PRECEDENCE;
 use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
+use crate::compiler::expr::PatternLet;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::StructRest;
 use crate::compiler::expr::tuple_literal;
+use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
@@ -27,6 +29,7 @@ use crate::parser::extend_namespace;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
 use crate::parser::parse_type_args;
+use crate::parser::pattern::parse_pattern;
 use crate::parser::type_args_ahead;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -474,24 +477,43 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 "Function arguments must be delimited by parentheses",
             );
             let mut args: Vec<SmolStr> = Vec::with_capacity(2);
-            // let mut args: Vec<(SmolStr, SmolStr)> = Vec::with_capacity(2);
+            let mut lets: Vec<Expr> = Vec::new();
             // `fn()` takes nothing, the empty list a declaration accepts too.
-            // The names are read only once there is one to read.
+            // The names are read only once there is one to read. A parameter
+            // written as a pattern takes the argument under a name no program
+            // can write, and the body opens with the `let` that takes it
+            // apart.
             while parser.peek_token() != Token::RParen {
-                let (next_token, next_token_span) = parser.next_token();
-                let Token::Identifier(arg_name) = next_token else {
-                    cold_path();
-                    parser.error(
-                        next_token_span,
-                        ParserErr::UnexpectedToken(Token::Identifier(""), next_token, ""),
-                    );
+                // A name alone binds, whatever its case.
+                let plain_name = matches!(parser.peek_token(), Token::Identifier(name) if name != "_")
+                    && parser
+                        .input
+                        .clone()
+                        .nth(1)
+                        .is_some_and(|(t, _)| matches!(t, Ok(Token::Comma | Token::RParen)));
+                let pattern = if plain_name {
+                    let (Token::Identifier(name), span) = parser.next_token() else {
+                        unreachable!()
+                    };
+                    Pattern::Bind(SmolStr::new(name), span)
+                } else {
+                    parse_pattern(parser, true)
                 };
-                // parser.next_token_expect(
-                //     Token::Colon,
-                //     "Argument names and types must be separated by a colon",
-                // );
-                // let arg_type = parse_type(parser);
-                args.push(SmolStr::new(arg_name));
+                match pattern {
+                    Pattern::Bind(name, _) => args.push(name),
+                    pattern => {
+                        let span = pattern.span();
+                        let name = SmolStr::from(format!("[param {}]", args.len()));
+                        lets.push(Expr::LetPattern(Box::new(PatternLet {
+                            pattern,
+                            value: Expr::Var(name.clone(), span),
+                            annotation: None,
+                            otherwise: None,
+                            span,
+                        })));
+                        args.push(name);
+                    }
+                }
                 if parser.peek_token() != Token::Comma {
                     break;
                 }
@@ -515,6 +537,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             //     )
             // } else
             if matches!(next_token, Some(Token::LBrace | Token::FatArrow)) {
+                parser.param_lets = lets;
                 let fn_code = parse_fn_body(parser, false);
                 Expr::AnonymousFunction(
                     Box::from(args),

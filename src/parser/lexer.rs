@@ -208,6 +208,9 @@ pub enum Token<'a> {
     Ellipsis,
     #[token("..")]
     RangeDot,
+    /// `..=`, a range that holds its high end.
+    #[token("..=")]
+    RangeDotEq,
     #[token(".")]
     Dot,
     #[token("::")]

@@ -118,6 +118,26 @@
 (enum_variant
   name: (identifier) @constructor)
 
+; Patterns: a variant with its payload, a struct or variant taken apart by
+; field, and a capitalised name alone, which names a variant or a constant
+; where a lowercase one binds.
+(variant_pattern
+  variant: (type_identifier) @constructor)
+
+(variant_pattern
+  variant: (qualified_type
+    name: (type_identifier) @constructor))
+
+(struct_pattern
+  name: (type_identifier) @type)
+
+(field_pattern
+  name: (identifier) @variable.member)
+
+((match_pattern
+  (identifier) @constructor)
+  (#match? @constructor "^[A-Z]"))
+
 ; Functions
 
 (function_declaration

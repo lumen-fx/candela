@@ -3031,12 +3031,20 @@ pub fn collect_direct_fn_calls(
             }
             Expr::Match(scrutinee, arms, wildcard, _, _) => {
                 expr_stack.push(scrutinee);
-                for (patterns, body) in arms {
-                    expr_stack.extend(patterns.iter());
-                    expr_stack.extend(body.iter());
+                for arm in arms {
+                    expr_stack.extend(arm.pattern.reads());
+                    expr_stack.extend(arm.guard.iter());
+                    expr_stack.extend(arm.body.iter());
                 }
                 if let Some(w) = wildcard {
                     expr_stack.extend(w.iter());
+                }
+            }
+            Expr::LetPattern(pattern_let) => {
+                expr_stack.push(&pattern_let.value);
+                expr_stack.extend(pattern_let.pattern.reads());
+                if let Some(otherwise) = &pattern_let.otherwise {
+                    expr_stack.extend(otherwise.iter());
                 }
             }
             Expr::ArrayGetIndex(x, y, _) => {
@@ -3119,11 +3127,16 @@ fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
                 collect_return_shapes(catch_code, shapes);
             }
             Expr::Match(_, arms, wildcard, _, _) => {
-                for (_, body) in arms {
-                    collect_return_shapes(body, shapes);
+                for arm in arms {
+                    collect_return_shapes(&arm.body, shapes);
                 }
                 if let Some(w) = wildcard {
                     collect_return_shapes(w, shapes);
+                }
+            }
+            Expr::LetPattern(pattern_let) => {
+                if let Some(otherwise) = &pattern_let.otherwise {
+                    collect_return_shapes(otherwise, shapes);
                 }
             }
             Expr::ReturnVal(value) => {
@@ -3630,59 +3643,49 @@ fn track_return_flow(
                     pin_empty_literal_bindings(args, &declared, v);
                 }
             }
-            Expr::Match(scrutinee, arms, wildcard, span, _) => {
+            Expr::Match(scrutinee, arms, wildcard, _, _) => {
                 let scrut_type = scrutinee.infer_type(v, ctx, state);
-                let is_enum = matches!(scrut_type, DataType::Enum(_));
-                if !is_enum {
-                    crate::compiler::check_match_scrutinee_is_enum(
-                        &scrut_type,
-                        arms,
-                        *span,
-                        v,
-                        ctx,
-                        state,
-                    );
-                }
+                let resolved =
+                    crate::compiler::patterns::resolve_arms(arms, &scrut_type, ctx, state);
                 let mut all_return = true;
-                for (patterns, body) in arms {
+                for (arm, resolved) in arms.iter().zip(&resolved) {
                     let v_len = v.len();
-                    if let DataType::Enum(enum_id) = scrut_type {
-                        crate::compiler::declare_arm_bindings(
-                            enum_id, patterns, *span, v, ctx, state,
-                        );
-                    } else {
-                        crate::compiler::declare_tuple_arm_bindings(
-                            &scrut_type,
-                            patterns,
-                            *span,
-                            v,
-                            ctx,
-                            state,
-                        );
+                    declare_resolved(resolved, v);
+                    if let Some(guard) = &arm.guard {
+                        crate::compiler::type_test::declare_condition_facts(guard, v, ctx, state);
                     }
-                    let flow = track_return_flow(body, v, ctx, state, fn_name);
+                    let flow = track_return_flow(&arm.body, v, ctx, state, fn_name);
                     v.truncate(v_len);
                     all_return &= flow.always_returns;
                     extend_return_types!(&mut return_types, flow.types, ctx, state);
                 }
-                let exhaustive = if wildcard.is_some() {
-                    if let Some(w) = wildcard {
-                        let flow = track_scoped_returns(w, v, ctx, state, fn_name);
-                        all_return &= flow.always_returns;
-                        extend_return_types!(&mut return_types, flow.types, ctx, state);
-                    }
-                    true
-                } else {
-                    // An enum match with no wildcard is compile-time exhaustive,
-                    // and so is one whose last arm is a tuple pattern of names.
-                    is_enum || crate::compiler::match_ends_irrefutable(arms)
-                };
+                if let Some(w) = wildcard {
+                    let flow = track_scoped_returns(w, v, ctx, state, fn_name);
+                    all_return &= flow.always_returns;
+                    extend_return_types!(&mut return_types, flow.types, ctx, state);
+                }
+                let exhaustive = crate::compiler::patterns::arms_cover(
+                    &scrut_type,
+                    arms,
+                    &resolved,
+                    wildcard.is_some(),
+                    state,
+                );
                 if exhaustive && all_return {
                     return FnReturnFlow {
                         types: return_types,
                         always_returns: true,
                     };
                 }
+            }
+            // What a pattern `let` binds is in scope for the rest of the body;
+            // its `else` block is a path that leaves.
+            Expr::LetPattern(pattern_let) => {
+                if let Some(otherwise) = &pattern_let.otherwise {
+                    let flow = track_scoped_returns(otherwise, v, ctx, state, fn_name);
+                    extend_return_types!(&mut return_types, flow.types, ctx, state);
+                }
+                declare_pattern_let(pattern_let, v, ctx, state);
             }
             // A try block and its catch are two paths out of the statement,
             // and the function returns on every path when both do. The catch
@@ -3763,9 +3766,13 @@ fn statement_breaks(expr: &Expr) -> bool {
             block_breaks(try_code) || block_breaks(catch_code)
         }
         Expr::Match(_, arms, wildcard, _, _) => {
-            arms.iter().any(|(_, body)| block_breaks(body))
+            arms.iter().any(|arm| block_breaks(&arm.body))
                 || wildcard.as_ref().is_some_and(|w| block_breaks(w))
         }
+        Expr::LetPattern(pattern_let) => pattern_let
+            .otherwise
+            .as_ref()
+            .is_some_and(|otherwise| block_breaks(otherwise)),
         _ => false,
     }
 }
@@ -4282,7 +4289,7 @@ impl Expr {
             Self::Bool(_) | Self::Eq(..) | Self::NotEq(..) => DataType::Bool,
             // A statement match has no value. One used as a value has the
             // type its arms give, each read with the names its pattern binds.
-            Self::Null | Self::Match(_, _, _, _, false) => DataType::Null,
+            Self::Null | Self::Match(_, _, _, _, false) | Self::LetPattern(_) => DataType::Null,
             Self::Array(x, _) => DataType::Array(if x.is_empty() {
                 None
             } else {
@@ -5072,26 +5079,18 @@ impl Expr {
                     ),
                 }
             }
-            Self::Match(scrutinee, arms, wildcard, span, true) => {
+            Self::Match(scrutinee, arms, wildcard, _, true) => {
                 let scrut_type = scrutinee.infer_type(v, ctx, state);
                 let mut types: Vec<Option<DataType>> = Vec::with_capacity(arms.len() + 1);
-                for (patterns, body) in arms {
+                for arm in arms {
                     let v_len = v.len();
-                    if let DataType::Enum(enum_id) = scrut_type {
-                        crate::compiler::declare_arm_bindings(
-                            enum_id, patterns, *span, v, ctx, state,
-                        );
-                    } else {
-                        crate::compiler::declare_tuple_arm_bindings(
-                            &scrut_type,
-                            patterns,
-                            *span,
-                            v,
-                            ctx,
-                            state,
-                        );
+                    let resolved =
+                        crate::compiler::patterns::resolve(&arm.pattern, &scrut_type, ctx, state);
+                    declare_resolved(&resolved, v);
+                    if let Some(guard) = &arm.guard {
+                        crate::compiler::type_test::declare_condition_facts(guard, v, ctx, state);
                     }
-                    types.push(inline_branch_type(body, v, ctx, state));
+                    types.push(inline_branch_type(&arm.body, v, ctx, state));
                     v.truncate(v_len);
                 }
                 if let Some(w) = wildcard {
@@ -5268,6 +5267,9 @@ pub(crate) fn inline_branch_type(
     let (last, declarations) = branch.split_last()?;
     let v_len = v.len();
     for declaration in declarations {
+        if let Expr::LetPattern(pattern_let) = declaration {
+            declare_pattern_let(pattern_let, v, ctx, state);
+        }
         if let Expr::VarDeclare(name, value, annotation) = declaration {
             let declared = annotation
                 .as_ref()
@@ -5465,4 +5467,33 @@ pub fn indirect_return_type(
             DataType::Union(all).check_poly()
         }
     }
+}
+
+/// Declares, for a walk that types code without compiling it, the names a
+/// resolved pattern binds.
+fn declare_resolved(resolved: &crate::compiler::patterns::Resolved, v: &mut Vec<Variable>) {
+    for (name, var_type) in resolved.bindings() {
+        v.push(Variable {
+            declared: None,
+            name,
+            register_id: 0,
+            cell: false,
+            var_type,
+        });
+    }
+}
+
+/// Declares what a pattern `let` binds, for a walk that types code without
+/// compiling it.
+fn declare_pattern_let(
+    pattern_let: &crate::compiler::expr::PatternLet,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) {
+    let value_type = match &pattern_let.annotation {
+        Some(a) => a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)),
+        None => pattern_let.value.infer_type(v, ctx, state),
+    };
+    crate::compiler::patterns::declare_bindings(&pattern_let.pattern, &value_type, v, ctx, state);
 }

@@ -21,6 +21,11 @@ use super::compiler_errors;
 use super::expr::Expr;
 use super::expr::IsTarget;
 use super::expr::Span;
+use super::patterns;
+use super::patterns::Pattern;
+use super::patterns::Payload;
+use super::patterns::Resolved;
+use super::set_jmp_size;
 use super::type_system::DataType;
 use super::type_system::Generics;
 use super::type_system::TypeExpr;
@@ -131,13 +136,8 @@ const fn both(a: Settled, b: Settled) -> Settled {
 pub enum Test {
     /// A type test.
     Type(DataType),
-    /// A variant test on a value of the enum `enum_id`, with one binder per
-    /// payload position (`_` for one that binds nothing).
-    Variant {
-        enum_id: u16,
-        variant_idx: u16,
-        binders: Vec<SmolStr>,
-    },
+    /// A pattern, resolved against the operand's type.
+    Pattern(Resolved),
 }
 
 /// Resolves the right side of `operand is target`, `operand_type` being the
@@ -155,30 +155,30 @@ pub fn resolve_test(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Test {
+    let named = |path: &[SmolStr], span: Span| Pattern::Named {
+        path: Box::from(path),
+        type_args: Box::from([]),
+        payload: Payload::None,
+        span,
+    };
     let pattern = match target {
-        IsTarget::Variant(pattern) => pattern.clone(),
+        IsTarget::Pattern(pattern) => pattern.clone(),
         IsTarget::Type(TypeExpr::Identifier(name, span))
             if names_variant(operand_type, std::slice::from_ref(name), *span, ctx, state) =>
         {
-            Expr::Var(name.clone(), *span)
+            named(std::slice::from_ref(name), *span)
         }
         IsTarget::Type(TypeExpr::NamespacedIdentifier(path, span))
             if names_variant(operand_type, path, *span, ctx, state) =>
         {
-            Expr::NamespacedRef(path.clone(), *span, Box::from([]))
+            named(path, *span)
         }
         IsTarget::Type(t) => return Test::Type(resolve_type(t, target_span, ctx, state)),
     };
-    let DataType::Enum(enum_id) = *operand_type else {
+    if !matches!(operand_type, DataType::Enum(_) | DataType::Struct(_)) {
         error_variant_test_not_enum(operand_type, operand_span, target_span, ctx, state);
-    };
-    let (variant_idx, binders) =
-        super::resolve_variant_pattern(enum_id, &pattern, target_span, ctx, state);
-    Test::Variant {
-        enum_id,
-        variant_idx,
-        binders,
     }
+    Test::Pattern(patterns::resolve(&pattern, operand_type, ctx, state))
 }
 
 /// Whether `path`, written where a type goes after `is`, names a variant
@@ -549,55 +549,105 @@ pub fn compile_is(
             push_narrowed(operand, want, want_facts, v, &mut facts);
             (dest, facts)
         }
-        Test::Variant {
-            enum_id,
-            variant_idx,
-            binders,
-        } => {
-            let scrut = operand
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            let tag = state.alloc_reg();
-            output.push(Instr::GetFieldStruct(scrut, 0, tag));
-            let idx = state.alloc_reg();
-            output.push(Instr::SetInt(idx, i32::from(variant_idx)));
-            state.free_reg(tag, v);
-            state.free_reg(idx, v);
+        Test::Pattern(resolved) => {
+            let (fails, mut pattern_facts) =
+                compile_pattern_test(operand, &have, &resolved, want_facts, v, ctx, state, output);
             let dest = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::Eq(tag, idx, dest));
+            let yes = state.const_register(Data::bool(true));
+            output.push(Instr::Mov(yes, dest));
+            if !fails.is_empty() {
+                output.push(Instr::Jmp(2));
+                let no_at = output.len();
+                for j in fails {
+                    set_jmp_size(&mut output[j], (no_at - j) as u16);
+                }
+                let no = state.const_register(Data::bool(false));
+                output.push(Instr::Mov(no, dest));
+            }
             if !want_facts {
-                state.free_reg(scrut, v);
+                for temp in pattern_facts.temps.drain(..) {
+                    state.free_reg(temp, v);
+                }
                 return (dest, facts);
             }
-            let payload = state.enums[enum_id as usize].variants[variant_idx as usize]
-                .payload
-                .clone();
-            for (i, (binder, var_type)) in binders.iter().zip(payload).enumerate() {
-                if binder.as_str() == "_" {
-                    continue;
-                }
-                let field = (i + 1) as u16;
-                let value = state.alloc_reg();
-                facts.reads.push(Instr::GetFieldStruct(scrut, field, value));
-                let captured = state.captured_binders.contains(binder);
-                let register_id = if captured {
-                    let cell = state.alloc_reg();
-                    facts.reads.push(Instr::NewCell(value, cell));
-                    cell
-                } else {
-                    value
-                };
-                facts.vars.push(Variable {
-                    declared: None,
-                    name: binder.clone(),
-                    register_id,
-                    cell: captured,
-                    var_type,
-                });
-            }
-            facts.temps.push(scrut);
-            (dest, facts)
+            (dest, pattern_facts)
         }
+    }
+}
+
+/// Compiles the operand of an `is` with a pattern and the pattern's tests,
+/// returning the jumps taken when it does not fit and what it binds where it
+/// does.
+#[allow(clippy::too_many_arguments)]
+fn compile_pattern_test(
+    operand: &Expr,
+    have: &DataType,
+    resolved: &Resolved,
+    want_facts: bool,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> (Vec<usize>, Facts) {
+    let scrut = operand
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    let v_len = v.len();
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static("[IS OPERAND]"),
+        register_id: scrut,
+        cell: false,
+        var_type: have.clone(),
+    });
+    let captured = state.captured_binders.clone();
+    let mut compiled = patterns::Compiled::default();
+    patterns::compile(
+        resolved,
+        scrut,
+        have,
+        false,
+        &captured,
+        &[],
+        &mut compiled,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    v.truncate(v_len);
+    let mut facts = Facts::default();
+    if want_facts {
+        facts.vars = compiled.binds;
+    } else {
+        for bound in compiled.binds {
+            state.free_reg(bound.register_id, v);
+        }
+    }
+    facts.temps.push(scrut);
+    (compiled.fails, facts)
+}
+
+/// `operand is pattern` where it guards code: the jumps taken when the
+/// pattern does not fit, and what it binds for the code it guards. `None`
+/// where the target is a type, which compiles to a bool.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_is_jumps(
+    operand: &Expr,
+    target: &IsTarget,
+    operand_span: Span,
+    target_span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) -> Option<(Vec<usize>, Facts)> {
+    let have = operand.infer_type(v, ctx, state);
+    match resolve_test(&have, target, operand_span, target_span, ctx, state) {
+        Test::Type(_) => None,
+        Test::Pattern(resolved) => Some(compile_pattern_test(
+            operand, &have, &resolved, true, v, ctx, state, output,
+        )),
     }
 }
 
@@ -643,19 +693,7 @@ pub fn is_fact_types(
             }
             _ => Vec::new(),
         },
-        Test::Variant {
-            enum_id,
-            variant_idx,
-            binders,
-        } => {
-            let payload = &state.enums[enum_id as usize].variants[variant_idx as usize].payload;
-            binders
-                .iter()
-                .zip(payload.iter())
-                .filter(|(binder, _)| binder.as_str() != "_")
-                .map(|(binder, t)| (binder.clone(), t.clone()))
-                .collect()
-        }
+        Test::Pattern(resolved) => resolved.bindings(),
     }
 }
 
@@ -730,13 +768,11 @@ pub fn captured_binders(condition: &Expr, scope: &[Expr]) -> Vec<SmolStr> {
         let Expr::Is(_, target, _, _) = conjunct else {
             continue;
         };
-        let IsTarget::Variant(pattern) = &**target else {
+        let IsTarget::Pattern(pattern) = &**target else {
             continue;
         };
-        for binder in super::expr::variant_pattern_binders(pattern) {
-            let Expr::Var(name, _) = binder else {
-                continue;
-            };
+        for (name, _) in pattern.binders() {
+            let name = &name;
             let in_scope = super::expr::code_captures_variable(name, scope)
                 || conjuncts.iter().any(|other| {
                     !std::ptr::eq(*other, *conjunct)

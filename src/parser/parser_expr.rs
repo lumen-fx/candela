@@ -492,7 +492,7 @@ const COMPARISON_PRECEDENCE: u8 = 4;
 /// braces would open the body, so there the test goes in parentheses.
 fn parse_is_target(parser: &mut Parser<'_>, allow_struct: bool) -> IsTarget {
     if variant_pattern_ahead(parser, allow_struct) {
-        IsTarget::Variant(parse_term(parser, allow_struct))
+        IsTarget::Pattern(super::pattern::parse_single_pattern(parser, allow_struct))
     } else {
         IsTarget::Type(parse_type(parser))
     }

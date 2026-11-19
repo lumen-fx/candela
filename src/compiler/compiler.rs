@@ -66,7 +66,8 @@ use expr::ForeignFn;
 use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
-use expr::Operand;
+use expr::MatchArm;
+use expr::PatternLet;
 use expr::Span;
 use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
@@ -76,7 +77,6 @@ use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::const_read;
 use expr::mangle_method;
-use expr::tuple_let_pattern;
 use functions::handle_functions;
 use functions::handle_value_call;
 use functions::user_functions::body_being_compiled;
@@ -99,7 +99,6 @@ use std::hash::BuildHasherDefault;
 use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tuples::check_tuple_places;
 use type_system::DataType;
 use type_system::FnTypeExpr;
 use type_system::Generics;
@@ -234,9 +233,9 @@ mod copies;
 pub(crate) mod flow;
 mod fold;
 pub(crate) mod function_table;
+pub(crate) mod patterns;
 mod registers;
 mod scalar;
-mod tuples;
 pub(crate) mod type_test;
 
 pub trait UnwrapId {
@@ -530,6 +529,19 @@ fn compile_short_circuit_condition(
         // An `is` whose false jump leaves the code it guards: what it proves
         // holds past the jump, so a variant's payload is read there.
         Expr::Is(operand, target, operand_span, target_span) if !bool_or_mode => {
+            if let Some((fails, facts)) = type_test::compile_is_jumps(
+                operand,
+                target,
+                *operand_span,
+                *target_span,
+                v,
+                ctx,
+                state,
+                output,
+            ) {
+                facts.apply(v, state, output);
+                return (Vec::new(), fails);
+            }
             let (cond_id, facts) = type_test::compile_is(
                 operand,
                 target,
@@ -1647,140 +1659,6 @@ fn compile_enum_definition(
     state.enums[enum_id as usize].variants = resolved;
 }
 
-/// Extracts a match arm's variant pattern: the variant index within `enum_id`
-/// and the payload binder identifiers (`_` ignores a slot). Raises a compile
-/// error for an unknown variant, a wrong-arity pattern, or a non-identifier
-/// binder.
-///
-/// A qualified pattern resolves through its qualifier, the way a qualified
-/// construction does: `Shape::Circle(r)` finds `Shape` in the arm's scope,
-/// `sh::Shape::Circle(r)` walks the alias, and `Slot<int>::Empty` instantiates
-/// the generic enum. The enum that comes back has to be the scrutinee's, so a
-/// pattern qualified with another enum is reported instead of matching the
-/// variant of the same name. Only a bare `Circle(r)` is looked up by name in
-/// the scrutinee's enum.
-pub(crate) fn resolve_variant_pattern(
-    enum_id: u16,
-    pattern: &Expr,
-    fallback_span: Span,
-    ctx: Ctx,
-    state: &mut State<'_>,
-) -> (u16, Vec<SmolStr>) {
-    let (path, type_args, binders, span): (&[SmolStr], &[TypeExpr], Vec<SmolStr>, Span) =
-        match pattern {
-            Expr::Var(name, span) => (std::slice::from_ref(name), &[], Vec::new(), *span),
-            Expr::NamespacedRef(path, span, type_args) => (path, type_args, Vec::new(), *span),
-            Expr::FunctionCall(args, namespace, span, _, type_args) => {
-                if let Some(VariantShape::Named(names)) = variant_shape(namespace, ctx, state)
-                    && !names.is_empty()
-                {
-                    compiler_errors::error_type_test(
-                        "Variant written in order",
-                        &format!("{} names its fields", namespace[namespace.len() - 1]),
-                        Some(&format!(
-                            "Write the pattern with braces: {} {{ {} }}",
-                            namespace.join("::"),
-                            names.join(", ")
-                        )),
-                        "variant_payload_shape",
-                        *span,
-                        ctx.file_idx,
-                        state.sources,
-                    );
-                }
-                (
-                    &**namespace,
-                    type_args,
-                    variant_binders(args, *span, ctx, state),
-                    *span,
-                )
-            }
-            Expr::Struct(namespace, fields, span, type_args, rest) => {
-                let variant = &namespace[namespace.len() - 1];
-                let Some(names) = named_variant_fields(namespace, *span, ctx, state) else {
-                    compiler_errors::error_enum(
-                        "Invalid match pattern",
-                        "A match on an enum expects variant patterns, e.g. Circle(r) or Click { x, y }",
-                        *span,
-                        ctx.file_idx,
-                        state.sources,
-                    );
-                };
-                let (values, _) = order_named_fields(
-                    &names,
-                    fields,
-                    rest.as_deref(),
-                    variant,
-                    *span,
-                    true,
-                    ctx,
-                    state,
-                );
-                (
-                    &**namespace,
-                    type_args,
-                    variant_binders(&values, *span, ctx, state),
-                    *span,
-                )
-            }
-            _ => compiler_errors::error_enum(
-                "Invalid match pattern",
-                "A match on an enum expects variant patterns, e.g. Circle(r) or Unit",
-                fallback_span,
-                ctx.file_idx,
-                state.sources,
-            ),
-        };
-    let variant_name = path[path.len() - 1].clone();
-    let variant_idx = if path.len() >= 2 {
-        let (pattern_enum, variant_idx) = if type_args.is_empty() {
-            resolve_qualified_pattern_enum(path, enum_id, span, ctx, state)
-        } else {
-            resolve_generic_variant(path, type_args, span, ctx, state)
-        };
-        if pattern_enum != enum_id {
-            compiler_errors::error_pattern_enum_mismatch(
-                &path.join("::"),
-                &state.enums[pattern_enum as usize].name,
-                &state.enums[enum_id as usize].name,
-                span,
-                ctx.file_idx,
-                state.sources,
-            );
-        }
-        variant_idx
-    } else {
-        let e = &state.enums[enum_id as usize];
-        let Some(variant_idx) = e.variants.iter().position(|vt| vt.name == variant_name) else {
-            compiler_errors::error_enum(
-                "Unknown enum variant",
-                &format!("{} is not a variant of enum {}", variant_name, e.name),
-                span,
-                ctx.file_idx,
-                state.sources,
-            );
-        };
-        variant_idx as u16
-    };
-    let e = &state.enums[enum_id as usize];
-    let expected_arity = e.variants[variant_idx as usize].payload.len();
-    if binders.len() != expected_arity {
-        compiler_errors::error_enum(
-            "Wrong variant payload arity",
-            &format!(
-                "Variant {} binds {} value(s) but the pattern has {}",
-                variant_name,
-                expected_arity,
-                binders.len()
-            ),
-            span,
-            ctx.file_idx,
-            state.sources,
-        );
-    }
-    (variant_idx, binders)
-}
-
 /// The field names of the variant a struct-shaped literal or pattern names,
 /// `Event::Click { x: 1, y: 2 }`, in declaration order.
 ///
@@ -2035,111 +1913,96 @@ fn resolve_qualified_pattern_enum(
     (pattern_enum as u16, variant_idx as u16)
 }
 
-/// The names a variant pattern binds, one per payload place.
-fn variant_binders(args: &[Expr], span: Span, ctx: Ctx, state: &State<'_>) -> Vec<SmolStr> {
-    args.iter()
-        .map(|arg| {
-            let Expr::Var(binder, _) = arg else {
-                compiler_errors::error_enum(
-                    "Invalid match pattern",
-                    "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
-                    span,
-                    ctx.file_idx,
-                    state.sources,
-                );
-            };
-            binder.clone()
-        })
-        .collect()
-}
-
-/// The span a variant pattern was written at, or `fallback` for one that
-/// carries none of its own.
-const fn pattern_span(pattern: &Expr, fallback: Span) -> Span {
-    match pattern {
-        Expr::Var(_, span)
-        | Expr::NamespacedRef(_, span, _)
-        | Expr::FunctionCall(_, _, span, _, _)
-        | Expr::Struct(_, _, span, _, _) => *span,
-        _ => fallback,
-    }
-}
-
-/// The names one resolved alternative binds, each with the type of the payload
-/// it binds, in name order.
-pub(crate) fn alternative_bindings(
-    enum_id: u16,
-    (variant_idx, binders): &(u16, Vec<SmolStr>),
-    state: &State<'_>,
-) -> Vec<(SmolStr, DataType)> {
-    let payload = &state.enums[enum_id as usize].variants[*variant_idx as usize].payload;
-    let mut bound: Vec<(SmolStr, DataType)> = binders
-        .iter()
-        .zip(payload.iter())
-        .filter(|(binder, _)| binder.as_str() != "_")
-        .map(|(binder, ty)| (binder.clone(), ty.clone()))
-        .collect();
-    bound.sort_by(|a, b| a.0.cmp(&b.0));
-    bound
-}
-
-/// Resolves every `|` alternative of an enum arm to the variant it names and
-/// the names it binds, one per payload position.
-///
-/// The arm body reads its bindings whichever alternative matched, so every
-/// alternative has to bind the same names at the same types; one that does
-/// not is reported against itself.
-pub(crate) fn resolve_arm_patterns(
-    enum_id: u16,
-    patterns: &[Expr],
-    span: Span,
-    ctx: Ctx,
-    state: &mut State<'_>,
-) -> Vec<(u16, Vec<SmolStr>)> {
-    let alternatives: Vec<(u16, Vec<SmolStr>)> = patterns
-        .iter()
-        .map(|pattern| resolve_variant_pattern(enum_id, pattern, span, ctx, state))
-        .collect();
-    if let [first, rest @ ..] = alternatives.as_slice() {
-        let expected = alternative_bindings(enum_id, first, state);
-        for (k, alternative) in rest.iter().enumerate() {
-            let found = alternative_bindings(enum_id, alternative, state);
-            if found != expected {
-                compiler_errors::error_pattern_bindings_differ(
-                    &expected,
-                    &found,
-                    pattern_span(&patterns[k + 1], span),
-                    ctx.file_idx,
-                    state.sources,
-                    state.type_names(),
-                );
-            }
-        }
-    }
-    alternatives
-}
-
-/// Declares, for the type walks that read an arm body without compiling it,
-/// the names the arm's pattern binds. Every alternative binds the same ones,
-/// so the first says what they are.
-pub(crate) fn declare_arm_bindings(
-    enum_id: u16,
-    patterns: &[Expr],
+/// Compiles a `match`: the first arm whose pattern fits the scrutinee and
+/// whose guard holds runs, and the wildcard when none does. `result` is where
+/// a match used as a value leaves its value, with whether that value is a
+/// function value; `None` for a statement.
+#[allow(clippy::too_many_arguments)]
+fn compile_match(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+    result: Option<(u16, bool)>,
 ) {
-    let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
-    for (name, var_type) in alternative_bindings(enum_id, &alternatives[0], state) {
-        v.push(Variable {
-            declared: None,
-            name,
-            register_id: 0,
-            cell: false,
-            var_type,
-        });
+    let scrut_type = scrutinee.infer_type(v, ctx, state);
+    check_shadowing_arms(arms, wildcard.is_some(), v, ctx, state);
+    let resolved = patterns::resolve_arms(arms, &scrut_type, ctx, state);
+    if !patterns::arms_cover(&scrut_type, arms, &resolved, wildcard.is_some(), state)
+        && (result.is_some() || matches!(scrut_type, DataType::Enum(_)))
+    {
+        error_match_not_covered(&scrut_type, arms, &resolved, span, ctx, state);
     }
+    let scrut_reg = scrutinee
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    // The scrutinee stays rooted for the whole match, so its register is not
+    // reused across the arms.
+    let v_base = v.len();
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static("[MATCH SCRUT]"),
+        register_id: scrut_reg,
+        cell: false,
+        var_type: scrut_type.clone(),
+    });
+    let mut end_jumps: Vec<usize> = Vec::with_capacity(arms.len());
+    for (arm, resolved) in arms.iter().zip(&resolved) {
+        let guard_code: &[Expr] = arm.guard.as_slice();
+        let captured = patterns::captured_in(&arm.pattern, &[&arm.body, guard_code]);
+        let mut compiled = patterns::Compiled::default();
+        patterns::compile(
+            resolved,
+            scrut_reg,
+            &scrut_type,
+            false,
+            &captured,
+            &[],
+            &mut compiled,
+            v,
+            ctx,
+            state,
+            output,
+        );
+        let v_arm = v.len();
+        v.extend(compiled.binds.iter().cloned());
+        let mut fails = compiled.fails;
+        if let Some(guard) = &arm.guard {
+            fails.extend(compile_guard(
+                guard,
+                arm.pattern.span(),
+                &arm.body,
+                v,
+                ctx,
+                state,
+                output,
+            ));
+        }
+        compile_arm_body(&arm.body, result, v, ctx, state, output);
+        v.truncate(v_arm);
+        for bound in &compiled.binds {
+            state.free_reg(bound.register_id, v);
+        }
+        end_jumps.push(output.len());
+        output.push(Instr::Jmp(0));
+        let next = output.len();
+        for j in fails {
+            set_jmp_size(&mut output[j], (next - j) as u16);
+        }
+    }
+    if let Some(w) = wildcard {
+        compile_arm_body(w, result, v, ctx, state, output);
+    }
+    let end = output.len();
+    for j in end_jumps {
+        set_jmp_size(&mut output[j], (end - j) as u16);
+    }
+    v.truncate(v_base);
+    state.free_reg(scrut_reg, v);
 }
 
 /// Compiles a match arm's body. A statement match runs it; a match used as a
@@ -2160,161 +2023,70 @@ fn compile_arm_body(
     }
 }
 
-/// Lowers a `match` on an enum scrutinee to a variant-tag compare chain with
-/// per-arm payload binding, reusing the ordinary conditional-jump machinery.
-///
-/// Each `|` alternative of an arm tests its own variant and binds its own
-/// payload positions into registers the arm shares, then joins the arm body.
-/// `result` is the register a match used as a value leaves its value in, with
-/// whether that value is a function value, and `None` for a statement.
-#[allow(clippy::too_many_arguments)]
-fn compile_enum_match(
-    enum_id: u16,
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
+/// Rejects an arm whose pattern is a lone name that a variable in scope
+/// already has, when arms follow it. The name binds whatever is matched, so
+/// the arms after it never run; the program most likely meant to compare
+/// with the variable, which a guard does.
+fn check_shadowing_arms(
+    arms: &[MatchArm],
+    has_wildcard: bool,
+    v: &[Variable],
     ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-    result: Option<(u16, bool)>,
+    state: &State<'_>,
 ) {
-    let scrut_reg = scrutinee
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    // Root the scrutinee for the whole match so its object-pool payload is not
-    // reclaimed and its register is not reused across arm bodies.
-    let v_base = v.len();
-    v.push(Variable {
-        declared: None,
-        name: SmolStr::new_static("[MATCH SCRUT]"),
-        register_id: scrut_reg,
-        cell: false,
-        var_type: DataType::Enum(enum_id),
-    });
+    for (i, arm) in arms.iter().enumerate() {
+        let last = i + 1 == arms.len() && !has_wildcard;
+        if let (patterns::Pattern::Bind(name, span), None, false) = (&arm.pattern, &arm.guard, last)
+            && v.iter().any(|var| &var.name == name)
+        {
+            compiler_errors::error_type_test(
+                "Pattern binds a name in use",
+                &format!(
+                    "{name} here binds a new name and matches every value, so the arms after it never run"
+                ),
+                Some(&format!(
+                    "To compare with the variable {name}, write a guard: x if x == {name} => ..."
+                )),
+                "pattern_binds_name",
+                *span,
+                ctx.file_idx,
+                state.sources,
+            );
+        }
+    }
+}
 
-    let tag_reg = state.alloc_reg();
-    output.push(Instr::GetFieldStruct(scrut_reg, 0, tag_reg));
-
-    let variant_count = state.enums[enum_id as usize].variants.len();
-    let mut covered = vec![false; variant_count];
-    // One entry per alternative: where its test starts and the jump it takes
-    // when the tag is another variant's.
-    let mut false_jmps: Vec<usize> = Vec::with_capacity(arms.len());
-    let mut alternative_starts: Vec<usize> = Vec::with_capacity(arms.len());
-    let mut end_jmps: Vec<usize> = Vec::with_capacity(arms.len());
-
-    for (patterns, body) in arms {
-        let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
-        // (name, register the body reads, register the payload is read into)
-        let mut slots: Vec<(SmolStr, u16, u16, DataType, bool)> = Vec::new();
-        let mut to_body: Vec<usize> = Vec::new();
-        for (k, (variant_idx, binders)) in alternatives.iter().enumerate() {
-            covered[*variant_idx as usize] = true;
-            alternative_starts.push(output.len());
-            let idx_reg = state.alloc_reg();
-            output.push(Instr::SetInt(idx_reg, i32::from(*variant_idx)));
-            false_jmps.push(output.len());
-            output.push(Instr::NotEqJmp(tag_reg, idx_reg, 0));
-            state.free_reg(idx_reg, v);
-
-            // Bind the variant payload into the arm's locals. The first
-            // alternative allocates them; the others write the same ones.
-            for (i, binder) in binders.iter().enumerate() {
-                if binder.as_str() == "_" {
-                    continue;
-                }
-                let field = (i + 1) as u16;
-                if let Some((_, read_reg, value_reg, _, captured)) =
-                    slots.iter().find(|slot| slot.0 == *binder)
-                {
-                    if *captured {
-                        output.push(Instr::GetFieldStruct(scrut_reg, field, *value_reg));
-                        output.push(Instr::NewCell(*value_reg, *read_reg));
-                    } else {
-                        output.push(Instr::GetFieldStruct(scrut_reg, field, *read_reg));
-                    }
-                    continue;
-                }
-                let value_reg = state.alloc_reg();
-                output.push(Instr::GetFieldStruct(scrut_reg, field, value_reg));
-                let payload_type = state.enums[enum_id as usize].variants[*variant_idx as usize]
-                    .payload[i]
-                    .clone();
-                let captured = code_captures_variable(binder, body);
-                let read_reg = if captured {
-                    let cell_id = state.alloc_reg();
-                    output.push(Instr::NewCell(value_reg, cell_id));
-                    cell_id
-                } else {
-                    value_reg
-                };
-                slots.push((binder.clone(), read_reg, value_reg, payload_type, captured));
-            }
-            if k + 1 < alternatives.len() {
-                to_body.push(output.len());
-                output.push(Instr::Jmp(0));
+/// Reports a `match` that has no arm for some value: one on an enum that
+/// leaves variants out, or one used as a value with no arm that always fits.
+#[cold]
+fn error_match_not_covered(
+    scrut_type: &DataType,
+    arms: &[MatchArm],
+    resolved: &[patterns::Resolved],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> ! {
+    if let DataType::Enum(enum_id) = scrut_type {
+        let mut covered = Vec::new();
+        for (arm, resolved) in arms.iter().zip(resolved) {
+            if arm.guard.is_none() {
+                resolved.covered_variants(state, &mut covered);
             }
         }
-        let body_start = output.len();
-        for at in to_body {
-            set_jmp_size(&mut output[at], (body_start - at) as u16);
-        }
-
-        let v_arm = v.len();
-        for (name, read_reg, _, var_type, captured) in slots {
-            v.push(Variable {
-                declared: None,
-                name,
-                register_id: read_reg,
-                cell: captured,
-                var_type,
-            });
-        }
-        compile_arm_body(body, result, v, ctx, state, output);
-        v.truncate(v_arm);
-
-        end_jmps.push(output.len());
-        output.push(Instr::Jmp(0));
-    }
-
-    // Where a non-matching last alternative (and the wildcard, if any) begins.
-    let after_arms = output.len();
-    if let Some(w) = wildcard {
-        compile_arm_body(w, result, v, ctx, state, output);
-    }
-    let end = output.len();
-
-    for (k, &j) in false_jmps.iter().enumerate() {
-        let target = if k + 1 < alternative_starts.len() {
-            alternative_starts[k + 1]
-        } else {
-            after_arms
-        };
-        set_jmp_size(&mut output[j], (target - j) as u16);
-    }
-    for &j in &end_jmps {
-        set_jmp_size(&mut output[j], (end - j) as u16);
-    }
-
-    v.truncate(v_base);
-    state.free_reg(tag_reg, v);
-    state.free_reg(scrut_reg, v);
-
-    if wildcard.is_none() && !covered.iter().all(|&c| c) {
-        let missing: Vec<&str> = state.enums[enum_id as usize]
+        let e = &state.enums[*enum_id as usize];
+        let missing: Vec<&str> = e
             .variants
             .iter()
             .enumerate()
-            .filter(|(i, _)| !covered[*i])
-            .map(|(_, vt)| vt.name.as_str())
+            .filter(|(i, _)| !covered.contains(&(*i as u16)))
+            .map(|(_, variant)| variant.name.as_str())
             .collect();
         compiler_errors::error_enum(
             "Non-exhaustive match",
             &format!(
                 "match on enum {} does not cover: {}. Add the missing arm(s) or a `_` wildcard",
-                state.enums[enum_id as usize].name,
+                e.name,
                 missing.join(", ")
             ),
             span,
@@ -2322,293 +2094,7 @@ fn compile_enum_match(
             state.sources,
         );
     }
-}
-
-/// The enum an arm pattern names a variant of, or `None` for a pattern the
-/// equality lowering compares as an ordinary value. Resolution follows what
-/// the pattern would compile to: a variable in scope wins over a variant of
-/// the same name, and a user function wins over a bare variant name.
-fn pattern_variant_enum(
-    pattern: &Expr,
-    v: &[Variable],
-    ctx: Ctx,
-    state: &State<'_>,
-) -> Option<u16> {
-    let path: &[SmolStr] = match pattern {
-        Expr::Var(name, _) if v.iter().all(|var| &var.name != name) => std::slice::from_ref(name),
-        Expr::NamespacedRef(path, _, _) => path,
-        Expr::FunctionCall(_, namespace, _, _, _)
-            if namespace.len() >= 2
-                || namespace.first().is_some_and(|name| {
-                    state
-                        .scope(ctx.file_idx)
-                        .find_function(&[], name.as_str())
-                        .is_none()
-                }) =>
-        {
-            namespace
-        }
-        _ => return None,
-    };
-    resolve_enum_variant(path, ctx.file_idx, state).map(|(enum_id, _)| enum_id)
-}
-
-/// Rejects a `match` whose arms name variants of an enum the scrutinee is not.
-/// Only an enum scrutinee carries the variant tag the arms dispatch on; the
-/// equality lowering would compile each pattern as a variant construction and
-/// compare it, which leaves every payload binder unbound.
-///
-/// Both the return-flow pass and the lowering call this, because either can be
-/// the first to read an arm body.
-pub(crate) fn check_match_scrutinee_is_enum(
-    scrut_type: &DataType,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    span: Span,
-    v: &[Variable],
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    if let Some(enum_id) = arms
-        .iter()
-        .flat_map(|(patterns, _)| patterns.iter())
-        .find_map(|pattern| pattern_variant_enum(pattern, v, ctx, state))
-    {
-        compiler_errors::error_match_not_enum(
-            &state.enums[enum_id as usize].name,
-            scrut_type,
-            span,
-            ctx.file_idx,
-            state.sources,
-            state.type_names(),
-        );
-    }
-}
-
-/// The test an arm of an equality `match` runs: the scrutinee, held in the
-/// variable `scrutinee`, equal to any of the arm's `|` alternatives.
-fn equality_arm_test(scrutinee: &SmolStr, patterns: &[Expr], span: Span) -> Expr {
-    let equals = |pattern: &Expr| {
-        Expr::Eq(
-            Operand::new(Expr::Var(scrutinee.clone(), span)),
-            Operand::new(pattern.clone()),
-            span,
-            span,
-        )
-    };
-    let mut test = equals(&patterns[0]);
-    for pattern in &patterns[1..] {
-        test = Expr::BoolOr(
-            Operand::new(test),
-            Operand::new(equals(pattern)),
-            span,
-            span,
-        );
-    }
-    test
-}
-
-/// The test and the body one arm of an equality `match` runs. An arm with a
-/// tuple pattern among its alternatives tests the elements and declares what
-/// the pattern binds; see [`tuples::tuple_arm`].
-fn equality_arm(
-    scrutinee: &SmolStr,
-    patterns: &[Expr],
-    body: &[Expr],
-    span: Span,
-) -> (Expr, Box<[Expr]>) {
-    if tuples::arm_has_tuple_pattern(patterns) {
-        tuples::tuple_arm(scrutinee, patterns, body, span)
-    } else {
-        (
-            equality_arm_test(scrutinee, patterns, span),
-            Box::from(body),
-        )
-    }
-}
-
-/// The `if` chain an equality `match` runs: one branch per arm, testing the
-/// scrutinee held in `scrutinee`, then the wildcard as the `else`. The first
-/// arm's body comes first, the way a condition holds its own code ahead of
-/// its `else if` blocks.
-///
-/// A last arm whose tuple pattern always matches stands in for a missing
-/// wildcard.
-fn equality_match_chain(
-    scrutinee: &SmolStr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-) -> (Expr, Box<[Expr]>) {
-    let mut arms = arms;
-    let mut catch_all: Option<Box<[Expr]>> = wildcard.map(Box::from);
-    if catch_all.is_none()
-        && let Some((patterns, body)) = arms.last()
-        && tuples::arm_is_irrefutable(patterns)
-    {
-        catch_all = Some(equality_arm(scrutinee, patterns, body, span).1);
-        if arms.len() > 1 {
-            arms = &arms[..arms.len() - 1];
-        }
-    }
-    let (first_patterns, first_body) = &arms[0];
-    let (first_test, first_code) = equality_arm(scrutinee, first_patterns, first_body, span);
-    let mut code: Vec<Expr> = Vec::with_capacity(arms.len() + first_code.len());
-    code.extend(first_code);
-    for (patterns, body) in &arms[1..] {
-        let (test, body) = equality_arm(scrutinee, patterns, body, span);
-        code.push(Expr::ElseIfBlock(Box::new(test), body, span));
-    }
-    if let Some(w) = catch_all {
-        code.push(Expr::ElseBlock(w));
-    }
-    (first_test, Box::from(code))
-}
-
-/// Checks every tuple pattern of a non-enum `match` against the matched
-/// value's type, and that each arm's alternatives bind the same names.
-fn check_tuple_arms(
-    scrut_type: &DataType,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    span: Span,
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    for (patterns, _) in arms {
-        if tuples::arm_has_tuple_pattern(patterns) {
-            tuples::arm_bindings(patterns, scrut_type, span, ctx, state);
-        }
-    }
-}
-
-/// Whether a `match` without a wildcard still covers every case, because its
-/// last arm is a tuple pattern of names alone.
-pub(crate) fn match_ends_irrefutable(arms: &[(Box<[Expr]>, Box<[Expr]>)]) -> bool {
-    arms.last()
-        .is_some_and(|(patterns, _)| tuples::arm_is_irrefutable(patterns))
-}
-
-/// Declares, for the type walks that read an arm body without compiling it,
-/// the names a non-enum arm's tuple patterns bind.
-pub(crate) fn declare_tuple_arm_bindings(
-    scrut_type: &DataType,
-    patterns: &[Expr],
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    if !tuples::arm_has_tuple_pattern(patterns) {
-        return;
-    }
-    for (name, var_type) in tuples::arm_bindings(patterns, scrut_type, span, ctx, state) {
-        v.push(Variable {
-            declared: None,
-            name,
-            register_id: 0,
-            cell: false,
-            var_type,
-        });
-    }
-}
-
-/// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
-/// with payload binding; any other scrutinee reproduces the equality-chain
-/// lowering (`scrutinee == pattern` per arm) that `match` has always had.
-fn compile_match(
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-) {
-    let scrut_type = scrutinee.infer_type(v, ctx, state);
-    if let DataType::Enum(enum_id) = scrut_type {
-        compile_enum_match(
-            enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output, None,
-        );
-    } else {
-        check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
-        check_tuple_arms(&scrut_type, arms, span, ctx, state);
-        let obj_var = SmolStr::new_static("[MATCH TEMP]");
-        let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
-        let desugared = Expr::EvalBlock(Box::from([
-            Expr::VarDeclare(obj_var, Box::new(scrutinee.clone()), None),
-            Expr::Condition(Box::new(test), code, span, span),
-        ]));
-        desugared.compile(v, ctx, state, output, None, false, false);
-    }
-}
-
-/// Compiles a `match` used as a value into `tgt_id`, or a fresh register, and
-/// returns where the value is.
-///
-/// It covers every case the way an `if` used as a value has an `else`: an
-/// enum match lists every variant or has a `_` arm, and any other match has a
-/// `_` arm.
-fn compile_match_value(
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-    tgt_id: Option<u16>,
-    as_fn_value: bool,
-) -> u16 {
-    let scrut_type = scrutinee.infer_type(v, ctx, state);
-    if let DataType::Enum(enum_id) = scrut_type {
-        let result = state.alloc_reg_tgt(tgt_id);
-        compile_enum_match(
-            enum_id,
-            scrutinee,
-            arms,
-            wildcard,
-            span,
-            v,
-            ctx,
-            state,
-            output,
-            Some((result, as_fn_value)),
-        );
-        return result;
-    }
-    check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
-    check_tuple_arms(&scrut_type, arms, span, ctx, state);
-    if wildcard.is_none() && !match_ends_irrefutable(arms) {
-        compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
-    }
-    let scrut_reg = scrutinee
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let obj_var = SmolStr::new_static("[MATCH TEMP]");
-    let v_base = v.len();
-    v.push(Variable {
-        declared: None,
-        name: obj_var.clone(),
-        register_id: scrut_reg,
-        cell: false,
-        var_type: scrut_type,
-    });
-    let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
-    let result = compile_inline_condition(
-        &test,
-        &code,
-        span,
-        v,
-        ctx,
-        state,
-        output,
-        tgt_id,
-        as_fn_value,
-    );
-    v.truncate(v_base);
-    state.free_reg(scrut_reg, v);
-    result
+    compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
 }
 
 fn compile_map_literal(
@@ -5348,6 +4834,126 @@ fn compile_var_declaration(
     );
 }
 
+/// Compiles `let pattern = value;` and `let pattern = value else { ... };`.
+/// What the pattern binds stays in scope for the rest of the block. Without an
+/// `else` the pattern fits every value of the value's type; with one, the
+/// `else` block runs where it does not, and leaves.
+fn compile_pattern_let(
+    pattern_let: &PatternLet,
+    remaining_code: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    let PatternLet {
+        pattern,
+        value,
+        annotation,
+        otherwise,
+        span,
+    } = pattern_let;
+    let declared = annotation
+        .as_ref()
+        .map(|a| a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)));
+    let value_type = match &declared {
+        Some(declared) => declared.clone(),
+        None => value.infer_type(v, ctx, state),
+    };
+    let resolved = patterns::resolve(pattern, &value_type, ctx, state);
+    let always = resolved.always(state);
+    if otherwise.is_none() && !always {
+        compiler_errors::error_type_test(
+            "Pattern that can fail",
+            &format!(
+                "This pattern does not fit every {}, and nothing says what happens when it does not",
+                state.type_names().of(&value_type)
+            ),
+            Some("Give the let an else block that leaves: let Some(v) = value else { return; };"),
+            "let_pattern_can_fail",
+            *span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    if otherwise.is_some() && always {
+        compiler_errors::error_type_test(
+            "else that never runs",
+            &format!(
+                "This pattern fits every {}, so the else block never runs",
+                state.type_names().of(&value_type)
+            ),
+            Some("Drop the else block"),
+            "let_else_never_runs",
+            *span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    let converted = match (&declared, annotation) {
+        (Some(declared), Some(a)) => {
+            check_declared_value(
+                "",
+                declared,
+                a.span,
+                value,
+                a.value_span,
+                v,
+                ctx,
+                state,
+                output,
+            );
+            coerce::compile_converted(value, declared, a.value_span, None, v, ctx, state, output)
+        }
+        _ => None,
+    };
+    let reg = converted.unwrap_or_else(|| {
+        value
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    });
+    let v_base = v.len();
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static("[LET VALUE]"),
+        register_id: reg,
+        cell: false,
+        var_type: value_type.clone(),
+    });
+    let captured = patterns::captured_in(pattern, &[remaining_code]);
+    let mut compiled = patterns::Compiled::default();
+    patterns::compile(
+        &resolved,
+        reg,
+        &value_type,
+        false,
+        &captured,
+        &[],
+        &mut compiled,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    v.truncate(v_base);
+    if let Some(otherwise) = otherwise
+        && !compiled.fails.is_empty()
+    {
+        let past_else = output.len();
+        output.push(Instr::Jmp(0));
+        let else_start = output.len();
+        for j in compiled.fails {
+            set_jmp_size(&mut output[j], (else_start - j) as u16);
+        }
+        let code = compile_expr(otherwise, v, ctx.advance_offset(output.len()), state);
+        output.extend(code);
+        let end = output.len();
+        set_jmp_size(&mut output[past_else], (end - past_else) as u16);
+    }
+    v.extend(compiled.binds);
+    state.free_reg(reg, v);
+}
+
 /// Compiles the value a `let` starts its variable with and brings the variable
 /// into scope, typed `var_type`.
 #[allow(clippy::too_many_arguments)]
@@ -6007,6 +5613,19 @@ pub fn compile_expr(
             output.truncate(output_len);
             v.truncate(vars_len);
             state.scope_mut(ctx.file_idx).symbols.truncate(symbols);
+            // What a pattern `let` would have bound is in scope too, its type
+            // unknown.
+            if let Expr::LetPattern(pattern_let) = x {
+                for (name, _) in pattern_let.pattern.binders() {
+                    v.push(Variable {
+                        declared: None,
+                        name,
+                        register_id: state.alloc_reg(),
+                        cell: false,
+                        var_type: DataType::Unknown,
+                    });
+                }
+            }
             if let Expr::VarDeclare(name, value, _) = x {
                 // The type the value would have had, when that much can be
                 // worked out without the error, so what reads the name
@@ -6984,13 +6603,6 @@ impl Expr {
             }
             Self::VarDeclare(name, value, annotation) => {
                 debug_assert!(!uses_id);
-                if let Some((places, pattern_span)) = tuple_let_pattern(name) {
-                    let found = match annotation {
-                        Some(a) => a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)),
-                        None => value.infer_type(v, ctx, state),
-                    };
-                    check_tuple_places(places, &found, pattern_span, ctx, state);
-                }
                 compile_var_declaration(
                     name,
                     value,
@@ -7030,7 +6642,8 @@ impl Expr {
             Self::Match(scrutinee, arms, wildcard, span, true) => {
                 debug_assert!(uses_id);
                 let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
-                Some(compile_match_value(
+                let result = state.alloc_reg_tgt(tgt_id);
+                compile_match(
                     scrutinee,
                     arms,
                     wildcard.as_deref(),
@@ -7039,9 +6652,9 @@ impl Expr {
                     ctx,
                     state,
                     output,
-                    tgt_id,
-                    as_fn_value,
-                ))
+                    Some((result, as_fn_value)),
+                );
+                Some(result)
             }
             Self::Match(scrutinee, arms, wildcard, span, false) => {
                 debug_assert!(!uses_id);
@@ -7054,7 +6667,13 @@ impl Expr {
                     ctx,
                     state,
                     output,
+                    None,
                 );
+                None
+            }
+            Self::LetPattern(pattern_let) => {
+                debug_assert!(!uses_id);
+                compile_pattern_let(pattern_let, remaining_code, v, ctx, state, output);
                 None
             }
             Self::NamespacedRef(path, span, type_args) => {

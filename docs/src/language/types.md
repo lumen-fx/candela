@@ -351,9 +351,9 @@ tuple instead, `t = (x, t.1);`. A list or a map inside a tuple is still the
 list or the map itself, and changing it through the tuple changes it everywhere
 it is held.
 
-`let (lo, hi) = range;` takes a tuple apart into one variable per element; see
-[Variables](variables.md#taking-a-tuple-apart). A `match` arm takes a tuple
-pattern too; see [Control flow](control-flow.md#tuple-patterns).
+`let (lo, hi) = pair;` takes a tuple apart into one variable per element; see
+[Variables](variables.md#taking-a-value-apart). A tuple pattern works wherever
+a pattern does; see [Control flow](control-flow.md#patterns).
 
 ## Structs
 

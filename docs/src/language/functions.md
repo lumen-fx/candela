@@ -58,6 +58,12 @@ fn main() {
 }
 ```
 
+A parameter can be a [pattern](control-flow.md#patterns) that takes the
+argument apart, with the type after it: `fn area((w, h): (int, int))`. The
+pattern has to fit every argument of its type, and the names it binds are the
+body's parameters. Anonymous functions take patterns the same way:
+`pairs.map(fn((k, v)) => k + v)`.
+
 An annotation is worth writing when a function is called from Rust rather than
 from the script, since there is no call site to take the types from; see
 [embedding](../integration/embedding.md). A parameter annotated `any` stays

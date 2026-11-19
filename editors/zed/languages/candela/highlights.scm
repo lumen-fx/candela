@@ -75,6 +75,19 @@
 (enum_variant
   name: (identifier) @variant)
 
+(variant_pattern
+  variant: (type_identifier) @variant)
+
+(variant_pattern
+  variant: (qualified_type
+    name: (type_identifier) @variant))
+
+(struct_pattern
+  name: (type_identifier) @type)
+
+(field_pattern
+  name: (identifier) @property)
+
 ; Functions
 
 (function_declaration

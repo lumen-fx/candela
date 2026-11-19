@@ -16,14 +16,14 @@ use crate::compiler::compiler_data::Source;
 use crate::compiler::expr::ForeignFn;
 use crate::compiler::expr::ForeignParams;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
-use crate::compiler::expr::tuple_let_temp;
+use crate::compiler::expr::PatternLet;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
+use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::TypeParams;
-use crate::compiler::type_system::tuple_field;
 use crate::compiler::type_system::tuple_name;
 use crate::errors::BLUE;
 use crate::errors::blue;
@@ -65,6 +65,7 @@ use logos::Logos;
 mod blocks;
 mod lexer;
 mod parser_expr;
+mod pattern;
 mod term;
 
 type TokenIter<'a> = Peekable<SpannedIter<'a, Token<'a>>>;
@@ -102,10 +103,9 @@ struct Parser<'a> {
     /// parsed, which is where a `break` or a `continue` has a loop to leave.
     /// A function body starts again from none.
     loops: u32,
-    /// Statements one statement expanded to past the first, waiting to be
-    /// placed right after it: `let (a, b) = t;` is a declaration of the tuple
-    /// and then one of each name.
-    pending_statements: Vec<Expr>,
+    /// The `let`s that take apart the parameters of the function being read
+    /// that are written as patterns, which open its body.
+    param_lets: Vec<Expr>,
     /// The indices in the file's items of its `const` declarations.
     consts: Vec<usize>,
 }
@@ -198,9 +198,6 @@ enum ParserErr<'a> {
     OutsideLoop(&'static str),
     /// `(a,)`: a tuple of one element, which candela does not have.
     TupleOfOne,
-    /// A `let ( ... )` pattern with something other than a name, `_` or
-    /// another parenthesised pattern in it.
-    TuplePatternElement,
     /// A parameter named `self` anywhere but first in an `impl` function
     /// (true) or in a function outside an `impl` block (false).
     MisplacedReceiver(bool),
@@ -215,6 +212,12 @@ enum ParserErr<'a> {
     /// A block used as a value whose last statement is not an expression
     /// without a `;`, nor a `return`, `throw`, `break` or `continue`.
     ValueBlockWithoutValue,
+    /// A token where a pattern goes that no pattern starts with.
+    PatternExpected(Token<'a>),
+    /// `let name = value else { ... }`: a name always matches.
+    LetElseOnName,
+    /// The `else` block of a `let ... else` that can reach its end.
+    LetElseMustLeave,
 }
 
 impl ParserErr<'_> {
@@ -235,6 +238,9 @@ impl ParserErr<'_> {
             ParserErr::ArrayElementsMissingComma => "array_elements_missing_comma",
             ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
             ParserErr::ValueBlockWithoutValue => "value_block_without_value",
+            ParserErr::PatternExpected(_) => "pattern_expected",
+            ParserErr::LetElseOnName => "let_else_on_name",
+            ParserErr::LetElseMustLeave => "let_else_must_leave",
             ParserErr::DivisionByZero => "division_by_zero",
             ParserErr::ModuloByZero => "modulo_by_zero",
             ParserErr::IntegerNegativeExponent => "integer_negative_exponent",
@@ -264,7 +270,6 @@ impl ParserErr<'_> {
             ParserErr::ThrowCall => "throw_call",
             ParserErr::OutsideLoop(_) => "outside_loop",
             ParserErr::TupleOfOne => "tuple_of_one",
-            ParserErr::TuplePatternElement => "tuple_pattern_element",
             ParserErr::MisplacedReceiver(_) => "misplaced_receiver",
             ParserErr::ImplParamUnbound(_) => "impl_param_unbound",
             ParserErr::PositionalAfterNamed => "positional_after_named",
@@ -323,6 +328,15 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::ArrayElementsMissingComma => "Array elements must be separated by a comma",
         ParserErr::InlineConditionNoElseBlock => &format!(
             "An {BLUE}{BOLD}if{RESET} used as a value has an {BLUE}{BOLD}else{RESET}, so it has a value whichever way it goes"
+        ),
+        ParserErr::PatternExpected(found) => &format!(
+            "Expected a pattern but found {found}. A pattern is {BLUE}{BOLD}_{RESET}, a name, a literal, a range {BLUE}{BOLD}1..5{RESET}, a tuple {BLUE}{BOLD}(a, b){RESET}, a variant {BLUE}{BOLD}Some(x){RESET} or a struct {BLUE}{BOLD}Point {{ x, y }}{RESET}"
+        ),
+        ParserErr::LetElseOnName => &format!(
+            "A name always matches, so this {BLUE}{BOLD}else{RESET} never runs. {BLUE}{BOLD}let ... else{RESET} takes a pattern that can fail: {BLUE}{BOLD}let Some(v) = lookup(k) else {{ return; }};{RESET}"
+        ),
+        ParserErr::LetElseMustLeave => &format!(
+            "The {BLUE}{BOLD}else{RESET} of a {BLUE}{BOLD}let{RESET} runs when the pattern does not fit, so nothing is bound after it: it ends in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
         ),
         ParserErr::ValueBlockWithoutValue => &format!(
             "This block is used as a value, so it ends in an expression with no {BOLD}';'{RESET}, its value, or in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
@@ -427,9 +441,6 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::ImplParamUnbound(param) => &format!(
             "{RED}{BOLD}{param}{RESET} is declared here but is not one of the type's arguments. An impl block's type parameters stand for the type's arguments: {BLUE}{BOLD}impl<T> Cell<T>{RESET}"
-        ),
-        ParserErr::TuplePatternElement => &format!(
-            "Each place in a {BLUE}{BOLD}let{RESET} pattern is a name, {BLUE}{BOLD}_{RESET}, or another pattern in parentheses: {BLUE}{BOLD}let (a, (b, _)) = t;{RESET}"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -841,7 +852,7 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         pending_gt: None,
         inactive: parser.inactive,
         loops: parser.loops,
-        pending_statements: Vec::new(),
+        param_lets: Vec::new(),
         consts: Vec::new(),
     };
     let expr = parse_expr(&mut sub);
@@ -938,7 +949,6 @@ fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEn
         }
         parser.inactive += 1;
         let _ = parse_statement(parser, Tail::No);
-        parser.pending_statements.clear();
         parser.inactive -= 1;
         token = parser.peek_token_opt()?;
     }
@@ -974,26 +984,25 @@ fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEn
 }
 
 fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
-    let (t, _) = parser.next_token();
+    let (t, let_span) = parser.next_token();
     debug_assert_eq!(t, Token::Let);
-    if parser.peek_token() == Token::LParen {
-        return parse_tuple_let(parser);
-    }
-    let (t, span) = parser.next_token();
-    let var_name = if let Token::Identifier(id) = t {
-        SmolStr::new(id)
-    } else {
-        cold_path();
-        parser.error(
-            span,
-            ParserErr::UnexpectedToken(
-                Token::Identifier(""),
-                t,
-                "Variable names must be identifiers.",
-            ),
-        );
+    // A name alone binds, whatever its case: `let PI = 3.14;`.
+    let pattern = match parser.peek_token() {
+        Token::Identifier(name)
+            if name != "_"
+                && parser
+                    .input
+                    .clone()
+                    .nth(1)
+                    .is_some_and(|(t, _)| matches!(t, Ok(Token::Colon | Token::Equals))) =>
+        {
+            let span = parser.next_token().1;
+            Pattern::Bind(SmolStr::new(name), span)
+        }
+        _ => pattern::parse_pattern(parser, true),
     };
-    // `let name: Type = value;` declares the variable's type.
+    // `let name: Type = value;` declares the variable's type, and a pattern's
+    // the type of the value it takes apart.
     let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
         parser.next_token();
         let start = parser.peek_token_span().start;
@@ -1009,138 +1018,36 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
     let value_start = parser.peek_token_span().start;
     let var_value = parse_expr(parser);
     let value_span = Span::from((value_start, parser.last_token_end as u32));
-    Expr::VarDeclare(
-        var_name,
-        Box::new(var_value),
-        annotation.map(|(ty, span)| {
-            Box::new(LetAnnotation {
-                ty,
-                span,
-                value_span,
-            })
-        }),
-    )
-}
-
-/// One place in a `let` pattern: a name to bind, `_`, or a nested pattern.
-enum LetPattern {
-    Name(SmolStr),
-    Ignore,
-    /// A nested pattern, with where it was written.
-    Tuple(Span, Vec<Self>),
-}
-
-/// Parses a parenthesised `let` pattern, `(a, (b, _))`, the `(` not yet read.
-fn parse_let_pattern(parser: &mut Parser<'_>) -> Vec<LetPattern> {
-    let open = parser.next_token().1;
-    parser.enter(open);
-    let mut places = Vec::with_capacity(2);
-    loop {
-        let place = match parser.peek_token() {
-            Token::LParen => {
-                let start = parser.peek_token_span().start;
-                let inner = parse_let_pattern(parser);
-                LetPattern::Tuple((start, parser.last_token_end as u32).into(), inner)
-            }
-            Token::Identifier("_") => {
-                parser.next_token();
-                LetPattern::Ignore
-            }
-            Token::Identifier(name) => {
-                parser.next_token();
-                LetPattern::Name(SmolStr::new(name))
-            }
-            _ => {
-                cold_path();
-                let span = parser.peek_token_span();
-                parser.error(span, ParserErr::TuplePatternElement);
-            }
-        };
-        places.push(place);
-        if parser.peek_token() != Token::Comma {
-            break;
+    let annotation = annotation.map(|(ty, span)| LetAnnotation {
+        ty,
+        span,
+        value_span,
+    });
+    let otherwise = if parser.peek_token_opt() == Some(Token::Else) {
+        let else_span = parser.next_token().1;
+        if let Pattern::Bind(..) = pattern {
+            cold_path();
+            parser.error(else_span, ParserErr::LetElseOnName);
         }
-        let comma = parser.next_token().1;
-        if parser.peek_token() == Token::RParen {
-            if places.len() == 1 {
-                cold_path();
-                parser.error(comma, ParserErr::TupleOfOne);
-            }
-            break;
+        let (code, end, span) = blocks::parse_block_in(parser, Tail::No);
+        if end != BlockEnd::Jump {
+            cold_path();
+            parser.error(span, ParserErr::LetElseMustLeave);
         }
-    }
-    let close = parser.next_token_expect(Token::RParen, "Unmatched '(' in a let pattern");
-    if places.len() == 1 {
-        cold_path();
-        parser.error(open.extend(close), ParserErr::TupleOfOne);
-    }
-    parser.leave();
-    places
-}
-
-/// `let (a, b) = value;`: the value goes into a variable no program can name,
-/// and each name in the pattern is declared from the element in its place.
-/// The declarations after the first wait in `pending_statements`, which puts
-/// them right after it in the block. A nested pattern gets a variable of its
-/// own the same way.
-fn parse_tuple_let(parser: &mut Parser<'_>) -> Expr {
-    let pattern_start = parser.peek_token_span().start;
-    let pattern = parse_let_pattern(parser);
-    let pattern_span = Span::from((pattern_start, parser.last_token_end as u32));
-    let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
-        parser.next_token();
-        let start = parser.peek_token_span().start;
-        let ty = parse_type(parser);
-        Some((ty, Span::from((start, parser.last_token_end as u32))))
+        Some(Box::from(code))
     } else {
         None
     };
-    parser.next_token_expect(
-        Token::Equals,
-        "Variable declarations need a '=' to separate the pattern from the value.",
-    );
-    let value_start = parser.peek_token_span().start;
-    let value = parse_expr(parser);
-    let value_span = Span::from((value_start, parser.last_token_end as u32));
-    let temp = tuple_let_temp(pattern.len(), pattern_span);
-    let mut bindings = Vec::new();
-    declare_let_pattern(&pattern, &temp, pattern_span, &mut bindings);
-    parser.pending_statements.extend(bindings);
-    Expr::VarDeclare(
-        temp,
-        Box::new(value),
-        annotation.map(|(ty, span)| {
-            Box::new(LetAnnotation {
-                ty,
-                span,
-                value_span,
-            })
-        }),
-    )
-}
-
-/// The declarations of every name `pattern` binds, each reading its element
-/// out of the variable `tuple`.
-fn declare_let_pattern(pattern: &[LetPattern], tuple: &SmolStr, span: Span, out: &mut Vec<Expr>) {
-    for (i, place) in pattern.iter().enumerate() {
-        let element = Expr::GetStructField(
-            Box::new(Expr::Var(tuple.clone(), span)),
-            tuple_field(i),
-            span,
-            span,
-        );
-        match place {
-            LetPattern::Name(name) => {
-                out.push(Expr::VarDeclare(name.clone(), Box::new(element), None));
-            }
-            LetPattern::Ignore => {}
-            LetPattern::Tuple(inner_span, inner) => {
-                let temp = tuple_let_temp(inner.len(), *inner_span);
-                out.push(Expr::VarDeclare(temp.clone(), Box::new(element), None));
-                declare_let_pattern(inner, &temp, span, out);
-            }
-        }
+    if let (Pattern::Bind(name, _), None) = (&pattern, &otherwise) {
+        return Expr::VarDeclare(name.clone(), Box::new(var_value), annotation.map(Box::new));
     }
+    Expr::LetPattern(Box::new(PatternLet {
+        span: let_span.extend(pattern.span()),
+        pattern,
+        value: var_value,
+        annotation,
+        otherwise,
+    }))
 }
 
 fn parse_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32) -> Expr {
@@ -1424,7 +1331,6 @@ fn parse_code(input: &mut Parser<'_>, tail: Tail) -> (Vec<Expr>, BlockEnd) {
         }
         end = e_end;
         output.push(e);
-        output.append(&mut input.pending_statements);
     }
     (output, end)
 }
@@ -2184,6 +2090,17 @@ fn parse_fn_signature_block(
             )
         } else {
             let (args, defaults) = blocks::parse_params(parser, false);
+            if !parser.param_lets.is_empty() {
+                cold_path();
+                parser.error(
+                    fn_name_span,
+                    ParserErr::UnexpectedTokenStr(
+                        "a parameter name",
+                        Token::LParen,
+                        "A host or dylib parameter is a name: fn f(x: int).",
+                    ),
+                );
+            }
             let mut types = Vec::with_capacity(args.len());
             let mut names = Vec::with_capacity(args.len());
             for (name, ty) in args {
@@ -2812,7 +2729,7 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
             pending_gt: None,
             inactive: 0,
             loops: 0,
-            pending_statements: Vec::new(),
+            param_lets: Vec::new(),
             consts: Vec::new(),
         },
         &mut impls,

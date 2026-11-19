@@ -209,7 +209,7 @@ module.exports = grammar({
     // `size: int = 12`: a call that leaves the argument out passes the default.
     parameter: ($) =>
       seq(
-        field('name', $.identifier),
+        field('name', $._pattern),
         optional(seq(':', field('type', $._type))),
         optional(seq('=', field('default', $._expression))),
       ),
@@ -497,27 +497,78 @@ module.exports = grammar({
     expression_statement: ($) =>
       choice(seq($._expression, ';'), prec(1, $.if_expression), prec(1, $.match_expression)),
 
+    // `let pattern = value;`, and `let pattern = value else { ... };` where
+    // the pattern can fail and the block leaves.
     let_declaration: ($) =>
       seq(
         'let',
-        field('name', choice($.identifier, $.tuple_pattern)),
+        field('name', $._pattern),
         optional(seq(':', field('type', $._type))),
         '=',
         field('value', $._expression),
+        optional(seq('else', field('else', $.block))),
         ';',
       ),
 
-    // `let (a, (b, _)) = t;`: each place is a name, `_`, or a nested pattern.
-    tuple_pattern: ($) =>
-      seq(
-        '(',
-        $._tuple_pattern_place,
-        repeat1(seq(',', $._tuple_pattern_place)),
-        optional(','),
-        ')',
+    // ------------------------------------------------------------------
+    // Patterns: one grammar for match arms, `is`, `let`, `for` and
+    // parameters. A name alone binds; one that starts with a capital names a
+    // variant or a constant.
+    // ------------------------------------------------------------------
+
+    _pattern: ($) => choice($._single_pattern, $.or_pattern),
+
+    or_pattern: ($) =>
+      prec.left(seq($._single_pattern, repeat1(seq('|', $._single_pattern)))),
+
+    _single_pattern: ($) =>
+      choice(
+        $.identifier,
+        $.qualified_type,
+        $._literal_pattern,
+        $.range_pattern,
+        $.tuple_pattern,
+        $.variant_pattern,
+        $.struct_pattern,
+        seq('(', $._pattern, ')'),
       ),
 
-    _tuple_pattern_place: ($) => choice($.identifier, $.tuple_pattern),
+    _literal_pattern: ($) =>
+      choice(
+        $.integer_literal,
+        $.float_literal,
+        $.string_literal,
+        $.boolean_literal,
+        $.null_literal,
+        $.negative_literal,
+      ),
+
+    negative_literal: ($) => seq('-', choice($.integer_literal, $.float_literal)),
+
+    // `1..5` holds 1 to 4, `1..=5` holds 5 too.
+    range_pattern: ($) =>
+      seq(
+        field('start', choice($._literal_pattern, $._type_identifier, $.qualified_type)),
+        choice('..', '..='),
+        field('end', choice($._literal_pattern, $._type_identifier, $.qualified_type)),
+      ),
+
+    tuple_pattern: ($) =>
+      seq('(', $._pattern, repeat1(seq(',', $._pattern)), optional(','), ')'),
+
+    // `Point { x, y: py, .. }`: a struct or a variant with named fields.
+    struct_pattern: ($) =>
+      seq(
+        field('name', choice($._type_identifier, $.qualified_type)),
+        '{',
+        sepByTrailing(',', choice($.field_pattern, $.rest_pattern)),
+        '}',
+      ),
+
+    field_pattern: ($) =>
+      seq(field('name', $.identifier), optional(seq(':', field('pattern', $._pattern)))),
+
+    rest_pattern: (_) => '..',
 
     assignment_statement: ($) =>
       seq(
@@ -547,7 +598,7 @@ module.exports = grammar({
     for_statement: ($) =>
       seq(
         'for',
-        field('binding', choice($.identifier, $.tuple_pattern)),
+        field('binding', $._pattern),
         'in',
         field('iterable', choice($.range_expression, $._expression)),
         field('body', $.block),
@@ -575,13 +626,35 @@ module.exports = grammar({
       ),
 
     match_arm: ($) =>
-      prec(1, seq(field('pattern', $.match_pattern), '=>', field('body', $.block))),
+      prec(
+        1,
+        seq(
+          field('pattern', $.match_pattern),
+          optional(field('guard', $.match_guard)),
+          '=>',
+          field('body', $.block),
+        ),
+      ),
 
     _expression_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value), ','),
+      seq(
+        field('pattern', $.match_pattern),
+        optional(field('guard', $.match_guard)),
+        '=>',
+        field('value', $._match_arm_value),
+        ',',
+      ),
 
     _last_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value)),
+      seq(
+        field('pattern', $.match_pattern),
+        optional(field('guard', $.match_guard)),
+        '=>',
+        field('value', $._match_arm_value),
+      ),
+
+    // `n if n > limit =>`: the arm runs only where the guard holds too.
+    match_guard: ($) => seq('if', field('condition', $._expression)),
 
     _match_arm_value: ($) =>
       choice(
@@ -600,16 +673,7 @@ module.exports = grammar({
 
     _arm_continue: (_) => 'continue',
 
-    // A pattern is an expression: an enum variant with bindings, a qualified
-    // name, or a literal compared for equality. `|` separates alternatives and
-    // binds looser than any operator inside one, so `1 | 2` is two patterns
-    // rather than bitwise or; `(a | b)` is the or. `_` is the wildcard, and it
-    // comes last.
-    match_pattern: ($) =>
-      seq(
-        field('alternative', $._expression),
-        repeat(prec(PREC.bit_or + 1, seq('|', field('alternative', $._expression)))),
-      ),
+    match_pattern: ($) => $._pattern,
 
     try_statement: ($) => seq('try', field('body', $.block), repeat1($.catch_clause)),
 
@@ -731,12 +795,13 @@ module.exports = grammar({
         ),
       ),
 
-    // The variant after `is`, with the names its payload binds: `Some(x)`,
-    // `Shape::Circle(r)`.
+    // A variant with its payload in order: `Some(x)`, `Shape::Circle(r)`.
     variant_pattern: ($) =>
       seq(
         field('variant', choice($._type_identifier, $.qualified_type)),
-        field('arguments', $.arguments),
+        '(',
+        sepByTrailing(',', $._pattern),
+        ')',
       ),
 
     cast_expression: ($) =>

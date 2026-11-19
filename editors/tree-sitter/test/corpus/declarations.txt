@@ -209,10 +209,9 @@ impl Option {
             (match_arm_list
               (match_arm
                 (match_pattern
-                  (call_expression
-                    (identifier)
-                    (arguments
-                      (identifier))))
+                  (variant_pattern
+                    (type_identifier)
+                    (identifier)))
                 (block
                   (return_statement
                     (boolean_literal))))
@@ -1198,22 +1197,20 @@ fn main() {
           (match_arm_list
             (match_arm
               (match_pattern
-                (struct_literal
-                  (identifier)
-                  (field_initializer_list
-                    (field_initializer
-                      (identifier))
-                    (struct_base))))
+                (struct_pattern
+                  (type_identifier)
+                  (field_pattern
+                    (identifier))
+                  (rest_pattern)))
               (call_expression
                 (identifier)
                 (arguments
                   (identifier))))
             (match_arm
               (match_pattern
-                (call_expression
-                  (identifier)
-                  (arguments
-                    (identifier))))
+                (variant_pattern
+                  (type_identifier)
+                  (identifier)))
               (call_expression
                 (identifier)
                 (arguments

@@ -842,7 +842,7 @@ impl State<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: SmolStr,
     pub register_id: u16,

@@ -514,7 +514,15 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
                     let impl_type = frames.last().and_then(|f| f.impl_type.clone());
                     pending.clear();
                     for (s, e) in toks.split_commas(j + 1, close.min(n)) {
-                        if s >= e || !toks.is_ident(s) {
+                        if s >= e {
+                            continue;
+                        }
+                        // A parameter written as a pattern, `(a, b): (int, int)`.
+                        if !toks.is_ident(s) || matches!(toks.s(s + 1), "(" | "{" | "::") {
+                            let pattern_end = (s..e)
+                                .find(|&k| toks.s(k) == ":" && matches!(toks.s(k - 1), ")" | "}"))
+                                .unwrap_or(e);
+                            pending.extend(pattern_bindings(toks, s, pattern_end));
                             continue;
                         }
                         let name = toks.s(s).to_owned();
@@ -563,7 +571,7 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
                             });
                         }
                     }
-                } else if toks.is_ident(j) {
+                } else if toks.is_ident(j) && !matches!(toks.s(j + 1), "(" | "{" | "::" | "<") {
                     let name = toks.s(j).to_owned();
                     let at = toks.toks[j].start;
                     j += 1;
@@ -574,6 +582,15 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
                         Source::Expr(value_start, value_end)
                     };
                     frame.bindings.push(Binding { name, at, source });
+                } else {
+                    // Any other pattern, `let Some(v) = ...`: its names, at
+                    // types this reading does not follow.
+                    let pattern_end = (j..eq.unwrap_or(end))
+                        .find(|&k| toks.s(k) == ":" && toks.s(k - 1) == ")")
+                        .unwrap_or(eq.unwrap_or(end));
+                    frame
+                        .bindings
+                        .extend(pattern_bindings(toks, j, pattern_end));
                 }
                 // The value may hold closures and blocks: read on into it.
                 i = eq.map_or(i + 1, |eq| eq + 1);
@@ -603,12 +620,14 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
                             });
                         }
                     }
-                } else if toks.is_ident(i + 1) {
+                } else if toks.is_ident(i + 1) && toks.s(i + 2) == "in" {
                     pending.push(Binding {
                         name: toks.s(i + 1).to_owned(),
                         at: toks.toks[i + 1].start,
                         source: Source::Element(expr_start, expr_end, None),
                     });
+                } else {
+                    pending.extend(pattern_bindings(toks, i + 1, in_at));
                 }
                 i = in_at + 1;
                 continue;
@@ -626,6 +645,29 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
         bindings,
         impl_type,
     }
+}
+
+/// The names a pattern in `start..end` binds, at types this reading does not
+/// follow: each name that starts with a lowercase letter or `_`, other than
+/// `_` itself, that is no path segment, call or struct name, and no field
+/// label (`x:` in `Point { x: px }` binds `px`).
+fn pattern_bindings(toks: &Tokens<'_>, start: usize, end: usize) -> Vec<Binding> {
+    (start..end)
+        .filter(|&k| {
+            let s = toks.s(k);
+            toks.is_ident(k)
+                && s != "_"
+                && s.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+                && !matches!(toks.s(k + 1), "(" | "{" | "::" | ":" | "<")
+                && (k == 0 || toks.s(k - 1) != "::")
+                && !matches!(s, "true" | "false" | "null" | "if")
+        })
+        .map(|k| Binding {
+            name: toks.s(k).to_owned(),
+            at: toks.toks[k].start,
+            source: Source::Known(Ty::Unknown),
+        })
+        .collect()
 }
 
 impl Scope {
@@ -1010,5 +1052,15 @@ mod tests {
         // A `for` with no `in` yet binds nothing.
         let toks = Tokens::new("fn f() { for (a, b)");
         assert!(scope_at(&toks, toks.toks.len()).bindings.is_empty());
+    }
+
+    #[test]
+    fn scopes_of_patterns() {
+        let toks = Tokens::new(
+            "fn f((a, b): (int, int), Point { x, y: py }: Point) {\n let Some(v) = m.get(k) else { return; };\n for Pair { left, .. } in ps {",
+        );
+        let scope = scope_at(&toks, toks.toks.len());
+        let names: Vec<&str> = scope.bindings.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "x", "py", "v", "left"]);
     }
 }

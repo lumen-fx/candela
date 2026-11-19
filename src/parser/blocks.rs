@@ -4,33 +4,32 @@
 use super::ParserErr;
 use super::lexer::Token;
 use super::lexer::parse_string;
-use super::parser_expr::PIPE_PRECEDENCE;
 use super::parser_expr::parse_expr;
 use super::parser_expr::parse_expr_no_struct;
-use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
+use crate::compiler::expr::MatchArm;
 use crate::compiler::expr::Operand;
 use crate::compiler::expr::ParamDefaults;
+use crate::compiler::expr::PatternLet;
 use crate::compiler::expr::RECEIVER;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::UNARY_MINUS_METHOD;
 use crate::compiler::expr::mangle_method;
-use crate::compiler::expr::tuple_let_temp;
+use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::ReturnAnnotation;
 use crate::parser::BlockEnd;
 use crate::parser::Parser;
 use crate::parser::Tail;
 use crate::parser::TypeExpr;
-use crate::parser::declare_let_pattern;
 use crate::parser::parse_attributes;
 use crate::parser::parse_code;
 use crate::parser::parse_jump;
-use crate::parser::parse_let_pattern;
 use crate::parser::parse_type;
 use crate::parser::parse_type_args;
 use crate::parser::parse_type_params;
+use crate::parser::pattern::parse_pattern;
 use smol_strc::SmolStr;
 use std::rc::Rc;
 
@@ -205,12 +204,15 @@ fn parse_block_rest(
 ///
 /// A block body hands back its value with `return`; unlike a block used as a
 /// value, it does not end in one.
+///
+/// The `let`s that take apart the parameters written as patterns open it.
 pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
+    let mut code = std::mem::take(&mut parser.param_lets);
     // A loop around an anonymous function is not one its body can leave.
     let loops = std::mem::take(&mut parser.loops);
-    let body = parse_fn_body_in(parser, declaration);
+    code.extend(parse_fn_body_in(parser, declaration));
     parser.loops = loops;
-    body
+    code
 }
 
 fn parse_fn_body_in(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
@@ -248,6 +250,44 @@ pub fn parse_while_block(input: &mut Parser<'_>) -> Expr {
     )
 }
 
+/// The rest of a `for` whose binding is a pattern, the pattern read: the
+/// element goes into a variable no program can name, and the body opens with
+/// the `let` that takes it apart.
+fn parse_for_pattern(parser: &mut Parser<'_>, pattern: Pattern) -> Expr {
+    let pattern_span = pattern.span();
+    let element = SmolStr::from(format!("[for {} {}]", pattern_span.start, pattern_span.end));
+    parser.next_token_expect(Token::In, "");
+    let start = parser.peek_token_span().start;
+    let for_collection = parse_expr_no_struct(parser);
+    let end = parser.last_token_end as u32;
+    if parser.peek_token() == Token::RangeDot {
+        cold_path();
+        let span = parser.peek_token_span();
+        parser.error(
+            span,
+            ParserErr::UnexpectedToken(
+                Token::LBrace,
+                Token::RangeDot,
+                "A range binds one number, not a pattern.",
+            ),
+        );
+    }
+    let mut code = vec![Expr::LetPattern(Box::new(PatternLet {
+        pattern,
+        value: Expr::Var(element.clone(), pattern_span),
+        annotation: None,
+        otherwise: None,
+        span: pattern_span,
+    }))];
+    code.extend(parse_loop_body(parser));
+    Expr::ForLoop(
+        element,
+        Box::new(for_collection),
+        Box::from(code),
+        (start, end).into(),
+    )
+}
+
 /// Parses ForLoop and IntForLoop
 /// for Identifier in Expr LBrace Code RBrace
 /// for Identifier in Expr RangeDot Expr LBrace Code Rbrace
@@ -255,55 +295,27 @@ pub fn parse_while_block(input: &mut Parser<'_>) -> Expr {
 pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
     let t = parser.next_token();
     debug_assert_eq!(t.0, Token::For);
-    // `for (a, b) in xs`: the element goes into a variable no program can
-    // name, and the body opens with the declarations `let (a, b) = element;`
-    // would make.
-    if parser.peek_token() == Token::LParen {
-        let pattern_start = parser.peek_token_span().start;
-        let pattern = parse_let_pattern(parser);
-        let pattern_span = Span::from((pattern_start, parser.last_token_end as u32));
-        let element = SmolStr::from(format!("[for {} {}]", pattern_span.start, pattern_span.end));
-        let temp = tuple_let_temp(pattern.len(), pattern_span);
-        let mut prelude = vec![Expr::VarDeclare(
-            temp.clone(),
-            Box::new(Expr::Var(element.clone(), pattern_span)),
-            None,
-        )];
-        declare_let_pattern(&pattern, &temp, pattern_span, &mut prelude);
-        parser.next_token_expect(Token::In, "");
-        let start = parser.peek_token_span().start;
-        let for_collection = parse_expr_no_struct(parser);
-        let end = parser.last_token_end as u32;
-        if parser.peek_token() == Token::RangeDot {
-            cold_path();
-            let span = parser.peek_token_span();
-            parser.error(
-                span,
-                ParserErr::UnexpectedToken(
-                    Token::LBrace,
-                    Token::RangeDot,
-                    "A range binds one number, not a pattern.",
-                ),
-            );
+    // A name alone binds, whatever its case.
+    let pattern = match parser.peek_token() {
+        Token::Identifier(name)
+            if name != "_"
+                && parser
+                    .input
+                    .clone()
+                    .nth(1)
+                    .is_some_and(|(t, _)| t == Ok(Token::In)) =>
+        {
+            let span = parser.next_token().1;
+            Pattern::Bind(SmolStr::new(name), span)
         }
-        let body = parse_loop_body(parser);
-        prelude.extend(body);
-        return Expr::ForLoop(
-            element,
-            Box::new(for_collection),
-            Box::from(prelude),
-            (start, end).into(),
-        );
-    }
-    let (i_token, span) = parser.next_token();
-    let id = if let Token::Identifier(id) = i_token {
-        SmolStr::new(id)
-    } else {
-        cold_path();
-        parser.error(
-            span,
-            ParserErr::UnexpectedToken(Token::Identifier(""), i_token, ""),
-        );
+        _ => parse_pattern(parser, true),
+    };
+    // `for (a, b) in xs`: the element goes into a variable no program can
+    // name, and the body opens with `let (a, b) = element;`.
+    let id = match pattern {
+        Pattern::Bind(id, _) => id,
+        Pattern::Wildcard(_) => SmolStr::new_static("_"),
+        pattern => return parse_for_pattern(parser, pattern),
     };
     parser.next_token_expect(Token::In, "");
     let start = parser.peek_token_span().start;
@@ -416,10 +428,48 @@ pub fn parse_params(
     );
     let mut args: Vec<(SmolStr, Option<TypeExpr>)> = Vec::with_capacity(4);
     let mut defaults: Vec<Option<(Expr, Span)>> = Vec::new();
+    let mut lets: Vec<Expr> = Vec::new();
     loop {
         if parser.peek_token() == Token::RParen {
             parser.next_token();
             break;
+        }
+        // A parameter that is a pattern, `(a, b): (int, int)`, takes the
+        // argument under a name no program can write, and the body opens
+        // with the `let` that takes it apart.
+        let plain_name = matches!(parser.peek_token(), Token::Identifier(name) if name != "_")
+            && parser.input.clone().nth(1).is_some_and(|(t, _)| {
+                matches!(
+                    t,
+                    Ok(Token::Colon | Token::Comma | Token::RParen | Token::Equals)
+                )
+            });
+        if !plain_name {
+            let pattern = parse_pattern(parser, true);
+            let span = pattern.span();
+            let name = SmolStr::from(format!("[param {}]", args.len()));
+            lets.push(Expr::LetPattern(Box::new(PatternLet {
+                pattern,
+                value: Expr::Var(name.clone(), span),
+                annotation: None,
+                otherwise: None,
+                span,
+            })));
+            let ty = if parser.peek_token() == Token::Colon {
+                parser.next_token();
+                Some(parse_type(parser))
+            } else {
+                None
+            };
+            args.push((name, ty));
+            if parser.peek_token() == Token::Comma {
+                parser.next_token();
+            } else if parser.peek_token() != Token::RParen {
+                cold_path();
+                let span = parser.peek_token_span();
+                parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
+            }
+            continue;
         }
         let (arg, span) = parser.next_token();
         if let Token::Identifier(arg) = arg {
@@ -461,6 +511,7 @@ pub fn parse_params(
     if !defaults.is_empty() {
         defaults.resize(args.len(), None);
     }
+    parser.param_lets = lets;
     (args, defaults.into_boxed_slice())
 }
 
@@ -1025,21 +1076,36 @@ fn parse_match_in(
 ) -> (Expr, Vec<(BlockEnd, Option<BlockEnd>)>) {
     let match_obj = parse_expr_no_struct(parser);
     parser.next_token_expect(Token::LBrace, "Blocks must be delimited by braces");
-    let mut arms: Vec<(Box<[Expr]>, Box<[Expr]>)> = Vec::with_capacity(2);
+    let mut arms: Vec<MatchArm> = Vec::with_capacity(2);
     let mut ends = Vec::with_capacity(2);
     let mut wildcard: Option<Box<[Expr]>> = None;
-    let mut has_non_wildcard = false;
     let end: u32;
     loop {
-        let peek_token = parser.peek_token();
-        if peek_token == Token::Identifier("_") {
-            if !has_non_wildcard {
+        if parser.peek_token() == Token::RBrace {
+            if arms.is_empty() {
                 cold_path();
                 let span = (start, parser.peek_token_span().end).into();
+                parser.error(span, ParserErr::MatchBlockZeroArms);
+            }
+            end = parser.peek_token_span().end;
+            parser.next_token();
+            break;
+        }
+        let pattern = parse_pattern(parser, true);
+        let guard = if parser.peek_token() == Token::If {
+            parser.next_token();
+            Some(parse_expr(parser))
+        } else {
+            None
+        };
+        parser.next_token_expect(Token::FatArrow, "Expected '=>'");
+        // `_` with no guard is the wildcard, which comes last.
+        if let (Pattern::Wildcard(wildcard_span), None) = (&pattern, &guard) {
+            if arms.is_empty() {
+                cold_path();
+                let span = (start, wildcard_span.end).into();
                 parser.error(span, ParserErr::MatchBlockNoNonWildcardArm);
             }
-            parser.next_token();
-            parser.next_token_expect(Token::FatArrow, "Expected '=>'");
             let (code, arm_end) = parse_match_arm_body(parser, mode, true);
             ends.push(arm_end);
             end = parser.peek_token_span().end;
@@ -1049,23 +1115,14 @@ fn parse_match_in(
             );
             wildcard = Some(Box::from(code));
             break;
-        } else if peek_token == Token::RBrace {
-            if !has_non_wildcard {
-                cold_path();
-                let span = (start, parser.peek_token_span().end).into();
-                parser.error(span, ParserErr::MatchBlockZeroArms);
-            }
-            end = parser.peek_token_span().end;
-            parser.next_token();
-            break;
-        } else {
-            let patterns = parse_match_patterns(parser);
-            parser.next_token_expect(Token::FatArrow, "");
-            let (code, arm_end) = parse_match_arm_body(parser, mode, false);
-            ends.push(arm_end);
-            has_non_wildcard = true;
-            arms.push((patterns, Box::from(code)));
         }
+        let (code, arm_end) = parse_match_arm_body(parser, mode, false);
+        ends.push(arm_end);
+        arms.push(MatchArm {
+            pattern,
+            guard,
+            body: Box::from(code),
+        });
     }
     (
         Expr::Match(
@@ -1077,26 +1134,6 @@ fn parse_match_in(
         ),
         ends,
     )
-}
-
-/// One arm's pattern: alternatives separated by `|`. Each alternative is read
-/// above the precedence of `|`, which in an expression is bitwise or, so
-/// `1 | 2` is two patterns rather than the number 3.
-fn parse_match_patterns(parser: &mut Parser<'_>) -> Box<[Expr]> {
-    let mut patterns: Vec<Expr> = Vec::with_capacity(1);
-    loop {
-        if parser.peek_token() == Token::Identifier("_") {
-            cold_path();
-            let span = parser.peek_token_span();
-            parser.error(span, ParserErr::MatchWildcardAlternative);
-        }
-        patterns.push(parse_expr_with_precedence(parser, PIPE_PRECEDENCE, true));
-        if parser.peek_token() != Token::Pipe {
-            break;
-        }
-        parser.next_token();
-    }
-    Box::from(patterns)
 }
 
 /// The body after an arm's `=>`: a braced block, or an expression followed by

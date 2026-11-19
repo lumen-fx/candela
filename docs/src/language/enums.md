@@ -124,7 +124,9 @@ fn main() {
 
 A payload binding introduces a variable for the arm's body. Use `_` in a
 payload position to ignore it, and `_` as a whole arm for everything not listed.
-A wildcard arm comes last.
+A wildcard arm comes last. A payload place takes any
+[pattern](control-flow.md#patterns), so `Some((0, y))` or `Click(x, 0)` tests
+inside the payload too.
 
 `|` joins variants that share an arm. Every alternative binds the same names at
 the same types, since the arm runs whichever of them matched; one that binds

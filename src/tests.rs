@@ -15549,12 +15549,12 @@ pub fn match_mistakes_are_reported() {
         (
             "enum E { A(int), B(string) }\nfn main() { match E::A(1) { A(x) | B(x) => print(x) } }",
             "pattern_bindings_differ",
-            "B",
+            "B(x)",
         ),
         (
             "enum E { A(int), B(int), C }\nfn main() { print(match E::C { A(x) | B(y) => 1, C => 2 }); }",
             "pattern_bindings_differ",
-            "B",
+            "B(y)",
         ),
         (
             "fn main() { match 1 { 1 | _ => print(1) } }",
@@ -16963,7 +16963,7 @@ pub fn match_takes_tuple_patterns() {
             }
             let origin = (0, 0);
             let found = match (0, 0) {
-                origin => "same",
+                o if o == origin => "same",
                 _ => "different",
             };
             print(found);
@@ -17032,11 +17032,8 @@ pub fn tuple_errors() {
         ),
         ("fn main() { let t = (1,); }", "tuple_of_one"),
         ("fn main() { let t: (int,) = 1; }", "tuple_of_one"),
-        ("fn main() { let (a) = 1; }", "tuple_of_one"),
-        (
-            "fn main() { let (a, 1) = (1, 2); }",
-            "tuple_pattern_element",
-        ),
+        ("fn main() { let (a,) = 1; }", "tuple_of_one"),
+        ("fn main() { let (a, 1) = (1, 2); }", "let_pattern_can_fail"),
         ("fn main() { print((1, 2) < (1, 3)); }", "invalid_operation"),
         ("fn main() { print((1, 2).len()); }", "no_such_method"),
     ] {
@@ -17689,6 +17686,142 @@ fn main() {
     ];
     for (src, code, at) in cases {
         let d = compile_diag(src, "blocks.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
+}
+
+/// One pattern grammar wherever a name is bound: `match` arms with guards,
+/// ranges, nested variants, structs and tuples, `is`, `let` and `let ... else`,
+/// `for`, and the parameters of functions and closures. A bare lowercase name
+/// binds; a comparison with a variable is a guard.
+#[test]
+pub fn patterns_bind_everywhere() {
+    let src = "
+enum Shape { Circle(float), Rect { w: float, h: float }, Empty }
+struct Point { x: int, y: int }
+
+fn describe(s: Shape) -> string {
+    return match s {
+        Shape::Circle(r) if r > 10.0 => \"big circle\",
+        Circle(r) => \"circle\",
+        Rect { w, h } if w == h => \"square\",
+        Rect { w, .. } => \"rect\",
+        Empty => \"empty\",
+    };
+}
+
+fn grade(n: int) -> string {
+    return match n {
+        90..=100 => \"A\",
+        80..90 => \"B\",
+        0 | 1 => \"tiny\",
+        x if x < 0 => \"negative\",
+        _ => \"low\",
+    };
+}
+
+fn lookup(m: {string: int}, k: string) -> int {
+    let Some(v) = m.get(k) else {
+        return -1;
+    };
+    return v * 2;
+}
+
+fn main() {
+    print(describe(Shape::Circle(20.0)), describe(Shape::Circle(1.0)));
+    print(describe(Shape::Rect { w: 2.0, h: 2.0 }), describe(Shape::Rect { w: 2.0, h: 3.0 }), describe(Shape::Empty));
+    print(grade(95), grade(85), grade(1), grade(-5), grade(50));
+    let p = Point { x: 3, y: 4 };
+    let Point { x, y } = p;
+    print(x + y);
+    let (a, (b, _)) = (1, (2, 3));
+    print(a, b);
+    let pairs = [(1, \"one\"), (2, \"two\")];
+    for (n, name) in pairs {
+        print(n, name);
+    }
+    let opt = Some((5, 6));
+    if opt is Some((q, r)) {
+        print(q * r);
+    }
+    match opt {
+        Some((0, _)) => print(\"zero first\"),
+        Some((f, s)) => print(f, s),
+        None => print(\"none\"),
+    }
+    print(lookup({\"a\": 4}, \"a\"), lookup({\"a\": 4}, \"b\"));
+    let add = fn((u, w)) => u + w;
+    print(add((10, 20)));
+    let pts = [Point { x: 1, y: 2 }, Point { x: 5, y: 6 }];
+    for Point { x, y: py } in pts {
+        print(x * py);
+    }
+}
+";
+    assert_eq!(
+        run_output(src),
+        "big circle\ncircle\nsquare\nrect\nempty\nA\nB\ntiny\nnegative\nlow\n7\n1\n2\n1\none\n2\ntwo\n30\n5\n6\n8\n-1\n30\n2\n30\n"
+    );
+    let src = "
+fn pair((a, b): (int, int)) -> int => a * b;
+struct P { x: int, y: int }
+fn main() {
+    let PI = 3;
+    let limit = 4;
+    let n = match 4 {
+        x if x == limit => \"at limit\",
+        _ => \"other\",
+    };
+    let P { x, .. } = P { x: 7, y: 8 };
+    print(PI, n, pair((3, 4)), x);
+}
+";
+    assert_eq!(run_output(src), "3\nat limit\n12\n7\n");
+    let cases = [
+        (
+            "fn main() { let limit = 4; match 3 { limit => print(1), _ => print(2) } }",
+            "pattern_binds_name",
+            "limit",
+        ),
+        (
+            "fn main() { let o = Some(1); let Some(v) = o; print(v); }",
+            "let_pattern_can_fail",
+            "let Some(v)",
+        ),
+        (
+            "fn main() { let o = Some(1); let Some(v) = o else { print(0); }; }",
+            "let_else_must_leave",
+            "{ print(0); }",
+        ),
+        (
+            "fn main() { let v = 1 else { return; }; }",
+            "let_else_on_name",
+            "else",
+        ),
+        (
+            "fn main() { let (a, b) = (1, 2) else { return; }; }",
+            "let_else_never_runs",
+            "let (a, b)",
+        ),
+        (
+            "struct P { x: int, y: int }\nfn main() { let P { x } = P { x: 1, y: 2 }; }",
+            "pattern_field_missing",
+            "P { x }",
+        ),
+        (
+            "fn main() { match 1 { + => print(1) } }",
+            "pattern_expected",
+            "+",
+        ),
+        (
+            "fn main() { print(match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }); }",
+            "enum_error",
+            "match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "patterns.cdl").unwrap_err();
         assert_eq!(d.code, code, "{src}: {d:?}");
         assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
     }

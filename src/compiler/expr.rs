@@ -2,6 +2,7 @@
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
 use super::attributes::AttributeDecl;
+use super::patterns::Pattern;
 use super::type_system::ReturnAnnotation;
 use super::type_system::TypeExpr;
 use super::type_system::TypeParams;
@@ -65,13 +66,6 @@ pub fn tuple_literal(elements: Vec<(Expr, Span)>, span: Span) -> Expr {
     Expr::Struct(Box::from([name]), fields, span, Box::from([]), None)
 }
 
-/// How the variable a `let (a, b) = value;` keeps its tuple in starts.
-///
-/// The rest of the name is the number of places in the pattern, the start and
-/// the end of the pattern in the file, all three separated by spaces, and `]`.
-/// No identifier can start with `[`.
-pub const TUPLE_LET_PREFIX: &str = "[TUPLE ";
-
 /// The call that reads the constant `name`: a constant is a function of no
 /// arguments that a bare name calls.
 #[must_use]
@@ -83,60 +77,6 @@ pub fn const_read(name: &SmolStr, span: Span) -> Expr {
         Box::from([]),
         Box::from([]),
     )
-}
-
-/// The variable a `let` pattern of `places` places written at `span` holds
-/// its tuple in. See [`TUPLE_LET_PREFIX`].
-#[must_use]
-pub fn tuple_let_temp(places: usize, span: Span) -> SmolStr {
-    format_args!("{TUPLE_LET_PREFIX}{places} {} {}]", span.start, span.end).to_smolstr()
-}
-
-/// The number of places the `let` pattern behind variable `name` has and
-/// where the pattern was written, `None` for a variable a program declared.
-#[must_use]
-pub fn tuple_let_pattern(name: &str) -> Option<(usize, Span)> {
-    let mut parts = name
-        .strip_prefix(TUPLE_LET_PREFIX)?
-        .strip_suffix(']')?
-        .split(' ');
-    let places = parts.next()?.parse().ok()?;
-    let start = parts.next()?.parse().ok()?;
-    let end = parts.next()?.parse().ok()?;
-    Some((places, Span { start, end }))
-}
-
-/// The elements of a tuple literal and where each was written, `None` for any
-/// other expression. A `match` arm written as a tuple literal is a tuple
-/// pattern.
-#[must_use]
-pub fn tuple_elements(expr: &Expr) -> Option<Vec<(&Expr, Span)>> {
-    match expr {
-        Expr::Struct(path, fields, _, type_args, None)
-            if type_args.is_empty()
-                && path.len() == 1
-                && crate::compiler::type_system::tuple_arity(&path[0]).is_some() =>
-        {
-            Some(
-                fields
-                    .iter()
-                    .map(|(_, value, span, _)| (value, *span))
-                    .collect(),
-            )
-        }
-        _ => None,
-    }
-}
-
-/// The expressions a variant pattern binds through, as written: `Some(x)`
-/// gives `x`, `Click { x, y: py }` gives `x` and `py`. Empty for any other
-/// expression.
-pub fn variant_pattern_binders(pattern: &Expr) -> Box<dyn Iterator<Item = &Expr> + '_> {
-    match pattern {
-        Expr::FunctionCall(args, ..) => Box::new(args.iter()),
-        Expr::Struct(_, fields, ..) => Box::new(fields.iter().map(|(_, value, _, _)| value)),
-        _ => Box::new(std::iter::empty()),
-    }
 }
 
 /// The field names of an enum's variants declared with named fields, by the
@@ -216,9 +156,29 @@ pub enum IsTarget {
     /// that names no type but a variant without a payload (`None`) is a
     /// variant test.
     Type(TypeExpr),
-    /// A variant written the way a `match` arm writes it, `Some(x)`: an
-    /// [`Expr::FunctionCall`] whose arguments name the payload binders.
-    Variant(Expr),
+    /// A pattern, written the way a `match` arm writes it: `Some(x)`,
+    /// `Click { x, y }`. What it binds is in scope where the test held.
+    Pattern(Pattern),
+}
+
+/// One arm of a `match`: its pattern, the guard written after `if`, and the
+/// body that runs when both hold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Box<[Expr]>,
+}
+
+/// `let pattern = value;`, or with `else { ... }` after the value: the block
+/// that runs when the pattern does not fit, which has to leave.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternLet {
+    pub pattern: Pattern,
+    pub value: Expr,
+    pub annotation: Option<LetAnnotation>,
+    pub otherwise: Option<Box<[Expr]>>,
+    pub span: Span,
 }
 
 /// The type a `let` declares for its variable: `let xs: int[] = [];`.
@@ -363,23 +323,21 @@ pub enum Expr {
     /// `type_args` names the instantiation of a generic enum
     /// (`Slot<int>::Empty`) and is empty otherwise.
     NamespacedRef(Box<[SmolStr]>, Span, Box<[TypeExpr]>),
-    /// Match(scrutinee, arms: [(patterns, body)], wildcard_body, span, is_value)
+    /// Match(scrutinee, arms, wildcard_body, span, is_value)
     ///
-    /// The arm patterns are parsed as ordinary expressions; the compiler picks
-    /// the lowering by the scrutinee's static type. For an enum scrutinee each
-    /// pattern is a variant pattern (`Circle(r)` binds the payload); otherwise
-    /// each pattern is an equality test against the scrutinee. An arm holds one
-    /// pattern per `|` alternative and runs when any of them matches.
+    /// The first arm whose pattern fits the scrutinee, and whose guard holds,
+    /// runs. A last arm written `_` with no guard is kept apart, as the
+    /// wildcard.
     ///
     /// `is_value` marks a `match` written where a value goes. Each of its
     /// bodies ends in the arm's value or leaves, and it covers every case.
-    Match(
-        Box<Self>,
-        Box<[(Box<[Self]>, Box<[Self]>)]>,
-        Option<Box<[Self]>>,
-        Span,
-        bool,
-    ),
+    Match(Box<Self>, Box<[MatchArm]>, Option<Box<[Self]>>, Span, bool),
+    /// LetPattern(let)
+    ///
+    /// `let pattern = value;` with a pattern other than a name, and
+    /// `let pattern = value else { ... };`: what the pattern binds is in scope
+    /// for the rest of the block. See [`PatternLet`].
+    LetPattern(Box<PatternLet>),
     /// GetStructField(struct_expr, field, struct_span, field_span, value_span)
     GetStructField(Box<Self>, SmolStr, Span, Span),
     /// SetStructField(struct_expr, field, new_expr, struct_span, field_span, value_span)
@@ -699,6 +657,7 @@ fn collect_value_blocks<'a>(expr: &'a Expr, root: bool, out: &mut Vec<&'a Expr>)
             out.push(expr);
         }
         Expr::Match(scrutinee, ..) => collect_value_blocks(scrutinee, false, out),
+        Expr::LetPattern(pattern_let) => collect_value_blocks(&pattern_let.value, false, out),
         Expr::Condition(condition, ..)
         | Expr::ElseIfBlock(condition, ..)
         | Expr::WhileBlock(condition, ..)
@@ -1062,12 +1021,20 @@ fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
                 || (err_var != var_name && code_modifies_variable(var_name, catch_code))
         }
         Expr::Match(_, arms, wildcard, _, _) => {
-            arms.iter()
-                .any(|(_, body)| code_modifies_variable(var_name, body))
-                || wildcard
-                    .as_ref()
-                    .is_some_and(|body| code_modifies_variable(var_name, body))
+            arms.iter().any(|arm| {
+                code_modifies_variable(var_name, &arm.body)
+                    || arm
+                        .guard
+                        .as_ref()
+                        .is_some_and(|g| code_modifies_variable(var_name, std::slice::from_ref(g)))
+            }) || wildcard
+                .as_ref()
+                .is_some_and(|body| code_modifies_variable(var_name, body))
         }
+        Expr::LetPattern(pattern_let) => pattern_let
+            .otherwise
+            .as_ref()
+            .is_some_and(|body| code_modifies_variable(var_name, body)),
         _ => false,
     }
 }
@@ -1115,28 +1082,14 @@ fn scan_block_free_names(
     bound.truncate(bound_len);
 }
 
-/// What a tuple pattern adds to a free-name scan: each name it binds is
-/// bound for the arm body, and each value it compares an element with is
-/// read where the pattern is.
-fn scan_tuple_pattern(
-    pattern: &Expr,
-    depth: u32,
-    bound: &mut Vec<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
-    let Some(elements) = tuple_elements(pattern) else {
-        scan_free_names(pattern, depth, bound, out);
-        return;
-    };
-    for (element, _) in elements {
-        match element {
-            Expr::Var(name, _) => bound.push(name.clone()),
-            nested if tuple_elements(nested).is_some() => {
-                scan_tuple_pattern(nested, depth, bound, out);
-            }
-            value => scan_free_names(value, depth, bound, out),
-        }
+/// What a pattern adds to a free-name scan: each name it binds is bound for
+/// the code after it, and each value it compares with is read where the
+/// pattern is.
+fn scan_pattern(pattern: &Pattern, depth: u32, bound: &mut Vec<SmolStr>, out: &mut Vec<SmolStr>) {
+    for read in pattern.reads() {
+        scan_free_names(read, depth, bound, out);
     }
+    bound.extend(pattern.binders().into_iter().map(|(name, _)| name));
 }
 
 /// Collects, in the order they first appear, the names the anonymous
@@ -1209,29 +1162,25 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::Match(scrutinee, arms, wildcard, _, _) => {
             scan_free_names(scrutinee, depth, bound, out);
-            for (patterns, body) in arms {
+            for arm in arms {
                 let bound_len = bound.len();
-                // An enum pattern binds its payload for the arm body; any
-                // other pattern is a value the scrutinee is compared against.
-                for pattern in patterns {
-                    if tuple_elements(pattern).is_some() {
-                        scan_tuple_pattern(pattern, depth, bound, out);
-                    } else if matches!(pattern, Expr::FunctionCall(..) | Expr::Struct(..)) {
-                        for binder in variant_pattern_binders(pattern) {
-                            if let Expr::Var(name, _) = binder {
-                                bound.push(name.clone());
-                            }
-                        }
-                    } else {
-                        scan_free_names(pattern, depth, bound, out);
-                    }
+                scan_pattern(&arm.pattern, depth, bound, out);
+                if let Some(guard) = &arm.guard {
+                    scan_free_names(guard, depth, bound, out);
                 }
-                scan_block_free_names(body, depth, bound, out);
+                scan_block_free_names(&arm.body, depth, bound, out);
                 bound.truncate(bound_len);
             }
             if let Some(body) = wildcard {
                 scan_block_free_names(body, depth, bound, out);
             }
+        }
+        Expr::LetPattern(pattern_let) => {
+            scan_free_names(&pattern_let.value, depth, bound, out);
+            if let Some(otherwise) = &pattern_let.otherwise {
+                scan_block_free_names(otherwise, depth, bound, out);
+            }
+            scan_pattern(&pattern_let.pattern, depth, bound, out);
         }
         Expr::Condition(condition, body, ..)
         | Expr::InlineCondition(condition, body, ..)
@@ -1246,12 +1195,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::Is(operand, target, _, _) => {
             scan_free_names(operand, depth, bound, out);
-            if let IsTarget::Variant(pattern) = &**target {
-                for binder in variant_pattern_binders(pattern) {
-                    if let Expr::Var(name, _) = binder {
-                        bound.push(name.clone());
-                    }
-                }
+            if let IsTarget::Pattern(pattern) = &**target {
+                scan_pattern(pattern, depth, bound, out);
             }
         }
         Expr::ElseBlock(body) | Expr::EvalBlock(body) | Expr::LoopBlock(body) => {
