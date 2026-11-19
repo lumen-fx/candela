@@ -1926,6 +1926,74 @@ pub(crate) fn order_named_fields(
     (values, spans)
 }
 
+/// A function a path written as a value names.
+pub(crate) enum PathValue {
+    /// A function candela compiled, by id: `m::f`, `Point::new`, `Rect::area`.
+    Fn(usize),
+    /// A constant, read by calling it: `m::LIMIT`.
+    Const,
+    /// A host or library function, which is no candela function of its own:
+    /// the anonymous function that calls it.
+    Wrapped(Expr),
+}
+
+/// What `path`, written where a value goes, names when it names a function:
+/// a module's function, a function an `impl` block declares (a method takes
+/// its receiver as the first argument), or a function of a `host` or `dylib`
+/// block. `None` for anything else.
+pub(crate) fn path_fn_value(
+    path: &[SmolStr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<PathValue> {
+    let (name, namespace) = path.split_last()?;
+    if type_args.is_empty()
+        && let Some(fn_id) = state.scope(ctx.file_idx).find_function(namespace, name)
+    {
+        return Some(if state.fns[fn_id].is_const {
+            PathValue::Const
+        } else {
+            PathValue::Fn(fn_id)
+        });
+    }
+    if let Some(fn_id) = type_system::type_path_fn(path, type_args, span, ctx, state) {
+        return Some(PathValue::Fn(fn_id));
+    }
+    let [block, fn_name] = path else {
+        return None;
+    };
+    let (arity, returns_null) = state
+        .dyn_libs
+        .iter()
+        .find(|lib| lib.name == *block)?
+        .fns
+        .iter()
+        .find(|sig| sig.name == *fn_name && !sig.variadic)
+        .map(|sig| (sig.args.len(), sig.return_type == DataType::Null))?;
+    let params: Box<[SmolStr]> = (0..arity)
+        .map(|i| format_args!("[{i}]").to_smolstr())
+        .collect();
+    let call = Expr::FunctionCall(
+        params.iter().map(|p| Expr::Var(p.clone(), span)).collect(),
+        Box::from(path),
+        span,
+        vec![span; arity].into_boxed_slice(),
+        Box::from([]),
+    );
+    let body = if returns_null {
+        call
+    } else {
+        Expr::ReturnVal(Box::new(Some(call)))
+    };
+    Some(PathValue::Wrapped(Expr::AnonymousFunction(
+        params,
+        Box::from([body]),
+        span,
+    )))
+}
+
 /// The enum and variant a qualified pattern with no type arguments names.
 ///
 /// The segments in front of the variant are the enum name and, before it, the
@@ -6982,6 +7050,40 @@ impl Expr {
             }
             Self::NamespacedRef(path, span, type_args) => {
                 debug_assert!(uses_id);
+                if let Some(value) = path_fn_value(path, type_args, *span, ctx, state) {
+                    return match value {
+                        PathValue::Fn(fn_id) => {
+                            Some(compile_fn_entry_value(fn_id, v, ctx, state, output, tgt_id))
+                        }
+                        PathValue::Const => Self::FunctionCall(
+                            Box::from([]),
+                            path.clone(),
+                            *span,
+                            Box::from([]),
+                            Box::from([]),
+                        )
+                        .compile_form(
+                            v,
+                            ctx,
+                            state,
+                            output,
+                            tgt_id,
+                            var_assignment,
+                            remaining_code,
+                            uses_id,
+                        ),
+                        PathValue::Wrapped(wrapper) => wrapper.compile_form(
+                            v,
+                            ctx,
+                            state,
+                            output,
+                            tgt_id,
+                            var_assignment,
+                            remaining_code,
+                            uses_id,
+                        ),
+                    };
+                }
                 if !type_args.is_empty() {
                     let (enum_id, variant_idx) =
                         resolve_generic_variant(path, type_args, *span, ctx, state);

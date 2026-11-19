@@ -2001,6 +2001,36 @@ pub fn path_call_target(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<usize> {
+    let fn_id = type_path_fn(path, type_args, span, ctx, state)?;
+    let method = &path[path.len() - 1];
+    if crate::compiler::expr::takes_receiver(state.fns[fn_id].args.iter().map(|a| a.0.as_str())) {
+        cold_path();
+        let registered = state.fns[fn_id]
+            .name
+            .split_once(METHOD_SEP)
+            .map_or_else(|| state.fns[fn_id].name.clone(), |(t, _)| SmolStr::new(t));
+        crate::compiler::compiler_errors::error_path_call_with_receiver(
+            method,
+            &registered,
+            span,
+            (state.fns[fn_id].name_span, state.fns[fn_id].src_file),
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    Some(fn_id)
+}
+
+/// The function an `impl` block declares that `path` names behind its type,
+/// `Point::new` or `Rect::area`, with or without a receiver. `None` when the
+/// path is not a type followed by one of its functions.
+pub fn type_path_fn(
+    path: &[SmolStr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<usize> {
     let [module @ .., type_name, method] = path else {
         return None;
     };
@@ -2017,19 +2047,7 @@ pub fn path_call_target(
         _ => return None,
     };
     let mangled = mangle_method(&registered, method);
-    let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
-    if crate::compiler::expr::takes_receiver(state.fns[fn_id].args.iter().map(|a| a.0.as_str())) {
-        cold_path();
-        crate::compiler::compiler_errors::error_path_call_with_receiver(
-            method,
-            &registered,
-            span,
-            (state.fns[fn_id].name_span, state.fns[fn_id].src_file),
-            ctx.file_idx,
-            state.sources,
-        );
-    }
-    Some(fn_id)
+    state.fns.iter().position(|f| f.name == mangled)
 }
 
 fn instantiated_struct_id(
@@ -2307,9 +2325,10 @@ pub fn resolve_generic_call(
     (fn_id, args)
 }
 
-/// Raised where `path` is written as a value and names no enum variant. A path
-/// to a function is reported as the call it was meant to be, since only a
-/// function's bare name is a value.
+/// Raised where `path` is written as a value and names no variant or function.
+///
+/// A variadic host function, which has no one signature to take as a value, is
+/// reported with the wrapper that gives it one.
 #[cold]
 #[inline(never)]
 pub fn error_unknown_namespaced_ref(
@@ -2319,16 +2338,19 @@ pub fn error_unknown_namespaced_ref(
     state: &State<'_>,
 ) -> ! {
     let written = path.join("::");
-    if path.split_last().is_some_and(|(name, namespace)| {
-        state
-            .scope(ctx.file_idx)
-            .find_function(namespace, name)
-            .is_some()
-    }) {
+    if let [block, fn_name] = path
+        && state.dyn_libs.iter().any(|lib| {
+            lib.name == *block
+                && lib
+                    .fns
+                    .iter()
+                    .any(|sig| sig.name == *fn_name && sig.variadic)
+        })
+    {
         crate::compiler::compiler_errors::error_enum(
             "Function used as a value",
             &format!(
-                "{written} is a function, called as {written}(...). Only a function's bare name is a value; pass this one on wrapped, as in fn(x) => {written}(x)"
+                "{written} takes any number of arguments, so it has no one signature to be a value of. Pass it on wrapped, as in fn(x) => {written}(x)"
             ),
             span,
             ctx.file_idx,
@@ -2337,7 +2359,7 @@ pub fn error_unknown_namespaced_ref(
     }
     crate::compiler::compiler_errors::error_enum(
         "Unknown enum variant",
-        &format!("{written} does not name an enum variant"),
+        &format!("{written} names no enum variant and no function"),
         span,
         ctx.file_idx,
         state.sources,
@@ -5022,6 +5044,24 @@ impl Expr {
                 branch_value_type(types, ctx, state)
             }
             Self::NamespacedRef(path, span, type_args) => {
+                if let Some(value) =
+                    crate::compiler::path_fn_value(path, type_args, *span, ctx, state)
+                {
+                    return match value {
+                        crate::compiler::PathValue::Fn(fn_id) => DataType::Fn(fn_id as u16),
+                        crate::compiler::PathValue::Const => Self::FunctionCall(
+                            Box::from([]),
+                            path.clone(),
+                            *span,
+                            Box::from([]),
+                            Box::from([]),
+                        )
+                        .infer_type(v, ctx, state),
+                        crate::compiler::PathValue::Wrapped(wrapper) => {
+                            wrapper.infer_type(v, ctx, state)
+                        }
+                    };
+                }
                 if !type_args.is_empty() {
                     let (enum_id, _) = resolve_generic_variant(path, type_args, *span, ctx, state);
                     return DataType::Enum(enum_id);

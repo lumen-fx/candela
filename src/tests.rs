@@ -5750,18 +5750,15 @@ pub fn diagnostics_calling_a_variable_that_is_not_a_function() {
     assert_eq!(&src[d.span], "f");
 }
 
-/// A module's function written without its call says it is a function to call,
-/// rather than that it names no enum variant.
+/// A path written as a value that names neither a variant nor a function says
+/// so.
 #[test]
-pub fn diagnostics_a_module_function_without_its_call() {
-    let src = "import \"std/json\";\nfn main() { print(json::parse); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_wellformed(&d, src);
-    assert!(d.message.contains("json::parse(...)"), "{}", d.message);
+pub fn diagnostics_a_path_naming_nothing() {
     let src = "import \"std/json\";\nfn main() { print(json::nope); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
     assert!(
-        d.message.contains("does not name an enum variant"),
+        d.message.contains("names no enum variant and no function"),
         "{}",
         d.message
     );
@@ -16360,6 +16357,32 @@ fn main() { print(P { x: 2 }.make().x); }
     let d = compile_diag(src, "dot.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "method_without_receiver");
+}
+
+/// A function an `impl` block declares is a value by its type's path, and a
+/// method taken that way takes the receiver as its first argument. The tests
+/// in `tests/imports.rs` and `tests/embedding.rs` cover a module's function
+/// and a host function.
+#[test]
+pub fn functions_are_values_by_path() {
+    let src = r"
+        struct Rect { w: int, h: int }
+        impl Rect {
+            fn new(w: int, h: int) -> Rect => Rect { w, h };
+            fn area(self) -> int => self.w * self.h;
+        }
+        struct Cell<T> { v: T }
+        impl<T> Cell<T> { fn of(v: T) -> Cell<T> => Cell<T> { v }; }
+        fn apply(f, x) { return f(x); }
+        fn main() {
+            let rects = [Rect::new(2, 3), Rect::new(4, 5)];
+            print(rects.map(Rect::area));
+            let make = Rect::new;
+            print(make(1, 7).area());
+            print(apply(Cell<int>::of, 3).v);
+        }
+    ";
+    assert_eq!(run_output(src), "[6,20]\n7\n3\n");
 }
 
 /// A variant may name its payload, `Click { x: int, y: int }`: it is built and

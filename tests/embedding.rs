@@ -51,6 +51,28 @@ fn main() {}
     assert_eq!(result, Value::Int(1));
 }
 
+/// A host function is a value by its path: the compiler wraps it in a
+/// function of its declared signature.
+#[test]
+fn host_fn_is_a_value_by_its_path() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
+    let src = r#"
+host "app" {
+    int rows(string);
+}
+
+fn total() -> int {
+    let f = app::rows;
+    return f("ab") + ["abc", "d"].map(app::rows)[0];
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(5));
+}
+
 /// A host block is a namespace, reached with `::`. A dot on the block's name
 /// is a compile error whose help names the `::` spelling, for a call used as a
 /// value and for one written as a statement.

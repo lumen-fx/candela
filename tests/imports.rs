@@ -312,6 +312,28 @@ fn aliased_module_sees_its_own_enum() {
     );
 }
 
+/// A module's function is a value by its path, the same as by its bare name.
+#[test]
+fn a_module_function_is_a_value_by_its_path() {
+    let output = run_program(
+        "fn_value_path",
+        &[
+            ("geo.cdl", "fn twice(x: int) -> int { return x * 2; }\n"),
+            (
+                "prog.cdl",
+                "import \"./geo.cdl\";\n\
+                 fn main() { let f = geo::twice; print(f(4)); print([1, 2].map(geo::twice)); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "8\n[2,4]\n");
+}
+
 /// A bare variant resolves among the enums its own module reaches, so two
 /// modules that each declare `Done` keep their own, whichever is imported
 /// first, and a bare name from a module imported under its name does not

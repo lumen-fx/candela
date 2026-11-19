@@ -355,8 +355,7 @@ function written at the call site. A declared function's name is the function
 itself wherever a value goes, so a `let`, a return, a list or map element and a
 struct field each take it by name, and the call goes to what the name handed
 over. The value carries the signature the function was declared with, so the
-call is checked against it. A function reached through a module, such as
-`math::sqrt`, is not a value by its path; wrap it: `fn(x) => math::sqrt(x)`.
+call is checked against it.
 
 ```rust
 fn twice(x: int) -> int {
@@ -371,6 +370,33 @@ fn main() {
     print(fs[1](4));
 }
 ```
+
+A function is a value by any path that names it: a module's function,
+`math::sqrt`, a function of a `host` or `dylib` block, and a function an `impl`
+block declares, `Point::new`. A method taken by its path, `Rect::area`, takes
+the receiver as its first argument:
+
+```rust
+struct Rect {
+    w: int,
+    h: int,
+}
+
+impl Rect {
+    fn new(w: int, h: int) -> Rect => Rect { w, h };
+    fn area(self) -> int => self.w * self.h;
+}
+
+fn main() {
+    let rects = [Rect::new(2, 3), Rect::new(4, 5)];
+    print(rects.map(Rect::area));
+    let make = Rect::new;
+    print(make(1, 1).area());
+}
+```
+
+A host function declared with `...` takes any number of arguments, so it has no
+one signature to be a value of; wrap it in an anonymous function that calls it.
 
 The standard library's list helpers take functions this way, so `map`, `filter`,
 and `reduce` are ordinary calls; see [Collections](collections.md).
