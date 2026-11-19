@@ -1256,3 +1256,58 @@ async fn document_highlight_marks_reads_and_writes() {
     assert_eq!(marks, vec![(1, 3), (2, 3), (3, 2)], "{found}");
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Workspace symbols list the declarations of every file in the workspace
+/// folder, open or not, filtered by the query.
+#[tokio::test]
+async fn workspace_symbols_cover_files_nobody_opened() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("symbols");
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": file_uri(&dir), "capabilities": {} }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": main_uri, "languageId": "candela", "version": 1, "text": main_text } }
+        }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 7, "method": "workspace/symbol", "params": { "query": "r" } }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let mut names: Vec<(String, String)> = found["result"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .map(|s| {
+            let uri = s["location"]["uri"].as_str().unwrap_or_default();
+            (
+                s["name"].as_str().unwrap_or_default().to_owned(),
+                uri.rsplit('/').next().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    names.sort();
+    // `area` and `report` hold an `r`; `Box` and `main` do not.
+    assert_eq!(
+        names,
+        vec![
+            ("area".to_owned(), "geo.cdl".to_owned()),
+            ("report".to_owned(), "report.cdl".to_owned()),
+        ],
+        "{found}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

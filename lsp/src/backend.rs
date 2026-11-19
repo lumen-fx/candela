@@ -17,6 +17,7 @@ use crate::checks::{self, Found};
 use crate::ide::Ide;
 use crate::line_index::{self, LineIndex};
 use crate::refs::{self, Decl};
+use crate::symbols::{self, Declared};
 use candela::Diagnostic as CdlDiagnostic;
 use candela::PackageCheck;
 use candela::compiler::imports::ImportResolver;
@@ -190,6 +191,9 @@ struct Inner {
     checking: tokio::sync::Mutex<()>,
     /// The editor's workspace folders, canonical.
     folders: RwLock<Vec<PathBuf>>,
+    /// What each workspace file declares, as of its modification time, so
+    /// a symbol search reads only the files that changed since the last.
+    declared: Mutex<HashMap<PathBuf, (std::time::SystemTime, Vec<Declared>)>>,
 }
 
 /// The references to one declaration found in one file.
@@ -207,8 +211,12 @@ struct RefSearch {
     unread: Vec<PathBuf>,
 }
 
-/// The most `.cdl` files a search for references reads from a package.
+/// The most `.cdl` files a search for references reads from a package, or
+/// a symbol search from the workspace.
 const MAX_PACKAGE_FILES: usize = 2000;
+
+/// The most symbols a workspace symbol search answers with.
+const MAX_SYMBOLS: usize = 500;
 
 impl Backend {
     #[must_use]
@@ -222,6 +230,7 @@ impl Backend {
                 published: Mutex::new(HashSet::new()),
                 checking: tokio::sync::Mutex::new(()),
                 folders: RwLock::new(Vec::new()),
+                declared: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -886,6 +895,73 @@ impl Inner {
         None
     }
 
+    /// The declarations matching `query` in the workspace's `.cdl` files and
+    /// the open buffers.
+    fn workspace_symbols(&self, query: &str) -> Vec<SymbolInformation> {
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        let open: HashMap<PathBuf, (Url, String)> = self
+            .docs
+            .iter()
+            .map(|d| (d.path.clone(), (d.key().clone(), d.text.clone())))
+            .collect();
+        let mut files: Vec<PathBuf> = folders
+            .iter()
+            .flat_map(|f| cdl_files(f, MAX_PACKAGE_FILES))
+            .collect();
+        files.extend(open.keys().cloned());
+        files.sort();
+        files.dedup();
+        let mut out = Vec::new();
+        let Ok(mut cache) = self.declared.lock() else {
+            return out;
+        };
+        cache.retain(|path, _| files.binary_search(path).is_ok());
+        for path in files {
+            let (uri, text, declared) = if let Some((uri, text)) = open.get(&path) {
+                (uri.clone(), text.clone(), symbols::declarations(text))
+            } else {
+                let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let declared = match cache.get(&path) {
+                    Some((at, d)) if *at == modified => d.clone(),
+                    _ => {
+                        let d = symbols::declarations(&text);
+                        cache.insert(path.clone(), (modified, d.clone()));
+                        d
+                    }
+                };
+                let Ok(uri) = Url::from_file_path(&path) else {
+                    continue;
+                };
+                (uri, text, declared)
+            };
+            let mut index = None;
+            for d in declared
+                .into_iter()
+                .filter(|d| symbols::matches(&d.name, query))
+            {
+                let index = index.get_or_insert_with(|| LineIndex::new(&text));
+                #[allow(deprecated)]
+                out.push(SymbolInformation {
+                    name: d.name,
+                    kind: d.kind,
+                    tags: None,
+                    deprecated: None,
+                    location: Location::new(uri.clone(), index.range(d.start, d.end)),
+                    container_name: d.container,
+                });
+                if out.len() >= MAX_SYMBOLS {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
     /// Says in the editor's log which files a search could not read.
     async fn report_unread(&self, search: &RefSearch) {
         for path in &search.unread {
@@ -1104,6 +1180,7 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -1436,6 +1513,13 @@ impl LanguageServer for Backend {
             })
             .collect();
         Ok(Some(highlights))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> RpcResult<Option<Vec<SymbolInformation>>> {
+        Ok(Some(self.inner.workspace_symbols(&params.query)))
     }
 
     async fn prepare_rename(
