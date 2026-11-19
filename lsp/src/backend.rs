@@ -15,7 +15,7 @@
 use crate::analysis::{self, ProgramSummary};
 use crate::checks::{self, Found};
 use crate::ide::Ide;
-use crate::line_index;
+use crate::line_index::{self, LineIndex};
 use candela::Diagnostic as CdlDiagnostic;
 use candela::PackageCheck;
 use candela::compiler::imports::ImportResolver;
@@ -272,6 +272,18 @@ impl Inner {
         }
     }
 
+    /// The summary completion and signature help read: the last good
+    /// compile's, whatever has been typed since. Both read what the cursor
+    /// is on from the current text, and the debounced check after the change
+    /// refreshes the summary, so a keystroke never waits for a compile of
+    /// the whole program. A document that has never compiled is compiled now.
+    fn typing_summary(&self, uri: &Url) -> Option<ProgramSummary> {
+        if let Some(summary) = self.docs.get(uri)?.last_good.clone() {
+            return Some(summary);
+        }
+        self.current_or_cached_summary(uri)
+    }
+
     fn doc_text(&self, uri: &Url) -> Option<String> {
         self.docs.get(uri).map(|d| d.text.clone())
     }
@@ -280,7 +292,7 @@ impl Inner {
     fn request(&self, uri: &Url, position: Position) -> Option<(String, ProgramSummary, usize)> {
         let text = self.doc_text(uri)?;
         let summary = self.current_or_cached_summary(uri)?;
-        let offset = line_index::position_to_offset(&text, position) as usize;
+        let offset = line_index::position_to_offset(&text, position);
         Some((text, summary, offset))
     }
 
@@ -555,8 +567,9 @@ impl Inner {
             .flat_map(|s| s.sources.iter().map(|f| (f.path.as_str(), f.text.as_str())))
             .collect();
         let mut by_file: HashMap<Url, Vec<LspDiagnostic>> = HashMap::new();
+        let root_index = LineIndex::new(root_text);
         let mut place = |d: &CdlDiagnostic, severity: DiagnosticSeverity| {
-            let (uri, diagnostic) = self.place(d, severity, root, root_path, root_text, &texts);
+            let (uri, diagnostic) = self.place(d, severity, root, root_path, &root_index, &texts);
             by_file.entry(uri).or_default().push(diagnostic);
         };
         for d in &outcome.errors {
@@ -571,7 +584,7 @@ impl Inner {
                     .entry(root.clone())
                     .or_default()
                     .push(LspDiagnostic {
-                        range: range_of(root_text, start, end),
+                        range: root_index.range(start, end),
                         severity: Some(DiagnosticSeverity::WARNING),
                         code: Some(NumberOrString::String(code.to_owned())),
                         source: Some("candela".to_owned()),
@@ -592,12 +605,12 @@ impl Inner {
         severity: DiagnosticSeverity,
         root: &Url,
         root_path: &str,
-        root_text: &str,
+        root_index: &LineIndex<'_>,
         texts: &HashMap<&str, &str>,
     ) -> (Url, LspDiagnostic) {
         let locate = |filename: &str, span: &std::ops::Range<usize>| -> Option<(Url, Range)> {
             if filename == root_path || filename.is_empty() {
-                return Some((root.clone(), range_of(root_text, span.start, span.end)));
+                return Some((root.clone(), root_index.range(span.start, span.end)));
             }
             let uri = Url::from_file_path(filename).ok()?;
             let text = texts
@@ -737,10 +750,7 @@ fn package_checks(summary: &ProgramSummary, checked: &Path) -> Vec<PackageCheck>
 }
 
 fn range_of(text: &str, start: usize, end: usize) -> Range {
-    Range::new(
-        line_index::offset_to_position(text, u32::try_from(start).unwrap_or(u32::MAX)),
-        line_index::offset_to_position(text, u32::try_from(end).unwrap_or(u32::MAX)),
-    )
+    LineIndex::new(text).range(start, end)
 }
 
 /// The editor location of a span in one of the program's files. The
@@ -764,13 +774,13 @@ fn location_for(
 
 #[allow(deprecated)]
 fn document_symbol(
-    text: &str,
+    index: &LineIndex<'_>,
     name: &str,
     detail: String,
     kind: SymbolKind,
     span: candela::compiler::expr::Span,
 ) -> DocumentSymbol {
-    let range = range_of(text, span.start as usize, span.end as usize);
+    let range = index.range(span.start as usize, span.end as usize);
     DocumentSymbol {
         name: name.to_owned(),
         detail: Some(detail),
@@ -998,9 +1008,9 @@ impl LanguageServer for Backend {
         // A buffer that never compiled still gets keywords and builtins.
         let summary = self
             .inner
-            .current_or_cached_summary(&p.text_document.uri)
+            .typing_summary(&p.text_document.uri)
             .unwrap_or_default();
-        let offset = line_index::position_to_offset(&text, p.position) as usize;
+        let offset = line_index::position_to_offset(&text, p.position);
         let items = Ide::new(&text, &summary, offset).completions();
         Ok(Some(CompletionResponse::Array(items)))
     }
@@ -1010,10 +1020,13 @@ impl LanguageServer for Backend {
         params: SignatureHelpParams,
     ) -> RpcResult<Option<SignatureHelp>> {
         let p = params.text_document_position_params;
-        let Some((text, summary, offset)) = self.inner.request(&p.text_document.uri, p.position)
+        let uri = &p.text_document.uri;
+        let (Some(text), Some(summary)) =
+            (self.inner.doc_text(uri), self.inner.typing_summary(uri))
         else {
             return Ok(None);
         };
+        let offset = line_index::position_to_offset(&text, p.position);
         Ok(Ide::new(&text, &summary, offset).signature_help())
     }
 
@@ -1026,6 +1039,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let text = summary.sources.first().map_or("", |s| s.text.as_str());
+        let text = &LineIndex::new(text);
         let mut symbols = Vec::new();
         for f in summary.own_functions() {
             let kind = if f.is_const {
