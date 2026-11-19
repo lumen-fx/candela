@@ -46,6 +46,7 @@ use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
 use crate::compiler::expr::VariantFields;
+use crate::compiler::expr::VariantShape;
 use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::reject_default_default;
@@ -713,15 +714,10 @@ impl Generics {
             .is_some_and(|template| self.prelude_templates.contains(&template))
     }
 
-    /// The field names a variant of generic enum `template` was declared
-    /// with: `None` when it declares no such variant, `Some(None)` when its
-    /// payload is positional.
+    /// How variant `variant` of generic enum `template` was declared, `None`
+    /// when it declares no such variant.
     #[must_use]
-    pub fn template_variant_fields(
-        &self,
-        template: usize,
-        variant: &str,
-    ) -> Option<Option<&[SmolStr]>> {
+    pub fn template_variant_shape(&self, template: usize, variant: &str) -> Option<VariantShape> {
         let decl = &self.templates[template];
         let TemplateBody::Enum(variants) = &decl.body else {
             return None;
@@ -731,7 +727,9 @@ impl Generics {
             decl.variant_fields
                 .iter()
                 .find(|(i, _)| usize::from(*i) == idx)
-                .map(|(_, names)| &**names),
+                .map_or(VariantShape::Positional, |(_, names)| {
+                    VariantShape::Named(names.clone())
+                }),
         )
     }
 

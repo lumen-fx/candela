@@ -143,6 +143,15 @@ pub fn variant_pattern_binders(pattern: &Expr) -> Box<dyn Iterator<Item = &Expr>
 /// variant's index: `Click { x: int, y: int }` names its two payload places.
 pub type VariantFields = Box<[(u16, Box<[SmolStr]>)]>;
 
+/// How a variant takes its payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantShape {
+    /// In order, in parentheses: `Key(string)`, or no payload at all.
+    Positional,
+    /// By field name, in braces: `Click { x: int, y: int }`.
+    Named(Box<[SmolStr]>),
+}
+
 /// What an import adds to the scope of the file that writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportBinding {

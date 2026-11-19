@@ -70,6 +70,7 @@ use expr::Span;
 use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
 use expr::VariantFields;
+use expr::VariantShape;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::const_read;
@@ -1663,7 +1664,7 @@ pub(crate) fn resolve_variant_pattern(
             Expr::Var(name, span) => (std::slice::from_ref(name), &[], Vec::new(), *span),
             Expr::NamespacedRef(path, span, type_args) => (path, type_args, Vec::new(), *span),
             Expr::FunctionCall(args, namespace, span, _, type_args) => {
-                if let Some(Some(names)) = variant_field_names(namespace, ctx, state)
+                if let Some(VariantShape::Named(names)) = variant_shape(namespace, ctx, state)
                     && !names.is_empty()
                 {
                     compiler_errors::error_type_test(
@@ -1785,9 +1786,9 @@ pub(crate) fn named_variant_fields(
     ctx: Ctx,
     state: &State<'_>,
 ) -> Option<Box<[SmolStr]>> {
-    match variant_field_names(path, ctx, state)? {
-        Some(names) => Some(names),
-        None => compiler_errors::error_type_test(
+    match variant_shape(path, ctx, state)? {
+        VariantShape::Named(names) => Some(names),
+        VariantShape::Positional => compiler_errors::error_type_test(
             "Variant written with braces",
             &format!(
                 "{} takes its payload in order, not by field name",
@@ -1805,14 +1806,9 @@ pub(crate) fn named_variant_fields(
     }
 }
 
-/// The field names of the variant `path` names: `Some(None)` for a variant
-/// whose payload is positional, `None` for a path that names a struct or no
-/// variant.
-pub(crate) fn variant_field_names(
-    path: &[SmolStr],
-    ctx: Ctx,
-    state: &State<'_>,
-) -> Option<Option<Box<[SmolStr]>>> {
+/// How the variant `path` names takes its payload, `None` for a path that
+/// names a struct or no variant.
+pub(crate) fn variant_shape(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -> Option<VariantShape> {
     let (name, module) = path.split_last()?;
     let scope = state.scope(ctx.file_idx);
     let names_struct = scope.resolve(module).is_some_and(|ns| {
@@ -1824,25 +1820,22 @@ pub(crate) fn variant_field_names(
     if names_struct {
         return None;
     }
-    let fields: Option<Option<Box<[SmolStr]>>> =
-        if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, ctx.file_idx, state) {
-            Some(
-                state
-                    .generics
-                    .variant_fields(enum_id, variant_idx)
-                    .map(Box::from),
-            )
-        } else {
-            let template = if let [enum_module @ .., enum_name, _] = path {
-                find_template(enum_module, enum_name, scope, state.generics)
-            } else {
-                state.generics.enum_template_with_variant_in(name, scope)
-            };
-            template
-                .and_then(|t| state.generics.template_variant_fields(t, name))
-                .map(|f| f.map(Box::from))
-        };
-    fields
+    if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, ctx.file_idx, state) {
+        return Some(
+            state
+                .generics
+                .variant_fields(enum_id, variant_idx)
+                .map_or(VariantShape::Positional, |names| {
+                    VariantShape::Named(Box::from(names))
+                }),
+        );
+    }
+    let template = if let [enum_module @ .., enum_name, _] = path {
+        find_template(enum_module, enum_name, scope, state.generics)
+    } else {
+        state.generics.enum_template_with_variant_in(name, scope)
+    };
+    template.and_then(|t| state.generics.template_variant_shape(t, name))
 }
 
 /// The values a named-field variant literal or pattern gives, put in the
