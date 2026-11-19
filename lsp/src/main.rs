@@ -5,6 +5,7 @@
 //! client (including `vscode-languageclient`, wired up in
 //! `editors/vscode`) expects by default.
 
+mod actions;
 mod analysis;
 mod backend;
 mod builtins;

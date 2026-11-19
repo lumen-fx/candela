@@ -1423,3 +1423,41 @@ async fn inlay_hints_name_types_and_parameters() {
     );
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// A diagnostic the editor sends back with a code action request gets the
+/// fix its help text names: here the import a std function needs.
+#[tokio::test]
+async fn a_missing_import_is_a_quick_fix() {
+    let text = "fn main() {\n    print(sqrt(2.0));\n}\n";
+    let uri = "file:///tmp/candela-lsp-actions.cdl";
+    let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../libs");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({ "libPath": lib }), &[(uri, text)]).await;
+    let found = diagnostics_for(&mut stdout, uri, |d| !d.is_empty()).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/codeAction",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": found[0]["range"],
+                "context": { "diagnostics": found }
+            }
+        }),
+    )
+    .await;
+    let actions = response(&mut stdout, 7).await;
+    let action = &actions["result"][0];
+    assert_eq!(action["kind"], "quickfix", "{actions}");
+    assert_eq!(action["isPreferred"], true, "{actions}");
+    let edits = action["edit"]["changes"][uri]
+        .as_array()
+        .expect("edits on the buffer");
+    let texts: Vec<&str> = edits.iter().filter_map(|e| e["newText"].as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["import \"std/math\";\n", "math::sqrt"],
+        "{actions}"
+    );
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
