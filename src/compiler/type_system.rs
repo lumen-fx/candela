@@ -776,11 +776,25 @@ impl Generics {
             .iter()
             .filter(|block| impl_base_name(&block.type_name) == decl.name.as_str())
             .flat_map(|block| block.methods.iter())
-            .any(|method| {
-                matches!(method, Expr::FunctionDecl(fn_name, args, ..)
-                    if fn_name == name && args.is_empty())
+            .find_map(|method| match method {
+                Expr::FunctionDecl(fn_name, args, ..)
+                    if fn_name == name
+                        && !crate::compiler::expr::takes_receiver(
+                            args.iter().map(|a| a.0.as_str()),
+                        ) =>
+                {
+                    Some(args.is_empty())
+                }
+                _ => None,
             })
-            .then(|| format!("{}<{}>::{name}()", decl.name, decl.params.join(", ")))
+            .map(|bare| {
+                format!(
+                    "{}<{}>::{name}({})",
+                    decl.name,
+                    decl.params.join(", "),
+                    if bare { "" } else { "..." }
+                )
+            })
     }
 
     /// Binds `frame` for the body about to be compiled. Every body pushes a
@@ -1479,6 +1493,18 @@ pub fn check_operator_method(
             sources,
         );
     }
+    if !crate::compiler::expr::takes_receiver(args.iter().map(|a| a.0.as_str())) {
+        cold_path();
+        error_operator_method(
+            "Operator method takes no receiver",
+            &format!("The first parameter of {symbol} is not self"),
+            "An operator method is a method: name its first parameter self, as in fn +(self, other).",
+            "operator_method_receiver",
+            name_span,
+            file_idx,
+            sources,
+        );
+    }
     if let Some((_, Some(annotation))) = args.first() {
         let base = impl_base_name(type_name);
         if annotation_base_name(annotation).is_none_or(|written| written != base) {
@@ -1841,9 +1867,9 @@ fn path_call_type(
 /// the path to the other lookups: a variant of the enum, a module function, a
 /// generic function.
 ///
-/// A function declared with no parameters is the only one a path reaches. One
-/// that declares a receiver is a method, and a path call to it is reported
-/// here with the dot call it needs.
+/// A function whose first parameter is not `self` is the only one a path
+/// reaches. One that declares a `self` receiver is a method, and a path call to
+/// it is reported here with the dot call it needs.
 pub fn path_call_target(
     path: &[SmolStr],
     type_args: &[TypeExpr],
@@ -1868,7 +1894,7 @@ pub fn path_call_target(
     };
     let mangled = mangle_method(&registered, method);
     let fn_id = state.fns.iter().position(|f| f.name == mangled)?;
-    if !state.fns[fn_id].args.is_empty() {
+    if crate::compiler::expr::takes_receiver(state.fns[fn_id].args.iter().map(|a| a.0.as_str())) {
         cold_path();
         crate::compiler::compiler_errors::error_path_call_with_receiver(
             method,

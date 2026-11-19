@@ -273,13 +273,13 @@ pub fn declare_parse_text(v: &mut Vec<Variable>, register: u16) {
     });
 }
 
-/// Refuses a dot call that reaches `impl` function `fn_id` when the function
-/// declares no parameters: nothing would receive the value in front of the
-/// dot. Inference and compilation both reach a dot call, and whichever gets
+/// Refuses a dot call that reaches `impl` function `fn_id` when the function's
+/// first parameter is not `self`: nothing would receive the value in front of
+/// the dot. Inference and compilation both reach a dot call, and whichever gets
 /// there first reports it.
 pub fn check_receiver(fn_id: usize, method: &str, span: Span, ctx: Ctx, state: &State<'_>) {
     let func = &state.fns[fn_id];
-    if !func.args.is_empty() {
+    if crate::compiler::expr::takes_receiver(func.args.iter().map(|a| a.0.as_str())) {
         return;
     }
     let type_name = func

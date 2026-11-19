@@ -11,6 +11,7 @@ use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Operand;
+use crate::compiler::expr::RECEIVER;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::UNARY_MINUS_METHOD;
 use crate::compiler::expr::mangle_method;
@@ -275,9 +276,28 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         );
     };
     let type_params = parse_type_params(parser);
+    let args = parse_params(parser, false);
+    let return_type = parse_return_annotation(parser);
+    let fn_code = parse_fn_body(parser, true);
+    Expr::FunctionDecl(
+        fn_name,
+        Box::from(args),
+        std::rc::Rc::from(fn_code),
+        span,
+        return_type,
+        type_params,
+    )
+}
+
+/// Parses a declaration's parameter list, `(a, b: int)`, from its `(`.
+///
+/// `self` names the receiver: it is a parameter only of an `impl` function
+/// (`in_impl`), and only the first one, which is what makes that function a
+/// method.
+pub fn parse_params(parser: &mut Parser<'_>, in_impl: bool) -> Vec<(SmolStr, Option<TypeExpr>)> {
     parser.next_token_expect(
         Token::LParen,
-        "Function arguments must be delimited by parentheses",
+        "Function parameters must be delimited by parentheses",
     );
     let mut args: Vec<(SmolStr, Option<TypeExpr>)> = Vec::with_capacity(4);
     loop {
@@ -287,6 +307,10 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         }
         let (arg, span) = parser.next_token();
         if let Token::Identifier(arg) = arg {
+            if arg == RECEIVER && (!in_impl || !args.is_empty()) {
+                cold_path();
+                parser.error(span, ParserErr::MisplacedReceiver(in_impl));
+            }
             args.push((
                 SmolStr::new(arg),
                 if parser.peek_token() == Token::Colon {
@@ -300,31 +324,18 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
             cold_path();
             parser.error(
                 span,
-                ParserErr::UnexpectedToken(
-                    Token::Identifier(""),
-                    arg,
-                    "Invalid function argument.",
-                ),
+                ParserErr::UnexpectedToken(Token::Identifier(""), arg, "Invalid parameter."),
             );
         }
         if parser.peek_token() == Token::Comma {
             parser.next_token();
-        } else if !(parser.peek_token() == Token::RParen) {
+        } else if parser.peek_token() != Token::RParen {
             cold_path();
             let span = parser.peek_token_span();
             parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
         }
     }
-    let return_type = parse_return_annotation(parser);
-    let fn_code = parse_fn_body(parser, true);
-    Expr::FunctionDecl(
-        fn_name,
-        Box::from(args),
-        std::rc::Rc::from(fn_code),
-        span,
-        return_type,
-        type_params,
-    )
+    args
 }
 
 /// Parses the optional `-> Type` return annotation that may follow a function's
@@ -750,47 +761,12 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
     } else {
         parse_type_params(parser)
     };
-    parser.next_token_expect(
-        Token::LParen,
-        "Method arguments must be delimited by parentheses",
-    );
-    let mut args: Vec<(SmolStr, Option<TypeExpr>)> = Vec::with_capacity(4);
-    loop {
-        if parser.peek_token() == Token::RParen {
-            parser.next_token();
-            break;
-        }
-        let (arg, span) = parser.next_token();
-        if let Token::Identifier(arg) = arg {
-            // A parameter left un-annotated (including the receiver) is inferred
-            // per call site: candela specialises each method on the actual
-            // argument types, so `self` takes the receiver's concrete struct
-            // type automatically. An annotation pins the parameter instead,
-            // exactly as it does on a free function.
-            args.push((
-                SmolStr::new(arg),
-                if parser.peek_token() == Token::Colon {
-                    parser.next_token();
-                    Some(parse_type(parser))
-                } else {
-                    None
-                },
-            ));
-        } else {
-            cold_path();
-            parser.error(
-                span,
-                ParserErr::UnexpectedToken(Token::Identifier(""), arg, "Invalid method argument."),
-            );
-        }
-        if parser.peek_token() == Token::Comma {
-            parser.next_token();
-        } else if parser.peek_token() != Token::RParen {
-            cold_path();
-            let span = parser.peek_token_span();
-            parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
-        }
-    }
+    // A parameter left un-annotated (including the receiver) is inferred per
+    // call site: candela specialises each method on the actual argument types,
+    // so `self` takes the receiver's concrete struct type automatically. An
+    // annotation pins the parameter instead, exactly as it does on a free
+    // function.
+    let args = parse_params(parser, true);
     let return_type = parse_return_annotation(parser);
     let code = parse_fn_body(parser, true);
     // `-` has a binary and a unary form and a type may define both, so the

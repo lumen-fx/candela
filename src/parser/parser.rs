@@ -199,6 +199,9 @@ enum ParserErr<'a> {
     /// A `let ( ... )` pattern with something other than a name, `_` or
     /// another parenthesised pattern in it.
     TuplePatternElement,
+    /// A parameter named `self` anywhere but first in an `impl` function
+    /// (true) or in a function outside an `impl` block (false).
+    MisplacedReceiver(bool),
 }
 
 impl ParserErr<'_> {
@@ -248,6 +251,7 @@ impl ParserErr<'_> {
             ParserErr::OutsideLoop(_) => "outside_loop",
             ParserErr::TupleOfOne => "tuple_of_one",
             ParserErr::TuplePatternElement => "tuple_pattern_element",
+            ParserErr::MisplacedReceiver(_) => "misplaced_receiver",
         }
     }
 }
@@ -386,6 +390,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::TupleOfOne => &format!(
             "A tuple holds at least two values. Drop the {BOLD}','{RESET} to group one value: {BLUE}{BOLD}(a){RESET}"
+        ),
+        ParserErr::MisplacedReceiver(true) => &format!(
+            "{BLUE}{BOLD}self{RESET} names a method's receiver, so it is the first parameter: {BLUE}{BOLD}fn area(self, scale: float){RESET}"
+        ),
+        ParserErr::MisplacedReceiver(false) => &format!(
+            "{BLUE}{BOLD}self{RESET} names the receiver of a method, and only a function in an {BLUE}{BOLD}impl{RESET} block has one. Give this parameter another name"
         ),
         ParserErr::TuplePatternElement => &format!(
             "Each place in a {BLUE}{BOLD}let{RESET} pattern is a name, {BLUE}{BOLD}_{RESET}, or another pattern in parentheses: {BLUE}{BOLD}let (a, (b, _)) = t;{RESET}"

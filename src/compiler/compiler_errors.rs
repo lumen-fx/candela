@@ -2074,8 +2074,9 @@ pub fn error_method_without_receiver(
             .with_label(
                 Label::new((decl_src.filename.as_str(), decl.0.into()))
                     .with_message(format_args!(
-                        "{} is declared with no parameters",
-                        blue(method)
+                        "{} has no {} parameter first",
+                        blue(method),
+                        blue("self")
                     ))
                     .with_color(ariadne::Color::Blue),
             )
@@ -2090,8 +2091,10 @@ pub fn error_method_without_receiver(
             );
             report
                 .with_help(format_args!(
-                    "Call it by its path: {}",
-                    blue(format_args!("{type_name}::{method}()"))
+                    "Call it by its path, {}, or make it a method by naming its first parameter {}: {}",
+                    blue(format_args!("{type_name}::{method}(...)")),
+                    blue("self"),
+                    blue(format_args!("fn {method}(self, ...)"))
                 ))
                 .finish()
         },
@@ -2650,8 +2653,18 @@ pub fn error_unknown_function_in_namespace(
                     state
                         .fns
                         .iter()
-                        .any(|f| f.name == mangled && f.args.is_empty())
-                        .then(|| format!("{name}::{fn_name}()"))
+                        .find(|f| {
+                            f.name == mangled
+                                && !crate::compiler::expr::takes_receiver(
+                                    f.args.iter().map(|a| a.0.as_str()),
+                                )
+                        })
+                        .map(|f| {
+                            format!(
+                                "{name}::{fn_name}({})",
+                                if f.args.is_empty() { "" } else { "..." }
+                            )
+                        })
                 }
                 SymbolKind::Template(template) => state
                     .generics

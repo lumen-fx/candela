@@ -20,6 +20,20 @@ use std::{hint::unreachable_unchecked, rc::Rc};
 /// distinct from a free `fn len`.
 pub const METHOD_SEP: char = '#';
 
+/// The parameter name that makes an `impl` function a method.
+///
+/// An `impl` function whose first parameter is named `self` takes the value in
+/// front of the dot; any other `impl` function is called by its path,
+/// `Point::new(1, 2)`.
+pub const RECEIVER: &str = "self";
+
+/// Whether a function declared with parameters named `names` takes a receiver:
+/// its first parameter is [`RECEIVER`].
+#[must_use]
+pub fn takes_receiver<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.next() == Some(RECEIVER)
+}
+
 /// Builds the mangled free-function symbol an `impl Type { fn method ... }`
 /// lowers to.
 ///

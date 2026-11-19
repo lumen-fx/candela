@@ -197,7 +197,7 @@ impl Signal<float> {
 }
 ```
 
-A function in the block that declares no parameters is called by the
+A function in the block whose first parameter is not `self` is called by the
 instantiation's path, which is how a generic type gets a constructor:
 
 ```rust

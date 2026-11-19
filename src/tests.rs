@@ -16362,6 +16362,74 @@ fn main() { print(P { x: 2 }.make().x); }
     assert_eq!(d.code, "method_without_receiver");
 }
 
+/// An `impl` function is a method only when its first parameter is `self`;
+/// any other `impl` function, with or without parameters, is called by its
+/// path. That is what lets a type have a constructor that takes arguments.
+#[test]
+pub fn impl_functions_without_self_are_called_by_path() {
+    let src = "
+struct P { x: int, y: int }
+impl P {
+    fn new(x: int, y: int) -> P => P { x: x, y: y };
+    fn splat(v) => P::new(v, v);
+    fn sum(self) -> int => self.x + self.y;
+}
+fn main() {
+    print(P::new(1, 2).sum());
+    print(P::splat(4).sum());
+}
+";
+    assert_eq!(run_output(src), "3\n8\n");
+    // A generic type's constructor is reached through its instantiation.
+    let src = "
+struct Cell<T> { v: T }
+impl Cell<T> {
+    fn of(v: T) -> Cell<T> => Cell<T> { v: v };
+    fn get(self) -> T => self.v;
+}
+fn main() { print(Cell<int>::of(7).get()); }
+";
+    assert_eq!(run_output(src), "7\n");
+}
+
+/// A receiver goes by `self` and nothing else: a first parameter named
+/// otherwise makes the function a path function, and `self` anywhere but first
+/// in an `impl` function, or in a free function, is refused.
+#[test]
+pub fn receiver_is_spelled_self() {
+    let src = "
+struct P { x: int }
+impl P { fn get(this) => this.x; }
+fn main() { print(P { x: 1 }.get()); }
+";
+    let d = compile_diag(src, "this.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "method_without_receiver");
+    assert!(d.message.contains("takes no receiver"), "{d:?}");
+
+    for (src, at) in [
+        (
+            "struct P { x: int }\nimpl P { fn add(n, self) => self.x + n; }\nfn main() {}",
+            "self",
+        ),
+        ("fn f(self) { return 1; }\nfn main() {}", "self"),
+    ] {
+        let d = compile_diag(src, "self.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "misplaced_receiver", "{src}");
+        assert_eq!(&src[d.span], at, "{src}");
+    }
+
+    let src = "
+struct V { x: int }
+impl V { fn +(a, b) => V { x: a.x + b.x }; }
+fn main() {}
+";
+    let d = compile_diag(src, "op.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_receiver");
+}
+
 /// `index_of` answers a position as an `Option` on lists and strings, `find`
 /// answers the first element a predicate accepts, and `split` cuts a list at a
 /// separator element.

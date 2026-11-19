@@ -55,6 +55,7 @@ Raised while the file is read, before any type is known.
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
+| Receiver | A parameter named `self` that is not the first parameter of an `impl` function, or a `self` parameter on a function outside an `impl` block (`misplaced_receiver`) |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function. A flat chain of operators, `a + b + c + ...`, is not nesting and compiles at any length |
 | Attribute | An attribute with nothing after it to apply to (`attribute_without_item`), an attribute other than `@cfg` in front of anything but a top-level `fn` or `struct` (`attribute_wrong_target`), or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [attributes](../language/attributes.md) and [conditional compilation](../language/conditional-compilation.md) |
@@ -114,11 +115,12 @@ labels the declaration as well as the call. A function that declares `-> Type`
 and returns something else is reported against the annotation. A call has the
 type its function declares, so an argument taken from a call is checked against
 the declared return type, not against what the body returns. A dot call that
-reaches an `impl` function declared with no parameters is
+reaches an `impl` function whose first parameter is not `self` is
 `method_without_receiver`: nothing would receive the value in front of the dot,
-and the help names the path call, `Type::name()`. The reverse, a path call that
-reaches an `impl` function declaring a receiver, is `path_call_with_receiver`,
-and the help names the dot call.
+and the help names the path call, `Type::name(...)`, and the `self` parameter
+that would make it a method. The reverse, a path call that reaches an `impl`
+function taking `self`, is `path_call_with_receiver`, and the help names the dot
+call.
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including a `float` operand of a bitwise operator and a non-`bool` operand of `&&`,
@@ -134,7 +136,8 @@ rules, each with an identifier an editor and an embedder read:
 file is read; `operator_method_arity` for a parameter count the operator does not
 have; `operator_method_on_builtin` for an operator inside `impl int`, `impl list`
 or another built-in type; `operator_method_receiver` for a first parameter
-annotated as a type other than the one the `impl` block names; and
+that is not `self` or is annotated as a type other than the one the `impl`
+block names; and
 `operator_method_return_type` for a method the operator cannot take a value from,
 which is one handing nothing back or an `==`, `<` or `<=` not answering a `bool`.
 See [methods](../language/methods.md).
