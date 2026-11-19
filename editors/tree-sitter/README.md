@@ -26,9 +26,9 @@ Needs Neovim 0.11 or newer, `nvim-treesitter`, and a C compiler. Copy
 checkout instead of fetching it), `grammar_url` and `grammar_revision` (where
 and what to fetch, tracking the default branch by default), `server_path`
 (absolute path to `candela-lsp`), and `treesitter`/`lsp` toggles to skip
-either half. With `server_path` unset the server is found the way the VS Code
-extension finds it: `candela-lsp` on `$PATH` (`cargo install --locked --git
-https://github.com/lumen-fx/candela candela-lsp` puts it there).
+either half. With `server_path` unset the server is `candela-lsp` on `$PATH`,
+where the candela toolchain installs it (`cargo install --locked --git
+https://github.com/lumen-fx/candela candela-lsp` builds it from source).
 
 On the `nvim-treesitter` main branch the queries install with the parser; on
 master, copy them yourself:

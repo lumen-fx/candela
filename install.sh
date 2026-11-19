@@ -52,8 +52,8 @@
 # to one fails with the names that release does publish.
 #
 # The archive holds the tree to install, flat: the candela compiler, the
-# candela-vm runtime, and the standard library in libs/ beside them. Both
-# binaries resolve `import "std/..."` relative to their own location, so the
+# candela-vm runtime, the candela-lsp language server where the release carries it, and the
+# standard library in libs/ beside them. The binaries resolve `import "std/..."` relative to their own location, so the
 # whole tree lands in one directory and that directory is what goes on PATH.
 # The same layout is what the Windows package installs. Every installed path
 # is recorded in a receipt at <prefix>/receipt, so a later run can replace an
@@ -102,8 +102,9 @@ Candela toolchain installer.
 Usage:
   install.sh [options]
 
-Installs the candela compiler, the candela-vm runtime, and the standard
-library, under a per-user prefix. Never uses sudo.
+Installs the candela compiler, the candela-vm runtime, the candela-lsp
+language server, and the standard library, under a per-user prefix. Never
+uses sudo.
 
 The registry client, lpm, is installed alongside, at ~/.local/bin/lpm.
 
@@ -626,7 +627,7 @@ if [ -n "$INSTALLED" ]; then
 else
   say "  candela $RELEASE"
 fi
-say "    the candela compiler, candela-vm, and the standard library"
+say "    the candela compiler, candela-vm, candela-lsp, and the standard library"
 say ""
 
 if ! ask "Install?"; then
@@ -707,6 +708,10 @@ fi
 } > "$RECEIPT"
 
 chmod 755 "$PREFIX/candela" "$PREFIX/candela-vm"
+# Older releases carry no language server.
+if [ -f "$PREFIX/candela-lsp" ]; then
+  chmod 755 "$PREFIX/candela-lsp"
+fi
 
 prune_dirs
 
@@ -776,7 +781,11 @@ fi
 say ""
 say "Installed under $PREFIX:"
 say "  candela $(receipt_version)"
-say "  candela-vm, and the standard library in libs/"
+if [ -f "$PREFIX/candela-lsp" ]; then
+  say "  candela-vm, candela-lsp, and the standard library in libs/"
+else
+  say "  candela-vm, and the standard library in libs/"
+fi
 lpm_note
 if [ -n "$PIN_VERSION" ]; then
   say ""

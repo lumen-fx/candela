@@ -1,9 +1,10 @@
 # Install
 
-candela installs as two programs: `candela`, the compiler that also runs source
-files and hosts the REPL, and `candela-vm`, the runtime that runs compiled
-artifacts. Both land together, along with the standard library and `lpm`, the
-client that fetches the packages a project depends on.
+candela installs as three programs: `candela`, the compiler that also runs
+source files and hosts the REPL, `candela-vm`, the runtime that runs compiled
+artifacts, and `candela-lsp`, the language server editors start. They land
+together, along with the standard library and `lpm`, the client that fetches
+the packages a project depends on.
 
 ## Linux and macOS
 
@@ -107,7 +108,8 @@ Windows installs from a package rather than the script. Download and run
 
 The package installs per user, under `%LOCALAPPDATA%\Programs\Candela`, so it
 never asks for administrator rights. It adds that directory to your `PATH` and
-ships `candela.exe`, `candela-vm.exe` and the standard library. Open a new
+ships `candela.exe`, `candela-vm.exe`, `candela-lsp.exe` and the standard
+library. Open a new
 terminal afterwards so the updated `PATH` takes effect.
 
 A portable `candela-windows-x86_64.zip` is published alongside the package for

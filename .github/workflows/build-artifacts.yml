@@ -25,6 +25,9 @@ name: build-artifacts
 # One asset is not a native build: candela-web.tar.gz is candela compiled to
 # WebAssembly, for a host with a browser instead of a file system.
 #
+# Each candela-<os>-<arch> archive holds candela, candela-vm, candela-lsp and
+# the standard library in libs/, the tree install.sh and the MSI lay down.
+#
 # The first-party packages ride along as <name>-<target>.tar.gz, one per
 # package and target; see the packages job.
 #
@@ -219,12 +222,22 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo pgo optimize --profiles-dir "${{ github.workspace }}/target/pgo-profiles-vm" -- --target ${{ matrix.target }} -p candela-vm --bin candela-vm
 
+      # The language server ships beside the compiler, so an editor finds it
+      # where the toolchain is installed. It is an editor's tool, not a hot
+      # path, so it takes a plain release build in a target directory of its
+      # own, which keeps its different flags off the profiled builds above.
+      - name: Build candela-lsp
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --target-dir target-lsp -p candela-lsp
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/candela dist/
           cp target/${{ matrix.target }}/release/candela-vm dist/
+          cp target-lsp/${{ matrix.target }}/release/candela-lsp dist/
           cp -R libs dist/
           cp LICENSE NOTICE THIRD-PARTY-LICENSE dist/
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
@@ -236,6 +249,7 @@ jobs:
           New-Item -ItemType "Directory" -Force -Path "dist"
           Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
           Copy-Item "target/${{ matrix.target }}/release/candela-vm.exe" "dist/"
+          Copy-Item "target-lsp/${{ matrix.target }}/release/candela-lsp.exe" "dist/"
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "NOTICE" "dist/"
