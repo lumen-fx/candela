@@ -14,6 +14,7 @@
 
 use crate::analysis::{self, ProgramSummary};
 use crate::checks::{self, Found};
+use crate::hints;
 use crate::ide::Ide;
 use crate::line_index::{self, LineIndex};
 use crate::refs::{self, Decl};
@@ -195,9 +196,11 @@ struct Inner {
     /// What each workspace file declares, as of its modification time, so
     /// a symbol search reads only the files that changed since the last.
     declared: Mutex<HashMap<PathBuf, (std::time::SystemTime, Vec<Declared>)>>,
-    /// Whether the client asks again for semantic tokens when told to,
-    /// which the server does after a check brings in new declarations.
+    /// Whether the client asks again for semantic tokens and inlay hints
+    /// when told to, which the server does after a check brings in new
+    /// declarations.
     refresh_tokens: std::sync::atomic::AtomicBool,
+    refresh_hints: std::sync::atomic::AtomicBool,
 }
 
 /// The references to one declaration found in one file.
@@ -236,6 +239,7 @@ impl Backend {
                 folders: RwLock::new(Vec::new()),
                 declared: Mutex::new(HashMap::new()),
                 refresh_tokens: std::sync::atomic::AtomicBool::new(false),
+                refresh_hints: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -428,16 +432,21 @@ impl Inner {
                 doc.compiled_generation = generation;
             }
         }
-        // Tokens were worked out against the summary before; the client asks
-        // again with this one.
-        if refreshed
-            && self
-                .refresh_tokens
-                .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        // Tokens and hints were worked out against the summary before; the
+        // client asks again with this one.
+        let load = |flag: &std::sync::atomic::AtomicBool| {
+            refreshed && flag.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        let (tokens, hints) = (load(&self.refresh_tokens), load(&self.refresh_hints));
+        if tokens || hints {
             let client = self.client.clone();
             tokio::spawn(async move {
-                let _ = client.semantic_tokens_refresh().await;
+                if tokens {
+                    let _ = client.semantic_tokens_refresh().await;
+                }
+                if hints {
+                    let _ = client.inlay_hint_refresh().await;
+                }
             });
         }
         if self.generation(uri) != Some(generation) {
@@ -1164,16 +1173,21 @@ impl LanguageServer for Backend {
         {
             folders.push(root.clone());
         }
-        let refresh = params
-            .capabilities
-            .workspace
-            .as_ref()
+        let workspace = params.capabilities.workspace.as_ref();
+        let tokens = workspace
             .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|t| t.refresh_support)
+            .unwrap_or(false);
+        let hints = workspace
+            .and_then(|w| w.inlay_hint.as_ref())
             .and_then(|t| t.refresh_support)
             .unwrap_or(false);
         self.inner
             .refresh_tokens
-            .store(refresh, std::sync::atomic::Ordering::Relaxed);
+            .store(tokens, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .refresh_hints
+            .store(hints, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut f) = self.inner.folders.write() {
             *f = folders
                 .iter()
@@ -1210,6 +1224,7 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -1573,6 +1588,20 @@ impl LanguageServer for Backend {
             result_id: None,
             data: semantic::tokens(&text, &summary),
         })))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> RpcResult<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        let summary = self.inner.typing_summary(uri).unwrap_or_default();
+        let index = LineIndex::new(&text);
+        let (start, end) = (
+            index.offset(params.range.start),
+            index.offset(params.range.end),
+        );
+        Ok(Some(hints::hints(&text, &summary, start, end)))
     }
 
     async fn symbol(

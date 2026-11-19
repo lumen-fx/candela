@@ -176,8 +176,9 @@ missing fields, an attribute's parameters and values), hover with a
 declaration's [doc comment](../language/modules.md#documenting-a-module) and a
 link to its documentation, signature help, go-to-definition, find references
 and rename across the files of a package, a document outline, a symbol
-search over the workspace, and semantic highlighting that colors each name by
-what it declares.
+search over the workspace, semantic highlighting that colors each name by
+what it declares, and inlay hints for a `let`'s type and a call's parameter
+names.
 Every editor below finds it as `candela-lsp` on your path.
 
 Highlighting comes from one of two grammars. VS Code and the IntelliJ-based

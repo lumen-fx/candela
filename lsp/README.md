@@ -159,6 +159,15 @@ the current text, so `bird.` completes while the line around it is unfinished.
   worked out from the current text and the last check, like completion; a
   client that supports it is asked to fetch them again after each check.
 
+- **Inlay hints.** After a `let` that writes no type, the type its value
+  has, when the server can follow it and the value does not spell it already
+  (a lone literal, `Point { .. }`, `Mode::On`, `Point::origin()`); a type
+  holding `any` or a generic parameter is left out. Before each argument of a
+  call to a function the program declares, the name of the parameter it
+  lands on, unless the argument already reads as that name (`area(width)`,
+  `area(box.width)`) or the function is named for it (`set_width(w)`). A
+  client that supports it is asked for them again after each check.
+
 - **Document symbols / outline.** The functions, structs and enums the buffer
   declares.
 
@@ -232,6 +241,9 @@ These are deliberate, and the source refers here for them.
   fields, methods and variants, two locals of one name in different
   functions, and a builtin, which has no declaration. It also covers which
   names a rename accepts and which bindings make it refuse.
+- `src/hints.rs` unit-tests which `let`s get a type and which arguments a
+  parameter name, including a generic call and a function named for its
+  parameter.
 - `src/semantic.rs` unit-tests the class of each kind of declaration and of
   a use of each.
 - `src/symbols.rs` unit-tests the declarations read from a file's tokens
@@ -260,6 +272,6 @@ These are deliberate, and the source refers here for them.
   highlight marks a local's declaration, assignment and read, and not a local
   of the same name in another function. Workspace symbols list a file of
   the workspace folder nobody opened, and semantic tokens decode against the
-  legend the server announces.
+  legend the server announces. Inlay hints answer for the range asked.
 
 Run both with `cargo test -p candela-lsp`.

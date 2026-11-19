@@ -9,6 +9,7 @@ mod analysis;
 mod backend;
 mod builtins;
 mod checks;
+mod hints;
 mod ide;
 mod line_index;
 mod refs;
