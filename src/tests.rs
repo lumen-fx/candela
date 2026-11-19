@@ -380,24 +380,20 @@ pub fn a_catch_reads_what_the_code_after_the_call_would_have_overwritten() {
     assert_eq!(
         run_output(
             "
-            fn dig(n, catching) {
+            fn dig(n) {
                 if n <= 0 { throw \"bottom\"; }
-                let mine = n * 10;
-                if catching {
-                    try {
-                        dig(n - 1, false);
-                        mine = 0;
-                        print(mine);
-                    } catch e {
-                        print(mine);
-                    }
-                } else {
-                    dig(n - 1, false);
-                }
+                dig(n - 1);
             }
 
             fn main() {
-                dig(2, true);
+                let mine = 20;
+                try {
+                    dig(1);
+                    mine = 0;
+                    print(mine);
+                } catch e {
+                    print(mine);
+                }
             }
             "
         ),
@@ -469,21 +465,22 @@ pub fn a_written_literal_register_is_not_a_constant() {
             "
             fn sum(n) {
                 if n <= 0 { throw \"bottom\"; }
-                let got = 0;
-                try {
-                    got = sum(n - 1);
-                } catch e {
-                    got = 1;
-                }
-                return n + got;
+                return n + sum(n - 1);
             }
 
             fn main() {
-                print(sum(3));
+                let got = 0;
+                try {
+                    got = sum(3);
+                } catch e {
+                    got = 1;
+                }
+                let other = 0;
+                print(got + other);
             }
             "
         ),
-        "7\n"
+        "1\n"
     );
 }
 
@@ -496,19 +493,16 @@ pub fn an_assignment_inside_a_try_gets_its_own_register() {
     assert_eq!(
         run_output(
             "
-            fn g(n) {
-                let got = 0;
-                try {
-                    got = n + 5;
-                } catch e {
-                    got = 1;
-                }
-                return got;
-            }
-
             fn main() {
-                print(g(1));
-                print(g(0) + 0);
+                for n in [1, 0] {
+                    let got = 0;
+                    try {
+                        got = n + 5;
+                    } catch e {
+                        got = 1;
+                    }
+                    print(got + 0);
+                }
             }
             "
         ),
@@ -892,18 +886,10 @@ impl V {
     fn +(self, other: V) -> V { return V { x: self.x + other.x, y: self.y + other.y }; }
 }
 
-fn caught(n: int) -> int {
-    let x = 1;
-    try {
-        x = 2;
-        if n > 0 {
-            throw \"e\";
-        }
-        x = 3;
-    } catch e {
-        return x * 10;
+fn boom(n: int) {
+    if n > 0 {
+        throw \"e\";
     }
-    return x;
 }
 
 fn deep(n: int) -> int {
@@ -931,10 +917,18 @@ fn main() {
         total += step;
         step = step * 2;
     }
-    print(caught(0), caught(1), deep(3), walk(3), total);
+    let x = 1;
+    try {
+        x = 2;
+        boom(1);
+        x = 3;
+    } catch e {
+        x = x * 10;
+    }
+    print(x, deep(3), walk(3), total);
 }
 ";
-    assert_eq!(run_output(src), "3\n20\n94\n12.0\n15\n");
+    assert_eq!(run_output(src), "20\n94\n12.0\n15\n");
 }
 
 /// A struct held in a field of another is kept in registers along with it,
@@ -1012,17 +1006,17 @@ pub fn a_catch_restores_the_registers_of_the_call_it_ended() {
             if n <= 0 {
                 throw \"bottom\";
             }
-            let mine = n * 10;
+            dig(n - 1);
+        }
+
+        fn main() {
+            let mine = 30;
             try {
-                dig(n - 1);
+                dig(3);
             } catch e {
                 print(mine);
             }
             print(mine);
-        }
-
-        fn main() {
-            dig(3);
         }
         ",
         30.into()
@@ -5549,7 +5543,7 @@ pub fn json_round_trips_a_large_integer() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"9007199254740993\") as int;
+            let v = json::parse(\"9007199254740993\").unwrap() as int;
             print(v);
         }
         ",
@@ -6830,7 +6824,7 @@ pub fn fs_return_types_stay_on_the_fs_path() {
         fn read(n: int) -> int { return n; }
 
         fn main() {
-            print(type(read(1)) + type(fs::read("p")) == "intstring");
+            print(type(read(1)) + type(fs::read("p")) == "intResult<string, string>");
         }
         "#,
         true.into()
@@ -8126,7 +8120,7 @@ pub fn any_type_tests() {
         "import \"std/json\";
 
         fn main() {
-            let j = json::parse(\"{\\\"n\\\": 5}\");
+            let j = json::parse(\"{\\\"n\\\": 5}\").unwrap();
             print(j is {any: any});
         }
         ",
@@ -8140,7 +8134,7 @@ pub fn any_is_int_true() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"7\");
+            let v = json::parse(\"7\").unwrap();
             print(v is int);
         }
         ",
@@ -8154,7 +8148,7 @@ pub fn any_is_int_false_on_string() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"\\\"x\\\"\");
+            let v = json::parse(\"\\\"x\\\"\").unwrap();
             print(v is int);
         }
         ",
@@ -8172,7 +8166,7 @@ pub fn any_bad_downcast_is_catchable() {
         fn main() {
             let r = 0;
             try {
-                let x = json::parse(\"\\\"str\\\"\") as int;
+                let x = json::parse(\"\\\"str\\\"\").unwrap() as int;
                 r = 1;
             } catch e {
                 r = 2;
@@ -8190,7 +8184,7 @@ pub fn any_as_str() {
         "import \"std/json\";
 
         fn main() {
-            print(json::parse(\"\\\"hi\\\"\") as string);
+            print(json::parse(\"\\\"hi\\\"\").unwrap() as string);
         }
         ",
         crate::data::Data::small_str("hi")
@@ -8203,7 +8197,7 @@ pub fn any_as_bool() {
         "import \"std/json\";
 
         fn main() {
-            print(json::parse(\"true\") as bool);
+            print(json::parse(\"true\").unwrap() as bool);
         }
         ",
         true.into()
@@ -8216,7 +8210,7 @@ pub fn json_parse_scalar_int() {
         "import \"std/json\";
 
         fn main() {
-            print((json::parse(\"42\") as int) + 1);
+            print((json::parse(\"42\").unwrap() as int) + 1);
         }
         ",
         43.into()
@@ -8229,7 +8223,7 @@ pub fn json_parse_object_field() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\") as {any: any};
+            let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\").unwrap() as {any: any};
             print((obj[\"x\"] as int) + (obj[\"y\"] as int));
         }
         ",
@@ -8243,7 +8237,7 @@ pub fn json_parse_nested_array() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\") as {any: any};
+            let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\").unwrap() as {any: any};
             let arr = obj[\"nums\"] as any[];
             print(arr.len());
         }
@@ -8298,7 +8292,7 @@ pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
         fn main() {
             let total = 0;
             for i in 0..3000 {
-                let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+                let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\").unwrap() as any[];
                 total = total + ((v[0] as any[])[1] as int);
             }
             print(total);
@@ -8335,7 +8329,7 @@ pub fn json_parse_survives_a_collection_mid_parse() {
             doc = doc + \"]\";
             let bad = 0;
             for round in 0..3 {
-                let parsed = json::parse(doc) as any[];
+                let parsed = json::parse(doc).unwrap() as any[];
                 if json::stringify(parsed) != doc { bad += 1; }
                 if parsed.len() != ids.len() { bad += 1; }
                 for i in 0..ids.len() {
@@ -8569,7 +8563,7 @@ pub fn an_interned_key_never_names_a_freed_string() {
                 let t = "garbage_string_" + string(i);
                 i += 1;
             }
-            let doc = json::parse("{\"garbage_string_5\": 1}") as {any: any};
+            let doc = json::parse("{\"garbage_string_5\": 1}").unwrap() as {any: any};
             let j = 0;
             while j < 300 {
                 let t = "reuse_every_slot_" + string(j);
@@ -8741,7 +8735,7 @@ pub fn a_json_key_interned_during_marking_keeps_its_text() {
             let bad = 0;
             for round in 0..300 {
                 let dead = "interned key " + string(round);
-                let doc = json::parse("{\"interned key " + string(round) + "\": [1, 2]}") as {any: any};
+                let doc = json::parse("{\"interned key " + string(round) + "\": [1, 2]}").unwrap() as {any: any};
                 let junk = "unrelated filler " + string(round);
                 let k = doc.keys()[0] as string;
                 if k != "interned key " + string(round) { bad += 1; }
@@ -8768,7 +8762,7 @@ pub fn parsed_array_survives_array_gc() {
             r#"import "std/json";
 
             fn libs_len(body) {{
-                let root = json::parse(body) as {{any: any}};
+                let root = json::parse(body).unwrap() as {{any: any}};
                 let s = "a,b,c";
                 let i = 0;
                 while i < 50 {{
@@ -8793,7 +8787,7 @@ pub fn json_roundtrip_preserves_int() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))) as {any: any};
+            let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\").unwrap())).unwrap() as {any: any};
             print(obj[\"a\"] as int);
         }
         ",
@@ -8807,7 +8801,7 @@ pub fn json_roundtrip_preserves_float() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(json::stringify(json::parse(\"2.5\")));
+            let v = json::parse(json::stringify(json::parse(\"2.5\").unwrap())).unwrap();
             print(v as float);
         }
         ",
@@ -8969,7 +8963,7 @@ pub fn map_downcast_takes_mixed_value_types() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1}\").unwrap() as {any: any};
             m[\"b\"] = 2;
             m[\"c\"] = \"three\";
             print(m.len());
@@ -8985,7 +8979,7 @@ pub fn map_downcast_entries_stay_dynamic() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\").unwrap() as {any: any};
             print((m[\"a\"] as int) + (m[\"b\"] as string).len());
         }
         ",
@@ -8999,7 +8993,7 @@ pub fn map_downcast_takes_mixed_key_types() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1}\").unwrap() as {any: any};
             m[\"b\"] = 2;
             m[7] = 3;
             print(m.len());
@@ -9015,7 +9009,7 @@ pub fn list_downcast_takes_mixed_element_types() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1]\") as any[];
+            let l = json::parse(\"[1]\").unwrap() as any[];
             l.push(2);
             l.push(\"three\");
             print(l.len());
@@ -9031,7 +9025,7 @@ pub fn list_downcast_elements_stay_dynamic() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1, \\\"two\\\"]\") as any[];
+            let l = json::parse(\"[1, \\\"two\\\"]\").unwrap() as any[];
             print((l[0] as int) + (l[1] as string).len());
         }
         ",
@@ -9047,7 +9041,7 @@ pub fn list_downcast_index_assignment_takes_any_type() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1, 2, 3]\") as any[];
+            let l = json::parse(\"[1, 2, 3]\").unwrap() as any[];
             l.push({\"a\": \"2\"});
             l[0] = 5;
             l[1] = \"two\";
@@ -9593,7 +9587,7 @@ pub fn any_condition_raises_on_a_non_bool() {
         fn main() {
             let r = 0;
             try {
-                if json::parse(\"1\") {
+                if json::parse(\"1\").unwrap() {
                     r = 1;
                 }
             } catch e {
@@ -9613,7 +9607,7 @@ pub fn any_condition_takes_a_bool() {
 
         fn main() {
             let r = 0;
-            if json::parse(\"true\") {
+            if json::parse(\"true\").unwrap() {
                 r = 1;
             }
             print(r);
@@ -12732,22 +12726,13 @@ pub fn a_range_loop_leaves_the_variable_it_starts_from_alone() {
     assert_eq!(printed, "1\n2\n5\n");
 }
 
-/// A function returns on every path when its try block and its catch both
-/// return, so the declared type is met without a return after the block.
+/// A function returns on every path when every way through it ends in a
+/// return, a throw or a loop nothing breaks out of, so the declared type is met
+/// without a return at the end.
 #[test]
-pub fn a_try_whose_catch_returns_meets_the_declared_type() {
+pub fn every_way_out_meets_the_declared_type() {
     let printed = run_output(
         "
-        fn a(n: int) -> int { try { return n; } catch e { return -1; } }
-        fn c(n: int) -> int {
-            try { if n == 0 { throw \"z\"; } return n; }
-            catch \"z\" { return 0; }
-            catch e { return -1; }
-        }
-        fn d(n: int) -> int {
-            try { if n == 0 { throw \"z\"; } return n; }
-            catch \"z\" { return 0; }
-        }
         fn e(n: int) -> int {
             match n {
                 0 => { return 1; }
@@ -12772,10 +12757,10 @@ pub fn a_try_whose_catch_returns_meets_the_declared_type() {
             }
             return n;
         }
-        fn main() { print(a(1), c(0), c(4), d(0), d(6), e(0), g(0), h(3), k(0)); }
+        fn main() { print(e(0), g(0), h(3), k(0)); }
         ",
     );
-    assert_eq!(printed, "1\n0\n4\n0\n6\n1\n1\n3\n1\n");
+    assert_eq!(printed, "1\n1\n3\n1\n");
 }
 
 /// A body that returns a value on one path and nothing on another, by reaching
@@ -13527,7 +13512,7 @@ pub fn a_json_object_round_trips_with_its_key_order() {
         "import \"std/json\";
 
         fn main() {
-            print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
+            print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\").unwrap()));
         }
         ",
     );
@@ -14207,8 +14192,8 @@ pub fn returning_any_from_a_declared_type_is_checked() {
         run_output(
             "import \"std/json\";
 
-            fn g(s: string) -> int { return json::parse(s); }
-            fn m(s: string) -> {string: string} { return json::parse(s); }
+            fn g(s: string) -> int { return json::parse(s).unwrap(); }
+            fn m(s: string) -> {string: string} { return json::parse(s).unwrap(); }
 
             fn main() {
                 print(g(\"4\") + 1);
@@ -15710,7 +15695,7 @@ pub fn the_json_builtins_are_gone() {
     }
     let src = r#"
         import "std/json";
-        fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]"))); }
+        fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]").unwrap())); }
     "#;
     assert_eq!(run_output(src), "[1,{\"a\":true}]\n");
 }
@@ -15723,10 +15708,10 @@ pub fn the_file_system_is_a_module() {
         r#"
         import "std/fs";
         fn main() {{
-            fs::write("{path_text}", "a");
-            fs::append("{path_text}", "b");
-            print(fs::read("{path_text}"), fs::exists("{path_text}"));
-            fs::delete("{path_text}");
+            fs::write("{path_text}", "a")?;
+            fs::append("{path_text}", "b")?;
+            print(fs::read("{path_text}")?, fs::exists("{path_text}"));
+            fs::delete("{path_text}")?;
             print(fs::exists("{path_text}"));
         }}
     "#
@@ -15866,10 +15851,6 @@ pub fn question_mark_returns_the_none_or_the_err() {
 pub fn question_mark_needs_a_function_returning_its_kind() {
     for (src, code) in [
         (
-            "fn main() { let m = {\"a\": 1}; let x = m.get(\"a\")?; print(x); }",
-            "propagate_return_type",
-        ),
-        (
             "fn f(m) -> int { let x = m.get(\"a\")?; return x; }\nfn main() { print(f({\"a\": 1})); }",
             "propagate_return_type",
         ),
@@ -15955,9 +15936,9 @@ pub fn is_tests_a_type() {
         struct P { x: int }
         enum Shape { Circle(float), Square(int) }
         fn main() {
-            let v = json::parse("{\"a\": 1, \"b\": [1, 2]}");
+            let v = json::parse("{\"a\": 1, \"b\": [1, 2]}").unwrap();
             print(v is int, v is {string: any}, v is {string: int}, v is {any: any});
-            let xs = json::parse("[1, 2, 3]");
+            let xs = json::parse("[1, 2, 3]").unwrap();
             print(xs is int[], xs is string[], xs is (int|string)[], xs is any[]);
             let ps = [P { x: 1 }];
             print(ps is P[], 3 is int, 3 is int|string, 3 is any);
@@ -16015,8 +15996,8 @@ pub fn is_binds_a_variants_payload() {
             return 8080;
         }
         fn main() {
-            print(port(json::parse("{\"port\": 80}") as {string: any}));
-            print(port(json::parse("{\"port\": \"x\"}") as {string: any}));
+            print(port(json::parse("{\"port\": 80}").unwrap() as {string: any}));
+            print(port(json::parse("{\"port\": \"x\"}").unwrap() as {string: any}));
             let o = Some(5);
             print(o is Some(n) && n > 3 && n < 10);
             print(o is None);
@@ -16044,12 +16025,12 @@ pub fn as_downcasts_or_raises() {
         import "std/json";
         fn keys(m: {string: any}) -> int { return m.len(); }
         fn main() {
-            let v = json::parse("{\"a\": 1, \"b\": 2}");
+            let v = json::parse("{\"a\": 1, \"b\": 2}").unwrap();
             print(keys(v as {string: any}));
-            print(json::parse("[1, 2]") as int[]);
-            print(json::parse("7") as int + 1);
+            print(json::parse("[1, 2]").unwrap() as int[]);
+            print(json::parse("7").unwrap() as int + 1);
             try {
-                print(json::parse("[1, \"x\"]") as int[]);
+                print(json::parse("[1, \"x\"]").unwrap() as int[]);
             } catch "bad_downcast" {
                 print("caught");
             }
@@ -16070,12 +16051,12 @@ pub fn type_test_diagnostics() {
             "string(x)",
         ),
         (
-            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Option); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\").unwrap() is Option); }",
             "type_test_needs_arguments",
             "Option<int>",
         ),
         (
-            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Some(x)); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\").unwrap() is Some(x)); }",
             "variant_test_not_enum",
             "is Option<int>",
         ),
@@ -16140,7 +16121,7 @@ pub fn is_and_as_bind_like_comparisons() {
     let src = r#"
         import "std/json";
         fn main() {
-            let v = json::parse("2");
+            let v = json::parse("2").unwrap();
             print(v as int + 1);
             print(1 + 1 is int);
             print(v is int && v as int > 1);
@@ -17796,8 +17777,8 @@ fn main() {
         ),
         (
             "fn main() { let v = 1 else { return; }; }",
-            "let_else_on_name",
-            "else",
+            "else_operand",
+            "1 else { return; }",
         ),
         (
             "fn main() { let (a, b) = (1, 2) else { return; }; }",
@@ -17978,4 +17959,72 @@ fn main() {
     let src = "fn main() { print(match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }); }";
     let d = compile_diag(src, "cover.cdl").unwrap_err();
     assert!(d.message.contains("does not cover: Some"), "{d:?}");
+}
+
+/// Errors are values: `T!E` is `Result<T, E>`, `value else fallback` and
+/// `value else |e| { ... }` give a fallback for an `Option` or a `Result`, `?`
+/// passes a failure on, and in `main`, which has no caller, ends the program
+/// with the error. A `catch` runs only in `main`; a `return`, `break` or
+/// `continue` out of a `try` takes its catch down.
+#[test]
+pub fn errors_are_values() {
+    let src = "
+fn parse_num(s: string) -> int!string {
+    let n = s.parse<int>() else { return Err(\"not a number: \" + s); };
+    return Ok(n);
+}
+fn sum(a: string, b: string) -> int!string => Ok(parse_num(a)? + parse_num(b)?);
+fn first_bad(xs: string[]) -> string {
+    for x in xs {
+        let n = parse_num(x) else |e| { return e; };
+        print(n);
+    }
+    return \"none\";
+}
+fn main() {
+    print(\"42\".parse<int>() else 0, \"x\".parse<int>() else 0);
+    print(sum(\"1\", \"2\"), sum(\"1\", \"z\"));
+    print(sum(\"1\", \"z\") else |e| { e.len() });
+    print(first_bad([\"1\", \"q\", \"2\"]));
+    let r: int!string = Err(\"boom\");
+    print(r else 7);
+    try {
+        let x = r?;
+        print(\"not reached\", x);
+    } catch e {
+        print(\"main caught \" + e);
+    }
+    try {
+        throw \"later\";
+    } catch e {
+        print(e);
+    }
+}
+";
+    assert_eq!(
+        run_output(src),
+        "42\n0\nOk(3)\nErr(\"not a number: z\")\n15\n1\nnot a number: q\n7\nmain caught boom\nlater\n"
+    );
+    let cases = [
+        (
+            "fn f() -> int { try { return 1; } catch e { return 0; } }\nfn main() { print(f()); }",
+            "try_outside_main",
+            "try",
+        ),
+        (
+            "fn main() { let o = Some(1); print(o else |e| { 0 }); }",
+            "else_binder_on_option",
+            "e",
+        ),
+        (
+            "fn main() { let n = 3; print(n else 0); }",
+            "else_operand",
+            "n else 0",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "errors.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
 }

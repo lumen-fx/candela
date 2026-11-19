@@ -64,7 +64,7 @@ fn set_max_concurrent(n: int) {
 
 /// The event a payload from the native library describes.
 fn decode(payload: string) -> Event {
-    let fields = json::parse(payload) as {string: any};
+    let fields = json::parse(payload).unwrap() as {string: any};
     if fields["kind"] as string == "done" {
         return Done(fields["dest"] as string, fields["files"] as int);
     }

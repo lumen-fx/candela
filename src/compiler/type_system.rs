@@ -3063,7 +3063,7 @@ pub fn collect_direct_fn_calls(
                 expr_stack.push(expr);
                 expr_stack.push(value);
             }
-            Expr::TryCatchBlock(try_code, _, catch_code) => {
+            Expr::TryCatchBlock(try_code, _, catch_code, _) => {
                 expr_stack.extend(try_code.iter());
                 expr_stack.extend(catch_code.iter());
             }
@@ -3077,6 +3077,10 @@ pub fn collect_direct_fn_calls(
                 if let Some(w) = wildcard {
                     expr_stack.extend(w.iter());
                 }
+            }
+            Expr::Else(value, _, fallback, _) => {
+                expr_stack.push(value);
+                expr_stack.push(fallback);
             }
             Expr::LetPattern(pattern_let) => {
                 expr_stack.push(&pattern_let.value);
@@ -3160,7 +3164,7 @@ fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code)
             | Expr::IntForLoop(_, _, _, code, _, _) => collect_return_shapes(code, shapes),
-            Expr::TryCatchBlock(try_code, _, catch_code) => {
+            Expr::TryCatchBlock(try_code, _, catch_code, _) => {
                 collect_return_shapes(try_code, shapes);
                 collect_return_shapes(catch_code, shapes);
             }
@@ -3176,6 +3180,9 @@ fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
                 if let Some(otherwise) = &pattern_let.otherwise {
                     collect_return_shapes(otherwise, shapes);
                 }
+            }
+            Expr::Else(_, _, fallback, _) => {
+                collect_return_shapes(std::slice::from_ref(fallback), shapes);
             }
             Expr::ReturnVal(value) => {
                 if value.is_some() {
@@ -3743,6 +3750,21 @@ fn track_return_flow(
                     };
                 }
             }
+            // A fallback reads as the `match` it lowers to.
+            Expr::Else(value, binder, fallback, span) => {
+                let lowered = crate::compiler::else_match(
+                    value,
+                    binder.as_ref(),
+                    fallback,
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                );
+                let flow =
+                    track_return_flow(std::slice::from_ref(&lowered), v, ctx, state, fn_name);
+                extend_return_types!(&mut return_types, flow.types, ctx, state);
+            }
             // What a pattern `let` binds is in scope for the rest of the body;
             // its `else` block is a path that leaves.
             Expr::LetPattern(pattern_let) => {
@@ -3755,7 +3777,7 @@ fn track_return_flow(
             // A try block and its catch are two paths out of the statement,
             // and the function returns on every path when both do. The catch
             // sees the error kind under the name the block binds.
-            Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+            Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
                 let try_flow = track_scoped_returns(try_code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, try_flow.types, ctx, state);
                 let v_len = v.len();
@@ -3827,7 +3849,7 @@ fn statement_breaks(expr: &Expr) -> bool {
         | Expr::ElseIfBlock(_, body, _)
         | Expr::ElseBlock(body)
         | Expr::EvalBlock(body) => block_breaks(body),
-        Expr::TryCatchBlock(try_code, _, catch_code) => {
+        Expr::TryCatchBlock(try_code, _, catch_code, _) => {
             block_breaks(try_code) || block_breaks(catch_code)
         }
         Expr::Match(_, arms, wildcard, _, _) => {
@@ -3838,6 +3860,7 @@ fn statement_breaks(expr: &Expr) -> bool {
             .otherwise
             .as_ref()
             .is_some_and(|otherwise| block_breaks(otherwise)),
+        Expr::Else(_, _, fallback, _) => block_breaks(std::slice::from_ref(fallback)),
         _ => false,
     }
 }
@@ -5308,6 +5331,10 @@ impl Expr {
             Self::DefaultArg(id, _) => {
                 let (file_idx, value, _) = state.generics.arg_default(*id).clone();
                 value.infer_type(&mut Vec::new(), Ctx { file_idx, ..ctx }, state)
+            }
+            Self::Else(value, binder, fallback, span) => {
+                crate::compiler::else_match(value, binder.as_ref(), fallback, *span, v, ctx, state)
+                    .infer_type(v, ctx, state)
             }
             // A block used as a value has the type of its last expression.
             Self::EvalBlock(code) => {

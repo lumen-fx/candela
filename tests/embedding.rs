@@ -998,10 +998,10 @@ fn main() {}
     assert!(err.message.contains("app::save"), "{}", err.message);
 }
 
-/// The error is an ordinary candela runtime error, so a script handles it with
-/// `try`/`catch` under the kind `host_fn_error`.
+/// The error is an ordinary candela runtime error of kind `host_fn_error`: it
+/// ends the call and reaches the host, unless `main` catches it.
 #[test]
-fn a_script_catches_a_host_error() {
+fn a_host_error_ends_the_call_and_reaches_the_host() {
     let mut engine = Engine::new();
     engine.register_host_fn("gpio", "read", |_pin: i64| {
         Err::<i64, HostError>(HostError::new("the bus is down"))
@@ -1012,19 +1012,19 @@ host "gpio" {
     fn read(a: int) -> int;
 }
 fn level(pin) {
+    return gpio::read(pin);
+}
+fn main() {
     try {
-        return gpio::read(pin);
+        print(level(1));
     } catch "host_fn_error" {
-        return -1;
+        print("caught in main");
     }
 }
-fn main() {}
 "#;
     let mut program = engine.compile(src, "gpio.cdl").unwrap();
-    assert_eq!(
-        program.call("level", &[7i64.into()]).unwrap(),
-        Value::Int(-1)
-    );
+    let error = program.call("level", &[7i64.into()]).unwrap_err();
+    assert!(error.message.contains("the bus is down"), "{error:?}");
 }
 
 /// A variadic closure raises the same way a typed one does.
@@ -2436,7 +2436,7 @@ fn a_call_with_new_argument_types_compiles_its_own_entry() {
 const PARSE_PER_FRAME: &str = "import \"std/json\";
 
 fn p() -> int {
-    let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+    let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\").unwrap() as any[];
     return ((v[0] as any[])[1] as int) + ((v[1] as {any: any})[\"a\"] as int);
 }
 fn main() {}

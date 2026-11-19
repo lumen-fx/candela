@@ -535,19 +535,63 @@ fn variant_pattern_ahead(parser: &Parser<'_>, allow_struct: bool) -> bool {
 
 #[inline(always)]
 pub fn parse_expr(parser: &mut Parser<'_>) -> Expr {
-    parse_range(parser, true)
+    parse_else(parser, true)
 }
 
 #[inline(always)]
 pub fn parse_expr_no_struct(parser: &mut Parser<'_>) -> Expr {
-    parse_range(parser, false)
+    parse_else(parser, false)
+}
+
+/// An expression with its fallbacks: `value else fallback` gives the value
+/// inside a `Some` or an `Ok`, or else the fallback, and
+/// `value else |e| { ... }` binds an `Err`'s error for the block that gives
+/// the fallback. `else` binds looser than everything else, and a run of them
+/// reads left to right.
+fn parse_else(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
+    let start = parser.peek_token_span().start;
+    let mut value = parse_range(parser, allow_struct);
+    while parser.peek_token_opt() == Some(Token::Else) {
+        parser.next_token();
+        let binder = if parser.peek_token() == Token::Pipe {
+            parser.next_token();
+            let (name, span) = parser.next_token();
+            let Token::Identifier(name) = name else {
+                cold_path();
+                parser.error(
+                    span,
+                    ParserErr::UnexpectedToken(
+                        Token::Identifier(""),
+                        name,
+                        "The error an `else |e|` binds is a name.",
+                    ),
+                );
+            };
+            parser.next_token_expect(Token::Pipe, "The name an `else` binds ends with '|'.");
+            Some((SmolStr::new(name), span))
+        } else {
+            None
+        };
+        let fallback = if binder.is_some() {
+            Expr::EvalBlock(Box::from(super::blocks::parse_value_block(parser)))
+        } else {
+            parse_range(parser, allow_struct)
+        };
+        value = Expr::Else(
+            Box::new(value),
+            binder,
+            Box::new(fallback),
+            (start, parser.last_token_end as u32).into(),
+        );
+    }
+    value
 }
 
 /// An expression, or the range `low..high` or `low..=high` between two. A
 /// range binds looser than every operator, so `0..n + 1` runs to `n + 1`.
 /// A `..` with `]` after it is the open end of a slice, `a[i..]`, which the
 /// index reads itself.
-fn parse_range(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
+pub fn parse_range(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
     let start = parser.peek_token_span().start;
     let low = parse_expr_with_precedence(parser, 0, allow_struct);
     let inclusive = match parser.peek_token_opt() {

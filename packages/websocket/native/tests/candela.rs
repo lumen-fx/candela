@@ -59,7 +59,7 @@ fn start() {{
                 test::seen(text);
                 echoes += 1;
                 if echoes == 2 {{
-                    test::seen("closing " + string(websocket::close(socket, 1000, "done")));
+                    test::seen("closing " + string(websocket::close(socket, 1000, "done").unwrap()));
                 }}
             }}
             Error(why) => test::seen("error " + why),
@@ -120,7 +120,7 @@ fn a_connection_that_never_opens_reports_an_error_and_a_close() {
 }
 
 #[test]
-fn a_close_code_the_protocol_reserves_raises() {
+fn a_close_code_the_protocol_reserves_is_an_error() {
     let dir = scratch("websocket-bad-close");
     let root = stage(package(), "websocket", &dir);
     let program = format!(
@@ -132,10 +132,8 @@ host "test" {{
 }}
 
 fn start() {{
-    try {{
-        websocket::close(1, 1001, "");
-    }} catch "websocket_bad_close" {{
-        test::seen("refused");
+    if websocket::close(1, 1001, "") is Err(e) {{
+        test::seen("refused " + e);
     }}
 }}
 
@@ -144,7 +142,7 @@ fn main() {{}}
         import = import(&root, "websocket"),
     );
     let seen = run(&dir, &program, |seen| !seen.is_empty());
-    assert_eq!(seen, ["refused"]);
+    assert_eq!(seen, ["refused websocket_bad_close"]);
     std::fs::remove_dir_all(&dir).ok();
 }
 

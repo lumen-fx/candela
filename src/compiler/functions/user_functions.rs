@@ -997,6 +997,8 @@ fn compile_function(
                 in_function: true,
                 offset: ctx.advance_offset(output.len()).offset,
                 return_downcast,
+                tries: 0,
+                loop_tries: 0,
                 ..ctx
             },
             state,

@@ -183,15 +183,13 @@ fn errors_in_machine_code_unwind_like_the_interpreter() {
             for i in 0..n { s = s + get(xs, i); }
             return s;
         }
-        fn safe(xs: int[], n: int) -> int {
-            let total = -1;
-            try { total = sum_to(xs, n); } catch e { print(e); }
-            return total;
-        }
         fn main() {
             let xs = [1, 2, 3];
-            print(safe(xs, 3));
-            print(safe(xs, 5));
+            for n in [3, 5] {
+                let total = -1;
+                try { total = sum_to(xs, n); } catch e { print(e); }
+                print(total);
+            }
             print(sum_to(xs, 4));
         }
         ",

@@ -68,8 +68,8 @@ Starts the closing handshake. The `Close` event follows once it is over.
 
 - `code`: 1000 for a normal close, or 3000 to 4999 for one of your own.
 - `reason`: at most 123 bytes.
-- Returns: false when there is no connection to close.
-- Raises: `websocket_bad_close` for another code or a longer reason.
+- Returns: a `bool!string`: `Ok(false)` when there is no connection to close,
+  and `Err("websocket_bad_close")` for another code or a longer reason.
 
 ## state
 

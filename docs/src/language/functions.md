@@ -195,7 +195,7 @@ fn row() -> {any: any} {
 }
 
 fn main() {
-    let rows = [json::parse("{\"id\": 1}") as {any: any}];
+    let rows = [json::parse("{\"id\": 1}")? as {any: any}];
     rows.push(row());
     print(rows.len());
 }

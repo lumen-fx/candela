@@ -194,9 +194,13 @@ not cover every variant. The non-exhaustive report lists the variants you left
 out. A qualified pattern is also reported when its qualifier names an enum other
 than the matched value's, or names nothing at all; the report says which enum
 the pattern reaches and which one the match is on. A `?` after a value that is
-neither an `Option` nor a `Result` is `propagate_operand`, and one in `main` or
-in a function that does not return the same enum, with the same error type for a
-`Result`, is `propagate_return_type`; see
+neither an `Option` nor a `Result` is `propagate_operand`, and one in a
+function that does not return the same enum, with the same error type for a
+`Result`, is `propagate_return_type`; in `main` a `?` ends the program with the
+error instead. `else` after a value that is neither an `Option` nor a `Result` is
+`else_operand`, and `else |e|` after an `Option`, whose `None` carries no
+error, is `else_binder_on_option`. A `try` outside `main` is
+`try_outside_main`; see
 [error handling](../language/error-handling.md#passing-a-failure-on). A `|` alternative that binds
 other names, or the same names at other types, than the first alternative of
 its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
@@ -386,32 +390,32 @@ Two kinds come from what the call was given rather than from the system:
 | `host_fn_error` | A function a `host` block declares failed. The message names the function and repeats what the host reported |
 
 An embedding program decides when this happens: its closure returns an error
-instead of a value. Catch it like any other kind, or let it end the run. See
-[embedding](../integration/embedding.md).
+instead of a value. It ends the run, and reaches the host, unless `main`
+catches it. See [embedding](../integration/embedding.md).
 
 ### Your own
 
 `throw "message";` raises an error whose kind is the string you pass, so
-`catch "message"` matches it. Choose short, stable identifiers for anything you
-intend to catch.
+`catch "message"` in `main` matches it. Use it for what should not happen; a
+failure a caller is meant to handle goes back as a `Result`.
 
 ## Catching
 
-A `try` block runs under the innermost `catch`. The errors listed above are
-caught wherever the block raises them: in an operator, a built-in function, a
-`throw`, or inside a function the block calls, at any depth. When no `catch`
-matches, the error is re-raised to the next enclosing `try`, and an error that
-reaches the top of the program is printed and ends it.
+A runtime error ends the program: it unwinds every call between where it was
+raised and `main`. A `try` in `main` catches it, and only there; a function
+that expects a failure hands it back as a [`Result`](../standard-library/result.md)
+instead, see [error handling](../language/error-handling.md). When no `catch`
+matches, the error is re-raised to the next enclosing `try`, and one that
+reaches the top of the program is printed and ends it. A host that called the
+program receives it as the call's error.
 
 ```rust
-import "std/fs";
-
 fn main() {
+    let text = "8o";
     try {
-        let text = fs::read("port.txt");
         print(int(text) + 1);
-    } catch "fs_not_found" {
-        print("no config");
+    } catch "invalid_int" {
+        print("not a number");
     } catch e {
         print("failed: " + e);
     }
@@ -419,11 +423,6 @@ fn main() {
 ```
 
 The catch variable holds the kind as a string.
-
-An error raised several frames below the `try` abandons the calls in between and
-resumes at the `catch`, so a failure deep in a helper is handled where the work
-was started. This covers your own functions and the standard library modules
-written in candela.
 
 `exit()` with a non-zero status ends a program without being catchable.
 

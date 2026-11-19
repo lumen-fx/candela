@@ -382,6 +382,7 @@ module.exports = grammar({
         $.generic_type,
         $.array_type,
         $.optional_type,
+        $.result_type,
         $.map_type,
         $.function_type,
         $.parenthesized_type,
@@ -459,6 +460,10 @@ module.exports = grammar({
     // its left.
     optional_type: ($) => prec.right(1, seq(field('inner', $._atomic_type), '?')),
 
+    // `T!E`, the same type as `Result<T, E>`.
+    result_type: ($) =>
+      prec.right(1, seq(field('ok', $._atomic_type), '!', field('error', $._atomic_type))),
+
     map_type: ($) => seq('{', field('key', $._type), ':', field('value', $._type), '}'),
 
     // `a::b::c` nests to the left, so the last segment is the name and
@@ -505,14 +510,17 @@ module.exports = grammar({
     // `let pattern = value;`, and `let pattern = value else { ... };` where
     // the pattern can fail and the block leaves.
     let_declaration: ($) =>
-      seq(
-        'let',
-        field('name', $._pattern),
-        optional(seq(':', field('type', $._type))),
-        '=',
-        field('value', $._expression),
-        optional(seq('else', field('else', $.block))),
-        ';',
+      prec(
+        1,
+        seq(
+          'let',
+          field('name', $._pattern),
+          optional(seq(':', field('type', $._type))),
+          '=',
+          field('value', $._expression),
+          optional(seq('else', field('else', $.block))),
+          ';',
+        ),
       ),
 
     // ------------------------------------------------------------------
@@ -610,6 +618,21 @@ module.exports = grammar({
       ),
 
     _range_from_zero: ($) => seq('..', field('end', $._expression)),
+
+    // `value else fallback` and `value else |e| { ... }`: the value inside a
+    // `Some` or an `Ok`, or the fallback. It binds looser than every operator.
+    else_expression: ($) =>
+      prec.left(
+        -1,
+        seq(
+          field('value', $._expression),
+          'else',
+          choice(
+            seq('|', field('error', $.identifier), '|', field('handler', $.block)),
+            field('fallback', $._expression),
+          ),
+        ),
+      ),
 
     // `a..b` and `a..=b`, a `Range` value. It binds looser than every
     // operator, so `0..n + 1` runs to `n + 1`.
@@ -738,6 +761,7 @@ module.exports = grammar({
         // A block where a value goes is one: its last expression.
         $.block,
         $.range_expression,
+        $.else_expression,
         $.macro_invocation,
       ),
 

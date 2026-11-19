@@ -214,8 +214,6 @@ enum ParserErr<'a> {
     ValueBlockWithoutValue,
     /// A token where a pattern goes that no pattern starts with.
     PatternExpected(Token<'a>),
-    /// `let name = value else { ... }`: a name always matches.
-    LetElseOnName,
     /// The `else` block of a `let ... else` that can reach its end.
     LetElseMustLeave,
 }
@@ -239,7 +237,6 @@ impl ParserErr<'_> {
             ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
             ParserErr::ValueBlockWithoutValue => "value_block_without_value",
             ParserErr::PatternExpected(_) => "pattern_expected",
-            ParserErr::LetElseOnName => "let_else_on_name",
             ParserErr::LetElseMustLeave => "let_else_must_leave",
             ParserErr::DivisionByZero => "division_by_zero",
             ParserErr::ModuloByZero => "modulo_by_zero",
@@ -331,9 +328,6 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::PatternExpected(found) => &format!(
             "Expected a pattern but found {found}. A pattern is {BLUE}{BOLD}_{RESET}, a name, a literal, a range {BLUE}{BOLD}1..5{RESET}, a tuple {BLUE}{BOLD}(a, b){RESET}, a variant {BLUE}{BOLD}Some(x){RESET} or a struct {BLUE}{BOLD}Point {{ x, y }}{RESET}"
-        ),
-        ParserErr::LetElseOnName => &format!(
-            "A name always matches, so this {BLUE}{BOLD}else{RESET} never runs. {BLUE}{BOLD}let ... else{RESET} takes a pattern that can fail: {BLUE}{BOLD}let Some(v) = lookup(k) else {{ return; }};{RESET}"
         ),
         ParserErr::LetElseMustLeave => &format!(
             "The {BLUE}{BOLD}else{RESET} of a {BLUE}{BOLD}let{RESET} runs when the pattern does not fit, so nothing is bound after it: it ends in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
@@ -1016,7 +1010,13 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
         "Variable declarations need a '=' to separate the name from the value.",
     );
     let value_start = parser.peek_token_span().start;
-    let var_value = parse_expr(parser);
+    // After a pattern, `else` runs where the pattern does not fit; after a
+    // name, it is the value's fallback, `let n = s.parse<int>() else 0;`.
+    let var_value = if let Pattern::Bind(..) = pattern {
+        parse_expr(parser)
+    } else {
+        parser_expr::parse_range(parser, true)
+    };
     let value_span = Span::from((value_start, parser.last_token_end as u32));
     let annotation = annotation.map(|(ty, span)| LetAnnotation {
         ty,
@@ -1024,11 +1024,7 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
         value_span,
     });
     let otherwise = if parser.peek_token_opt() == Some(Token::Else) {
-        let else_span = parser.next_token().1;
-        if let Pattern::Bind(..) = pattern {
-            cold_path();
-            parser.error(else_span, ParserErr::LetElseOnName);
-        }
+        parser.next_token();
         let (code, end, span) = blocks::parse_block_in(parser, Tail::No);
         if end != BlockEnd::Jump {
             cold_path();
@@ -1687,6 +1683,17 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
                 let question = parser.next_token().1;
                 t = optional_type(t, question);
             }
+            // `T!E`: a `Result<T, E>`.
+            Some(Token::OpNot) => {
+                let bang = parser.next_token().1;
+                let error = parse_atomic_type(parser);
+                t = TypeExpr::Generic(Box::new(GenericType {
+                    namespace: Box::from([]),
+                    name: SmolStr::new_static("Result"),
+                    args: Box::from([t, error]),
+                    span: bang,
+                }));
+            }
             _ => break,
         }
     }
@@ -1833,6 +1840,10 @@ impl<'a> TypeArgScan<'a> {
         loop {
             if self.eat(Token::LBracket) {
                 if !self.eat(Token::RBracket) {
+                    return false;
+                }
+            } else if self.eat(Token::OpNot) {
+                if !self.atomic_type() {
                     return false;
                 }
             } else if !self.eat(Token::Question) {

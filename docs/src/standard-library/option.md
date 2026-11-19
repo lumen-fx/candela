@@ -121,7 +121,8 @@ o.unwrap_or(default)
 
 - `default`: the value to return when the option is `None`. It has the option's
   own payload type.
-- Returns: the contained value, or `default`.
+- Returns: the contained value, or `default`. `o else default` reads the same
+  and also takes a block: `o else { return; }`.
 - Raises: nothing.
 
 ### map

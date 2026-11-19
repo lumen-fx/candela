@@ -81,30 +81,17 @@ fn main() {
     }
     assert::eq(caught, "assert::eq failed: 1 != 2");
 
-    // Library calls raise into the enclosing catch.
-    caught = "";
-    try {
-        value = json::parse("nope") as int;
-        caught = "not raised";
-    } catch "json_parse_error" {
-        caught = "json_parse_error";
-    }
-    assert::eq(caught, "json_parse_error");
+    // A library call that can fail answers its failure as a value.
+    assert::eq(json::parse("nope") else |e| { e }, "json_parse_error");
 
-    // Every shape of malformed input raises rather than running away.
+    // Every shape of malformed input fails rather than running away.
     let malformed = ["nope", "[1,", "{oops", "", "[1] extra"];
     for text in malformed {
-        caught = "not raised";
-        try {
-            value = json::parse(text) as int;
-        } catch "json_parse_error" {
-            caught = "json_parse_error";
-        }
-        assert::eq(caught, "json_parse_error");
+        assert::eq(json::parse(text) else |e| { e }, "json_parse_error");
     }
 
     // A parsed object is looked up by keys of any length.
-    let obj = json::parse("{\"n\": 7, \"long_key_name\": 42}") as {any: any};
+    let obj = json::parse("{\"n\": 7, \"long_key_name\": 42}").unwrap() as {any: any};
     assert::eq(obj["n"] as int, 7);
     assert::eq(obj["long_key_name"] as int, 42);
 

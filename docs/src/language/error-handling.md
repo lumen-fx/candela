@@ -1,8 +1,11 @@
 # Error handling
 
-Candela separates the mistakes it can see from the ones it cannot. Type errors,
-unknown names, and malformed syntax stop the program before it starts. What
-remains at runtime is raised as an error you can catch.
+Candela separates the mistakes it can see from the ones it cannot, and the
+failures a program expects from the ones it does not. Type errors, unknown
+names and malformed syntax stop the program before it starts. A failure the
+program expects, a missing file or a string that is not a number, is a value:
+an `Option` or a `Result` the caller handles. Anything else is a bug, which
+ends the program unless `main` catches it.
 
 ## Compile errors
 
@@ -12,144 +15,18 @@ running anything. A type mismatch, a call to an undeclared function, a missing
 line and nothing runs. Fixing these is part of writing the program rather than
 part of handling failure.
 
-## Runtime errors
-
-A runtime error carries a kind: a short lower-case string naming what went
-wrong. The common ones come from conversions and lookups.
-
-- `invalid_int`, `invalid_float`, `invalid_bool`: a conversion whose input does
-  not parse.
-- `index_out_of_bounds`, `slice_out_of_bounds`: a list or string index past the
-  end.
-- `unknown_map_key`: `m[k]` on a key the map does not hold.
-- `division_by_zero`, `modulo_by_zero`.
-- `json_parse_error`: malformed input to `json::parse`.
-- `fs_not_found`, `fs_permission_denied`, and the other `fs_` kinds: file system
-  calls.
-
-An error that nobody catches stops the program and prints a report pointing at
-the expression that raised it.
-
-## try and catch
-
-Wrap the risky work in `try` and handle the failure in `catch`. A `catch` with a
-quoted kind handles that kind only; a `catch` naming a variable handles anything
-and binds the kind to that name. A `try` needs at least one `catch`. A quoted
-kind that no built-in error carries and nothing in the program throws is
-reported as a warning, since a misspelt kind never matches; see
-[the error catalogue](../reference/errors.md#warnings).
-
-```rust
-fn main() {
-    let zero = 0;
-    try {
-        print(10 / zero);
-    } catch "division_by_zero" {
-        print("cannot divide by zero");
-    }
-
-    try {
-        let xs = [1];
-        print(xs[9]);
-    } catch e {
-        print("failed: " + e);
-    }
-}
-```
-
-Several `catch` blocks may follow one `try`. The catch-all comes last and takes
-whatever the earlier ones did not.
-
-```rust
-fn main() {
-    try {
-        print(int("not a number"));
-    } catch "invalid_int" {
-        print("that was not a number");
-    } catch e {
-        print("something else: " + e);
-    }
-}
-```
-
-A `try` covers everything the block runs, not only the expressions written in
-it. An error raised inside a function the block calls unwinds to the enclosing
-`catch` however many frames down it started, and the calls in between are
-abandoned. That applies to your own functions and to the standard library
-modules written in candela.
-
-```rust
-fn withdraw(balance, amount) {
-    if amount > balance {
-        throw "insufficient_funds";
-    }
-    return balance - amount;
-}
-
-fn checkout(balance) {
-    return withdraw(balance, 50);
-}
-
-fn main() {
-    try {
-        print(checkout(10));
-    } catch "insufficient_funds" {
-        print("declined");
-    }
-}
-```
-
-Recovering usually means producing a fallback value, which reads best as a small
-function.
-
-```rust
-fn parse_or(text, fallback) {
-    let value = fallback;
-    try {
-        value = int(text);
-    } catch e {
-        value = fallback;
-    }
-    return value;
-}
-
-fn main() {
-    print(parse_or("42", 0), parse_or("nope", 0));
-}
-```
-
-## Raising your own
-
-`throw "kind";` raises an error with the kind you give it, so your own failures
-catch exactly like the built-in ones. The kind is any string expression.
-
-```rust
-fn main() {
-    let balance = 10;
-    let amount = 50;
-    try {
-        if amount > balance {
-            throw "insufficient_funds";
-        }
-        print(balance - amount);
-    } catch "insufficient_funds" {
-        print("declined");
-    }
-}
-```
-
 ## Expected absence and failure
 
-An error is for the unexpected. When a value may reasonably be missing, or an
-operation may reasonably fail, return it in the type instead: `Option` for a
-value that may be absent, `Result` for an operation that may fail. Both are
-enums from the standard library's prelude, so they need no import, and the
-caller handles them with a `match` and cannot forget the failing case. The
-lookups that may find nothing answer an `Option` this way: `m.get(k)`,
-`xs.first()`, `xs.max()`.
+When a value may reasonably be missing, or an operation may reasonably fail,
+say so in the type: `T?`, an `Option<T>`, for a value that may be absent, and
+`T!E`, a `Result<T, E>`, for an operation that may fail with an error of type
+`E`. Both are enums from the prelude, so they need no import, and the caller
+cannot forget the failing case. The lookups that may find nothing answer an
+`Option`: `m.get(k)`, `xs.first()`, `s.parse<int>()`. The standard library
+answers a `Result` where it can fail: `fs::read`, `json::parse`.
 
 ```rust
-fn divide(a, b) {
+fn divide(a: int, b: int) -> int!string {
     if b == 0 {
         return Err("division by zero");
     }
@@ -158,15 +35,49 @@ fn divide(a, b) {
 
 fn main() {
     match divide(10, 2) {
-        Ok(value) => { print(value); }
-        Err(message) => { print(message); }
+        Ok(value) => print(value),
+        Err(message) => print(message),
     }
-    print(divide(1, 0).unwrap_or(0));
+    if divide(1, 0) is Err(e) {
+        print("failed: " + e);
+    }
 }
 ```
 
-`unwrap` on a `None` or an `Err` raises, which is the deliberate way to say a
-case cannot happen. See [Enums](enums.md) for matching them.
+`E` is any type: a string, or an enum that names each way the operation fails.
+
+### A fallback with else
+
+`value else fallback` reads the value out of a `Some` or an `Ok`, and gives the
+fallback for a `None` or an `Err`. `value else |e| { ... }` binds an `Err`'s
+error for the block, whose last expression is the fallback. A fallback that
+leaves, with `return`, `break`, `continue` or `throw`, gives no value: the
+variable after it always holds a real one.
+
+```rust
+fn port(text: string) -> int {
+    let n = text.parse<int>() else {
+        return 8080;
+    };
+    return n;
+}
+
+fn half(n: int) -> int!string {
+    if n % 2 == 1 {
+        return Err("odd: " + string(n));
+    }
+    return Ok(n / 2);
+}
+
+fn main() {
+    print("42".parse<int>() else 0, "x".parse<int>() else 0);
+    print(port("80"), port("eighty"));
+    print(half(3) else |e| { e.len() });
+}
+```
+
+`else` binds looser than every operator, so `a + b else 0` falls back for the
+whole sum.
 
 ### Passing a failure on
 
@@ -175,14 +86,14 @@ On a `None` or an `Err` it returns that value from the function it is written
 in, at once, so the caller gets the failure:
 
 ```rust
-fn parse(text: string) -> Result<int, string> {
+fn parse(text: string) -> int!string {
     if text.parse<int>() is Some(n) {
         return Ok(n);
     }
     return Err("not a number: " + text);
 }
 
-fn sum(a: string, b: string) -> Result<int, string> {
+fn sum(a: string, b: string) -> int!string {
     let x = parse(a)?;
     let y = parse(b)?;
     return Ok(x + y);
@@ -198,9 +109,71 @@ The function a `?` is in has to return the same enum as its operand: an
 `Option` for a `?` on an `Option`, and for a `Result` one whose error type is
 the same. The success side does not have to match, since a `None` or an `Err`
 carries none of it. A function with no return annotation that uses `?` returns
-that enum. A `?` anywhere else is a compile error: in `main`, which has no
-caller to hand the failure to, or in a function that returns something else.
-Read the value with `match` or `unwrap_or` there instead.
+that enum. In `main`, which has no caller, a `?` on a `None` or an `Err` ends
+the program with the error.
+
+```rust
+import "std/fs";
+
+fn main() {
+    fs::write("notes.txt", "hello")?;
+    print(fs::read("notes.txt")?);
+    fs::delete("notes.txt")?;
+}
+```
+
+## What should not happen
+
+A bug ends the program. The runtime raises an error when a program does what it
+cannot: an index past the end of a list, a division by zero, `unwrap` on a
+`None`. Each error carries a kind, a short lower-case string naming what went
+wrong.
+
+- `invalid_int`, `invalid_float`, `invalid_bool`: a conversion whose input does
+  not parse. `s.parse<int>()` answers an `Option` instead.
+- `index_out_of_bounds`, `slice_out_of_bounds`: a list or string index past the
+  end.
+- `unknown_map_key`: `m[k]` on a key the map does not hold. `m.get(k)` answers
+  an `Option` instead.
+- `division_by_zero`, `modulo_by_zero`.
+
+`throw "kind";` raises one of your own, for a case your program rules out. An
+error unwinds every call between where it was raised and `main`, then prints a
+report pointing at the expression that raised it. A host that called into the
+program receives it as the call's error.
+
+### Catching in main
+
+`main` can catch what would end the program, to report it its own way or carry
+on. A `catch` with a quoted kind handles that kind only; a `catch` naming a
+variable handles anything and binds the kind to that name. A `try` needs at
+least one `catch`, and the catch-all comes last. A `try` written in any other
+function is a compile error: a failure a function expects goes back to its
+caller as a `Result`.
+
+```rust
+fn withdraw(balance: int, amount: int) -> int {
+    if amount > balance {
+        throw "insufficient_funds";
+    }
+    return balance - amount;
+}
+
+fn main() {
+    try {
+        print(withdraw(100, 30));
+        print(withdraw(10, 50));
+    } catch "insufficient_funds" {
+        print("declined");
+    } catch e {
+        print("failed: " + e);
+    }
+}
+```
+
+A quoted kind that no built-in error carries and nothing in the program throws
+is reported as a warning, since a misspelt kind never matches; see
+[the error catalogue](../reference/errors.md#warnings).
 
 ## Assertions
 
@@ -218,8 +191,9 @@ fn main() {
 ```
 
 A failed assertion raises the message it prints, so it stops the program on its
-own and a `try` around the check catches it like any other error. That is how a
-test harness reports which check failed instead of ending the run.
+own, and a `try` in `main` around the check catches it like any other error.
+That is how a test harness reports which check failed instead of ending the
+run.
 
 ```rust
 import "std/assert";

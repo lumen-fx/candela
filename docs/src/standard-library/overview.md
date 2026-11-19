@@ -53,7 +53,7 @@ the importing file, so it works from any working directory:
 import "std/json";
 
 fn main() {
-    print(json::stringify(json::parse("[1, 2]")));
+    print(json::stringify(json::parse("[1, 2]")?));
 }
 ```
 
@@ -123,14 +123,11 @@ Everything else is imported: `assert`, `fs`, `hash`, `json`, `math`,
 
 ## Errors
 
-Standard library functions report failure the same way the rest of the language
-does: they raise an error that stops the run and prints a message naming the
-cause. Each page below states what its functions raise.
-
-A raised error carries a short code as well as a message. The code is what a
-`catch` binds and what `catch "code"` filters on; the message is what an uncaught
-error prints. A `throw` is its own code, so `throw "no such user";` is caught as
-`no such user`. A `try` catches what a library function raises just as it
-catches a `throw` written in the block. See
-[error handling](../language/error-handling.md) for the mechanism and
+A standard library function that can fail in the normal run of a program, such
+as reading a file or parsing json, answers a `Result` whose error is a short
+code naming the cause, `fs_not_found` or `json_parse_error`. Misuse that the
+program should rule out, such as an index past the end, raises an error that
+stops the run and prints a message naming the cause; only `main` can catch one.
+Each page below states what its functions answer and raise. See
+[error handling](../language/error-handling.md) for both and
 [the error catalogue](../reference/errors.md) for the codes.

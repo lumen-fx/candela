@@ -434,6 +434,13 @@ pub enum Expr {
     DefaultArg(u32, Span),
 
     ReturnVal(Box<Option<Self>>),
+    /// Else(value, binder, fallback, span)
+    ///
+    /// `value else fallback`: the value inside the `Some` or `Ok` that `value`
+    /// holds, or the fallback when it is a `None` or an `Err`. With a binder,
+    /// `value else |e| { ... }`, the block sees the `Err`'s error under it. A
+    /// fallback that leaves (`return`, `break`, ...) gives no value.
+    Else(Box<Self>, Option<(SmolStr, Span)>, Box<Self>, Span),
 
     ArrayGetIndex(Box<Self>, Box<Self>, Span),
     /// Propagate(operand, span)
@@ -504,8 +511,8 @@ pub enum Expr {
     EvalBlock(Box<[Self]>),
     LoopBlock(Box<[Self]>),
 
-    /// TryCatchBlock(try_code, err_var, catch_code)
-    TryCatchBlock(Box<[Self]>, SmolStr, Box<[Self]>),
+    /// TryCatchBlock(try_code, err_var, catch_code, try_span)
+    TryCatchBlock(Box<[Self]>, SmolStr, Box<[Self]>, Span),
 
     Mul(Operand, Operand, Span, Span),
     Div(Operand, Operand, Span, Span),
@@ -568,6 +575,7 @@ impl Expr {
                 | Self::GetStructField(_, _, _, _)
                 | Self::InlineCondition(_, _, _, _)
                 | Self::Match(_, _, _, _, true)
+                | Self::Else(..)
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
                 | Self::Propagate(_, _)
@@ -653,7 +661,11 @@ fn collect_value_blocks<'a>(expr: &'a Expr, root: bool, out: &mut Vec<&'a Expr>)
         Expr::InlineCondition(condition, ..) if root => collect_value_blocks(condition, false, out),
         Expr::Match(scrutinee, ..) if root => collect_value_blocks(scrutinee, false, out),
         Expr::EvalBlock(_) if root => {}
-        Expr::InlineCondition(..) | Expr::Match(_, _, _, _, true) | Expr::EvalBlock(_) => {
+        Expr::Else(value, ..) if root => collect_value_blocks(value, false, out),
+        Expr::InlineCondition(..)
+        | Expr::Match(_, _, _, _, true)
+        | Expr::EvalBlock(_)
+        | Expr::Else(..) => {
             out.push(expr);
         }
         Expr::Match(scrutinee, ..) => collect_value_blocks(scrutinee, false, out),
@@ -1016,7 +1028,7 @@ fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
         | Expr::IntForLoop(_, _, _, body, _, _) => code_modifies_variable(var_name, body),
         // A catch binds its own name for the error; an assignment to a
         // variable of the same name there writes the error binding instead.
-        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+        Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
             code_modifies_variable(var_name, try_code)
                 || (err_var != var_name && code_modifies_variable(var_name, catch_code))
         }
@@ -1035,6 +1047,11 @@ fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
             .otherwise
             .as_ref()
             .is_some_and(|body| code_modifies_variable(var_name, body)),
+        // A fallback is code the statement runs.
+        Expr::Else(_, binder, fallback, _) => {
+            binder.as_ref().is_none_or(|(name, _)| name != var_name)
+                && code_modifies_variable(var_name, std::slice::from_ref(fallback))
+        }
         _ => false,
     }
 }
@@ -1175,6 +1192,15 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 scan_block_free_names(body, depth, bound, out);
             }
         }
+        Expr::Else(value, binder, fallback, _) => {
+            scan_free_names(value, depth, bound, out);
+            let bound_len = bound.len();
+            if let Some((name, _)) = binder {
+                bound.push(name.clone());
+            }
+            scan_free_names(fallback, depth, bound, out);
+            bound.truncate(bound_len);
+        }
         Expr::LetPattern(pattern_let) => {
             scan_free_names(&pattern_let.value, depth, bound, out);
             if let Some(otherwise) = &pattern_let.otherwise {
@@ -1217,7 +1243,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             scan_block_free_names(body, depth, bound, out);
             bound.truncate(bound_len);
         }
-        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
+        Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
             scan_block_free_names(try_code, depth, bound, out);
             let bound_len = bound.len();
             bound.push(err_var.clone());

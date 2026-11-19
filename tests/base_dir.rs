@@ -24,8 +24,8 @@ fn a_relative_path_resolves_against_the_base_directory() {
 import "std/fs";
 
 fn save(text: string) -> string {
-    fs::write("one.txt", text);
-    return fs::read("one.txt");
+    fs::write("one.txt", text).unwrap();
+    return fs::read("one.txt").unwrap();
 }
 
 fn main() {}

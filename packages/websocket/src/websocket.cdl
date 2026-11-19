@@ -74,14 +74,14 @@ fn send(handle: int, text: string) -> bool => websocket::candela_websocket_send(
 
 /// Starts closing the connection with `code`, 1000 for a normal close or 3000
 /// to 4999 for one of the program's own, and a reason of at most 123 bytes.
-/// False when there is no connection to close. Another code or a longer
-/// reason raises `websocket_bad_close`.
-fn close(handle: int, code: int, reason: string) -> bool {
+/// `Ok(false)` when there is no connection to close. Another code or a longer
+/// reason is `Err("websocket_bad_close")`.
+fn close(handle: int, code: int, reason: string) -> bool!string {
     let answer = websocket::candela_websocket_close(handle, code, reason);
     if answer < 0 {
-        throw "websocket_bad_close";
+        return Err("websocket_bad_close");
     }
-    return answer == 1;
+    return Ok(answer == 1);
 }
 
 /// `connecting`, `open`, `closing` or `closed`, which is also the answer for
@@ -90,7 +90,7 @@ fn state(handle: int) -> string => websocket::candela_websocket_state(handle);
 
 /// The event a payload describes.
 fn decode(payload: string) -> Event {
-    let fields = json::parse(payload) as {string: any};
+    let fields = json::parse(payload).unwrap() as {string: any};
     let kind = fields["kind"] as string;
     if kind == "open" {
         return Open;

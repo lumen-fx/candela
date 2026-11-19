@@ -1111,7 +1111,7 @@ fn per_frame_arguments_stay_whole_mid_cycle() {
 const PARSE_PER_FRAME: &str = "import \"std/json\";
 
     fn p() -> int {
-        let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+        let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\").unwrap() as any[];
         return ((v[0] as any[])[1] as int) + ((v[1] as {any: any})[\"a\"] as int);
     }
     fn main() {}

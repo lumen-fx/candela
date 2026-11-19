@@ -36,7 +36,7 @@ host "js" {
 fn answer_source(on_done: fn(Result<any, string>)) -> int {
     let id = event::source();
     event::on(id, fn(payload) {
-        let fields = json::parse(payload) as {string: any};
+        let fields = json::parse(payload).unwrap() as {string: any};
         if fields.contains("error") {
             on_done(Err(fields["error"] as string));
         } else {
@@ -141,7 +141,7 @@ fn release(handle: int) -> bool {
 fn listen(target: string, event: string, on_event: fn(any)) -> Option<int> {
     let id = event::source();
     event::on(id, fn(payload) {
-        on_event(json::parse(payload));
+        on_event(json::parse(payload).unwrap());
     });
     if js::candela_js_listen(id, target, event) {
         return Some(id);

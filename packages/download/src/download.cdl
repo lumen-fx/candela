@@ -91,7 +91,7 @@ fn set_max_concurrent(n: int) {
 
 /// The event a payload from the native library describes.
 fn decode(payload: string) -> Event {
-    let fields = json::parse(payload) as {string: any};
+    let fields = json::parse(payload).unwrap() as {string: any};
     let kind = fields["kind"] as string;
     if kind == "progress" {
         let total = fields["total"] as int;

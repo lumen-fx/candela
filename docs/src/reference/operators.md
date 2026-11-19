@@ -226,7 +226,7 @@ type. `T` is any type an annotation can name, read up to the end of the type, so
 if v is int && v > 0 {
     print(v + 1);
 }
-let cfg = json::parse(text) as {string: any};
+let cfg = json::parse(text)? as {string: any};
 ```
 
 Where the test held, a tested variable has the type `T` and a variant's names

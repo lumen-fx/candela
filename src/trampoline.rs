@@ -90,6 +90,8 @@ fn compile_trampoline_in(
         file_idx,
         offset,
         return_downcast: None,
+        tries: 0,
+        loop_tries: 0,
     };
     let mut variables = seed_vars;
     let mut output = Vec::new();

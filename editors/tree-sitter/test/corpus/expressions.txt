@@ -1459,3 +1459,70 @@ fn main() {
                   (identifier)
                   (integer_literal)
                   (integer_literal))))))))))
+
+================================================================================
+Errors are values (docs/src/language/error-handling.md)
+================================================================================
+
+fn half(n: int) -> int!string {
+    let v = n.parse() else { return Err("no"); };
+    print(half(3) else |e| { e.len() }, "x".parse<int>() else 0);
+    return Ok(n / 2);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (result_type
+        (type_identifier)
+        (type_identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments))
+        (block
+          (return_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (string_literal))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (else_expression
+              (call_expression
+                (identifier)
+                (arguments
+                  (integer_literal)))
+              (identifier)
+              (block
+                (method_call_expression
+                  (identifier)
+                  (identifier)
+                  (arguments))))
+            (else_expression
+              (method_call_expression
+                (string_literal)
+                (identifier)
+                (type_arguments
+                  (type_identifier))
+                (arguments))
+              (integer_literal)))))
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (binary_expression
+              (identifier)
+              (integer_literal))))))))

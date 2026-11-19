@@ -60,7 +60,7 @@ struct Message {
 fn answer_source<T>(read: fn(any) -> T, on_done: fn(Result<T, string>)) -> int {
     let id = event::source();
     event::on(id, fn(payload) {
-        let fields = json::parse(payload) as {string: any};
+        let fields = json::parse(payload).unwrap() as {string: any};
         if fields.contains("error") {
             on_done(Err(fields["error"] as string));
         } else {
@@ -162,7 +162,7 @@ fn match_media(query: string) -> bool {
 fn watch_media(query: string, on_change: fn(bool)) {
     let id = event::source();
     event::on(id, fn(payload) {
-        on_change((json::parse(payload) as {string: any})["matches"] as bool);
+        on_change((json::parse(payload).unwrap() as {string: any})["matches"] as bool);
     });
     browser::candela_browser_watch_media(id, query);
 }
@@ -228,7 +228,7 @@ fn is_fullscreen() -> bool {
 fn on_message(handler: fn(Message)) {
     let id = event::source();
     event::on(id, fn(payload) {
-        let fields = json::parse(payload) as {string: any};
+        let fields = json::parse(payload).unwrap() as {string: any};
         handler(Message {
             origin: fields["origin"] as string,
             data: fields["data"],
@@ -248,7 +248,7 @@ fn on_message(handler: fn(Message)) {
 fn on_fullscreen_change(handler: fn(string, bool)) {
     let id = event::source();
     event::on(id, fn(payload) {
-        let fields = json::parse(payload) as {string: any};
+        let fields = json::parse(payload).unwrap() as {string: any};
         handler(fields["id"] as string, fields["on"] as bool);
     });
     browser::candela_browser_on_fullscreen_change(id);

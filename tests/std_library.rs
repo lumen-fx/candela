@@ -303,10 +303,10 @@ fn json_map_set_inline_into_cdlb() {
 import "std/json";
 import "std/set";
 fn main() {
-    let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}") as {any: any};
+    let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}").unwrap() as {any: any};
     print(obj["n"] as int);
     print((obj["xs"] as any[]).len());
-    print(json::stringify(json::parse("[1,2,3]")));
+    print(json::stringify(json::parse("[1,2,3]").unwrap()));
     let s = set::Set<int>::new();
     s.add(1);
     s.add(1);

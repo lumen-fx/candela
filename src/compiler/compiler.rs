@@ -2399,7 +2399,10 @@ fn compile_propagate(
         && function
             .as_ref()
             .is_some_and(|(_, returns)| propagation_fits(&operand_type, returns, state));
-    if !fits {
+    // In `main` there is no caller to hand the failure to, so a `None` or an
+    // `Err` ends the program, the error its message.
+    let aborts = !ctx.in_function;
+    if !fits && !aborts {
         compiler_errors::error_propagate_return(
             function
                 .as_ref()
@@ -2434,13 +2437,49 @@ fn compile_propagate(
     state.free_reg(failure_reg, v);
     state.free_reg(tag_reg, v);
 
-    compile_return(
-        Some(&Expr::Var(SmolStr::new_static("[PROPAGATE]"), span)),
-        v,
-        ctx,
-        state,
-        output,
-    );
+    if aborts {
+        let DataType::Enum(enum_id) = v[v_base].var_type else {
+            unreachable!()
+        };
+        let failure = &state.enums[enum_id as usize].variants[failure_idx as usize];
+        let message = if let Some(error_type) = failure.payload.first().cloned() {
+            let error_reg = state.alloc_reg();
+            output.push(Instr::GetFieldStruct(operand_reg, 1, error_reg));
+            v.push(Variable {
+                declared: None,
+                name: SmolStr::new_static("[PROPAGATED ERROR]"),
+                register_id: error_reg,
+                cell: false,
+                var_type: error_type,
+            });
+            Expr::FunctionCall(
+                Box::from([Expr::Var(SmolStr::new_static("[PROPAGATED ERROR]"), span)]),
+                Box::from([SmolStr::new_static("string")]),
+                span,
+                Box::from([span]),
+                Box::from([]),
+            )
+        } else {
+            Expr::String(SmolStr::new_static("none"))
+        };
+        Expr::FunctionCall(
+            Box::from([message]),
+            Box::from([SmolStr::new_static("throw")]),
+            span,
+            Box::from([span]),
+            Box::from([]),
+        )
+        .compile(v, ctx, state, output, None, false, false);
+        v.truncate(v_base + 1);
+    } else {
+        compile_return(
+            Some(&Expr::Var(SmolStr::new_static("[PROPAGATE]"), span)),
+            v,
+            ctx,
+            state,
+            output,
+        );
+    }
 
     let success = output.len();
     set_jmp_size(&mut output[to_success], (success - to_success) as u16);
@@ -2449,6 +2488,97 @@ fn compile_propagate(
     v.truncate(v_base);
     state.free_reg(operand_reg, v);
     dest
+}
+
+/// What `value else fallback` reads as once the value's type is known: a
+/// `match` used as a value on the `Option` or the `Result`, whose `Some` or
+/// `Ok` arm gives what the value holds and whose other arm gives the fallback,
+/// with the `Err`'s error bound under the binder of `else |e|`.
+pub(crate) fn else_match(
+    value: &Expr,
+    binder: Option<&(SmolStr, Span)>,
+    fallback: &Expr,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Expr {
+    let value_type = value.infer_type(v, ctx, state);
+    let Some((_, failure_idx)) = type_system::propagation_sides(&value_type, state) else {
+        compiler_errors::error_type_test(
+            "else after a value that cannot fail",
+            &format!(
+                "else gives a fallback for an Option or a Result, and this value is {}",
+                state.type_names().of(&value_type)
+            ),
+            None,
+            "else_operand",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let DataType::Enum(enum_id) = value_type else {
+        unreachable!()
+    };
+    let variants = &state.enums[enum_id as usize].variants;
+    let success = variants[1 - failure_idx as usize].name.clone();
+    let failure = variants[failure_idx as usize].name.clone();
+    let is_result = failure == "Err";
+    if let (Some((_, binder_span)), false) = (binder, is_result) {
+        compiler_errors::error_type_test(
+            "None binds nothing",
+            "A None carries no error for the else to bind",
+            Some("Drop the |e|: value else { ... }"),
+            "else_binder_on_option",
+            *binder_span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    let held = SmolStr::new_static("[else value]");
+    let named = |name: SmolStr, payload: patterns::Payload| patterns::Pattern::Named {
+        path: Box::from([name]),
+        type_args: Box::from([]),
+        payload,
+        span,
+    };
+    let failure_payload = if is_result {
+        patterns::Payload::Positional(Box::from([binder
+            .map_or(patterns::Pattern::Wildcard(span), |(name, at)| {
+                patterns::Pattern::Bind(name.clone(), *at)
+            })]))
+    } else {
+        patterns::Payload::None
+    };
+    let fallback_body: Box<[Expr]> = match fallback {
+        Expr::EvalBlock(code) => code.clone(),
+        other => Box::from([other.clone()]),
+    };
+    Expr::Match(
+        Box::new(value.clone()),
+        Box::from([
+            MatchArm {
+                pattern: named(
+                    success,
+                    patterns::Payload::Positional(Box::from([patterns::Pattern::Bind(
+                        held.clone(),
+                        span,
+                    )])),
+                ),
+                guard: None,
+                body: Box::from([Expr::Var(held, span)]),
+            },
+            MatchArm {
+                pattern: named(failure, failure_payload),
+                guard: None,
+                body: fallback_body,
+            },
+        ]),
+        None,
+        span,
+        true,
+    )
 }
 
 /// Whether a function returning `returns` can hand back the `None` or the
@@ -4084,12 +4214,7 @@ fn compile_while_loop(
     // parse the code block, clone the vars to avoid overriding anything
     let loop_id = ctx.block_id + 1;
 
-    let mut cond_code = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let mut cond_code = compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     v.truncate(v_len);
 
     let exit = output.len() + cond_code.len() + 1;
@@ -4612,7 +4737,7 @@ fn compile_walk(
     let body = compile_expr(
         code,
         v,
-        ctx.no_single_run()
+        ctx.loop_body()
             .advance_offset(output.len() + usize::from(pending)),
         state,
     );
@@ -4732,12 +4857,8 @@ fn compile_int_for_loop(
     }
 
     let regs_before = state.registers.len() as u16;
-    let compiled_loop_code = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let compiled_loop_code =
+        compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     state.free_scope_registers(regs_before, &compiled_loop_code, v);
     let compiled_loop_code_len = compiled_loop_code.len() as u16;
 
@@ -4773,12 +4894,7 @@ fn compile_loop_block(
 ) {
     let loop_id = ctx.block_id + 1;
     let regs_before = state.registers.len() as u16;
-    let mut compiled = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let mut compiled = compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     state.free_scope_registers(regs_before, &compiled, v);
     let code_length = compiled.len() as u16;
     parse_loop_flow_control(&mut compiled, loop_id, code_length + 1, false, true);
@@ -4786,15 +4902,32 @@ fn compile_loop_block(
     output.push(Instr::JmpBack(code_length));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_try_catch_block(
     e: &[Expr],
     err_var: &SmolStr,
     catch_code: &[Expr],
+    try_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
+    // A failure a function expects goes back to its caller as a `Result`;
+    // what is thrown ends the program, and only `main`, or the host, sees it.
+    // The standard library is the one exception: it turns what its native
+    // half raises into the `Result` it hands back.
+    if ctx.in_function && !state.namespaces.is_std(ctx.file_idx) {
+        compiler_errors::error_type_test(
+            "try outside main",
+            "A function hands a failure it expects back as a value, and a catch runs only in main, where it sees what ended the program",
+            Some("Return a Result, -> T!E, with Ok(v) and Err(e), and pass it on with ?"),
+            "try_outside_main",
+            try_span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
     output.push(Instr::StartErrorCatch(0, 0)); // patched later on
     let err_catch_instr = output.len() - 1;
     // A function body is compiled inline at its first call site and records its
@@ -4802,7 +4935,7 @@ fn compile_try_catch_block(
     // compiled at the offset they occupy. Compiling them at the
     // enclosing offset makes every call inside a `try` jump short by the length
     // of the code already emitted before it.
-    let main_code = compile_expr(e, v, ctx.advance_offset(output.len()), state);
+    let main_code = compile_expr(e, v, ctx.in_try().advance_offset(output.len()), state);
     output.extend(main_code);
     output.push(Instr::StopErrorCatch);
     output.push(Instr::Jmp(0)); // jumps over the catch handler if no error arises
@@ -5554,6 +5687,32 @@ fn compile_return(
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
+    compile_return_value(return_value, v, ctx, state, output);
+    // A `return` inside `try` blocks takes their catches down on its way out,
+    // after its value is worked out under them.
+    if ctx.in_function && ctx.tries > 0 {
+        let at = output.len() - 1;
+        for _ in 0..ctx.tries {
+            output.insert(at, Instr::StopErrorCatch);
+        }
+    }
+}
+
+/// Takes down the catches of the `try` blocks a jump out of `tries` of them
+/// leaves.
+fn leave_tries(tries: u8, output: &mut Vec<Instr>) {
+    for _ in 0..tries {
+        output.push(Instr::StopErrorCatch);
+    }
+}
+
+fn compile_return_value(
+    return_value: Option<&Expr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
     // `main` is compiled inline at the program's top level, so a `return` there
     // has no call frame to pop. It ends the program, and its value, like the
     // value of `main` itself, has nowhere to go.
@@ -5676,11 +5835,13 @@ fn compile_return(
 
 #[inline]
 fn compile_loop_break(ctx: Ctx, output: &mut Vec<Instr>) {
+    leave_tries(ctx.loop_tries, output);
     output.push(Instr::NotEqJmp(ctx.block_id + 1, 0, 0));
 }
 
 #[inline]
 fn compile_loop_continue(ctx: Ctx, output: &mut Vec<Instr>) {
+    leave_tries(ctx.loop_tries, output);
     output.push(Instr::EqJmp(ctx.block_id + 1, 0, 0));
 }
 
@@ -6739,9 +6900,9 @@ impl Expr {
                 compile_loop_block(code, v, ctx, state, output);
                 None
             }
-            Self::TryCatchBlock(e, err_var, catch_code) => {
+            Self::TryCatchBlock(e, err_var, catch_code, try_span) => {
                 debug_assert!(!uses_id);
-                compile_try_catch_block(e, err_var, catch_code, v, ctx, state, output);
+                compile_try_catch_block(e, err_var, catch_code, *try_span, v, ctx, state, output);
                 None
             }
             Self::VarDeclare(name, value, annotation) => {
@@ -6818,6 +6979,19 @@ impl Expr {
                 debug_assert!(!uses_id);
                 compile_pattern_let(pattern_let, remaining_code, v, ctx, state, output);
                 None
+            }
+            Self::Else(value, binder, fallback, span) => {
+                debug_assert!(uses_id);
+                else_match(value, binder.as_ref(), fallback, *span, v, ctx, state).compile_form(
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    tgt_id,
+                    var_assignment,
+                    remaining_code,
+                    uses_id,
+                )
             }
             Self::NamespacedRef(path, span, type_args) => {
                 debug_assert!(uses_id);
@@ -9333,6 +9507,8 @@ pub fn compile_profile(
         in_function: false,
         offset: 0,
         return_downcast: None,
+        tries: 0,
+        loop_tries: 0,
     };
     let mut indirect_registers = IndirectRegisters::default();
     let mut state = State {

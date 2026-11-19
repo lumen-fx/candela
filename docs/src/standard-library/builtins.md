@@ -173,7 +173,7 @@ declaring string keys accepts.
 import "std/json";
 
 fn main() {
-    let m = json::parse("{\"n\": 7}") as {string: any};
+    let m = json::parse("{\"n\": 7}")? as {string: any};
     print(m["n"] as int + 1);
     m["name"] = "ada";
     if m["name"] is string {

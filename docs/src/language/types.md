@@ -73,7 +73,7 @@ when every element is an `int`.
 import "std/json";
 
 fn main() {
-    let v = json::parse("[1, 2, 3]");
+    let v = json::parse("[1, 2, 3]")?;
     print(v is int[], v is string[], v is any[]);
 }
 ```
@@ -140,7 +140,7 @@ fn port(cfg: {string: any}) -> int {
 }
 
 fn main() {
-    let cfg = json::parse("{\"port\": 80}") as {string: any};
+    let cfg = json::parse("{\"port\": 80}")? as {string: any};
     print(port(cfg));
 }
 ```
