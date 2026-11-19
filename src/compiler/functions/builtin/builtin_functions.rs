@@ -229,41 +229,6 @@ pub fn builtin_functions(
             output.push(Instr::CallLibFunc(LibFunc::Input, id, output_id));
             Some(output_id)
         }
-        "range" => {
-            check_args_range(
-                args,
-                1,
-                2,
-                name,
-                args_indexes,
-                ctx.file_idx,
-                state.sources,
-                span,
-            );
-            check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
-            if args.len() != 1 {
-                check_arg_type(name, v, ctx, state, args, args_indexes, 1, &[DataType::Int]);
-            }
-
-            let id_first_arg = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            let source_reg_id = if args.len() == 1 {
-                id_first_arg
-            } else {
-                let id_second_arg = args[1]
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
-                output.push(Instr::StoreFuncArg(id_first_arg));
-                *state.allocated_arg_count += 1;
-                id_second_arg
-            };
-            state.free_reg(id_first_arg, v);
-            state.free_reg(source_reg_id, v);
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::Range, source_reg_id, output_id));
-            Some(output_id)
-        }
         // The text tests `s.parse<T>()` lowers to; see `methods::parse_call`.
         "[int text]" | "[float text]" => {
             let id = args[0]

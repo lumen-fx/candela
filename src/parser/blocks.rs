@@ -6,6 +6,7 @@ use super::lexer::Token;
 use super::lexer::parse_string;
 use super::parser_expr::parse_expr;
 use super::parser_expr::parse_expr_no_struct;
+use super::parser_expr::range_literal_ends;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::MatchArm;
@@ -260,18 +261,6 @@ fn parse_for_pattern(parser: &mut Parser<'_>, pattern: Pattern) -> Expr {
     let start = parser.peek_token_span().start;
     let for_collection = parse_expr_no_struct(parser);
     let end = parser.last_token_end as u32;
-    if parser.peek_token() == Token::RangeDot {
-        cold_path();
-        let span = parser.peek_token_span();
-        parser.error(
-            span,
-            ParserErr::UnexpectedToken(
-                Token::LBrace,
-                Token::RangeDot,
-                "A range binds one number, not a pattern.",
-            ),
-        );
-    }
     let mut code = vec![Expr::LetPattern(Box::new(PatternLet {
         pattern,
         value: Expr::Var(element.clone(), pattern_span),
@@ -338,20 +327,16 @@ pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
     } else {
         let for_collection = parse_expr_no_struct(parser);
         let end = parser.last_token_end as u32;
-        let peek_token = parser.peek_token();
-        if peek_token == Token::RangeDot {
-            parser.next_token();
-            let start2 = parser.peek_token_span().start;
-            let upper_bound = parse_expr_no_struct(parser);
-            let end2 = parser.last_token_end as u32;
+        // `for i in a..b` counts in a register and builds no range.
+        if let Some((low, high)) = range_literal_ends(&for_collection) {
             let for_loop_code = parse_loop_body(parser);
             Expr::IntForLoop(
                 id,
-                Box::new(for_collection),
-                Box::new(upper_bound),
+                Box::new(low.clone()),
+                Box::new(high.clone()),
                 Box::from(for_loop_code),
                 (start, start).into(),
-                (start2, end2).into(),
+                (start, end).into(),
             )
         } else {
             let for_loop_code = parse_loop_body(parser);

@@ -305,6 +305,7 @@ clause matches and the string bound to the catch variable. See
 | `index_out_of_bounds` | An array or string index outside the value |
 | `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end. A slice starting where the value ends is in range and produces an empty one |
 | `unknown_map_key` | Reading a map key that is not present with `m[k]`. `m.get(k)` answers `None` instead |
+| `range_step` | `r.step(n)` with an `n` less than 1. See [range](../standard-library/range.md) |
 
 ### Arithmetic
 

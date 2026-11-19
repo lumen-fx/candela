@@ -338,7 +338,7 @@ fn main() {
         let to_i = int(3.14);
         let to_s = string(42);
         let to_b = bool("true");
-        let rng = range(10);
+        let rng = (0..10).list();
         let arr = [3, 1, 4, 1, 5];
         arr.sort();
         arr.reverse();

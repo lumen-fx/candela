@@ -1410,3 +1410,52 @@ fn main() {
       (let_declaration
         (identifier)
         (map_literal)))))
+
+================================================================================
+Ranges are values (docs/src/standard-library/range.md)
+================================================================================
+
+fn main() {
+    let r = 0..n + 1;
+    let s = (1..=3).rev();
+    for i in ..3 {
+        print(xs[1..3]);
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (range_expression
+          (integer_literal)
+          (binary_expression
+            (identifier)
+            (integer_literal))))
+      (let_declaration
+        (identifier)
+        (method_call_expression
+          (parenthesized_expression
+            (range_expression
+              (integer_literal)
+              (integer_literal)))
+          (identifier)
+          (arguments)))
+      (for_statement
+        (identifier)
+        (range_expression
+          (integer_literal))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (slice_expression
+                  (identifier)
+                  (integer_literal)
+                  (integer_literal))))))))))

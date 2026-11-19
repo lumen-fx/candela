@@ -86,8 +86,11 @@ fn main() {
 
 `for` walks a range or a collection.
 
-A range is written `start..end` and covers `start` up to but not including
-`end`. Leaving the start out begins at zero.
+A [range](../standard-library/range.md) is written `start..end` and covers
+`start` up to but not including `end`; `start..=end` covers `end` too. Leaving
+the start out, `..end`, begins at zero. A range written in place counts in a
+register, and a range held in a variable loops the same way, in either
+direction.
 
 ```rust
 fn main() {
@@ -95,6 +98,10 @@ fn main() {
         print(i);
     }
     for i in ..2 {
+        print(i);
+    }
+    let countdown = (1..=3).rev();
+    for i in countdown {
         print(i);
     }
 }
@@ -134,8 +141,7 @@ fn main() {
 ```
 
 A name a pattern binds to a struct is that element, not a copy, so changing a
-field through it changes the list. A range binds a number, so it takes a name,
-not a pattern.
+field through it changes the list.
 
 The loop variable belongs to the loop and is not in scope after it.
 

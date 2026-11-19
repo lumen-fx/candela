@@ -1,0 +1,72 @@
+/// `Range`: a run of whole numbers, `a..b` or `a..=b`.
+///
+/// `a..b` holds `a` up to but not including `b`, and `a..=b` holds `b` too. A
+/// range is a value like any other: store it, pass it, return it, and loop
+/// over it with `for`. A `for` over a range written in place, `for i in 0..n`,
+/// counts in a register and builds no range at all.
+///
+///     let r = 2..5;
+///     print(r.len(), r.contains(4));
+///     for i in r.rev() {
+///         print(i);
+///     }
+///
+/// It is part of the prelude, so it needs no import. This module is pure
+/// candela and inlines into a `.cdlb`, so it runs under `candela-vm` with no
+/// source tree.
+
+/// The numbers from `start`, moving by `step`, up to but not including `end`.
+/// A negative `step` counts down.
+struct Range {
+    start: int,
+    end: int,
+    step: int,
+}
+
+impl Range {
+    /// How many numbers the range holds.
+    fn len(self) -> int {
+        if self.step > 0 {
+            if self.end <= self.start {
+                return 0;
+            }
+            return (self.end - self.start + self.step - 1) / self.step;
+        }
+        if self.end >= self.start {
+            return 0;
+        }
+        return (self.start - self.end - self.step - 1) / (0 - self.step);
+    }
+
+    /// Whether the range holds `x`.
+    fn contains(self, x: int) -> bool {
+        if self.step > 0 {
+            return x >= self.start && x < self.end && (x - self.start) % self.step == 0;
+        }
+        return x <= self.start && x > self.end && (self.start - x) % (0 - self.step) == 0;
+    }
+
+    /// The same numbers, last first: `(0..3).rev()` holds 2, 1, 0.
+    fn rev(self) -> Range {
+        let last = self.start + (self.len() - 1) * self.step;
+        return Range { start: last, end: self.start - self.step, step: 0 - self.step };
+    }
+
+    /// The numbers of the range in a list, first to last.
+    fn list(self) -> int[] {
+        let out: int[] = [];
+        for i in self {
+            out.push(i);
+        }
+        return out;
+    }
+
+    /// Every `n`th number of the range, starting from its first:
+    /// `(0..10).step(3)` holds 0, 3, 6, 9. `n` is at least 1.
+    fn step(self, n: int) -> Range {
+        if n < 1 {
+            throw "range_step";
+        }
+        return Range { start: self.start, end: self.end, step: self.step * n };
+    }
+}

@@ -78,6 +78,7 @@ What a program reaches for on every other line needs no import:
   the language builds it in (`s.uppercase()`, `xs.push(x)`) or a module
   defines it (`s.capitalize()`, `xs.map(f)`, `m.get(k)`, `"42".parse<int>()`).
 - `Option` and `Result`, with `Some`, `None`, `Ok`, `Err` and their methods.
+- [`Range`](range.md), the type of `a..b`, with its methods.
 - The free built-ins: `print`, `input`, `exit`, `argv`, `type` and the
   conversions. They are listed in [built-in functions](builtins.md).
 
@@ -90,7 +91,8 @@ fn main() {
 }
 ```
 
-The modules behind it are `list`, `string`, `map`, `option` and `result`.
+The modules behind it are `list`, `string`, `map`, `option`, `result` and
+`range`.
 Importing one of them still works, reaches the same module, and binds its name
 like any import; its names stay reachable with no prefix. A method nothing calls is never compiled, so the prelude adds nothing to
 a program that does not use it. A program that declares its own enum with a

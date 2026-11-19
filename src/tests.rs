@@ -1974,7 +1974,7 @@ pub fn sieve_of_eratosthenes() {
         "
         fn main() {
             let limit = 100000;
-            let sieve = range(limit);
+            let sieve = (0..limit).list();
             sieve[0] = 0;
             sieve[1] = 0;
             let i = 2;
@@ -2040,7 +2040,7 @@ pub fn range_sum() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(101);
+            let arr = (0..101).list();
             let sum = 0;
             for x in arr {
                 sum += x;
@@ -2805,7 +2805,7 @@ pub fn array_push_type_inference_propagation() {
     run_and_check_registers!(
         "
         fn build_sieve(limit) {
-            let sieve = range(limit);
+            let sieve = (0..limit).list();
             sieve[0] = 0;
             sieve[1] = 0;
             let i = 2;
@@ -3526,7 +3526,7 @@ pub fn range_two_arg() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(5, 10);
+            let arr = (5..10).list();
             let sum = 0;
             for x in arr { sum += x; }
             print(sum);
@@ -3541,7 +3541,7 @@ pub fn range_two_arg_index() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(3, 7);
+            let arr = (3..7).list();
             print(arr[0]);
         }
         ",
@@ -8059,7 +8059,7 @@ pub fn enum_built_in_a_loop_survives_a_second_call() {
         enum Value { Int(int), Text(string) }
         fn build(n) {
             let cells = [];
-            for i in range(n) { cells.push(Value::Int(i)); }
+            for i in 0..n { cells.push(Value::Int(i)); }
             return cells;
         }
         fn main() {
@@ -16855,7 +16855,7 @@ pub fn for_pattern_errors() {
         ),
         (
             "fn main() { for (a, b) in 0..3 { print(a); } }",
-            "unexpected_token",
+            "tuple_pattern_mismatch",
         ),
     ] {
         let d = compile_diag(src, "diag.kl").unwrap_err();
@@ -17825,4 +17825,62 @@ fn main() {
         assert_eq!(d.code, code, "{src}: {d:?}");
         assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
     }
+}
+
+/// `a..b` and `a..=b` are values of the prelude's `Range`: stored, passed,
+/// looped over in either direction, sliced with, and asked for `len`,
+/// `contains`, `rev`, `step` and `list`. `range()` is gone and its call names
+/// the range to write.
+#[test]
+pub fn ranges_are_values() {
+    let src = "
+fn total(r: Range) -> int {
+    let sum = 0;
+    for i in r {
+        sum += i;
+    }
+    return sum;
+}
+
+fn main() {
+    let r = 2..5;
+    print(r.len(), r.contains(4), r.contains(5), total(r));
+    let back = (0..4).rev();
+    for i in back {
+        print(i);
+    }
+    for i in (0..10).step(3) {
+        print(i);
+    }
+    let n = 3;
+    for i in 1..=n {
+        print(i * 10);
+    }
+    let xs = [10, 20, 30, 40, 50];
+    print(xs[1..3], xs[1..=3], xs[2..]);
+    print((5..0).len(), (0..10).step(4).len(), (0..=10).rev().len());
+    print((10..0).rev().len());
+    let s = 0;
+    for i in 0..n + 1 {
+        if i == 1 { continue; }
+        s += i;
+    }
+    print(s);
+    print(0..3);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "3\ntrue\nfalse\n9\n3\n2\n1\n0\n0\n3\n6\n9\n10\n20\n30\n[20,30]\n[20,30,40]\n[30,40,50]\n0\n3\n11\n0\n5\nRange {start:0,end:3,step:1}\n"
+    );
+    assert_eq!(
+        run_output(
+            "fn main() { print((1..4).list(), (3..0).rev().list(), (0..10).step(5).list()); }"
+        ),
+        "[1,2,3]\n[]\n[0,5]\n"
+    );
+    let src = "fn main() { for i in range(3) { print(i); } }";
+    let d = compile_diag(src, "range.cdl").unwrap_err();
+    assert_eq!(&src[d.span.clone()], "range", "{d:?}");
+    assert!(d.message.contains("0..n"), "{d:?}");
 }

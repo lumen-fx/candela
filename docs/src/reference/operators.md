@@ -29,6 +29,9 @@ except `^`.
 
 `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
 
+A range, `a..b` or `a..=b`, binds looser than all of them and does not chain:
+`0..n + 1` is `0..(n + 1)`. See [ranges](#ranges).
+
 `is` and `as` take a type on their right rather than an expression, at the
 level of the comparisons: `a + b as int` is `(a + b) as int`, `v as int + 1` is
 `(v as int) + 1`, and `v is int && v > 0` tests before it compares. See [type
@@ -374,16 +377,23 @@ See [methods](../language/methods.md), [enums](../language/enums.md) and
 
 ## Ranges
 
-`..` builds the range of a `for` loop and appears nowhere else. Both bounds must
-be `int`, and the end is exclusive. `for i in ..n` starts at zero.
+`a..b` is a value of the prelude type [`Range`](../standard-library/range.md):
+the `int`s from `a` up to but not including `b`. `a..=b` includes `b`. Both
+bounds must be `int`. `for i in ..n` starts at zero. Between the brackets of an
+index a range slices, `xs[1..3]`; in a pattern it tests that a number is in it,
+`1..=9 => ...`.
 
 ```rust
-for i in 0..3 {
-    print(i);       // 0, 1, 2
+fn main() {
+    let r = 0..3;
+    for i in r {
+        print(i);       // 0, 1, 2
+    }
+    print((0..=3).len());       // 4
 }
 ```
 
-See [control flow](../language/control-flow.md).
+See [control flow](../language/control-flow.md#for).
 
 ## Symbols that are not operators
 

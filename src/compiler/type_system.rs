@@ -226,6 +226,8 @@ impl TypeExpr {
                         DataType::Struct(struct_id as u16)
                     } else if let Some(enum_id) = ctx.scope().find_enum(&[], struct_name) {
                         DataType::Enum(enum_id as u16)
+                    } else if let Some(struct_id) = ctx.generics.prelude_struct(struct_name) {
+                        DataType::Struct(struct_id)
                     } else if find_template(&[], struct_name, ctx.scope(), ctx.generics).is_some() {
                         // A generic type named without its arguments is the
                         // dynamic slot: candela never makes a missing type
@@ -448,6 +450,9 @@ pub struct Generics {
     /// a program imported one by name first. Their templates are bare names
     /// everywhere.
     prelude_files: Vec<u16>,
+    /// The structs the prelude declares, by name, which every file reaches by
+    /// a bare name unless it declares one of its own: `Range`.
+    prelude_structs: Vec<(SmolStr, u16)>,
     /// The field names of the variants declared with named fields, by enum id.
     /// An enum with none has no entry.
     variant_fields: FxHashMap<u16, VariantFields>,
@@ -527,6 +532,21 @@ impl Generics {
     /// Records that file `file_idx` is a prelude module.
     pub fn mark_prelude_file(&mut self, file_idx: u16) {
         self.prelude_files.push(file_idx);
+    }
+
+    /// Records a struct the prelude declares, so every file reaches it by name.
+    pub fn add_prelude_struct(&mut self, name: SmolStr, id: u16) {
+        self.prelude_structs.push((name, id));
+    }
+
+    /// The struct the prelude declares under `name`, for a file that declares
+    /// no struct of that name itself.
+    #[must_use]
+    pub fn prelude_struct(&self, name: &str) -> Option<u16> {
+        self.prelude_structs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, id)| *id)
     }
 
     /// Records which templates the prelude registered.
@@ -1897,19 +1917,38 @@ pub fn struct_literal_id(
             .collect();
         return instantiated_struct_id(path, &name, &args, span, ctx, state);
     }
-    state
-        .scope(ctx.file_idx)
-        .find_struct(path, &name, span, ctx.file_idx, state.sources)
-        .unwrap_or_else(|| {
-            error_unknown_struct(
-                &name,
-                span,
-                state.scope(ctx.file_idx),
-                state.sources,
-                ctx.file_idx,
-            );
-        }) as u16
+    if let Some(id) =
+        state
+            .scope(ctx.file_idx)
+            .find_struct(path, &name, span, ctx.file_idx, state.sources)
+    {
+        return id as u16;
+    }
+    // `a..b` is a literal of the prelude's `Range`, whatever the file
+    // declares under that name.
+    let prelude_name = if path.is_empty() && name == RANGE_LITERAL {
+        "Range"
+    } else {
+        name.as_str()
+    };
+    if path.is_empty()
+        && let Some(id) = state.generics.prelude_struct(prelude_name)
+    {
+        return id;
+    }
+    error_unknown_struct(
+        &name,
+        span,
+        state.scope(ctx.file_idx),
+        state.sources,
+        ctx.file_idx,
+    );
 }
+
+/// The name a range literal, `a..b`, is written under: a literal of the
+/// prelude's `Range` that no file can shadow, since no identifier starts with
+/// `[`.
+pub const RANGE_LITERAL: &str = "[range]";
 
 /// Resolves the struct a literal names.
 ///
@@ -2510,7 +2549,6 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
         "float" => DataType::Float,
         "int" | "the_answer" => DataType::Int,
         "bool" | "[int text]" | "[float text]" => DataType::Bool,
-        "range" => DataType::Array(Some(Box::from(DataType::Int))),
         "argv" => DataType::Array(Some(Box::from(DataType::String))),
         _ => return None,
     })
@@ -3574,6 +3612,19 @@ fn track_return_flow(
             }
             Expr::ForLoop(var_name, array_expr, array_code, span) => {
                 let inferred_collection_type = array_expr.infer_type(v, ctx, state);
+                if crate::compiler::is_range(&inferred_collection_type, state) {
+                    let desugared =
+                        crate::compiler::range_loop(var_name, array_expr, array_code, *span);
+                    let flow = track_scoped_returns(
+                        std::slice::from_ref(&desugared),
+                        v,
+                        ctx,
+                        state,
+                        fn_name,
+                    );
+                    extend_return_types!(&mut return_types, flow.types, ctx, state);
+                    continue;
+                }
                 let elem_type = match inferred_collection_type {
                     DataType::Array(inner) => inner.map_or(DataType::Unknown, |t| *t),
                     DataType::String => DataType::String,

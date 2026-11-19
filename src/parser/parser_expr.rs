@@ -9,6 +9,7 @@ use crate::compiler::expr::Expr;
 use crate::compiler::expr::IsTarget;
 use crate::compiler::expr::Operand;
 use crate::compiler::expr::Span;
+use crate::compiler::type_system::RANGE_LITERAL;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
 use crate::parser::parse_args;
@@ -293,7 +294,19 @@ fn parse_postfix_op(parser: &mut Parser<'_>, mut base: Expr, mut base_span: Span
                 } else {
                     let lower_bound = parse_expr(parser);
                     let (next_token, next_token_span) = parser.next_token();
-                    if next_token == Token::RBracket {
+                    // `a[i..j]` and `a[i..=j]` read the range between the
+                    // brackets as the slice's bounds.
+                    if next_token == Token::RBracket
+                        && let Some((start, end)) = range_literal_ends(&lower_bound)
+                    {
+                        base_span.end = next_token_span.end;
+                        base = Expr::ArrayGetSlice(
+                            Box::new(base),
+                            Box::new(start.clone()),
+                            Some(Box::new(end.clone())),
+                            base_span,
+                        );
+                    } else if next_token == Token::RBracket {
                         // array index
                         base_span.end = next_token_span.end;
                         base =
@@ -522,10 +535,95 @@ fn variant_pattern_ahead(parser: &Parser<'_>, allow_struct: bool) -> bool {
 
 #[inline(always)]
 pub fn parse_expr(parser: &mut Parser<'_>) -> Expr {
-    parse_expr_with_precedence(parser, 0, true)
+    parse_range(parser, true)
 }
 
 #[inline(always)]
 pub fn parse_expr_no_struct(parser: &mut Parser<'_>) -> Expr {
-    parse_expr_with_precedence(parser, 0, false)
+    parse_range(parser, false)
+}
+
+/// An expression, or the range `low..high` or `low..=high` between two. A
+/// range binds looser than every operator, so `0..n + 1` runs to `n + 1`.
+/// A `..` with `]` after it is the open end of a slice, `a[i..]`, which the
+/// index reads itself.
+fn parse_range(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
+    let start = parser.peek_token_span().start;
+    let low = parse_expr_with_precedence(parser, 0, allow_struct);
+    let inclusive = match parser.peek_token_opt() {
+        Some(Token::RangeDot)
+            if !matches!(parser.input.clone().nth(1), Some((Ok(Token::RBracket), _))) =>
+        {
+            false
+        }
+        Some(Token::RangeDotEq) => true,
+        _ => return low,
+    };
+    let low_end = parser.last_token_end as u32;
+    parser.next_token();
+    let high_start = parser.peek_token_span().start;
+    let high = parse_expr_with_precedence(parser, 0, allow_struct);
+    let high_end = parser.last_token_end as u32;
+    range_literal(
+        low,
+        high,
+        inclusive,
+        (start, low_end).into(),
+        (high_start, high_end).into(),
+        (start, high_end).into(),
+    )
+}
+
+/// The literal `a..b` (or `a..=b`, `inclusive`) is: the prelude's `Range`
+/// counting up by one from `low`, up to but not including its end. An
+/// inclusive range ends one past `high`.
+#[must_use]
+pub fn range_literal(
+    low: Expr,
+    high: Expr,
+    inclusive: bool,
+    low_span: Span,
+    high_span: Span,
+    span: Span,
+) -> Expr {
+    let end = if inclusive {
+        match high {
+            Expr::Int(i) => Expr::Int(i.wrapping_add(1)),
+            high => Expr::Add(
+                Operand::new(high),
+                Operand::new(Expr::Int(1)),
+                high_span,
+                high_span,
+            ),
+        }
+    } else {
+        high
+    };
+    Expr::Struct(
+        Box::from([SmolStr::new_static(RANGE_LITERAL)]),
+        Box::from([
+            (SmolStr::new_static("start"), low, low_span, low_span),
+            (SmolStr::new_static("end"), end, high_span, high_span),
+            (SmolStr::new_static("step"), Expr::Int(1), span, span),
+        ]),
+        span,
+        Box::from([]),
+        None,
+    )
+}
+
+/// The ends of a range literal written with a step of one, `start..end`, `None`
+/// for any other expression.
+#[must_use]
+pub fn range_literal_ends(expr: &Expr) -> Option<(&Expr, &Expr)> {
+    match expr {
+        Expr::Struct(path, fields, _, type_args, None)
+            if type_args.is_empty()
+                && matches!(&**path, [name] if name == RANGE_LITERAL)
+                && matches!(fields[2].1, Expr::Int(1)) =>
+        {
+            Some((&fields[0].1, &fields[1].1))
+        }
+        _ => None,
+    }
 }

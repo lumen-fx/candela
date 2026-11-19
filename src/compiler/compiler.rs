@@ -67,6 +67,7 @@ use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
 use expr::MatchArm;
+use expr::Operand;
 use expr::PatternLet;
 use expr::Span;
 use expr::StructRest;
@@ -4139,6 +4140,10 @@ fn compile_for_loop(
 
     // parse the array, get its id (the target array is the first Expr in array_code)
     let array_type = array.infer_type(v, ctx, state);
+    if is_range(&array_type, state) {
+        range_loop(var_name, array, code, span).compile(v, ctx, state, output, None, false, false);
+        return;
+    }
     let mut array = array
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
@@ -4177,6 +4182,61 @@ fn compile_for_loop(
         state,
         output,
     );
+}
+
+/// Whether `t` is the prelude's `Range`, the type of `a..b`.
+pub(crate) fn is_range(t: &DataType, state: &State<'_>) -> bool {
+    matches!(t, DataType::Struct(id) if state.generics.prelude_struct("Range") == Some(*id))
+}
+
+/// The loop `for var in range` runs over a `Range` value: the numbers it
+/// holds, read out of its fields once, counting by its step either way. A
+/// range written in place, `for i in 0..n`, never gets here: it is an
+/// [`Expr::IntForLoop`].
+pub(crate) fn range_loop(var_name: &SmolStr, range: &Expr, code: &[Expr], span: Span) -> Expr {
+    let tag = format!("{} {}]", span.start, span.end);
+    let name = |what: &str| SmolStr::from(format!("[range {what} {tag}"));
+    let (r, i, end, step) = (name("value"), name("at"), name("end"), name("step"));
+    let var = |n: &SmolStr| Expr::Var(n.clone(), span);
+    let field = |f: &'static str| {
+        Expr::GetStructField(Box::new(var(&r)), SmolStr::new_static(f), span, span)
+    };
+    let op = Operand::new;
+    let up = Expr::BoolAnd(
+        op(Expr::Sup(op(var(&step)), op(Expr::Int(0)), span, span)),
+        op(Expr::Inf(op(var(&i)), op(var(&end)), span, span)),
+        span,
+        span,
+    );
+    let down = Expr::BoolAnd(
+        op(Expr::Inf(op(var(&step)), op(Expr::Int(0)), span, span)),
+        op(Expr::Sup(op(var(&i)), op(var(&end)), span, span)),
+        span,
+        span,
+    );
+    let mut body = Vec::with_capacity(code.len() + 2);
+    if var_name != "_" {
+        body.push(Expr::VarDeclare(var_name.clone(), Box::new(var(&i)), None));
+    }
+    // The step comes before the body, so a `continue` takes it too.
+    body.push(Expr::VarAssign(
+        i.clone(),
+        Box::new(Expr::Add(op(var(&i)), op(var(&step)), span, span)),
+        span,
+        span,
+    ));
+    body.extend_from_slice(code);
+    Expr::EvalBlock(Box::from([
+        Expr::VarDeclare(r.clone(), Box::new(range.clone()), None),
+        Expr::VarDeclare(i, Box::new(field("start")), None),
+        Expr::VarDeclare(end, Box::new(field("end")), None),
+        Expr::VarDeclare(step, Box::new(field("step")), None),
+        Expr::WhileBlock(
+            Box::new(Expr::BoolOr(op(up), op(down), span, span)),
+            Box::from(body),
+            span,
+        ),
+    ]))
 }
 
 /// Compiles `for x in list[start..end]` to walk `list` itself from `start` to
@@ -7259,12 +7319,13 @@ fn real_path(path: &Path) -> std::io::Result<PathBuf> {
 /// `Option`, a variant called `Some` or a method of the same name finds its own
 /// first. A method nothing calls is never compiled, so a program pays for the
 /// ones it uses.
-pub const PRELUDE_MODULES: [&str; 5] = [
+pub const PRELUDE_MODULES: [&str; 6] = [
     "std/option.cdl",
     "std/result.cdl",
     "std/list.cdl",
     "std/string.cdl",
     "std/map.cdl",
+    "std/range.cdl",
 ];
 
 /// The source of a standard library module the compiler carries, by the path
@@ -7281,6 +7342,7 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/list.cdl" => Some(include_str!("../../libs/std/list.cdl")),
         "std/string.cdl" => Some(include_str!("../../libs/std/string.cdl")),
         "std/map.cdl" => Some(include_str!("../../libs/std/map.cdl")),
+        "std/range.cdl" => Some(include_str!("../../libs/std/range.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
         #[cfg(target_arch = "wasm32")]
@@ -7416,6 +7478,13 @@ fn load_prelude(
             generics,
             resolver,
         );
+        // A struct the prelude declares is reached by its bare name from
+        // every file that declares none of its own.
+        for (name, kind) in &child_namespace.symbols {
+            if let SymbolKind::Struct(id) = kind {
+                generics.add_prelude_struct(name.clone(), *id);
+            }
+        }
         file_namespaces.insert(child_src_idx, child_namespace);
         file_namespaces.mark_std(child_src_idx);
         generics.mark_prelude_file(child_src_idx);

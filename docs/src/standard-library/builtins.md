@@ -150,14 +150,9 @@ turns out to hold. `value is T` answers at run time; see
 
 ### range
 
-```rust
-range(end)
-range(start, end)
-```
-
-Returns a list of ints from `start` (0 when omitted) up to but not including
-`end`. Both arguments are ints. The result is empty when `start` is not less
-than `end`.
+`range(n)` and `range(start, end)` are removed. A range is written in place:
+`0..n` and `start..end`, and `(start..end).list()` gives the list `range`
+returned. See [range](range.md).
 
 ## Dynamic values
 

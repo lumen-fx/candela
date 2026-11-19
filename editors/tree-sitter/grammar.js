@@ -600,12 +600,19 @@ module.exports = grammar({
         'for',
         field('binding', $._pattern),
         'in',
-        field('iterable', choice($.range_expression, $._expression)),
+        field('iterable', choice(alias($._range_from_zero, $.range_expression), $._expression)),
         field('body', $.block),
       ),
 
+    _range_from_zero: ($) => seq('..', field('end', $._expression)),
+
+    // `a..b` and `a..=b`, a `Range` value. It binds looser than every
+    // operator, so `0..n + 1` runs to `n + 1`.
     range_expression: ($) =>
-      seq(optional(field('start', $._expression)), '..', field('end', $._expression)),
+      prec.left(
+        0,
+        seq(field('start', $._expression), choice('..', '..='), field('end', $._expression)),
+      ),
 
     loop_statement: ($) => seq('loop', field('body', $.block)),
 
@@ -725,6 +732,7 @@ module.exports = grammar({
         $.match_expression,
         // A block where a value goes is one: its last expression.
         $.block,
+        $.range_expression,
         $.macro_invocation,
       ),
 

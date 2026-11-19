@@ -50,10 +50,6 @@ pub const BUILTIN_FUNCTIONS: &[(&str, &str)] = &[
         "input() -> string\ninput(p: string) -> string\n\nAsks the user for input, optionally printing prompt `p` first.",
     ),
     (
-        "range",
-        "range(j: int) -> int[]\nrange(i: int, j: int) -> int[]\n\nReturns an array containing the numbers from 0 or `i` to `j`-1.",
-    ),
-    (
         "the_answer",
         "the_answer() -> int\n\nPrints \"The answer to the Ultimate Question of Life, the Universe, and Everything is 42.\" and returns 42.",
     ),

@@ -2351,7 +2351,7 @@ const FEW_LARGE: &str = "
 fn churn(n: int) -> int {
     let total = 0;
     for i in 0..n {
-        let big = range(0, 50000);
+        let big = (0..50000).list();
         let grown = [];
         for j in 0..50000 {
             grown.push(j);

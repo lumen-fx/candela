@@ -35,9 +35,9 @@ pub struct Tokens<'a> {
     comments: Vec<(usize, usize)>,
 }
 
-const PUNCTS: [&str; 18] = [
-    "...", "::", "->", "=>", "..", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=",
-    "%=", "**", "|>",
+const PUNCTS: [&str; 19] = [
+    "...", "..=", "::", "->", "=>", "..", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=",
+    "/=", "%=", "**", "|>",
 ];
 
 impl<'a> Tokens<'a> {
@@ -320,6 +320,7 @@ impl Ty {
             Self::List(t) => (**t).clone(),
             Self::Map(k, _) => (**k).clone(),
             Self::Named(n) if n == "string" => self.clone(),
+            Self::Named(n) if n == "Range" => Self::Named("int".to_owned()),
             _ => Self::Unknown,
         }
     }
@@ -730,7 +731,7 @@ impl<'a> Infer<'a> {
             match self.toks.s(i) {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" => depth -= 1,
-                ".." if depth == 0 => return true,
+                ".." | "..=" if depth == 0 => return true,
                 _ => {}
             }
         }
@@ -759,7 +760,7 @@ impl<'a> Infer<'a> {
             "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" | "is" => {
                 Ty::Named("bool".to_owned())
             }
-            ".." => Ty::List(Box::new(Ty::Named("int".to_owned()))),
+            ".." | "..=" => Ty::Named("Range".to_owned()),
             _ => ty,
         }
     }

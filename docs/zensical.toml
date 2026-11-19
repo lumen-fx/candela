@@ -62,6 +62,7 @@ nav = [
      "standard-library/math.md",
      "standard-library/option.md",
      "standard-library/random.md",
+     "standard-library/range.md",
      "standard-library/result.md",
      "standard-library/set.md",
      "standard-library/string.md",

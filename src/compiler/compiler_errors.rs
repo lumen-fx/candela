@@ -70,6 +70,7 @@ fn replaced_builtin(name: &str) -> Option<&'static str> {
         "as_list" => "v as any[]",
         "as_map" => "v as {any: any}",
         "str" => "string(x)",
+        "range" => "the range a..b: range(n) is 0..n, range(a, b) is a..b",
         _ => return None,
     })
 }

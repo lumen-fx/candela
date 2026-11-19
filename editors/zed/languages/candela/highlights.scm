@@ -117,7 +117,7 @@
 ((call_expression
   function: (identifier) @function.builtin)
   (#any-of? @function.builtin
-    "print" "type" "float" "int" "string" "bool" "input" "range" "the_answer"
+    "print" "type" "float" "int" "string" "bool" "input" "the_answer"
     "argv" "exit"))
 
 ; Macros

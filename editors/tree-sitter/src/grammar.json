@@ -3104,8 +3104,13 @@
             "type": "CHOICE",
             "members": [
               {
-                "type": "SYMBOL",
-                "name": "range_expression"
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_range_from_zero"
+                },
+                "named": true,
+                "value": "range_expression"
               },
               {
                 "type": "SYMBOL",
@@ -3124,25 +3129,9 @@
         }
       ]
     },
-    "range_expression": {
+    "_range_from_zero": {
       "type": "SEQ",
       "members": [
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "start",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_expression"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
         {
           "type": "STRING",
           "value": ".."
@@ -3156,6 +3145,44 @@
           }
         }
       ]
+    },
+    "range_expression": {
+      "type": "PREC_LEFT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "start",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": ".."
+              },
+              {
+                "type": "STRING",
+                "value": "..="
+              }
+            ]
+          },
+          {
+            "type": "FIELD",
+            "name": "end",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          }
+        ]
+      }
     },
     "loop_statement": {
       "type": "SEQ",
@@ -3673,6 +3700,10 @@
         {
           "type": "SYMBOL",
           "name": "block"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "range_expression"
         },
         {
           "type": "SYMBOL",
