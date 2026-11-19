@@ -156,6 +156,15 @@ the current text, so `bird.` completes while the line around it is unfinished.
   imported module and a package from `importRoots`. A call written
   `geo::area(...)` goes to the `area` of the module bound as `geo`.
 
+- **Find references.** Every name that go-to-definition takes to the same
+  declaration: in the declaring file, the files of the program, the open
+  buffers, and every `.cdl` file of the package that declares it (the
+  directory of the nearest `candela.toml`, or else the workspace folder). A
+  file nobody opened is read from disk and checked as the root of a program;
+  one that does not compile is skipped, and the editor's log names it. A
+  local's references stay in its own file. A local spelled like a function
+  is told apart from it, as go-to-definition tells them apart.
+
 ## Known simplifications
 
 These are deliberate, and the source refers here for them.
@@ -167,6 +176,9 @@ These are deliberate, and the source refers here for them.
   found by matching its name at its recorded position in each file.
 - A method of a generic struct is known once the program uses an
   instantiation of the struct (`State<Phase>`).
+- References are searched in the package that declares the item, the open
+  files and the programs they import. Another package that depends on it is
+  searched only while one of its files is open.
 - Inside one function body, an error in a statement drops that statement, and a
   `let` it declared takes the type its value would have had, or `any` when that
   cannot be worked out either. A later error that follows only from the dropped
@@ -184,6 +196,9 @@ These are deliberate, and the source refers here for them.
   and the attribute warnings against a small game written for a host that
   declares its attributes in a `host` block, the way an engine module does,
   and the type of each expression form a local can be declared with.
+- `src/refs.rs` unit-tests finding a declaration from a use and from itself,
+  fields, methods and variants, two locals of one name in different
+  functions, and a builtin, which has no declaration.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.

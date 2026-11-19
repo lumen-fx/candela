@@ -1,8 +1,8 @@
 //! The `tower_lsp::LanguageServer` implementation: wires document sync,
-//! diagnostics, hover, completion, signature help, document symbols, and
-//! go-to-definition to the analysis in `crate::analysis` (a thin wrapper
-//! around candela's own compile) and the position-based features in
-//! `crate::ide`.
+//! diagnostics, hover, completion, signature help, document symbols,
+//! go-to-definition and the reference features to the analysis in
+//! `crate::analysis` (a thin wrapper around candela's own compile), the
+//! position-based features in `crate::ide`, and `crate::refs`.
 //!
 //! Diagnostics are worked out off the request path. Every open buffer is
 //! checked as the root of a program, a moment after the last change to it or
@@ -16,6 +16,7 @@ use crate::analysis::{self, ProgramSummary};
 use crate::checks::{self, Found};
 use crate::ide::Ide;
 use crate::line_index::{self, LineIndex};
+use crate::refs::{self, Decl};
 use candela::Diagnostic as CdlDiagnostic;
 use candela::PackageCheck;
 use candela::compiler::imports::ImportResolver;
@@ -187,7 +188,27 @@ struct Inner {
     /// Held while a package check runs: one runs at a time, and a check
     /// waiting for it that a newer one replaced by then does not run.
     checking: tokio::sync::Mutex<()>,
+    /// The editor's workspace folders, canonical.
+    folders: RwLock<Vec<PathBuf>>,
 }
+
+/// The references to one declaration found in one file.
+struct FileRefs {
+    path: PathBuf,
+    text: String,
+    ranges: Vec<(usize, usize)>,
+}
+
+/// What a search for references read.
+struct RefSearch {
+    found: Vec<FileRefs>,
+    /// Files that name the declaration but did not compile, so their
+    /// references could not be told apart.
+    unread: Vec<PathBuf>,
+}
+
+/// The most `.cdl` files a search for references reads from a package.
+const MAX_PACKAGE_FILES: usize = 2000;
 
 impl Backend {
     #[must_use]
@@ -200,6 +221,7 @@ impl Backend {
                 roots: Mutex::new(HashMap::new()),
                 published: Mutex::new(HashSet::new()),
                 checking: tokio::sync::Mutex::new(()),
+                folders: RwLock::new(Vec::new()),
             }),
         }
     }
@@ -712,6 +734,154 @@ impl Inner {
         }
     }
 
+    /// The canonical path of an open document's file.
+    fn doc_path(&self, uri: &Url) -> Option<PathBuf> {
+        self.docs.get(uri).map(|d| d.path.clone())
+    }
+
+    /// The declaration under the cursor of an open document, and the range
+    /// of the name the cursor is on.
+    fn declaration_at(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<(Decl, (usize, usize), String, ProgramSummary)> {
+        let (text, summary, offset) = self.request(uri, position)?;
+        let path = self.doc_path(uri)?;
+        let (decl, under) = refs::declaration(&text, &summary, &path, offset)?;
+        Some((decl, under, text, summary))
+    }
+
+    /// The files a reference to `decl` can be in: a local's own file, or
+    /// for anything else the files of the program `summary` describes, the
+    /// open buffers, and every `.cdl` file of the package (or workspace
+    /// folder) holding the declaration.
+    fn reference_files(&self, decl: &Decl, summary: &ProgramSummary) -> Vec<PathBuf> {
+        let mut files = vec![decl.file.clone()];
+        if decl.local {
+            return files;
+        }
+        let mut add = |path: PathBuf| {
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        };
+        for source in summary.sources.iter().skip(1).filter(|s| !s.is_std) {
+            add(canonical(Path::new(&source.path)));
+        }
+        for doc in self.docs.iter() {
+            add(doc.path.clone());
+        }
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        if let Some(root) = package_root(&decl.file, &folders) {
+            for path in cdl_files(&root, MAX_PACKAGE_FILES) {
+                add(path);
+            }
+        }
+        if let Some(path) = summary
+            .sources
+            .first()
+            .map(|s| canonical(Path::new(&s.path)))
+        {
+            add(path);
+        }
+        files
+    }
+
+    /// Every reference to `decl` in the files that can hold one. An open
+    /// buffer is read as it stands; any other file that spells the name is
+    /// compiled as the root of a program, against the open buffers' text.
+    async fn find_references(&self, decl: &Decl, summary: &ProgramSummary) -> RefSearch {
+        let files = self.reference_files(decl, summary);
+        let mut found = Vec::new();
+        let mut closed = Vec::new();
+        for path in files {
+            let open = self
+                .docs
+                .iter()
+                .find(|d| d.path == path)
+                .map(|d| d.key().clone());
+            match open {
+                Some(uri) => {
+                    let (Some(text), Some(summary)) =
+                        (self.doc_text(&uri), self.current_or_cached_summary(&uri))
+                    else {
+                        continue;
+                    };
+                    let ranges = refs::occurrences(&text, &summary, &path, decl);
+                    if !ranges.is_empty() {
+                        found.push(FileRefs { path, text, ranges });
+                    }
+                }
+                None => closed.push(path),
+            }
+        }
+        let settings = self.settings();
+        let overlays: Vec<(PathBuf, String)> = self
+            .docs
+            .iter()
+            .map(|d| (d.path.clone(), d.text.clone()))
+            .collect();
+        let decl = decl.clone();
+        let mut unread = Vec::new();
+        // The compiles run off the async threads; the resolver is built on
+        // the thread that uses it.
+        let read = tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            let mut unread = Vec::new();
+            for path in closed {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if !text.contains(decl.name.as_str()) {
+                    continue;
+                }
+                let resolver = resolver_with(&settings, overlays.clone());
+                let outcome = analysis::analyze(&text, &path.to_string_lossy(), &resolver);
+                let Some(summary) = outcome.summary else {
+                    unread.push(path);
+                    continue;
+                };
+                let ranges = refs::occurrences(&text, &summary, &path, &decl);
+                if !ranges.is_empty() {
+                    out.push(FileRefs { path, text, ranges });
+                }
+            }
+            (out, unread)
+        })
+        .await;
+        if let Ok((more, missed)) = read {
+            found.extend(more);
+            unread = missed;
+        }
+        RefSearch { found, unread }
+    }
+
+    /// Says in the editor's log which files a search could not read.
+    async fn report_unread(&self, search: &RefSearch) {
+        for path in &search.unread {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!(
+                        "candela-lsp: {} does not compile, so its references were not searched",
+                        path.display()
+                    ),
+                )
+                .await;
+        }
+    }
+
+    /// The URI an edit or a location for `path` names: the open buffer's
+    /// own when the file is open.
+    fn uri_for(&self, path: &Path) -> Option<Url> {
+        self.docs
+            .iter()
+            .find(|d| d.path == path)
+            .map(|d| d.key().clone())
+            .or_else(|| Url::from_file_path(path).ok())
+    }
+
     fn apply_settings(&self, value: &Value) {
         let settings = ImportSettings::from_json(value);
         if let Ok(mut s) = self.settings.write() {
@@ -727,6 +897,54 @@ fn resolver_with(settings: &ImportSettings, overlays: Vec<(PathBuf, String)>) ->
         resolver.set_overlay(path, Arc::from(text));
     }
     resolver
+}
+
+/// The directory to search for references to an item declared in `file`:
+/// the nearest one above it holding a `candela.toml`, or else the workspace
+/// folder it is in.
+fn package_root(file: &Path, folders: &[PathBuf]) -> Option<PathBuf> {
+    let dir = file.parent()?;
+    for ancestor in dir.ancestors() {
+        if ancestor.join("candela.toml").is_file() {
+            return Some(ancestor.to_path_buf());
+        }
+        if folders.iter().any(|f| f == ancestor) {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// The `.cdl` files under `root`, canonical, at most `max` of them. Hidden
+/// directories and build output (`target`, `node_modules`) are skipped.
+fn cdl_files(root: &Path, max: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                    stack.push(entry.path());
+                }
+            } else if name.ends_with(".cdl") {
+                out.push(canonical(&entry.path()));
+                if out.len() >= max {
+                    return out;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The check commands of the packages a program's files belong to, once
@@ -799,6 +1017,26 @@ impl LanguageServer for Backend {
         if let Some(options) = &params.initialization_options {
             self.inner.apply_settings(options);
         }
+        #[allow(deprecated)]
+        let mut folders: Vec<Url> = params
+            .workspace_folders
+            .iter()
+            .flatten()
+            .map(|f| f.uri.clone())
+            .collect();
+        #[allow(deprecated)]
+        if folders.is_empty()
+            && let Some(root) = &params.root_uri
+        {
+            folders.push(root.clone());
+        }
+        if let Ok(mut f) = self.inner.folders.write() {
+            *f = folders
+                .iter()
+                .filter_map(|u| u.to_file_path().ok())
+                .map(|p| canonical(&p))
+                .collect();
+        }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -825,6 +1063,7 @@ impl LanguageServer for Backend {
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -1094,5 +1333,33 @@ impl LanguageServer for Backend {
             None => None,
         };
         Ok(location.map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
+        let p = params.text_document_position;
+        let Some((decl, _, _, summary)) =
+            self.inner.declaration_at(&p.text_document.uri, p.position)
+        else {
+            return Ok(None);
+        };
+        let search = self.inner.find_references(&decl, &summary).await;
+        self.inner.report_unread(&search).await;
+        let mut locations = Vec::new();
+        for file in &search.found {
+            let Some(uri) = self.inner.uri_for(&file.path) else {
+                continue;
+            };
+            let index = LineIndex::new(&file.text);
+            for &(s, e) in &file.ranges {
+                if !params.context.include_declaration
+                    && file.path == decl.file
+                    && decl.name_range == Some((s, e))
+                {
+                    continue;
+                }
+                locations.push(Location::new(uri.clone(), index.range(s, e)));
+            }
+        }
+        Ok(Some(locations))
     }
 }

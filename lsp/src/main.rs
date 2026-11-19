@@ -11,6 +11,7 @@ mod builtins;
 mod checks;
 mod ide;
 mod line_index;
+mod refs;
 mod syntax;
 
 use backend::Backend;
