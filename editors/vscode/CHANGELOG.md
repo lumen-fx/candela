@@ -15,6 +15,9 @@ With a `candela-lsp` from the same release:
 - Semantic highlighting: types, functions, methods, fields, enum variants,
   parameters, locals, modules and attributes color by what they are, as the
   compiler reads them, wherever the grammar could not tell from the spelling.
+- Inlay hints show the type a `let` takes from its value and the parameter
+  each argument of a call lands on. VS Code's `editor.inlayHints.enabled`
+  turns them off.
 - Completion and signature help no longer wait for a check of the whole
   program on each keystroke.
 

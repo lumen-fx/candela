@@ -1380,3 +1380,46 @@ async fn semantic_tokens_name_what_each_name_is() {
     }
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Inlay hints over the protocol: a `let`'s type after its name and a
+/// parameter's name before its argument, only inside the asked range.
+#[tokio::test]
+async fn inlay_hints_name_types_and_parameters() {
+    let text = "fn area(width: int, height: int) -> int { return width * height; }\n\nfn main() {\n    let a = area(2, 3);\n    let b = area(4, 5);\n}\n";
+    let uri = "file:///tmp/candela-lsp-hints.cdl";
+    let (mut child, mut stdin, mut stdout) = open_files(json!({}), &[(uri, text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/inlayHint",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": { "start": { "line": 3, "character": 0 }, "end": { "line": 4, "character": 0 } }
+            }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let hints: Vec<(u64, u64, String)> = found["result"]
+        .as_array()
+        .expect("hints")
+        .iter()
+        .map(|h| {
+            (
+                h["position"]["line"].as_u64().unwrap_or(99),
+                h["position"]["character"].as_u64().unwrap_or(99),
+                h["label"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        hints,
+        vec![
+            (3, 9, ": int".to_owned()),
+            (3, 17, "width:".to_owned()),
+            (3, 20, "height:".to_owned()),
+        ],
+        "{found}"
+    );
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
