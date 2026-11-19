@@ -7,15 +7,20 @@ A map holds key-value pairs. Brackets read and write an entry: `m[k]` is the
 value stored under `k` and raises `unknown_map_key` when there is none, and
 `m[k] = v` adds the entry or replaces its value. The built-in methods
 `m.len()`, `m.contains(k)`, `m.remove(k)`, `m.keys()` and `m.values()` are
-listed in [built-in functions](builtins.md), and a map iterates its keys:
+listed in [built-in functions](builtins.md). A `for` over a map gives its
+entries, a key and a value each, and `m.keys()` or `m.values()` gives one
+side:
 
 ```rust
 fn main() {
     let m = {"a": 1, "b": 2};
     m["c"] = 3;
     m["a"] += 10;
-    for k in m {
-        print(k + "=" + string(m[k]));
+    for (k, v) in m {
+        print(k + "=" + string(v));
+    }
+    for k in m.keys() {
+        print(k);
     }
 }
 ```

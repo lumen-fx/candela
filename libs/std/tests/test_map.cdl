@@ -24,10 +24,10 @@ fn main() {
     assert::eq(m.keys().len(), 3);
     assert::eq(m.values().len(), 3);
 
-    // Iteration walks the keys; the values sum to 1+2+3.
+    // Iteration gives the entries; the values sum to 1+2+3.
     let sum = 0;
-    for k in m {
-        sum += m[k];
+    for (_, v) in m {
+        sum += v;
     }
     assert::eq(sum, 6);
 

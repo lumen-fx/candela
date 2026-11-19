@@ -120,7 +120,9 @@ pattern always fits is `let_else_never_runs`. A struct or variant pattern of
 another type than the value is `pattern_type_mismatch`; a struct pattern that
 leaves out a field without ending in `..` is `pattern_field_missing`, one naming
 a field the struct does not have `pattern_field_unknown`, and one naming a field
-twice `pattern_field_twice`. A match arm whose pattern is a lone name that a
+twice `pattern_field_twice`. A `for` over a map with a lone name rather than
+a pattern is `map_iteration_takes_a_pattern`: a map gives its entries, so write
+`for (k, v) in m`, or `for k in m.keys()` for the keys alone. A match arm whose pattern is a lone name that a
 variable in scope already has, with arms after it, is `pattern_binds_name`: the
 name binds and matches everything, so compare with the variable in a guard
 instead. See [control flow](../language/control-flow.md#patterns).

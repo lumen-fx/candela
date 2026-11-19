@@ -4,7 +4,7 @@
 /// raises `unknown_map_key` when there is none; `m[k] = v` adds the entry or
 /// replaces its value. The built-in methods `m.len()`, `m.contains(k)`,
 /// `m.remove(k)`, `m.keys()` and `m.values()` cover the rest, and a map
-/// iterates its keys (`for k in m { ... }`). This module adds the methods
+/// gives its entries to a `for` (`for (k, v) in m { ... }`). This module adds the methods
 /// below in an `impl map` block. It is part of the prelude, so they need no
 /// import.
 ///

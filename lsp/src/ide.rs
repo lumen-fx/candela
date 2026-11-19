@@ -1968,7 +1968,7 @@ fn run(board: Board, shape: Shape) {
     let second = both.1;
     let held = Holder<int> { value: 1 };
     let inner = held.value;
-    for key in table {
+    for key in table.keys() {
         print(key);
     }
     print(shape.area() + float(size) + float(i) + all[0]);

@@ -7510,7 +7510,7 @@ pub fn a_declared_map_parameter_pins_an_empty_literal() {
         enum Value { Num(int), Text(string) }
         fn total(m: {string: Value}) -> int {
             let sum = 0;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7536,7 +7536,7 @@ pub fn a_declared_map_parameter_pins_an_empty_literal_key() {
         enum Key { Num(int), Text(string) }
         fn total(m: {Key: int}) -> int {
             let sum = 7;
-            for k in m {
+            for k in m.keys() {
                 match k {
                     Key::Num(n) => { sum = sum + n; }
                     Key::Text(t) => { sum = sum + t.len(); }
@@ -7561,7 +7561,7 @@ pub fn a_declared_map_parameter_pins_a_nested_empty_literal() {
         enum Value { Num(int), Text(string) }
         fn total(m: {string: Value}) -> int {
             let sum = 0;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7600,7 +7600,7 @@ pub fn a_declared_map_return_pins_an_empty_literal() {
         }
         fn total(m) {
             let sum = 5;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7934,7 +7934,7 @@ pub fn a_struct_field_declares_what_an_empty_literal_holds() {
         struct Holder { rows: {string: Value}, names: Value[] }
         fn total(h: Holder) -> int {
             let sum = 3;
-            for k in h.rows {
+            for k in h.rows.keys() {
                 match h.rows[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -8953,7 +8953,7 @@ pub fn map_iteration_over_keys() {
             m[1] = 10;
             m[2] = 20;
             let s = 0;
-            for k in m {
+            for k in m.keys() {
                 s += m[k];
             }
             print(s);
@@ -13441,7 +13441,7 @@ pub fn iterating_a_map_walks_the_keys_in_insertion_order() {
             m[\"c\"] = 3;
             m[\"b\"] = 2;
             m[\"a\"] = 1;
-            for k in m { print(k); }
+            for k in m.keys() { print(k); }
         }
         ",
     );
@@ -17883,4 +17883,45 @@ fn main() {
     let d = compile_diag(src, "range.cdl").unwrap_err();
     assert_eq!(&src[d.span.clone()], "range", "{d:?}");
     assert!(d.message.contains("0..n"), "{d:?}");
+}
+
+/// A map gives a `for` its entries: `(k, v)` binds the key and the value, any
+/// other pattern takes the entry as a tuple, `_` walks it once per entry, and
+/// `m.keys()` and `m.values()` give one side. A lone name is an error that
+/// names those.
+#[test]
+pub fn map_iteration_gives_entries() {
+    let src = "
+fn main() {
+    let m = {\"a\": 1, \"b\": 2};
+    m[\"c\"] = 3;
+    let total = 0;
+    for (k, v) in m {
+        print(k, v);
+        total += v;
+    }
+    for e in [1] {
+        print(e);
+    }
+    for (_, v) in m {
+        total += v;
+    }
+    let pairs = {\"p\": (1, 2)};
+    for (name, (x, y)) in pairs {
+        print(name, x + y);
+    }
+    let n = 0;
+    for _ in m {
+        n += 1;
+    }
+    print(total, n, m.keys(), m.values());
+}
+";
+    assert_eq!(
+        run_output(src),
+        "a\n1\nb\n2\nc\n3\n1\np\n3\n12\n3\n[\"a\",\"b\",\"c\"]\n[1,2,3]\n"
+    );
+    let src = "fn main() { let m = {1: 2}; for k in m { print(k); } }";
+    let d = compile_diag(src, "map.cdl").unwrap_err();
+    assert_eq!(d.code, "map_iteration_takes_a_pattern", "{d:?}");
 }

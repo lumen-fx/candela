@@ -316,7 +316,7 @@ in the [map module](map.md).
 | `m.values()` | list | The values |
 
 A map keeps its entries in the order they went in, so `keys`, `values`,
-`for k in m`, printing, and json all walk it first-inserted first. Three rules
+`for (k, v) in m`, printing, and json all walk it first-inserted first. Three rules
 settle every case:
 
 - Writing a key the map does not hold puts it at the end.

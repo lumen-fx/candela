@@ -107,8 +107,10 @@ fn main() {
 }
 ```
 
-Iterating a list binds each element in turn; iterating a map binds each key.
-Iterating a string binds each character as a one-character string.
+Iterating a list binds each element in turn, and iterating a string each
+character as a one-character string. Iterating a map gives its entries, so it
+takes a pattern of a key and a value, `for (k, v) in m`; `m.keys()` and
+`m.values()` give one side.
 
 ```rust
 fn main() {
@@ -117,8 +119,11 @@ fn main() {
     }
 
     let counts = {"x": 1, "y": 2};
-    for key in counts {
-        print(key, counts[key]);
+    for (key, count) in counts {
+        print(key, count);
+    }
+    for key in counts.keys() {
+        print(key);
     }
 }
 ```

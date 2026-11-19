@@ -202,8 +202,8 @@ enum Cell { Num(int), Text(string) }
 
 fn width(cells: {string: Cell}) -> int {
     let w = 0;
-    for name in cells {
-        w = w + match cells[name] {
+    for (_, cell) in cells {
+        w = w + match cell {
             Cell::Num(_) => 1,
             Cell::Text(t) => t.len(),
         };
@@ -244,8 +244,10 @@ map does not hold leaves it as it was.
 
 ### Iterating
 
-Iterating a map walks its keys in the order they went in, and a literal's keys
-go in as written. `keys`, `values`, and printing read the same order. Writing
+A `for` over a map gives its entries in the order they went in, a key and a
+value each, taken apart with a pattern: `for (k, v) in m`. A literal's keys go
+in as written. A lone name is an error, since an entry is two values; write
+`m.keys()` or `m.values()` to walk one side. `keys`, `values`, and printing read the same order. Writing
 a key that is already there replaces the value and leaves the entry where it
 is; removing a key and writing it again puts it at the end. Two maps holding
 the same entries are equal whatever order they were built in.
@@ -254,8 +256,9 @@ the same entries are equal whatever order they were built in.
 fn main() {
     let scores = {"a": 1, "b": 2};
     let total = 0;
-    for key in scores {
-        total += scores[key];
+    for (name, points) in scores {
+        print(name, points);
+        total += points;
     }
     print(total);
 }

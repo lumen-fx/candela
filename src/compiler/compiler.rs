@@ -4144,12 +4144,17 @@ fn compile_for_loop(
         range_loop(var_name, array, code, span).compile(v, ctx, state, output, None, false, false);
         return;
     }
+    if matches!(array_type, DataType::Map(_)) && var_name != "_" {
+        map_loop(var_name, array, code, span, ctx, state)
+            .compile(v, ctx, state, output, None, false, false);
+        return;
+    }
     let mut array = array
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
 
-    // Iterating a map walks its keys: materialize the key array and iterate that
-    // with the ordinary array machinery. The loop variable binds each key.
+    // `for _ in m` runs once per entry and binds nothing: walk the keys with
+    // the ordinary array machinery.
     if matches!(array_type, DataType::Map(_)) {
         let keys_reg = state.alloc_reg();
         output.push(Instr::CallLibFunc(LibFunc::Keys, array, keys_reg));
@@ -4234,6 +4239,93 @@ pub(crate) fn range_loop(var_name: &SmolStr, range: &Expr, code: &[Expr], span: 
         Expr::WhileBlock(
             Box::new(Expr::BoolOr(op(up), op(down), span, span)),
             Box::from(body),
+            span,
+        ),
+    ]))
+}
+
+/// The loop a `for` runs over a map: its entries, the keys and the values
+/// walked side by side. The binding is a pattern, which the body opens by
+/// taking the element apart (the parser's `parse_for_pattern`); one of two places,
+/// `(k, v)`, binds the key and the value straight from the two lists, with no
+/// entry built, and any other pattern takes the entry as a tuple.
+///
+/// A lone name over a map is an error that names the pattern to write, or
+/// `m.keys()` for the keys alone.
+pub(crate) fn map_loop(
+    element: &SmolStr,
+    map: &Expr,
+    code: &[Expr],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Expr {
+    let Some((Expr::LetPattern(pattern_let), rest)) = code
+        .split_first()
+        .filter(|(first, _)| matches!(first, Expr::LetPattern(p) if matches!(&p.value, Expr::Var(n, _) if n == element)))
+    else {
+        compiler_errors::error_type_test(
+            "Map walked by a name",
+            &format!("A map gives its entries, a key and a value, so {element} cannot hold one"),
+            Some("Write for (k, v) in m, or for k in m.keys() for the keys alone"),
+            "map_iteration_takes_a_pattern",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let tag = format!("{} {}]", span.start, span.end);
+    let name = |what: &str| SmolStr::from(format!("[map {what} {tag}"));
+    let (m, keys, values, i) = (name("value"), name("keys"), name("values"), name("at"));
+    let var = |n: &SmolStr| Expr::Var(n.clone(), span);
+    let method = |on: &SmolStr, method: &'static str| {
+        Expr::ObjFunctionCall(
+            Box::new(var(on)),
+            Box::from([]),
+            Box::from([SmolStr::new_static(method)]),
+            span,
+            span,
+            Box::from([]),
+            Box::from([]),
+        )
+    };
+    let at = |list: &SmolStr| Expr::ArrayGetIndex(Box::new(var(list)), Box::new(var(&i)), span);
+    let bind = |pattern: &patterns::Pattern, value: Expr, out: &mut Vec<Expr>| match pattern {
+        patterns::Pattern::Wildcard(_) => {}
+        patterns::Pattern::Bind(n, _) => {
+            out.push(Expr::VarDeclare(n.clone(), Box::new(value), None));
+        }
+        other => out.push(Expr::LetPattern(Box::new(PatternLet {
+            pattern: other.clone(),
+            value,
+            annotation: None,
+            otherwise: None,
+            span: other.span(),
+        }))),
+    };
+    let mut body = Vec::with_capacity(rest.len() + 2);
+    match &pattern_let.pattern {
+        patterns::Pattern::Tuple(items, _) if items.len() == 2 => {
+            bind(&items[0], at(&keys), &mut body);
+            bind(&items[1], at(&values), &mut body);
+        }
+        other => bind(
+            other,
+            expr::tuple_literal(vec![(at(&keys), span), (at(&values), span)], span),
+            &mut body,
+        ),
+    }
+    body.extend_from_slice(rest);
+    Expr::EvalBlock(Box::from([
+        Expr::VarDeclare(m.clone(), Box::new(map.clone()), None),
+        Expr::VarDeclare(keys.clone(), Box::new(method(&m, "keys")), None),
+        Expr::VarDeclare(values, Box::new(method(&m, "values")), None),
+        Expr::IntForLoop(
+            i,
+            Box::new(Expr::Int(0)),
+            Box::new(method(&keys, "len")),
+            Box::from(body),
+            span,
             span,
         ),
     ]))

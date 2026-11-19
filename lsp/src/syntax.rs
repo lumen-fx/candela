@@ -318,7 +318,8 @@ impl Ty {
     pub fn element(&self) -> Self {
         match self {
             Self::List(t) => (**t).clone(),
-            Self::Map(k, _) => (**k).clone(),
+            // A map gives its entries, key and value.
+            Self::Map(k, v) => Self::Tuple(vec![(**k).clone(), (**v).clone()]),
             Self::Named(n) if n == "string" => self.clone(),
             Self::Named(n) if n == "Range" => Self::Named("int".to_owned()),
             _ => Self::Unknown,
@@ -1013,7 +1014,11 @@ mod tests {
         assert_eq!(Ty::parse("Cell<int"), named("Cell<int>"));
         assert_eq!(Ty::parse("!"), Ty::Unknown);
         assert_eq!(Ty::Unknown.render(), "any");
-        assert_eq!(Ty::parse("{string: int}").element(), named("string"));
+        assert_eq!(
+            Ty::parse("{string: int}").element(),
+            Ty::Tuple(vec![named("string"), named("int")])
+        );
+        assert_eq!(Ty::parse("Range").element(), named("int"));
         assert_eq!(named("string").element(), named("string"));
         assert_eq!(named("int").element(), Ty::Unknown);
     }

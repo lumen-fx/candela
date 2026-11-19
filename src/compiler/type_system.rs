@@ -3625,11 +3625,25 @@ fn track_return_flow(
                     extend_return_types!(&mut return_types, flow.types, ctx, state);
                     continue;
                 }
+                if matches!(inferred_collection_type, DataType::Map(_)) && var_name != "_" {
+                    let desugared = crate::compiler::map_loop(
+                        var_name, array_expr, array_code, *span, ctx, state,
+                    );
+                    let flow = track_scoped_returns(
+                        std::slice::from_ref(&desugared),
+                        v,
+                        ctx,
+                        state,
+                        fn_name,
+                    );
+                    extend_return_types!(&mut return_types, flow.types, ctx, state);
+                    continue;
+                }
                 let elem_type = match inferred_collection_type {
                     DataType::Array(inner) => inner.map_or(DataType::Unknown, |t| *t),
                     DataType::String => DataType::String,
                     DataType::Unknown => DataType::Unknown,
-                    // A map iterates its keys.
+                    // `for _ in m` runs once per entry.
                     DataType::Map(m) => m.0.unwrap_or(DataType::Unknown),
                     // A function whose return type is inferred has its body
                     // walked before the loop is compiled, so a loop over a
