@@ -1223,3 +1223,36 @@ async fn rename_edits_the_whole_package() {
     let _ = std::fs::remove_dir_all(&dir);
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Document highlight marks a local's uses in its own function, the
+/// declaration and an assignment as writes, and leaves the other function's
+/// local of the same name alone.
+#[tokio::test]
+async fn document_highlight_marks_reads_and_writes() {
+    let text = "fn a() -> int {\n    let n = 1;\n    n += 1;\n    return n;\n}\n\nfn b() -> int {\n    let n = 2;\n    return n;\n}\n";
+    let uri = "file:///tmp/candela-lsp-highlight.cdl";
+    let (mut child, mut stdin, mut stdout) = open_files(json!({}), &[(uri, text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/documentHighlight",
+            "params": { "textDocument": { "uri": uri }, "position": { "line": 3, "character": 11 } }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let marks: Vec<(u64, u64)> = found["result"]
+        .as_array()
+        .expect("highlights")
+        .iter()
+        .map(|h| {
+            (
+                h["range"]["start"]["line"].as_u64().unwrap_or(99),
+                h["kind"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    // Read is 2, write is 3.
+    assert_eq!(marks, vec![(1, 3), (2, 3), (3, 2)], "{found}");
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

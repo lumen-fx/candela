@@ -1103,6 +1103,7 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -1404,6 +1405,37 @@ impl LanguageServer for Backend {
             }
         }
         Ok(Some(locations))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> RpcResult<Option<Vec<DocumentHighlight>>> {
+        let p = params.text_document_position_params;
+        let uri = &p.text_document.uri;
+        let Some((decl, _, text, summary)) = self.inner.declaration_at(uri, p.position) else {
+            return Ok(None);
+        };
+        let Some(path) = self.inner.doc_path(uri) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&text);
+        let highlights = refs::occurrences(&text, &summary, &path, &decl)
+            .into_iter()
+            .map(|(s, e)| {
+                let written = decl.name_range == Some((s, e)) && decl.file == path
+                    || refs::assigned_at(&text, e);
+                DocumentHighlight {
+                    range: index.range(s, e),
+                    kind: Some(if written {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    }),
+                }
+            })
+            .collect();
+        Ok(Some(highlights))
     }
 
     async fn prepare_rename(

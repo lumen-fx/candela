@@ -165,6 +165,10 @@ the current text, so `bird.` completes while the line around it is unfinished.
   local's references stay in its own file. A local spelled like a function
   is told apart from it, as go-to-definition tells them apart.
 
+- **Document highlight.** The references in the current buffer to what the
+  cursor is on; the declaration and an assignment (`x = 1`, `x += 1`) are
+  marked as writes, the rest as reads.
+
 - **Rename.** Renames a declaration and every reference to it, in each file
   of the package, open or not. It is turned down, with the reason, for a
   builtin, an item of the standard library or one declared outside the
@@ -230,6 +234,8 @@ These are deliberate, and the source refers here for them.
   once for the program holding the saved file, not again for the watcher's
   report of it. On a package of three files, one of them never opened, find
   references reaches all three and rename edits each, past a local of the
-  same name, and turns down a builtin and a name that is not one.
+  same name, and turns down a builtin and a name that is not one. Document
+  highlight marks a local's declaration, assignment and read, and not a local
+  of the same name in another function.
 
 Run both with `cargo test -p candela-lsp`.

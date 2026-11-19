@@ -6,7 +6,8 @@
   lists every use of a function, type, field, method, variant or local, across
   the files of its package, including files that are not open. Rename Symbol
   (F2) renames it everywhere those references are, and says why when it
-  cannot. Completion and signature help no longer wait for a check of the
+  cannot. Placing the cursor on a name highlights its other uses in the file.
+  Completion and signature help no longer wait for a check of the
   whole program on each keystroke.
 
 ## 0.6.0

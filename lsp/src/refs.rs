@@ -177,6 +177,17 @@ pub fn occurrences(
     found
 }
 
+/// Whether the name ending at `end` is assigned to: `x = 1`, `x += 1`.
+#[must_use]
+pub fn assigned_at(text: &str, end: usize) -> bool {
+    let rest = text[end.min(text.len())..].trim_start();
+    ["=", "+=", "-=", "*=", "/=", "%="]
+        .iter()
+        .any(|op| rest.starts_with(op))
+        && !rest.starts_with("==")
+        && !rest.starts_with("=>")
+}
+
 /// Whether `name` is something a declaration can be renamed to.
 #[must_use]
 pub fn valid_name(name: &str) -> bool {
@@ -325,5 +336,15 @@ fn main() {
         assert!(!bound_by_pattern(SRC, "total"));
         assert!(bound_by_pattern("try { f(); } catch e { print(e); }", "e"));
         assert!(!bound_by_pattern("let f = fn(x) => x + 1;", "x"));
+    }
+
+    #[test]
+    fn assignments_are_writes() {
+        let text = "x = 1; x += 2; x == 3; f(x); y => x";
+        let ends: Vec<bool> = text
+            .match_indices('x')
+            .map(|(i, _)| assigned_at(text, i + 1))
+            .collect();
+        assert_eq!(ends, vec![true, true, false, false, false]);
     }
 }
