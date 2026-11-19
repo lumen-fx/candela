@@ -61,7 +61,9 @@ Every feature re-analyses the buffer by calling candela's compiler (parse,
 type-check, and codegen, without running `main`, so editing has no script side
 effects) and reads the symbol tables it returns; a request on a buffer that
 has not changed, nor any file it imports, since its last check reuses that
-check's tables. A per-document cache keeps the
+check's tables. Completion and signature help always answer from the last
+check, so a keystroke never waits for a compile; the check that follows the
+change brings in what was just declared. A per-document cache keeps the
 last successful compile's tables, so the features below keep working while a
 buffer is mid-edit and not yet compiling. What the cursor is on is read from
 the current text, so `bird.` completes while the line around it is unfinished.
