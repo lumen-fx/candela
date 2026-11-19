@@ -389,6 +389,26 @@ fn main() {
 }
 ```
 
+A field written alone takes the variable of the same name, so
+`Point { x, y }` is `Point { x: x, y: y }`. The two forms mix in one literal:
+
+```rust
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn new(x: int, y: int) -> Point => Point { x, y };
+}
+
+fn main() {
+    let y = 7;
+    let p = Point { x: 1, y };
+    print(p.y, Point::new(2, 3).x);
+}
+```
+
 A field can hold any type, including a list, a map, or a union.
 
 ```rust

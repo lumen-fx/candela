@@ -16362,6 +16362,29 @@ fn main() { print(P { x: 2 }.make().x); }
     assert_eq!(d.code, "method_without_receiver");
 }
 
+/// A field written alone in a struct literal takes the variable of its name,
+/// alongside fields written with a value and a closing `..`.
+#[test]
+pub fn struct_literal_field_shorthand() {
+    let src = "
+struct P { x: int, y: int, z: int = 9 }
+struct Cell<T> { v: T }
+fn make(x: int, y: int) -> P => P { x, y, .. };
+fn main() {
+    let y = 5;
+    let p = make(1, 2);
+    let q = P { x: 3, y, z: 4 };
+    let v = \"hi\";
+    print(p.x, p.y, p.z, q.x, q.y, q.z, Cell<string> { v }.v);
+}
+";
+    assert_eq!(run_output(src), "1\n2\n9\n3\n5\n4\nhi\n");
+    let src = "struct P { x: int }\nfn main() { let p = P { x }; }";
+    let d = compile_diag(src, "short.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(&src[d.span.clone()], "x", "{d:?}");
+}
+
 /// An `impl` function is a method only when its first parameter is `self`;
 /// any other `impl` function, with or without parameters, is called by its
 /// path. That is what lets a type have a constructor that takes arguments.

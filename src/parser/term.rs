@@ -108,18 +108,29 @@ fn parse_struct(
                 ),
             )
         };
-        parser.next_token_expect(
-            Token::Colon,
-            "A colon must separate a field from its value.",
-        );
-        let field_start: u32 = parser.peek_token_span().start;
-        let field_value = parse_expr(parser);
-        fields.push((
-            field_name,
-            field_value,
-            field_name_span,
-            (field_start, parser.peek_token_span().start).into(),
-        ));
+        // `Vec2 { x, y }`: a field written alone takes the variable of its
+        // name, the way `x: x` would.
+        if matches!(parser.peek_token(), Token::Comma | Token::RBrace) {
+            fields.push((
+                field_name.clone(),
+                Expr::Var(field_name, field_name_span),
+                field_name_span,
+                field_name_span,
+            ));
+        } else {
+            parser.next_token_expect(
+                Token::Colon,
+                "A colon separates a field from its value; a field written alone takes the variable of its name.",
+            );
+            let field_start: u32 = parser.peek_token_span().start;
+            let field_value = parse_expr(parser);
+            fields.push((
+                field_name,
+                field_value,
+                field_name_span,
+                (field_start, parser.peek_token_span().start).into(),
+            ));
+        }
         let (next_token, span) = parser.next_token();
         if next_token == Token::RBrace {
             end = span.end;
