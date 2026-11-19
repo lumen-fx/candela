@@ -212,6 +212,9 @@ enum ParserErr<'a> {
     /// A `host` or `dylib` entry written the removed C way, `int f(int);`.
     /// Carries the entry rewritten the new way, when it could be read.
     OldHostSignature(String),
+    /// A block used as a value whose last statement is not an expression
+    /// without a `;`, nor a `return`, `throw`, `break` or `continue`.
+    ValueBlockWithoutValue,
 }
 
 impl ParserErr<'_> {
@@ -231,6 +234,7 @@ impl ParserErr<'_> {
             }
             ParserErr::ArrayElementsMissingComma => "array_elements_missing_comma",
             ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
+            ParserErr::ValueBlockWithoutValue => "value_block_without_value",
             ParserErr::DivisionByZero => "division_by_zero",
             ParserErr::ModuloByZero => "modulo_by_zero",
             ParserErr::IntegerNegativeExponent => "integer_negative_exponent",
@@ -317,7 +321,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         )
         .to_string(),
         ParserErr::ArrayElementsMissingComma => "Array elements must be separated by a comma",
-        ParserErr::InlineConditionNoElseBlock => "Inline conditions must have an else block",
+        ParserErr::InlineConditionNoElseBlock => &format!(
+            "An {BLUE}{BOLD}if{RESET} used as a value has an {BLUE}{BOLD}else{RESET}, so it has a value whichever way it goes"
+        ),
+        ParserErr::ValueBlockWithoutValue => &format!(
+            "This block is used as a value, so it ends in an expression with no {BOLD}';'{RESET}, its value, or in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
+        ),
         ParserErr::DivisionByZero => "Division by zero",
         ParserErr::ModuloByZero => "Modulo by zero",
         ParserErr::IntegerNegativeExponent => "Integers cannot be raised to a negative exponent",
@@ -869,7 +878,45 @@ pub fn catch_kinds_and_strings(src: &str) -> (Vec<(SmolStr, Span)>, Vec<SmolStr>
     (kinds, strings)
 }
 
-fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
+/// Whether the block being read may end in an expression with no `;`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    /// It may not: every statement ends in `;` or a block.
+    No,
+    /// A block used as a value, whose last expression is its value.
+    Value,
+    /// A function body, which hands back its value with `return` instead.
+    /// An expression there with no `;` is reported as such.
+    FnBody,
+}
+
+/// How a block's last statement ends it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockEnd {
+    /// An expression with no `;`, the block's value; carries where the `;`
+    /// would go.
+    Value(u32),
+    /// `return`, `throw`, `break` or `continue`, or a statement whose every
+    /// way through ends in one: control never reaches the block's end.
+    Jump,
+    /// Any other statement, or none.
+    Statement,
+}
+
+impl BlockEnd {
+    /// How a statement that is not a value ends a block.
+    fn of(statement: &Expr) -> Self {
+        if statement.diverges() {
+            Self::Jump
+        } else {
+            Self::Statement
+        }
+    }
+}
+
+/// Reads one statement and how it ends the block. In a block used as a value
+/// (`tail` is [`Tail::Value`]) the last statement may be its value.
+fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEnd)> {
     let mut token = parser.peek_token_opt()?;
     // A statement a `@cfg` turns off is parsed and dropped, and the statement
     // after it stands in its place.
@@ -887,24 +934,28 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
             parser.error(span, ParserErr::AttributeWithoutItem);
         }
         if active {
-            return parse_statement(parser);
+            return parse_statement(parser, tail);
         }
         parser.inactive += 1;
-        let _ = parse_statement(parser);
+        let _ = parse_statement(parser, Tail::No);
         parser.pending_statements.clear();
         parser.inactive -= 1;
         token = parser.peek_token_opt()?;
     }
     let t_span = parser.peek_token_span();
-    match token {
-        Token::If => Some(parse_condition_block(parser, t_span.start)),
+    let statement = match token {
+        Token::If => return Some(parse_condition_block(parser, t_span.start, tail)),
+        Token::Match => return Some(parse_match(parser, tail)),
+        Token::LBrace => return Some(parse_eval_block(parser, tail)),
         Token::While => Some(parse_while_block(parser)),
         Token::For => Some(parse_for_loop(parser)),
-        Token::Match => Some(parse_match(parser)),
-        Token::LBrace => Some(parse_eval_block(parser)),
         // Only `parse_file` accepts a function declaration. Reaching one here
         // means it was written inside a block, where it would otherwise parse
         // and then be dropped without ever being registered.
+        // `fn(` opens an anonymous function, an expression.
+        Token::Function if second_token_is(parser, Token::LParen) => {
+            return Some(parse_line(parser, token, tail));
+        }
         Token::Function => {
             cold_path();
             parser.error(t_span, ParserErr::NestedFunctionDeclaration);
@@ -914,8 +965,12 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
         Token::Struct => Some(parse_struct_declare(parser)),
         Token::Enum => Some(parse_enum_declare(parser)),
         Token::RBrace => None,
-        t => Some(parse_line(parser, t)),
-    }
+        t => return Some(parse_line(parser, t, tail)),
+    };
+    statement.map(|statement| {
+        let end = BlockEnd::of(&statement);
+        (statement, end)
+    })
 }
 
 fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
@@ -1193,7 +1248,12 @@ fn parse_jump(input: &mut Parser<'_>, peek: Token<'_>) -> Option<Expr> {
     Some(jump)
 }
 
-fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
+/// Reads a statement that is not a block: a `let`, an assignment, a jump or
+/// an expression, with its `;`. As the last statement of a block used as a
+/// value (`tail`), an expression or a jump may leave the `;` off.
+fn parse_line(input: &mut Parser<'_>, peek: Token<'_>, tail: Tail) -> (Expr, BlockEnd) {
+    let start = input.peek_token_span().start;
+    let mut is_value = false;
     let line_code = if peek == Token::Let {
         parse_var_declare(input)
     } else if let Some(jump) = parse_jump(input, peek) {
@@ -1217,15 +1277,40 @@ fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
                 | Token::AssignOpShl
                 | Token::AssignOpShr),
             ) => parse_op_var_assign(input, e, e_start, op),
-            _ => e,
+            _ => {
+                is_value = true;
+                e
+            }
         }
     };
-    if input.peek_token_opt() != Some(Token::SemiColon) {
-        error_missing_semicolon(input);
+    let end = BlockEnd::of(&line_code);
+    match input.peek_token_opt() {
+        Some(Token::SemiColon) => {
+            input.next_token();
+            (line_code, end)
+        }
+        Some(Token::RBrace) if tail == Tail::Value && (is_value || end == BlockEnd::Jump) => {
+            let at = input.last_token_end as u32;
+            let end = if end == BlockEnd::Jump {
+                end
+            } else {
+                BlockEnd::Value(at)
+            };
+            (line_code, end)
+        }
+        // A function body does not end in its value the way a block used as
+        // a value does, so the help names the `return` that hands one back.
+        Some(Token::RBrace) if tail == Tail::FnBody && is_value => {
+            cold_path();
+            let text = &input.ctx.src.contents[start as usize..input.last_token_end];
+            let help = format!(
+                "All statements end with a ';'. To hand the value back, write {}",
+                blue(format_args!("return {text};"))
+            );
+            error_missing_semicolon_at(input, input.last_token_end as u32, Some(&help));
+        }
+        _ => error_missing_semicolon(input),
     }
-    input.next_token();
-    // input.next_token_expect(Token::SemiColon, "Lines must end with a ';'.");
-    line_code
 }
 
 #[cold]
@@ -1296,26 +1381,28 @@ fn error_unclosed_delimiter(
 #[cold]
 #[inline(never)]
 fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
-    let span: Span = (parser.last_token_end as u32, parser.last_token_end as u32).into();
+    error_missing_semicolon_at(parser, parser.last_token_end as u32, None)
+}
+
+/// Reports a statement that ends at `at` with no `;` after it.
+#[cold]
+#[inline(never)]
+fn error_missing_semicolon_at(parser: &Parser<'_>, at: u32, help: Option<&str>) -> ! {
+    let span: Span = (at, at).into();
+    let at = at as usize;
     parser.throw_parser_err(
         || {
             build_report(
                 ariadne::ReportKind::Error,
-                (
-                    parser.ctx.src.filename.as_str(),
-                    (parser.last_token_end..parser.last_token_end),
-                ),
+                (parser.ctx.src.filename.as_str(), (at..at)),
             )
             .with_message("Missing semicolon")
             .with_label(
-                Label::new((
-                    parser.ctx.src.filename.as_str(),
-                    (parser.last_token_end..parser.last_token_end),
-                ))
-                .with_message(format_args!("Add a {} here", blue(';')))
-                .with_color(ariadne::Color::Blue),
+                Label::new((parser.ctx.src.filename.as_str(), (at..at)))
+                    .with_message(format_args!("Add a {} here", blue(';')))
+                    .with_color(ariadne::Color::Blue),
             )
-            .with_help("All statements end with a ';'")
+            .with_help(help.unwrap_or("All statements end with a ';'"))
             .finish()
         },
         span,
@@ -1324,13 +1411,22 @@ fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
     )
 }
 
-fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {
+/// Reads the statements of a block up to its `}`, and how the last one ends
+/// it.
+fn parse_code(input: &mut Parser<'_>, tail: Tail) -> (Vec<Expr>, BlockEnd) {
     let mut output: Vec<Expr> = Vec::with_capacity(4);
-    while let Some(e) = parse_statement(input) {
+    let mut end = BlockEnd::Statement;
+    while let Some((e, e_end)) = parse_statement(input, tail) {
+        // Only the last statement can leave the `;` off.
+        if let BlockEnd::Value(at) = end {
+            cold_path();
+            error_missing_semicolon_at(input, at, None);
+        }
+        end = e_end;
         output.push(e);
         output.append(&mut input.pending_statements);
     }
-    output
+    (output, end)
 }
 
 fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
@@ -1858,6 +1954,74 @@ fn type_args_ahead(parser: &Parser<'_>, follow: TypeArgFollow) -> bool {
         Some(Token::LBrace) => follow == TypeArgFollow::Term,
         _ => false,
     }
+}
+
+/// Whether the token after the next one is `expected`.
+fn second_token_is(parser: &Parser<'_>, expected: Token<'_>) -> bool {
+    matches!(parser.input.clone().nth(1), Some((Ok(t), _)) if t == expected)
+}
+
+/// Whether the `{` just read opens a block used as a value rather than a map
+/// literal. A map's first key is followed by `:` before anything closes it;
+/// a block starts with a statement keyword, or its first statement ends in
+/// `;`, `=` or the block's own `}`. `{}` is the empty map.
+fn block_ahead(parser: &Parser<'_>) -> bool {
+    let mut input = parser.input.clone();
+    let first = match input.peek() {
+        Some((Ok(t), _)) => *t,
+        _ => return false,
+    };
+    match first {
+        Token::RBrace => return false,
+        Token::Let
+        | Token::Return
+        | Token::Throw
+        | Token::Break
+        | Token::Continue
+        | Token::If
+        | Token::While
+        | Token::For
+        | Token::Loop
+        | Token::Match
+        | Token::Try
+        | Token::Struct
+        | Token::Enum
+        | Token::LBrace
+        | Token::At => return true,
+        _ => {}
+    }
+    let mut depth = 0u32;
+    for (token, _) in input {
+        let Ok(token) = token else {
+            return false;
+        };
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket => depth = depth.saturating_sub(1),
+            Token::RBrace if depth == 0 => return true,
+            Token::RBrace => depth -= 1,
+            Token::Colon | Token::Comma if depth == 0 => return false,
+            Token::SemiColon
+            | Token::Equals
+            | Token::AssignOpAdd
+            | Token::AssignOpSub
+            | Token::AssignOpMul
+            | Token::AssignOpDiv
+            | Token::AssignOpMod
+            | Token::AssignOpPow
+            | Token::AssignOpBitAnd
+            | Token::AssignOpBitOr
+            | Token::AssignOpBitXor
+            | Token::AssignOpShl
+            | Token::AssignOpShr
+                if depth == 0 =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Parses `<Type, Type, ...>` where a type-argument list is already known to

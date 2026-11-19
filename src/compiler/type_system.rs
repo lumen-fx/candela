@@ -3101,6 +3101,9 @@ struct ReturnShapes {
 
 fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
     for content in content {
+        for block in content.nested_value_blocks() {
+            collect_return_shapes(std::slice::from_ref(block), shapes);
+        }
         match content {
             Expr::ElseIfBlock(_, code, _)
             | Expr::ElseBlock(code)
@@ -3459,6 +3462,12 @@ fn track_return_flow(
     let mut return_types: Vec<DataType> = Vec::new();
     let mut threw = false;
     for expr in content {
+        // A `return` in a value block inside this statement's expressions
+        // leaves the function from the middle of the statement.
+        for block in expr.nested_value_blocks() {
+            let flow = track_return_flow(std::slice::from_ref(block), v, ctx, state, fn_name);
+            extend_return_types!(&mut return_types, flow.types, ctx, state);
+        }
         match expr {
             Expr::Condition(condition, code, _, _)
             | Expr::InlineCondition(condition, code, _, _) => {
@@ -3732,7 +3741,18 @@ fn track_return_flow(
 /// inside a nested loop leaves that loop only, so nested loops are not
 /// searched.
 fn block_breaks(code: &[Expr]) -> bool {
-    code.iter().any(|expr| match expr {
+    code.iter().any(|expr| {
+        expr.nested_value_blocks()
+            .into_iter()
+            .any(|block| block_breaks(std::slice::from_ref(block)))
+            || statement_breaks(expr)
+    })
+}
+
+/// [`block_breaks`] for one statement, leaving out the value blocks inside
+/// its expressions.
+fn statement_breaks(expr: &Expr) -> bool {
+    match expr {
         Expr::Break => true,
         Expr::Condition(_, body, _, _)
         | Expr::InlineCondition(_, body, _, _)
@@ -3747,7 +3767,7 @@ fn block_breaks(code: &[Expr]) -> bool {
                 || wildcard.as_ref().is_some_and(|w| block_breaks(w))
         }
         _ => false,
-    })
+    }
 }
 
 /// Infers the return type of a user function specialised for
@@ -5054,7 +5074,7 @@ impl Expr {
             }
             Self::Match(scrutinee, arms, wildcard, span, true) => {
                 let scrut_type = scrutinee.infer_type(v, ctx, state);
-                let mut types: Vec<DataType> = Vec::with_capacity(arms.len() + 1);
+                let mut types: Vec<Option<DataType>> = Vec::with_capacity(arms.len() + 1);
                 for (patterns, body) in arms {
                     let v_len = v.len();
                     if let DataType::Enum(enum_id) = scrut_type {
@@ -5071,17 +5091,17 @@ impl Expr {
                             state,
                         );
                     }
-                    types.push(body[body.len() - 1].infer_type(v, ctx, state));
+                    types.push(inline_branch_type(body, v, ctx, state));
                     v.truncate(v_len);
                 }
                 if let Some(w) = wildcard {
-                    types.push(w[w.len() - 1].infer_type(v, ctx, state));
+                    types.push(inline_branch_type(w, v, ctx, state));
                 }
                 branch_value_type(types, ctx, state)
             }
             Self::InlineCondition(condition, code, _, _) => {
                 // Each branch is typed with what its condition proved.
-                let mut types: Vec<DataType> = Vec::with_capacity(code.len());
+                let mut types: Vec<Option<DataType>> = Vec::with_capacity(code.len());
                 let v_len = v.len();
                 crate::compiler::type_test::declare_condition_facts(condition, v, ctx, state);
                 let main_len = code
@@ -5225,28 +5245,39 @@ impl Expr {
                 let (file_idx, value, _) = state.generics.arg_default(*id).clone();
                 value.infer_type(&mut Vec::new(), Ctx { file_idx, ..ctx }, state)
             }
+            // A block used as a value has the type of its last expression.
+            Self::EvalBlock(code) => {
+                inline_branch_type(code, v, ctx, state).unwrap_or(DataType::Null)
+            }
             _ => unsafe { unreachable_unchecked() },
         }
     }
 }
 
-/// The type of one branch of an `if` used as a value: its last expression.
-///
-/// A branch the parser reads is that expression alone. One a `match` arm with
-/// a tuple pattern lowers to declares the names the pattern binds first, and
-/// those are in scope for the expression.
-fn inline_branch_type(
+/// The type of one branch of an `if`, a `match` or a block used as a value:
+/// its last expression, read with what the statements before it declare in
+/// scope. `None` for a branch that ends in `return`, `throw`, `break` or
+/// `continue`, which gives no value and leaves the others to type the
+/// construct.
+pub(crate) fn inline_branch_type(
     branch: &[Expr],
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
-) -> DataType {
-    let (last, declarations) = branch.split_last().unwrap();
+) -> Option<DataType> {
+    let (last, declarations) = branch.split_last()?;
+    let v_len = v.len();
     for declaration in declarations {
-        if let Expr::VarDeclare(name, value, None) = declaration {
-            let var_type = value.infer_type(v, ctx, state);
+        if let Expr::VarDeclare(name, value, annotation) = declaration {
+            let declared = annotation
+                .as_ref()
+                .map(|a| a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)));
+            let var_type = match &declared {
+                Some(declared) => declared.clone(),
+                None => value.infer_type(v, ctx, state),
+            };
             v.push(Variable {
-                declared: None,
+                declared,
                 name: name.clone(),
                 register_id: 0,
                 cell: false,
@@ -5254,7 +5285,9 @@ fn inline_branch_type(
             });
         }
     }
-    last.infer_type(v, ctx, state)
+    let value = (!last.diverges()).then(|| last.infer_type(v, ctx, state));
+    v.truncate(v_len);
+    value
 }
 
 /// The type of a construct used as a value, an `if` or a `match`, from the
@@ -5269,7 +5302,11 @@ fn inline_branch_type(
 /// a body do (see [`add_return_type`]): `if c { Some(x) } else { None }` is an
 /// `Option<int>`, not a union of it with the `Option<any>` the bare `None`
 /// names.
-fn branch_value_type(types: Vec<DataType>, ctx: Ctx, state: &mut State<'_>) -> DataType {
+fn branch_value_type(types: Vec<Option<DataType>>, ctx: Ctx, state: &mut State<'_>) -> DataType {
+    let types: Vec<DataType> = types.into_iter().flatten().collect();
+    if types.is_empty() {
+        return DataType::Null;
+    }
     if let Some(fn_value) = merge_fn_types(&types) {
         return fn_value;
     }

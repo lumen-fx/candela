@@ -487,7 +487,7 @@ module.exports = grammar({
         $.for_statement,
         $.loop_statement,
         $.try_statement,
-        $.block,
+        prec(1, $.block),
         $.struct_declaration,
         $.enum_declaration,
       ),
@@ -574,7 +574,8 @@ module.exports = grammar({
         '}',
       ),
 
-    match_arm: ($) => seq(field('pattern', $.match_pattern), '=>', field('body', $.block)),
+    match_arm: ($) =>
+      prec(1, seq(field('pattern', $.match_pattern), '=>', field('body', $.block))),
 
     _expression_match_arm: ($) =>
       seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value), ','),
@@ -658,6 +659,8 @@ module.exports = grammar({
         $.closure_expression,
         $.if_expression,
         $.match_expression,
+        // A block where a value goes is one: its last expression.
+        $.block,
         $.macro_invocation,
       ),
 
@@ -842,7 +845,8 @@ module.exports = grammar({
     array_literal: ($) => seq('[', sepByTrailing(',', $._expression), ']'),
 
     // Map literals take no trailing comma; struct literals do.
-    map_literal: ($) => seq('{', optional(sepBy1(',', $.map_entry)), '}'),
+    // `{}` is the empty map, not an empty block.
+    map_literal: ($) => prec.dynamic(1, seq('{', optional(sepBy1(',', $.map_entry)), '}')),
 
     map_entry: ($) => seq(field('key', $._expression), ':', field('value', $._expression)),
 

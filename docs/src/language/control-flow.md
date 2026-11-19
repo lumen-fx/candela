@@ -33,14 +33,36 @@ tested variable has the type it was tested for, and a variant test such as
 ### if as an expression
 
 An `if` written where a value is expected produces a value. Each branch is a
-single expression with no semicolon, and an `else` branch is required so that
-every path yields something. A [match](#match-as-an-expression) works the same
-way.
+block whose last expression, written without a semicolon, is its value; the
+statements before it run first. An `else` branch is required so that every
+path yields something. A [match](#match-as-an-expression) and a plain
+[block](#blocks-and-scope) work the same way.
 
 ```rust
 fn main() {
-    let size = if 3 > 2 { "big" } else { "small" };
+    let n = 7;
+    let size = if n > 5 {
+        let excess = n - 5;
+        excess * 2
+    } else {
+        0
+    };
     print(size);
+}
+```
+
+A branch can leave instead of giving a value: one that ends in `return`,
+`throw`, `break` or `continue` gives nothing, and the other branches decide
+the type.
+
+```rust
+fn half(n: int) -> int {
+    let even = if n % 2 == 0 { n } else { return -1; };
+    return even / 2;
+}
+
+fn main() {
+    print(half(8), half(3));
 }
 ```
 
@@ -238,9 +260,9 @@ every tuple, so written last it stands in for the `_` arm.
 A `match` written where a value is expected produces a value: the value of the
 arm that fits. Like an `if` used as a value, it has to give one on every path,
 so it needs a `_` arm unless it matches an enum and lists every variant, or
-ends in a [tuple pattern](#tuple-patterns) of names alone. A
-braced arm holds one expression, as the branches of an `if` used as a value do,
-and no arm of it can leave through `break`, `continue`, `return` or `throw`.
+ends in a [tuple pattern](#tuple-patterns) of names alone. A braced arm is a
+block whose last expression is its value, and any arm can leave through
+`break`, `continue`, `return` or `throw` instead.
 
 ```rust
 fn main() {
@@ -248,7 +270,10 @@ fn main() {
     let size = match n {
         0 => "none",
         1 | 2 => "few",
-        _ => "many",
+        _ => {
+            let label = "many";
+            label
+        }
     };
     print(size);
 }
@@ -270,6 +295,25 @@ fn main() {
     print(total);
 }
 ```
+
+A block written where a value is expected is a value too: its last
+expression, written without a semicolon. Use it to compute a value with a few
+temporaries that do not outlive it.
+
+```rust
+fn main() {
+    let area = {
+        let w = 4;
+        let h = 3;
+        w * h
+    };
+    print(area);
+}
+```
+
+An `if` or a `match` that is the last thing in such a block gives the block
+its value the same way. `{}` on its own is an empty
+[map](collections.md), not an empty block.
 
 Loop bodies, `if` branches, and `match` arms are blocks and scope the same way.
 See [Variables](variables.md) for the scoping rules.

@@ -4043,6 +4043,9 @@ fn compile_inline_condition_branch(
     let v_len = v.len();
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let (last, statements) = branch.split_last().unwrap();
+    // A branch that ends in `return`, `throw`, `break` or `continue` gives no
+    // value: control leaves before it would.
+    let statements = if last.diverges() { branch } else { statements };
     for (idx, statement) in statements.iter().enumerate() {
         if let Some(id) = statement.compile_with_code_context(
             v,
@@ -4057,7 +4060,9 @@ fn compile_inline_condition_branch(
             state.free_reg(id, v);
         }
     }
-    let val_id = if as_fn_value {
+    let val_id = if statements.len() == branch.len() {
+        tgt_id
+    } else if as_fn_value {
         compile_fn_value(last, v, ctx, state, output, Some(tgt_id))
     } else {
         last.compile(v, ctx, state, output, Some(tgt_id), false, true)
@@ -7262,8 +7267,15 @@ impl Expr {
                 compile_loop_continue(ctx, output);
                 None
             }
+            // A block used as a value: its statements, then its last
+            // expression into the result.
+            Self::EvalBlock(code) if uses_id => {
+                let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
+                let result = state.alloc_reg_tgt(tgt_id);
+                compile_inline_condition_branch(code, v, ctx, state, output, result, as_fn_value);
+                Some(result)
+            }
             Self::EvalBlock(code) => {
-                debug_assert!(!uses_id);
                 compile_eval_block(code, v, ctx, state, output);
                 None
             }

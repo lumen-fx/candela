@@ -16,10 +16,12 @@ use crate::compiler::expr::tuple_literal;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
-use crate::parser::blocks::parse_block_expr;
+use crate::parser::block_ahead;
 use crate::parser::blocks::parse_condition_expr;
 use crate::parser::blocks::parse_fn_body;
 use crate::parser::blocks::parse_match_arms;
+use crate::parser::blocks::parse_value_block;
+use crate::parser::blocks::parse_value_block_after;
 use crate::parser::expand_macro;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
@@ -422,8 +424,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         // Inline condition
         Token::If => {
             let (condition, condition_span) = parse_condition_expr(parser);
-            let mut output_code: Vec<Expr> = Vec::with_capacity(2);
-            output_code.push(parse_block_expr(parser));
+            let mut output_code: Vec<Expr> = parse_value_block(parser);
             loop {
                 let next_token = parser.peek_token_opt();
                 if next_token != Some(Token::Else) {
@@ -437,19 +438,15 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 if next_token == Some(Token::If) {
                     parser.next_token();
                     let (else_if_condition, else_if_span) = parse_condition_expr(parser);
-                    parser.next_token_expect(Token::LBrace, "Blocks must begin with a '{'.");
-                    let else_if_value = parse_expr(parser);
-                    parser.next_token_expect(Token::RBrace, "Unmatched '}'");
+                    let else_if_code = parse_value_block(parser);
                     output_code.push(Expr::ElseIfBlock(
                         Box::new(else_if_condition),
-                        Box::new([else_if_value]),
+                        Box::from(else_if_code),
                         else_if_span,
                     ));
                 } else if next_token == Some(Token::LBrace) {
-                    parser.next_token();
-                    let else_value = parse_expr(parser);
-                    parser.next_token_expect(Token::RBrace, "Unmatched '}'");
-                    output_code.push(Expr::ElseBlock(Box::new([else_value])));
+                    let else_code = parse_value_block(parser);
+                    output_code.push(Expr::ElseBlock(Box::from(else_code)));
                     break;
                 } else {
                     break;
@@ -535,6 +532,10 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                     ),
                 );
             }
+        }
+        // A block used as a value, `{ let t = 5; t * 2 }`.
+        Token::LBrace if block_ahead(parser) => {
+            Expr::EvalBlock(Box::from(parse_value_block_after(parser, t_span)))
         }
         // map
         Token::LBrace => {

@@ -1362,3 +1362,54 @@ fn main() {
                   (identifier)
                   (identifier)))
               (integer_literal))))))))
+
+================================================================================
+Blocks are values (docs/src/language/control-flow.md)
+================================================================================
+
+fn main() {
+    let area = {
+        let w = 4;
+        w * 3
+    };
+    let even = if n % 2 == 0 { let h = n; h } else { return -1; };
+    let empty = {};
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (block
+          (let_declaration
+            (identifier)
+            (integer_literal))
+          (binary_expression
+            (identifier)
+            (integer_literal))))
+      (let_declaration
+        (identifier)
+        (if_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (integer_literal))
+            (integer_literal))
+          (block
+            (let_declaration
+              (identifier)
+              (identifier))
+            (identifier))
+          (else_clause
+            (block
+              (return_statement
+                (unary_expression
+                  (integer_literal)))))))
+      (let_declaration
+        (identifier)
+        (map_literal)))))

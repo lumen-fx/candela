@@ -42,7 +42,8 @@ Raised while the file is read, before any type is known.
 | String literal | A string the file ends inside, reported at its opening quote (`unterminated_string`), or a `'`, since strings are written in double quotes (`single_quote`) |
 | Number literal | An `int` or a `float` literal whose value is past what the type holds, or an exponent marker with no digits after it, as in `1e` |
 | Unclosed delimiter | A `(`, `[` or `{` that is never closed; the report points at the opener |
-| Missing semicolon | A statement not ended with `;` |
+| Missing semicolon | A statement not ended with `;`. Only the last expression of a block used as a value leaves it off; at the end of a function body, the report names the `return` that hands the value back |
+| Block value | A block used as a value (an `if` or `match` branch, or `{ ... }` where a value goes) whose last statement is neither an expression without `;` nor `return`, `throw`, `break` or `continue` (`value_block_without_value`) |
 | Missing separator | Array elements, arguments or parameters not separated by `,` |
 | Argument order | An argument passed in order after one passed by name (`positional_after_named`) |
 | `host` or `dylib` entry | An entry written the removed C way, `int f(int);`; the report shows it rewritten as `fn f(a: int) -> int;` (`old_host_signature`) |

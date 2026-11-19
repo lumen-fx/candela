@@ -372,7 +372,7 @@ pub enum Expr {
     /// pattern per `|` alternative and runs when any of them matches.
     ///
     /// `is_value` marks a `match` written where a value goes. Each of its
-    /// bodies is one expression, the arm's value, and it covers every case.
+    /// bodies ends in the arm's value or leaves, and it covers every case.
     Match(
         Box<Self>,
         Box<[(Box<[Self]>, Box<[Self]>)]>,
@@ -643,6 +643,136 @@ impl Expr {
 }
 
 impl Expr {
+    /// Whether control never reaches the end of this statement: `return`,
+    /// `throw`, `break` and `continue`, and a block or an `if` with an `else`
+    /// whose every way through ends in one. A branch of an `if` or a `match`
+    /// used as a value may end this way instead of in a value.
+    #[must_use]
+    pub fn diverges(&self) -> bool {
+        match self {
+            Self::ReturnVal(_) | Self::Break | Self::Continue => true,
+            Self::FunctionCall(_, namespace, ..) => {
+                matches!(&**namespace, [name] if name == "throw")
+            }
+            Self::EvalBlock(body) => body.last().is_some_and(Self::diverges),
+            Self::Condition(_, code, ..) | Self::InlineCondition(_, code, ..) => {
+                let main = code
+                    .iter()
+                    .position(|x| matches!(x, Self::ElseIfBlock(..) | Self::ElseBlock(_)))
+                    .unwrap_or(code.len());
+                matches!(code.last(), Some(Self::ElseBlock(_)))
+                    && code[..main].last().is_some_and(Self::diverges)
+                    && code[main..].iter().all(|branch| match branch {
+                        Self::ElseIfBlock(_, body, _) | Self::ElseBlock(body) => {
+                            body.last().is_some_and(Self::diverges)
+                        }
+                        _ => true,
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// The `if`, `match` and block expressions used as values inside this
+    /// statement's expressions, outermost first, not looking inside anonymous
+    /// functions or the bodies of the statement itself.
+    ///
+    /// A value block's statements run where the expression holding it does,
+    /// so a walk over a body's statements (for its returns, its breaks, the
+    /// variables it writes) reads these the way it reads the statements.
+    #[must_use]
+    pub fn nested_value_blocks(&self) -> Vec<&Self> {
+        let mut out = Vec::new();
+        collect_value_blocks(self, true, &mut out);
+        out
+    }
+}
+
+/// See [`Expr::nested_value_blocks`]. `root` is the statement itself, whose
+/// own bodies the walk that asked already reads.
+fn collect_value_blocks<'a>(expr: &'a Expr, root: bool, out: &mut Vec<&'a Expr>) {
+    match expr {
+        Expr::InlineCondition(condition, ..) if root => collect_value_blocks(condition, false, out),
+        Expr::Match(scrutinee, ..) if root => collect_value_blocks(scrutinee, false, out),
+        Expr::EvalBlock(_) if root => {}
+        Expr::InlineCondition(..) | Expr::Match(_, _, _, _, true) | Expr::EvalBlock(_) => {
+            out.push(expr);
+        }
+        Expr::Match(scrutinee, ..) => collect_value_blocks(scrutinee, false, out),
+        Expr::Condition(condition, ..)
+        | Expr::ElseIfBlock(condition, ..)
+        | Expr::WhileBlock(condition, ..)
+        | Expr::ForLoop(_, condition, ..)
+        | Expr::VarDeclare(_, condition, _)
+        | Expr::VarAssign(_, condition, _, _)
+        | Expr::NamedArg(_, condition, _)
+        | Expr::Propagate(condition, _)
+        | Expr::Is(condition, ..)
+        | Expr::Cast(condition, ..)
+        | Expr::Neg(condition, ..)
+        | Expr::BitNot(condition, ..)
+        | Expr::BoolNeg(condition, ..)
+        | Expr::GetStructField(condition, ..) => collect_value_blocks(condition, false, out),
+        Expr::IntForLoop(_, start, end, ..) | Expr::ArrayGetIndex(start, end, _) => {
+            collect_value_blocks(start, false, out);
+            collect_value_blocks(end, false, out);
+        }
+        Expr::ArrayGetSlice(base, start, end, _) => {
+            collect_value_blocks(base, false, out);
+            collect_value_blocks(start, false, out);
+            if let Some(end) = end {
+                collect_value_blocks(end, false, out);
+            }
+        }
+        Expr::ArrayModify(base, index, value, _, _) => {
+            collect_value_blocks(base, false, out);
+            collect_value_blocks(index, false, out);
+            collect_value_blocks(value, false, out);
+        }
+        Expr::SetStructField(obj, _, value, ..) => {
+            collect_value_blocks(obj, false, out);
+            collect_value_blocks(value, false, out);
+        }
+        Expr::ReturnVal(value) => {
+            if let Some(value) = value.as_ref() {
+                collect_value_blocks(value, false, out);
+            }
+        }
+        Expr::FunctionCall(args, ..) | Expr::Array(args, _) => {
+            for arg in args {
+                collect_value_blocks(arg, false, out);
+            }
+        }
+        Expr::ObjFunctionCall(callee, args, ..) | Expr::CallValue(callee, args, ..) => {
+            collect_value_blocks(callee, false, out);
+            for arg in args {
+                collect_value_blocks(arg, false, out);
+            }
+        }
+        Expr::Map(pairs, _) => {
+            for (key, _, value, _) in pairs {
+                collect_value_blocks(key, false, out);
+                collect_value_blocks(value, false, out);
+            }
+        }
+        Expr::Struct(_, fields, _, _, base) => {
+            for (_, value, _, _) in fields {
+                collect_value_blocks(value, false, out);
+            }
+            if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
+                collect_value_blocks(base, false, out);
+            }
+        }
+        _ if expr.binary_operands().is_some() => {
+            for operand in expr.chain_operands() {
+                collect_value_blocks(operand, false, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Expr {
     /// The two operands of a binary operator, `None` for any other form.
     ///
     /// A chain of left-associative operators, `a + b + c + ...`, nests down
@@ -903,7 +1033,18 @@ pub fn self_operator_method(expr: &Expr) -> Option<&'static str> {
 
 #[must_use]
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
-    code.iter().any(|expr| match expr {
+    code.iter().any(|expr| {
+        expr.nested_value_blocks()
+            .into_iter()
+            .any(|block| code_modifies_variable(var_name, std::slice::from_ref(block)))
+            || statement_modifies_variable(var_name, expr)
+    })
+}
+
+/// [`code_modifies_variable`] for one statement, leaving out the value
+/// blocks inside its expressions.
+fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
+    match expr {
         Expr::VarAssign(n, _, _, _) => n == var_name,
         Expr::Condition(_, body, _, _)
         | Expr::WhileBlock(_, body, _)
@@ -928,7 +1069,7 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
                     .is_some_and(|body| code_modifies_variable(var_name, body))
         }
         _ => false,
-    })
+    }
 }
 
 #[must_use]

@@ -16,6 +16,10 @@
           "named": true
         },
         {
+          "type": "block",
+          "named": true
+        },
+        {
           "type": "boolean_literal",
           "named": true
         },
@@ -132,6 +136,10 @@
         },
         {
           "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
           "named": true
         },
         {
@@ -291,6 +299,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -455,6 +467,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -958,6 +974,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -1147,6 +1167,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -1545,6 +1569,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -1767,6 +1795,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -1935,6 +1967,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -2095,6 +2131,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -2310,6 +2350,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -2426,6 +2470,10 @@
           "named": true
         },
         {
+          "type": "block",
+          "named": true
+        },
+        {
           "type": "boolean_literal",
           "named": true
         },
@@ -2538,6 +2586,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -2738,6 +2790,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -2861,6 +2917,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -3020,6 +3080,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -3402,6 +3466,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -3668,6 +3736,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -3775,6 +3847,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -3950,6 +4026,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -4108,6 +4188,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -4215,6 +4299,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -4459,6 +4547,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -4616,6 +4708,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -4729,6 +4825,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -4872,6 +4972,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -5005,6 +5109,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -5198,6 +5306,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -5378,6 +5490,10 @@
         },
         {
           "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
           "named": true
         },
         {
@@ -5590,6 +5706,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -5776,6 +5896,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -5883,6 +6007,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -5999,6 +6127,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -6188,6 +6320,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -6298,6 +6434,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -6405,6 +6545,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -6584,6 +6728,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -6779,6 +6927,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -6918,6 +7070,10 @@
         },
         {
           "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
           "named": true
         },
         {
@@ -7210,6 +7366,10 @@
             "named": true
           },
           {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "boolean_literal",
             "named": true
           },
@@ -7323,6 +7483,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {
@@ -7613,6 +7777,10 @@
           },
           {
             "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
             "named": true
           },
           {

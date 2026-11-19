@@ -165,6 +165,11 @@ fn main() {
 }
 ```
 
+A function body hands its value back with `return`, or is declared with
+`=> expr;` when the body is one expression. Unlike a block used as a value, a
+function body does not end in an expression without a semicolon; the missing
+semicolon error there names the `return` to write.
+
 The return type is inferred from the body. `-> Type` after the parameter list
 declares it instead, and a body that hands back anything else is a compile
 error. Since each set of argument types is specialised separately, a declared

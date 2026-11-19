@@ -17601,3 +17601,95 @@ pub fn explicit_conversions_still_work() {
         "2\n-2\n3.0\n7\n0.5\n"
     );
 }
+
+/// Every block is a value: an `if` or `match` branch holds statements and ends
+/// in its value, a `{ ... }` where a value goes is one, and a branch may leave
+/// through `return`, `break`, `continue` or `throw` instead of giving one.
+#[test]
+pub fn blocks_are_values() {
+    let src = "
+fn classify(n: int) -> string {
+    let label = if n < 0 {
+        let neg = \"negative\";
+        neg
+    } else if n == 0 {
+        \"zero\"
+    } else {
+        let big = n > 100;
+        if big { \"big\" } else { \"small\" }
+    };
+    return label;
+}
+fn first_half(xs: int[]) -> int {
+    for x in xs {
+        let half = match x % 2 {
+            0 => x / 2,
+            _ => continue,
+        };
+        return half;
+    }
+    return -1;
+}
+fn parse_or(s: string) -> int {
+    let n = match s {
+        \"one\" => 1,
+        \"two\" => { let t = 2; t }
+        _ => { return 0; }
+    };
+    return n * 10;
+}
+fn main() {
+    print(classify(-3), classify(0), classify(500), classify(5));
+    let total = {
+        let a = 5;
+        let b = 6;
+        a * b
+    };
+    print(total, first_half([3, 5, 8]), parse_or(\"two\"), parse_or(\"x\"));
+    let tail = {
+        let q = 3;
+        match q {
+            3 => \"three\",
+            _ => \"other\",
+        }
+    };
+    let empty = {};
+    let w = { if total > 1 { 1 } else { 2 } };
+    print(tail, empty, w);
+    let x = 1;
+    let y = { x = 2; x + 1 };
+    print(x, y);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "negative\nzero\nbig\nsmall\n30\n4\n20\n0\nthree\n{}\n1\n2\n3\n"
+    );
+    let cases = [
+        (
+            "fn f() {\n    5 + 1\n}\nfn main() { print(f()); }",
+            "missing_semicolon",
+            "",
+        ),
+        (
+            "fn main() {\n    let x = { let a = 1; };\n}",
+            "value_block_without_value",
+            "{ let a = 1; }",
+        ),
+        (
+            "fn main() {\n    let x = if true { 1 };\n}",
+            "inline_condition_no_else_block",
+            "if true { 1 }",
+        ),
+        (
+            "fn main() {\n    let x = { if true { 1 } else { 2 } print(3); 4 };\n}",
+            "missing_semicolon",
+            "",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "blocks.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
+}

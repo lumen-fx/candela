@@ -19,7 +19,9 @@ use crate::compiler::expr::mangle_method;
 use crate::compiler::expr::tuple_let_temp;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::ReturnAnnotation;
+use crate::parser::BlockEnd;
 use crate::parser::Parser;
+use crate::parser::Tail;
 use crate::parser::TypeExpr;
 use crate::parser::declare_let_pattern;
 use crate::parser::parse_attributes;
@@ -41,11 +43,23 @@ pub fn parse_condition_expr(parser: &mut Parser<'_>) -> (Expr, Span) {
 }
 
 // call right after peeking Token::If
-pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
+/// Reads an `if` statement and how it ends the block it is in.
+///
+/// As the last statement of a block used as a value (`tail`), an `if` whose
+/// branches end in values is that block's value: it reads as an `if` used as
+/// a value, so it has an `else`, and every branch gives a value or leaves.
+pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32, tail: Tail) -> (Expr, BlockEnd) {
     let t = parser.next_token();
     debug_assert_eq!(t.0, Token::If);
+    let branch_tail = if tail == Tail::Value {
+        Tail::Value
+    } else {
+        Tail::No
+    };
     let (condition, condition_span) = parse_condition_expr(parser);
-    let mut output_code = parse_block(parser);
+    let (mut output_code, first_end, _) = parse_block_in(parser, branch_tail);
+    let mut ends = vec![first_end];
+    let mut has_else = false;
     loop {
         let next_token = parser.peek_token_opt();
         if next_token != Some(Token::Else) {
@@ -59,38 +73,128 @@ pub fn parse_condition_block(parser: &mut Parser<'_>, start: u32) -> Expr {
         if next_token == Some(Token::If) {
             parser.next_token();
             let (else_if_condition, else_if_condition_span) = parse_condition_expr(parser);
-            let else_if_code = parse_block(parser);
+            let (else_if_code, end, _) = parse_block_in(parser, branch_tail);
+            ends.push(end);
             output_code.push(Expr::ElseIfBlock(
                 Box::new(else_if_condition),
                 Box::from(else_if_code),
                 else_if_condition_span,
             ));
         } else if next_token == Some(Token::LBrace) {
-            let else_code = parse_block(parser);
+            let (else_code, end, _) = parse_block_in(parser, branch_tail);
+            ends.push(end);
+            has_else = true;
             output_code.push(Expr::ElseBlock(Box::from(else_code)));
             break;
         } else {
             break;
         }
     }
-    Expr::Condition(
+    let span: Span = (start, parser.last_token_end as u32).into();
+    if let Some(at) = value_end(&ends) {
+        if !has_else {
+            cold_path();
+            parser.error(span, ParserErr::InlineConditionNoElseBlock);
+        }
+        return as_tail(
+            parser,
+            Expr::InlineCondition(
+                Box::new(condition),
+                Box::from(output_code),
+                span,
+                condition_span,
+            ),
+            &ends,
+            at,
+            span,
+        );
+    }
+    let statement = Expr::Condition(
         Box::new(condition),
         Box::from(output_code),
-        (start, parser.last_token_end as u32).into(),
+        span,
         condition_span,
-    )
+    );
+    let end = BlockEnd::of(&statement);
+    (statement, end)
+}
+
+/// Where the first of `ends` that is a value leaves its `;` off, if any is.
+fn value_end(ends: &[BlockEnd]) -> Option<u32> {
+    ends.iter().find_map(|end| match end {
+        BlockEnd::Value(at) => Some(*at),
+        _ => None,
+    })
+}
+
+/// A construct one of whose branches ended in a value, which makes it the
+/// value of the block it is the last statement of. Followed by anything but
+/// the block's `}`, the value is a statement missing its `;`. Every branch
+/// ends in a value or leaves.
+fn as_tail(
+    parser: &mut Parser<'_>,
+    value: Expr,
+    ends: &[BlockEnd],
+    at: u32,
+    span: Span,
+) -> (Expr, BlockEnd) {
+    if parser.peek_token_opt() != Some(Token::RBrace) {
+        cold_path();
+        crate::parser::error_missing_semicolon_at(parser, at, None);
+    }
+    if ends.contains(&BlockEnd::Statement) {
+        cold_path();
+        parser.error(span, ParserErr::ValueBlockWithoutValue);
+    }
+    (value, BlockEnd::Value(parser.last_token_end as u32))
 }
 
 /// LBrace Code RBrace
 #[inline(always)]
 pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
+    parse_block_in(parser, Tail::No).0
+}
+
+/// A block used as a value, `{ let t = 5; t * 2 }`: its statements, the last
+/// of which is its value or leaves (`return`, `throw`, `break`, `continue`).
+pub fn parse_value_block(parser: &mut Parser<'_>) -> Vec<Expr> {
+    let (code, end, span) = parse_block_in(parser, Tail::Value);
+    if end == BlockEnd::Statement {
+        cold_path();
+        parser.error(span, ParserErr::ValueBlockWithoutValue);
+    }
+    code
+}
+
+/// Reads a block, `{` to `}`, and how its last statement ends it, and the
+/// span of the block.
+pub fn parse_block_in(parser: &mut Parser<'_>, tail: Tail) -> (Vec<Expr>, BlockEnd, Span) {
     let opener_token_span =
         parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'");
-    parser.enter(opener_token_span);
-    let code = parse_code(parser);
-    parser.leave();
-    parser.next_token_expect_closer(Token::LBrace, opener_token_span, Token::RBrace);
+    parse_block_rest(parser, opener_token_span, tail)
+}
+
+/// [`parse_value_block`] once its `{`, read at `opener`, is.
+pub fn parse_value_block_after(parser: &mut Parser<'_>, opener: Span) -> Vec<Expr> {
+    let (code, end, span) = parse_block_rest(parser, opener, Tail::Value);
+    if end == BlockEnd::Statement {
+        cold_path();
+        parser.error(span, ParserErr::ValueBlockWithoutValue);
+    }
     code
+}
+
+/// [`parse_block_in`] once the `{`, read at `opener_token_span`, is.
+fn parse_block_rest(
+    parser: &mut Parser<'_>,
+    opener_token_span: Span,
+    tail: Tail,
+) -> (Vec<Expr>, BlockEnd, Span) {
+    parser.enter(opener_token_span);
+    let (code, end) = parse_code(parser, tail);
+    parser.leave();
+    let close = parser.next_token_expect_closer(Token::LBrace, opener_token_span, Token::RBrace);
+    (code, end, (opener_token_span.start, close).into())
 }
 
 /// The body of a function: a block, or `=> expr` for one that evaluates to a
@@ -98,6 +202,9 @@ pub fn parse_block(parser: &mut Parser<'_>) -> Vec<Expr> {
 /// rest of the compiler sees one shape of body. A declaration ends its arrow
 /// body with `;`, the way a statement ends; an anonymous function's arrow
 /// body ends where the expression does.
+///
+/// A block body hands back its value with `return`; unlike a block used as a
+/// value, it does not end in one.
 pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
     // A loop around an anonymous function is not one its body can leave.
     let loops = std::mem::take(&mut parser.loops);
@@ -108,7 +215,7 @@ pub fn parse_fn_body(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
 
 fn parse_fn_body_in(parser: &mut Parser<'_>, declaration: bool) -> Vec<Expr> {
     if parser.peek_token_opt() != Some(Token::FatArrow) {
-        return parse_block(parser);
+        return parse_block_in(parser, Tail::FnBody).0;
     }
     parser.next_token();
     let value = parse_expr(parser);
@@ -126,18 +233,6 @@ fn parse_loop_body(parser: &mut Parser<'_>) -> Vec<Expr> {
     parser.loops += 1;
     let code = parse_block(parser);
     parser.loops -= 1;
-    code
-}
-
-/// LBrace Expr RBrace
-#[inline(always)]
-pub fn parse_block_expr(parser: &mut Parser<'_>) -> Expr {
-    let opener_token_span =
-        parser.next_token_expect(Token::LBrace, "Blocks need to start with '{'");
-    parser.enter(opener_token_span);
-    let code = parse_expr(parser);
-    parser.leave();
-    parser.next_token_expect_closer(Token::LBrace, opener_token_span, Token::RBrace);
     code
 }
 
@@ -258,9 +353,20 @@ pub fn parse_for_loop(parser: &mut Parser<'_>) -> Expr {
     }
 }
 
-#[inline(always)]
-pub fn parse_eval_block(parser: &mut Parser<'_>) -> Expr {
-    Expr::EvalBlock(Box::from(parse_block(parser)))
+/// A block written where a statement goes. As the last statement of a block
+/// used as a value (`tail`), one that ends in a value is that block's value.
+pub fn parse_eval_block(parser: &mut Parser<'_>, tail: Tail) -> (Expr, BlockEnd) {
+    let inner = if tail == Tail::Value {
+        Tail::Value
+    } else {
+        Tail::No
+    };
+    let (code, end, span) = parse_block_in(parser, inner);
+    let block = Expr::EvalBlock(Box::from(code));
+    match end {
+        BlockEnd::Value(at) => as_tail(parser, block, &[end], at, span),
+        _ => (block, end),
+    }
 }
 
 pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
@@ -838,23 +944,89 @@ pub fn parse_loop_block(input: &mut Parser<'_>) -> Expr {
 /// body. The compiler picks the lowering by the scrutinee's static type: an
 /// enum scrutinee gives variant-pattern matching with payload binding; any
 /// other scrutinee gives the equality-chain behavior.
-pub fn parse_match(parser: &mut Parser<'_>) -> Expr {
+///
+/// As the last statement of a block used as a value (`tail`), a `match` whose
+/// arms give values is that block's value, the way a `match` written where a
+/// value goes is.
+pub fn parse_match(parser: &mut Parser<'_>, tail: Tail) -> (Expr, BlockEnd) {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Match);
-    parse_match_arms(parser, start, false)
+    let mode = if tail == Tail::Value {
+        MatchMode::MaybeValue
+    } else {
+        MatchMode::Statement
+    };
+    let (statement, ends) = parse_match_in(parser, start, mode);
+    let Expr::Match(scrutinee, arms, wildcard, span, _) = statement else {
+        unreachable!()
+    };
+    let braced_value = value_end(&ends.iter().filter_map(|(_, end)| *end).collect::<Vec<_>>());
+    let is_last = parser.peek_token_opt() == Some(Token::RBrace);
+    if tail == Tail::Value && is_last {
+        // Each arm written as an expression is a value too, here.
+        let as_values: Vec<BlockEnd> = ends
+            .iter()
+            .map(|(expr_end, braced)| braced.unwrap_or(*expr_end))
+            .collect();
+        if let Some(at) = value_end(&as_values)
+            && (braced_value.is_some() || !as_values.contains(&BlockEnd::Statement))
+        {
+            return as_tail(
+                parser,
+                Expr::Match(scrutinee, arms, wildcard, span, true),
+                &as_values,
+                at,
+                span,
+            );
+        }
+    } else if let Some(at) = braced_value {
+        cold_path();
+        crate::parser::error_missing_semicolon_at(parser, at, None);
+    }
+    let statement = Expr::Match(scrutinee, arms, wildcard, span, false);
+    let end = BlockEnd::of(&statement);
+    (statement, end)
+}
+
+/// How a `match`'s arms are read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchMode {
+    /// A statement: a braced arm is a block of statements.
+    Statement,
+    /// A statement that may turn out to be the value of the block around it:
+    /// a braced arm may end in a value.
+    MaybeValue,
+    /// Written where a value goes: every arm gives a value or leaves.
+    Value,
 }
 
 /// Parses what follows the `match` keyword, which started at `start`.
 ///
 /// An arm is `pattern => { ... }` or `pattern => expr`, and an expression arm
 /// is separated from the next by `,`. A pattern is one or more alternatives
-/// separated by `|`. In a statement (`is_value` false) a braced arm is a block
-/// of statements; in a `match` used as a value it holds one expression, the
-/// way the branches of an `if` used as a value do.
+/// separated by `|`. In a `match` used as a value (`is_value`) a braced arm
+/// is a block whose last expression is the arm's value.
 pub fn parse_match_arms(parser: &mut Parser<'_>, start: u32, is_value: bool) -> Expr {
+    let mode = if is_value {
+        MatchMode::Value
+    } else {
+        MatchMode::Statement
+    };
+    parse_match_in(parser, start, mode).0
+}
+
+/// [`parse_match_arms`], with how each arm ends: what an arm written as an
+/// expression gives (a value, or a jump), and for a braced arm how its block
+/// ends.
+fn parse_match_in(
+    parser: &mut Parser<'_>,
+    start: u32,
+    mode: MatchMode,
+) -> (Expr, Vec<(BlockEnd, Option<BlockEnd>)>) {
     let match_obj = parse_expr_no_struct(parser);
     parser.next_token_expect(Token::LBrace, "Blocks must be delimited by braces");
     let mut arms: Vec<(Box<[Expr]>, Box<[Expr]>)> = Vec::with_capacity(2);
+    let mut ends = Vec::with_capacity(2);
     let mut wildcard: Option<Box<[Expr]>> = None;
     let mut has_non_wildcard = false;
     let end: u32;
@@ -868,7 +1040,8 @@ pub fn parse_match_arms(parser: &mut Parser<'_>, start: u32, is_value: bool) -> 
             }
             parser.next_token();
             parser.next_token_expect(Token::FatArrow, "Expected '=>'");
-            let code = parse_match_arm_body(parser, is_value, true);
+            let (code, arm_end) = parse_match_arm_body(parser, mode, true);
+            ends.push(arm_end);
             end = parser.peek_token_span().end;
             parser.next_token_expect(
                 Token::RBrace,
@@ -888,17 +1061,21 @@ pub fn parse_match_arms(parser: &mut Parser<'_>, start: u32, is_value: bool) -> 
         } else {
             let patterns = parse_match_patterns(parser);
             parser.next_token_expect(Token::FatArrow, "");
-            let code = parse_match_arm_body(parser, is_value, false);
+            let (code, arm_end) = parse_match_arm_body(parser, mode, false);
+            ends.push(arm_end);
             has_non_wildcard = true;
             arms.push((patterns, Box::from(code)));
         }
     }
-    Expr::Match(
-        Box::new(match_obj),
-        Box::from(arms),
-        wildcard,
-        (start, end).into(),
-        is_value,
+    (
+        Expr::Match(
+            Box::new(match_obj),
+            Box::from(arms),
+            wildcard,
+            (start, end).into(),
+            mode == MatchMode::Value,
+        ),
+        ends,
     )
 }
 
@@ -923,24 +1100,41 @@ fn parse_match_patterns(parser: &mut Parser<'_>) -> Box<[Expr]> {
 }
 
 /// The body after an arm's `=>`: a braced block, or an expression followed by
-/// the `,` that separates it from the next arm. In a statement the
-/// expression can be `return`, `throw`, `break` or `continue`. The `,` is
-/// optional before the closing brace, and `last` says the wildcard arm is
-/// being read, which the closing brace always follows.
-fn parse_match_arm_body(parser: &mut Parser<'_>, is_value: bool, last: bool) -> Vec<Expr> {
+/// the `,` that separates it from the next arm. The expression can be
+/// `return`, `throw`, `break` or `continue`. The `,` is optional before the
+/// closing brace, and `last` says the wildcard arm is being read, which the
+/// closing brace always follows.
+///
+/// Says how the arm ends: for an expression, whether it leaves or is a value;
+/// for a braced block, how the block ends too.
+fn parse_match_arm_body(
+    parser: &mut Parser<'_>,
+    mode: MatchMode,
+    last: bool,
+) -> (Vec<Expr>, (BlockEnd, Option<BlockEnd>)) {
     if parser.peek_token() == Token::LBrace {
-        return if is_value {
-            vec![parse_block_expr(parser)]
-        } else {
-            parse_block(parser)
+        return match mode {
+            MatchMode::Value => {
+                let code = parse_value_block(parser);
+                let end = code.last().map_or(BlockEnd::Statement, |last| {
+                    if last.diverges() {
+                        BlockEnd::Jump
+                    } else {
+                        BlockEnd::Value(0)
+                    }
+                });
+                (code, (end, Some(end)))
+            }
+            MatchMode::MaybeValue => {
+                let (code, end, _) = parse_block_in(parser, Tail::Value);
+                (code, (end, Some(end)))
+            }
+            MatchMode::Statement => (parse_block(parser), (BlockEnd::Statement, None)),
         };
     }
     let peek = parser.peek_token();
-    let value = if is_value {
-        parse_expr(parser)
-    } else {
-        parse_jump(parser, peek).unwrap_or_else(|| parse_expr(parser))
-    };
+    let value = parse_jump(parser, peek).unwrap_or_else(|| parse_expr(parser));
+    let at = parser.last_token_end as u32;
     match parser.peek_token_opt() {
         Some(Token::Comma) => {
             parser.next_token();
@@ -955,7 +1149,12 @@ fn parse_match_arm_body(parser: &mut Parser<'_>, is_value: bool, last: bool) -> 
             parser.error(span, ParserErr::MatchArmMissingComma);
         }
     }
-    vec![value]
+    let end = if value.diverges() {
+        BlockEnd::Jump
+    } else {
+        BlockEnd::Value(at)
+    };
+    (vec![value], (end, None))
 }
 
 pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
