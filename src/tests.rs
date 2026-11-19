@@ -17925,3 +17925,57 @@ fn main() {
     let d = compile_diag(src, "map.cdl").unwrap_err();
     assert_eq!(d.code, "map_iteration_takes_a_pattern", "{d:?}");
 }
+
+/// `T?` is `Option<T>` wherever a type is written: parameters, returns, `let`,
+/// fields, payloads and type arguments, and after `is`.
+#[test]
+pub fn optional_types_are_options() {
+    let src = "
+struct Slot { item: string? }
+fn first_even(xs: int[]) -> int? {
+    for x in xs {
+        if x % 2 == 0 {
+            return Some(x);
+        }
+    }
+    return None;
+}
+fn main() {
+    let found: int? = first_even([3, 4]);
+    let none: int? = first_even([3]);
+    let lists: int?[] = [found, none];
+    let s = Slot { item: Some(\"x\") };
+    let v: any = found;
+    print(found, none, lists.len(), s.item, v is int?, found is Option<int>);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "Some(4)\nNone\n2\nSome(\"x\")\ntrue\ntrue\n"
+    );
+}
+
+/// A match covers an enum when its arms between them fit every value, down
+/// through the payloads: `Some(Some(_))`, `Some(None)` and `None` cover an
+/// `Option<Option<int>>`, and leaving one out names the variant it misses.
+#[test]
+pub fn nested_patterns_cover_a_match() {
+    let src = "
+fn kind(o: int??) -> string => match o {
+    Some(Some(_)) => \"both\",
+    Some(None) => \"outer\",
+    None => \"none\",
+};
+fn flag(p: (bool, int)) -> int => match p {
+    (true, n) => n,
+    (false, _) => 0,
+};
+fn main() {
+    print(kind(Some(Some(1))), kind(Some(None)), kind(None), flag((true, 3)), flag((false, 3)));
+}
+";
+    assert_eq!(run_output(src), "both\nouter\nnone\n3\n0\n");
+    let src = "fn main() { print(match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }); }";
+    let d = compile_diag(src, "cover.cdl").unwrap_err();
+    assert!(d.message.contains("does not cover: Some"), "{d:?}");
+}

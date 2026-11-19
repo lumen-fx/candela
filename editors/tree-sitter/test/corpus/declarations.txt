@@ -1215,3 +1215,42 @@ fn main() {
                 (identifier)
                 (arguments
                   (identifier))))))))))
+
+================================================================================
+Optional types (docs/src/language/types.md)
+================================================================================
+
+fn first(xs: int[]) -> int? {
+    let seen: int?[] = [];
+    let attr: string[]? = None;
+    return None;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (array_type
+          (type_identifier))))
+    (return_type
+      (optional_type
+        (type_identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (array_type
+          (optional_type
+            (type_identifier)))
+        (array_literal))
+      (let_declaration
+        (identifier)
+        (optional_type
+          (array_type
+            (type_identifier)))
+        (identifier))
+      (return_statement
+        (identifier)))))

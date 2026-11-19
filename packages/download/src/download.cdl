@@ -11,7 +11,8 @@
 ///     fn main() {
 ///         download::to_file("https://example.com/pack.zip", "pack.zip", download::Options { .. }, fn(e) {
 ///             match e {
-///                 Progress(received, total) => print(string(received) + " of " + string(total)),
+///                 Progress(received, Some(total)) => print(string(received) + " of " + string(total)),
+///                 Progress(received, None) => print(string(received)),
 ///                 Done(path) => print("saved " + path),
 ///                 Failed(why) => print(why),
 ///             }
@@ -48,9 +49,9 @@ struct Options {
 
 /// What a transfer reports.
 enum Event {
-    /// How many bytes have arrived, and how many the server said would; the
-    /// second is -1 when it did not say.
-    Progress(int, int),
+    /// How many bytes have arrived, and how many the server said would;
+    /// `None` when it did not say.
+    Progress(int, int?),
     /// The file is in place at this path.
     Done(string),
     /// The transfer did not happen, or was cancelled (the message is then
@@ -93,7 +94,8 @@ fn decode(payload: string) -> Event {
     let fields = json::parse(payload) as {string: any};
     let kind = fields["kind"] as string;
     if kind == "progress" {
-        return Progress(fields["received"] as int, fields["total"] as int);
+        let total = fields["total"] as int;
+        return Progress(fields["received"] as int, if total < 0 { None } else { Some(total) });
     }
     if kind == "done" {
         return Done(fields["path"] as string);

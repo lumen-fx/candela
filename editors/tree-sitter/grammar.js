@@ -381,6 +381,7 @@ module.exports = grammar({
         $.qualified_type,
         $.generic_type,
         $.array_type,
+        $.optional_type,
         $.map_type,
         $.function_type,
         $.parenthesized_type,
@@ -453,6 +454,10 @@ module.exports = grammar({
     // list. See `function_type`.
     array_type: ($) =>
       prec.right(1, seq(field('element', $._atomic_type), '[', ']')),
+
+    // `T?`, the same type as `Option<T>`. Like `[]` it binds to the type on
+    // its left.
+    optional_type: ($) => prec.right(1, seq(field('inner', $._atomic_type), '?')),
 
     map_type: ($) => seq('{', field('key', $._type), ':', field('value', $._type), '}'),
 

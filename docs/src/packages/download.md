@@ -14,7 +14,8 @@ fn main() {
     let options = download::Options { checksum: "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", .. };
     download::to_file("https://example.com/hello.txt", "hello.txt", options, fn(e) {
         match e {
-            Progress(received, total) => print(string(received) + " of " + string(total)),
+            Progress(received, Some(total)) => print(string(received) + " of " + string(total)),
+            Progress(received, None) => print(string(received)),
             Done(path) => print("saved " + path),
             Failed(why) => print(why),
         }
@@ -48,7 +49,7 @@ download::to_file(url, path, options, on_event)
 
 | `Event` variant | Meaning |
 | --- | --- |
-| `Progress(received, total)` | Bytes so far, and the size the server declared, or -1 when it declared none. At most every 100 ms, and once more at the end |
+| `Progress(received, total)` | Bytes so far, and the size the server declared as an `int?`: `None` when it declared none. At most every 100 ms, and once more at the end |
 | `Done(path)` | The file is in place |
 | `Failed(message)` | The transfer did not happen; `cancelled` after a `cancel` |
 

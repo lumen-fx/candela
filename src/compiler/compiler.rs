@@ -2069,19 +2069,10 @@ fn error_match_not_covered(
     state: &State<'_>,
 ) -> ! {
     if let DataType::Enum(enum_id) = scrut_type {
-        let mut covered = Vec::new();
-        for (arm, resolved) in arms.iter().zip(resolved) {
-            if arm.guard.is_none() {
-                resolved.covered_variants(state, &mut covered);
-            }
-        }
         let e = &state.enums[*enum_id as usize];
-        let missing: Vec<&str> = e
-            .variants
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !covered.contains(&(*i as u16)))
-            .map(|(_, variant)| variant.name.as_str())
+        let missing: Vec<&str> = patterns::missing_variants(*enum_id, arms, resolved, state)
+            .into_iter()
+            .map(|variant| e.variants[variant as usize].name.as_str())
             .collect();
         compiler_errors::error_enum(
             "Non-exhaustive match",
@@ -5013,7 +5004,7 @@ fn compile_pattern_let(
         None => value.infer_type(v, ctx, state),
     };
     let resolved = patterns::resolve(pattern, &value_type, ctx, state);
-    let always = resolved.always(state);
+    let always = patterns::always_fits(&resolved, &value_type, state);
     if otherwise.is_none() && !always {
         compiler_errors::error_type_test(
             "Pattern that can fail",

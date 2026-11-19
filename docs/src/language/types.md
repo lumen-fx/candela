@@ -64,7 +64,8 @@ reads `any` however the program later fills it.
 
 `value is T` answers whether the value is a `T`, as a `bool`. `T` is any type
 an annotation can name: `int`, a struct, an enum, `int[]`, `{string: any}`, a
-union, or a generic type with its arguments, such as `Option<int>`. A list or a
+union, or a generic type with its arguments, such as `Option<int>` or its
+shorthand `int?`. A list or a
 map is checked down to what it holds, so a list of `any` passes `is int[]` only
 when every element is an `int`.
 
@@ -264,9 +265,11 @@ it, so a variable is never implicitly empty. Test for it with `value == null`.
 `x: null`, `-> null` and `int|null` are all rejected. A function that returns
 nothing leaves its return annotation off.
 
-`print(null)` prints `null`. `null` stands for "no value was returned" and
-nothing else: a value that may be absent is an `Option`, which the lookups that
-may find nothing (`m.get(k)`, `xs.first()`) answer, and which needs no import.
+`print(null)` prints `null`. `null` stands for "no value was returned", and
+for the empty value a host passes in an `any`, and nothing else: a value that
+may be absent is an [`Option`](../standard-library/option.md), written `T?`,
+which the lookups that may find nothing (`m.get(k)`, `xs.first()`) answer, and
+which needs no import.
 
 ## Where you write a type
 
@@ -278,6 +281,8 @@ all of them.
 - `int`, `float`, `bool`, `string`: the built-in types. `null` is not among
   them; see [null](#null).
 - `T[]`: a list of `T`, for example `string[]` or `int[][]`.
+- `T?`: a `T` that may be absent, the same type as `Option<T>`. `int?[]` is a
+  list of options, `int[]?` an optional list.
 - `{K: V}`: a map from `K` to `V`, for example `{string: int}`.
 - A struct or enum name: that type.
 - `A|B`: a union, a value that is either an `A` or a `B`.

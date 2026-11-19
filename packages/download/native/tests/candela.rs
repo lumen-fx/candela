@@ -24,11 +24,12 @@ host "test" {{
 
 fn report(e: download::Event) {{
     match e {{
-        Progress(received, total) => {{
+        Progress(received, Some(total)) => {{
             if received == total {{
                 test::seen("all " + string(total));
             }}
         }}
+        Progress(_, None) => {{}}
         Done(path) => test::seen("done " + path),
         Failed(why) => test::seen("failed " + why),
     }}

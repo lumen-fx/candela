@@ -195,37 +195,6 @@ pub enum Resolved {
 }
 
 impl Resolved {
-    /// Whether every value of the type matches.
-    pub fn always(&self, state: &State<'_>) -> bool {
-        match self {
-            Self::Any | Self::Bind(..) => true,
-            Self::Equal(..) | Self::Range(..) => false,
-            Self::Fields(fields) => fields.iter().all(|(_, _, p)| p.always(state)),
-            Self::Variant(enum_id, _, fields) => {
-                state.enums[*enum_id as usize].variants.len() == 1
-                    && fields.iter().all(|(_, _, p)| p.always(state))
-            }
-            Self::Or(alternatives) => alternatives.iter().any(|p| p.always(state)),
-        }
-    }
-
-    /// The variants of an enum this pattern matches every value of, by index.
-    pub fn covered_variants(&self, state: &State<'_>, out: &mut Vec<u16>) {
-        match self {
-            Self::Variant(_, variant, fields) => {
-                if fields.iter().all(|(_, _, p)| p.always(state)) {
-                    out.push(*variant);
-                }
-            }
-            Self::Or(alternatives) => {
-                for p in alternatives {
-                    p.covered_variants(state, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// The names the pattern binds with their types, sorted by name.
     pub fn bindings(&self) -> Vec<(SmolStr, DataType)> {
         let mut out = Vec::new();
@@ -917,9 +886,8 @@ pub fn resolve_arms(
         .collect()
 }
 
-/// Whether a `match` has an arm for every value of `ty`: a wildcard, an arm
-/// with no guard whose pattern always fits, or, on an enum, arms with no guard
-/// that between them fit every value of every variant.
+/// Whether a `match` has an arm for every value of `ty`: a wildcard, or arms
+/// with no guard whose patterns between them fit every value.
 pub fn arms_cover(
     ty: &DataType,
     arms: &[super::expr::MatchArm],
@@ -927,24 +895,192 @@ pub fn arms_cover(
     has_wildcard: bool,
     state: &State<'_>,
 ) -> bool {
-    if has_wildcard {
-        return true;
-    }
-    let unguarded = || {
-        arms.iter()
-            .zip(resolved)
-            .filter(|(arm, _)| arm.guard.is_none())
-            .map(|(_, resolved)| resolved)
-    };
-    if unguarded().any(|resolved| resolved.always(state)) {
-        return true;
-    }
-    let DataType::Enum(enum_id) = ty else {
+    has_wildcard
+        || rows_cover(
+            unguarded_rows(arms, resolved),
+            std::slice::from_ref(ty),
+            state,
+        )
+}
+
+/// Whether `resolved` fits every value of type `ty`.
+pub fn always_fits(resolved: &Resolved, ty: &DataType, state: &State<'_>) -> bool {
+    rows_cover(vec![vec![Some(resolved)]], std::slice::from_ref(ty), state)
+}
+
+/// The variants of enum `enum_id` some value of which no arm with no guard
+/// fits, by index.
+pub fn missing_variants(
+    enum_id: u16,
+    arms: &[super::expr::MatchArm],
+    resolved: &[Resolved],
+    state: &State<'_>,
+) -> Vec<u16> {
+    let rows = expand_first(unguarded_rows(arms, resolved));
+    (0..state.enums[enum_id as usize].variants.len() as u16)
+        .filter(|&variant| {
+            let (spec, types) = specialize_variant(&rows, enum_id, variant, &[], state);
+            !rows_cover(spec, &types, state)
+        })
+        .collect()
+}
+
+/// One row per arm with no guard, holding its pattern.
+fn unguarded_rows<'a>(
+    arms: &[super::expr::MatchArm],
+    resolved: &'a [Resolved],
+) -> Vec<Vec<Option<&'a Resolved>>> {
+    arms.iter()
+        .zip(resolved)
+        .filter(|(arm, _)| arm.guard.is_none())
+        .map(|(_, resolved)| vec![Some(resolved)])
+        .collect()
+}
+
+/// A row of patterns, one per value of a sequence; `None` fits anything.
+type Row<'a> = Vec<Option<&'a Resolved>>;
+
+/// Whether `rows`, each a pattern per value of a sequence typed `types`,
+/// between them fit every such sequence. Each column is split by what its
+/// type can be: every variant of an enum, the one shape of a struct or a
+/// tuple, `true` and `false` for a `bool`; any other type has more values
+/// than a pattern of literals and ranges can list, so only a pattern that
+/// fits anything covers it.
+fn rows_cover(rows: Vec<Row<'_>>, types: &[DataType], state: &State<'_>) -> bool {
+    if rows.is_empty() {
         return false;
-    };
-    let mut covered = Vec::new();
-    for resolved in unguarded() {
-        resolved.covered_variants(state, &mut covered);
     }
-    (0..state.enums[*enum_id as usize].variants.len()).all(|i| covered.contains(&(i as u16)))
+    let Some((first, rest)) = types.split_first() else {
+        return true;
+    };
+    let rows = expand_first(rows);
+    let wild = |p: Option<&Resolved>| matches!(p, None | Some(Resolved::Any | Resolved::Bind(..)));
+    if rows.iter().all(|row| wild(row[0])) {
+        return rows_cover(
+            rows.into_iter().map(|row| row[1..].to_vec()).collect(),
+            rest,
+            state,
+        );
+    }
+    match first {
+        DataType::Enum(enum_id) => {
+            (0..state.enums[*enum_id as usize].variants.len() as u16).all(|variant| {
+                let (spec, types) = specialize_variant(&rows, *enum_id, variant, rest, state);
+                rows_cover(spec, &types, state)
+            })
+        }
+        DataType::Struct(struct_id) => {
+            let fields: Vec<DataType> = state.structs[*struct_id as usize]
+                .fields
+                .iter()
+                .map(|(_, t, _)| t.clone())
+                .collect();
+            let spec = rows
+                .iter()
+                .filter_map(|row| {
+                    let expanded = match row[0] {
+                        None | Some(Resolved::Any | Resolved::Bind(..)) => vec![None; fields.len()],
+                        Some(Resolved::Fields(given)) => spread(given, fields.len(), 0),
+                        Some(_) => return None,
+                    };
+                    Some(
+                        expanded
+                            .into_iter()
+                            .chain(row[1..].iter().copied())
+                            .collect(),
+                    )
+                })
+                .collect();
+            let types: Vec<DataType> = fields.into_iter().chain(rest.iter().cloned()).collect();
+            rows_cover(spec, &types, state)
+        }
+        DataType::Bool => [true, false].iter().all(|b| {
+            let spec = rows
+                .iter()
+                .filter(|row| {
+                    wild(row[0])
+                        || matches!(row[0], Some(Resolved::Equal(Expr::Bool(v), _)) if v == b)
+                })
+                .map(|row| row[1..].to_vec())
+                .collect();
+            rows_cover(spec, rest, state)
+        }),
+        _ => rows_cover(
+            rows.iter()
+                .filter(|row| wild(row[0]))
+                .map(|row| row[1..].to_vec())
+                .collect(),
+            rest,
+            state,
+        ),
+    }
+}
+
+/// The rows with each `|` in their first place spread into one row per
+/// alternative.
+fn expand_first(rows: Vec<Row<'_>>) -> Vec<Row<'_>> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut pending = rows;
+    while let Some(row) = pending.pop() {
+        if let Some(Resolved::Or(alternatives)) = row[0] {
+            for alternative in alternatives.iter().rev() {
+                let mut split = row.clone();
+                split[0] = Some(alternative);
+                pending.push(split);
+            }
+        } else {
+            out.push(row);
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// The rows that fit variant `variant` of enum `enum_id`, each with its first
+/// place replaced by the variant's payload, and the types of the new row.
+fn specialize_variant<'a>(
+    rows: &[Row<'a>],
+    enum_id: u16,
+    variant: u16,
+    rest: &[DataType],
+    state: &State<'_>,
+) -> (Vec<Row<'a>>, Vec<DataType>) {
+    let payload = &state.enums[enum_id as usize].variants[variant as usize].payload;
+    let spec = rows
+        .iter()
+        .filter_map(|row| {
+            let expanded = match row[0] {
+                None | Some(Resolved::Any | Resolved::Bind(..)) => vec![None; payload.len()],
+                Some(Resolved::Variant(_, v, given)) if *v == variant => {
+                    spread(given, payload.len(), 1)
+                }
+                Some(_) => return None,
+            };
+            Some(
+                expanded
+                    .into_iter()
+                    .chain(row[1..].iter().copied())
+                    .collect(),
+            )
+        })
+        .collect();
+    let types = payload
+        .iter()
+        .cloned()
+        .chain(rest.iter().cloned())
+        .collect();
+    (spec, types)
+}
+
+/// The patterns `given` places by field index, laid out over `width` places;
+/// a place it does not name fits anything. A variant's fields count from 1,
+/// past its tag, so `first` is the index of place 0.
+fn spread(given: &[(u16, DataType, Resolved)], width: usize, first: u16) -> Row<'_> {
+    let mut row = vec![None; width];
+    for (field, _, pattern) in given {
+        if let Some(place) = row.get_mut((field - first) as usize) {
+            *place = Some(pattern);
+        }
+    }
+    row
 }

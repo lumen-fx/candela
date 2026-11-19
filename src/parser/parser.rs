@@ -1674,16 +1674,33 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
             ParserErr::UnexpectedToken(Token::Identifier(""), next_token, "Invalid type"),
         );
     };
+    // `T[]` is a list of `T`, and `T?` an `Option<T>`; both read left to
+    // right, so `int?[]` is a list of options and `int[]?` an optional list.
     loop {
-        if parser.peek_token() == Token::LBracket {
-            parser.next_token();
-            parser.next_token_expect(Token::RBracket, "Unmatched '['");
-            t = TypeExpr::Array(Box::new(t));
-        } else {
-            break;
+        match parser.peek_token_opt() {
+            Some(Token::LBracket) => {
+                parser.next_token();
+                parser.next_token_expect(Token::RBracket, "Unmatched '['");
+                t = TypeExpr::Array(Box::new(t));
+            }
+            Some(Token::Question) => {
+                let question = parser.next_token().1;
+                t = optional_type(t, question);
+            }
+            _ => break,
         }
     }
     t
+}
+
+/// `T?`: the type `Option<T>`, written where `?` follows `T` at `question`.
+fn optional_type(t: TypeExpr, question: Span) -> TypeExpr {
+    TypeExpr::Generic(Box::new(GenericType {
+        namespace: Box::from([]),
+        name: SmolStr::new_static("Option"),
+        args: Box::from([t]),
+        span: question,
+    }))
 }
 
 /// Walks a copy of the token stream to decide whether the `<` an identifier is
@@ -1813,12 +1830,15 @@ impl<'a> TypeArgScan<'a> {
                 return false;
             }
         }
-        while self.eat(Token::LBracket) {
-            if !self.eat(Token::RBracket) {
-                return false;
+        loop {
+            if self.eat(Token::LBracket) {
+                if !self.eat(Token::RBracket) {
+                    return false;
+                }
+            } else if !self.eat(Token::Question) {
+                return true;
             }
         }
-        true
     }
 }
 
@@ -2516,10 +2536,20 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
                 Token::Colon,
                 "An attribute parameter is a name, a ':' and its type, as in writes: type[].",
             );
-            let ty = parse_attr_param_type(parser);
-            let optional = parser.peek_token() == Token::Question;
-            if optional {
+            // `T?` is how an attribute parameter says it may be left out,
+            // the way it says an `Option<T>` anywhere else.
+            let (ty, mut optional) = match parse_attr_param_type(parser) {
+                AttrParamTypeExpr::Value(TypeExpr::Generic(g))
+                    if g.name == "Option" && g.namespace.is_empty() && g.args.len() == 1 =>
+                {
+                    let inner = g.args.into_vec().pop().unwrap();
+                    (AttrParamTypeExpr::Value(inner), true)
+                }
+                ty => (ty, false),
+            };
+            if parser.peek_token() == Token::Question {
                 parser.next_token();
+                optional = true;
             }
             let default = if parser.peek_token() == Token::Equals {
                 parser.next_token();

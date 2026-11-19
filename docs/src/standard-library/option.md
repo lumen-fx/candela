@@ -52,6 +52,10 @@ fn main() {
 }
 ```
 
+`T?` is the same type as `Option<T>` in every place a type is written:
+`fn nearest(points: Point[]) -> Point?`, `let best: int? = None;`. `int?[]` is
+a list of options and `int[]?` an optional list.
+
 `None` names no payload, so on its own it is an `Option<any>`, which goes
 wherever an `Option<T>` is expected. Name the argument (`Option<Point>`) where
 you want the check. See [enums](../language/enums.md) for the enum and match

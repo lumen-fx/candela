@@ -86,9 +86,9 @@ parameter has a name, a type from the table above, and optionally `= value` as
 its default. An enum a parameter takes is declared like any other; a parameter
 typed `enum` takes a variant of whichever enum the script names.
 
-A `?` after the type makes a parameter optional with no default: a script may
-leave it out, and the host then finds no argument for it rather than a default
-value.
+A `?` after the type makes a parameter optional with no default, the way `T?`
+says a value may be absent anywhere else: a script may leave it out, and the
+host then finds no argument for it rather than a default value.
 
 ```rust
 host "game" {
