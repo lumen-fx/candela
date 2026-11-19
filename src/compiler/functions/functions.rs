@@ -428,6 +428,24 @@ pub fn handle_functions(
             })
         })
     {
+        // Arguments passed by name go in place, and the ones left out take
+        // their defaults, as for a candela function.
+        let bound = (!is_variadic)
+            .then(|| {
+                foreign_bound_args(
+                    namespace[0].as_str(),
+                    fn_name,
+                    args,
+                    args_indexes,
+                    span,
+                    ctx,
+                    state,
+                )
+            })
+            .flatten();
+        let (args, args_indexes) = bound
+            .as_ref()
+            .map_or((args, args_indexes), |(a, s)| (&**a, &**s));
         // A variadic host fn accepts any argument count and any types, so its
         // arity/type checks are skipped; every supplied argument is still
         // compiled and stored, and the registered closure receives them all.
@@ -502,4 +520,42 @@ pub fn handle_functions(
     } else {
         error_unknown_function_in_namespace(fn_name, namespace, span, ctx.file_idx, state);
     }
+}
+
+/// The arguments of a call to function `fn_name` of `host` or `dylib` block
+/// `block`, with named arguments put in place and the ones it leaves out filled
+/// from their defaults; `None` when the call needs nothing done.
+fn foreign_bound_args(
+    block: &str,
+    fn_name: &str,
+    args: &[Expr],
+    args_indexes: &[Span],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<(Box<[Expr]>, Box<[Span]>)> {
+    let sig = state
+        .dyn_libs
+        .iter()
+        .find(|lib| lib.name == block)?
+        .fns
+        .iter()
+        .find(|sig| sig.name == fn_name)?;
+    let named = args.iter().any(|arg| matches!(arg, Expr::NamedArg(..)));
+    if !named && (args.len() >= sig.params.len() || sig.defaults.is_empty()) {
+        return None;
+    }
+    let callee = format!("{block}::{fn_name}");
+    crate::compiler::call_args::bind(
+        &crate::compiler::call_args::Params {
+            callee: &callee,
+            names: &sig.params,
+            defaults: &sig.defaults,
+        },
+        args,
+        args_indexes,
+        span,
+        ctx.file_idx,
+        state.sources,
+    )
 }

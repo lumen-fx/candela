@@ -1,9 +1,9 @@
 dylib "../std_src/random/random" {
-    candela_seed(int);
-    int candela_random_int();
-    int candela_random_int_range(int, int);
-    float candela_random();
-    float candela_random_float_range(float,float);
+    fn candela_seed(seed: int);
+    fn candela_random_int() -> int;
+    fn candela_random_int_range(min: int, max: int) -> int;
+    fn candela_random() -> float;
+    fn candela_random_float_range(min: float, max: float) -> float;
 }
 
 fn seed(s) { random::candela_seed(s); }

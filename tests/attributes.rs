@@ -210,8 +210,8 @@ fn a_function_returning_a_type_named_attribute_still_parses() {
     let src = r#"
 struct attribute { x: int }
 host "app" {
-    attribute make(int);
-    attribute none();
+    fn make(x: int) -> attribute;
+    fn none() -> attribute;
 }
 fn use_them() -> int { return app::make(1).x + app::none().x; }
 fn main() {}
@@ -229,7 +229,7 @@ fn the_table_reads_out_of_an_artifact() {
         r#"
 host "tags" {
     attribute task(priority: int = 0) on fn;
-    int now();
+    fn now() -> int;
 }
 
 @task(priority: 3)

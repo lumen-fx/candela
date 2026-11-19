@@ -20,16 +20,16 @@ import "std/json";
 
 @cfg(web)
 host "js" {
-    any candela_js_call(string, any[]);
-    candela_js_call_async(int, string, any[]);
-    any candela_js_get(string);
-    candela_js_set(string, any);
-    candela_js_load(int, string);
-    any candela_js_invoke(int, string, any[]);
-    candela_js_invoke_async(int, int, string, any[]);
-    bool candela_js_release(int);
-    bool candela_js_listen(int, string, string);
-    bool candela_js_unlisten(int);
+    fn candela_js_call(path: string, args: any[]) -> any;
+    fn candela_js_call_async(source: int, path: string, args: any[]);
+    fn candela_js_get(path: string) -> any;
+    fn candela_js_set(path: string, value: any);
+    fn candela_js_load(id: int, url: string);
+    fn candela_js_invoke(handle: int, method: string, args: any[]) -> any;
+    fn candela_js_invoke_async(source: int, handle: int, method: string, args: any[]);
+    fn candela_js_release(handle: int) -> bool;
+    fn candela_js_listen(id: int, target: string, event: string) -> bool;
+    fn candela_js_unlisten(handle: int) -> bool;
 }
 
 /// A source whose one answer `on_done` reads as a `Result`.

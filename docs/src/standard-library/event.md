@@ -25,7 +25,7 @@ see [posting events from a library](../integration/c-libraries.md#posting-events
 import "std/event";
 
 dylib "../dist/ticker" {
-    start(int, int);
+    fn start(source: int, ms: int);
 }
 
 fn every(ms: int, on_tick: fn(string)) -> int {

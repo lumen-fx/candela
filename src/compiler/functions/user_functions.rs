@@ -198,6 +198,26 @@ pub fn handle_user_function(
     // whose callee is an expression rather than a name.
     env_id: Option<u16>,
 ) -> Option<u16> {
+    // Arguments passed by name go in place, and the ones left out take their
+    // defaults, before anything below counts or compiles them.
+    if let Some((args, args_indexes)) =
+        crate::compiler::call_args::bind_user_args(fn_id, 0, args, args_indexes, span, ctx, state)
+    {
+        return handle_user_function(
+            fn_name,
+            fn_id,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            &args,
+            span,
+            &args_indexes,
+            type_args,
+            env_id,
+        );
+    }
     let is_recursive = resolve_is_recursive(fn_id, state);
 
     let fn_returns_null = state.fns[fn_id].returns_null;

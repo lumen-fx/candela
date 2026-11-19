@@ -31,8 +31,8 @@ fn load(src: &str, filename: &str, hosts: &HostRegistry) -> RuntimeProgram {
 
 const HOST_PROGRAM: &str = r#"
 host "app" {
-    int width(string);
-    log(string);
+    fn width(a: string) -> int;
+    fn log(a: string);
 }
 
 fn banner(label: string) -> int {
@@ -279,7 +279,7 @@ fn an_enum_in_a_struct_argument_goes_in() {
 fn variadic_host_fn_binds_through_an_artifact() {
     let src = "
         host \"app\" {
-            log(...);
+            fn log(...);
         }
 
         fn report(label: string, count: int) {
@@ -342,7 +342,7 @@ fn a_partly_covered_registry_names_what_is_missing() {
 /// the wrong shape is refused before anything runs.
 #[test]
 fn a_closure_of_the_wrong_shape_is_refused_at_load() {
-    let src = "host \"app\" { int width(string); }\n\nfn main() {}\n";
+    let src = "host \"app\" { fn width(a: string) -> int; }\n\nfn main() {}\n";
     let bytes = build_bytecode(src.to_owned(), "shape.cdl", &candela::ImportResolver::new())
         .expect("builds");
 
@@ -545,7 +545,7 @@ fn a_runtime_error_comes_back_as_a_diagnostic() {
 fn a_signature_given_as_data_binds_at_load() {
     let src = "
         host \"gpio\" {
-            int read(int);
+            fn read(a: int) -> int;
         }
 
         fn level(pin: int) -> int { return gpio::read(pin) + 1; }
@@ -592,7 +592,7 @@ fn a_signature_given_as_data_binds_at_load() {
 fn a_host_fn_error_comes_back_from_an_artifact_call() {
     let src = "
         host \"gpio\" {
-            int read(int);
+            fn read(a: int) -> int;
         }
 
         fn level(pin: int) -> int { return gpio::read(pin); }
@@ -1169,7 +1169,7 @@ host "process" {
         cwd: string = ".",
         end_at_exit: bool = true,
     }
-    bool start(string, StartOptions);
+    fn start(a: string, b: StartOptions) -> bool;
 }
 
 fn in_dir(dir: string) -> bool {
@@ -1455,8 +1455,8 @@ fn call_in_out_hands_back_what_the_function_wrote() {
 fn host_fn_arguments_convert_between_int_and_float() {
     let src = r#"
 host "app" {
-    float scale(float);
-    int cells(int);
+    fn scale(a: float) -> float;
+    fn cells(a: int) -> int;
 }
 
 fn sizes() -> float {

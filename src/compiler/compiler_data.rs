@@ -217,6 +217,12 @@ pub struct FunctionImpl {
 pub struct FnSignature {
     pub name: SmolStr,
     pub args: Box<[DataType]>,
+    /// The parameters' names, which a call passes arguments by.
+    pub params: Box<[SmolStr]>,
+    /// The parameters' defaults, by the id
+    /// [`crate::compiler::type_system::Generics::arg_default`] reads; empty
+    /// when none declares one.
+    pub defaults: Box<[Option<u32>]>,
     pub return_type: DataType,
     pub id: u16,
     /// When true (host functions only) the call site accepts any number of

@@ -58,7 +58,7 @@ fn main() -> Result<(), candela::Diagnostic> {
     let mut program = engine.compile(
         r#"
         host "app" {
-            int width(string);
+            fn width(text: string) -> int;
         }
 
         fn banner(label: string) -> int {
@@ -103,6 +103,22 @@ them or `()`:
 The closure's signature is derived from its Rust types and checked against the
 script's `host` declaration when you compile. A disagreement in arity, argument
 type or return type is returned as a `Diagnostic`, never a panic.
+
+A `host` block declares each function the way a candela function is declared,
+with a `;` in place of the body: `fn width(text: string) -> int;`. A function
+that returns nothing leaves out the `->`. The parameter names are what a call
+passes arguments by, and a parameter may declare a default that a call leaving
+it out passes instead; the closure always receives every argument:
+
+```candela
+host "app" {
+    fn scaled(text: string, by: int = 10) -> int;
+}
+
+fn main() {
+    print(app::scaled("ab"), app::scaled(by: 2, text: "abc"));
+}
+```
 
 A namespace is a namespace, so a host function may take a name a built-in
 already has: `gpio::read` is the `int` its block declares, not the `read` that
@@ -149,7 +165,7 @@ declare the function with `...`:
 
 ```rust
 host "app" {
-    log(...);
+    fn log(...);
 }
 ```
 
@@ -211,7 +227,7 @@ host "process" {
         env: {string: string},
         end_at_exit: bool = true,
     }
-    bool start(string, string[], string, StartOptions);
+    fn start(cmd: string, args: string[], cwd: string, options: StartOptions) -> bool;
 }
 ```
 
@@ -271,7 +287,7 @@ closure always receives every field.
 
 A host function cannot return a struct; a declaration that does is refused
 when it binds. A tuple crosses the same way, as a struct whose fields are named
-by position: `int area((int, string));` registers its parameter as
+by position: `fn area(shape: (int, string)) -> int;` registers its parameter as
 `HostType::Struct` with the fields `"0"` and `"1"`, and the closure receives a
 `Value::Struct` named `(int, string)` and reads `args[0].field("0")`. A `.cdlb` built from the script records the struct with the program's
 own, so `RuntimeProgram` binds and passes it the same way.

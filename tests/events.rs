@@ -121,7 +121,7 @@ const AFTER_MAIN: &str = r#"
 import "std/event";
 
 dylib "ticker" {
-    int tick(int, int, int);
+    fn tick(a: int, b: int, c: int) -> int;
 }
 
 fn main() {
@@ -215,7 +215,7 @@ fn main_can_dispatch_itself() {
 import "std/event";
 
 dylib "ticker" {
-    int tick(int, int, int);
+    fn tick(a: int, b: int, c: int) -> int;
 }
 
 fn main() {
@@ -246,8 +246,8 @@ fn nothing_held_means_main_is_the_end() {
 import "std/event";
 
 dylib "ticker" {
-    int own_source();
-    int abi();
+    fn own_source() -> int;
+    fn abi() -> int;
 }
 
 fn main() {
@@ -280,7 +280,7 @@ fn an_embedder_dispatches_from_its_own_loop() {
 import "std/event";
 
 dylib "ticker" {
-    int tick(int, int, int);
+    fn tick(a: int, b: int, c: int) -> int;
 }
 
 fn start() -> int {
@@ -338,7 +338,7 @@ fn a_registered_handler_survives_a_collection() {
 import "std/event";
 
 dylib "ticker" {
-    int tick(int, int, int);
+    fn tick(a: int, b: int, c: int) -> int;
 }
 
 fn start() {

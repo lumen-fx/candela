@@ -99,6 +99,38 @@ resolves, as [methods](methods.md) describes.
 inside another function's body, is a compile error; move it out to the top
 level.
 
+## Default values and named arguments
+
+A parameter may declare a default after `=`. A call that leaves the argument out
+passes the default instead, and a call may pass any argument by its parameter's
+name, `name: value`, after the ones it passes in order:
+
+```rust
+fn window(width: int, height: int, title: string = "untitled", resizable: bool = true) {
+    print(title, width, height, resizable);
+}
+
+fn main() {
+    window(800, 600);
+    window(800, 600, resizable: false);
+    window(height: 400, width: 300, title: "tools");
+}
+```
+
+The compiler fills in each default at the call, so a call costs the same as one
+that writes every argument, and each call builds its own value: a default of
+`[]` is a fresh empty list every time. A default compiles in the file that
+declares it and sees what that file sees (its constants, functions and
+imports), not the caller's variables and not the other parameters.
+
+Every function takes defaults and named arguments this way: a function, a
+method or a constructor in an `impl` block, and a function of a `host` or
+`dylib` block. An argument passed by name to something with no parameter names,
+a built-in such as `print`, a function held in a variable of a `fn(...)` type,
+or an enum variant, is a compile error; pass those in order. A name that is not
+one of the parameters, a parameter given twice, or a parameter with no default
+that the call leaves out is reported at the call.
+
 ## main
 
 `main` is the entry point. Running a file calls it, and only the `main` of the

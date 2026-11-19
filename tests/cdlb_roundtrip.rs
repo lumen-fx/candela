@@ -421,8 +421,7 @@ fn dyn_lib_program_round_trips_and_rebinds() {
             return;
         }
 
-        let src =
-            "dylib \"z\" { string zlibVersion(); }\n\nfn main() { print(z::zlibVersion()); }\n";
+        let src = "dylib \"z\" { fn zlibVersion() -> string; }\n\nfn main() { print(z::zlibVersion()); }\n";
         let bytes =
             candela::build_bytecode(src.to_owned(), "zt.cdl", &candela::ImportResolver::new())
                 .expect("dyn-lib program must now build to a .cdlb artifact");
@@ -452,7 +451,7 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 /// fail with a clear error that names the missing function.
 #[test]
 fn host_block_program_builds_but_load_names_missing_host_fn() {
-    let src = "host \"app\" { int rows(string); }\n\nfn main() { print(\"start\"); }\n";
+    let src = "host \"app\" { fn rows(a: string) -> int; }\n\nfn main() { print(\"start\"); }\n";
     let bytes = candela::build_bytecode(src.to_owned(), "h.cdl", &candela::ImportResolver::new())
         .expect("host-block program must now build to a .cdlb artifact");
 

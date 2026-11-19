@@ -41,8 +41,8 @@ const PROGRAM: &str = "
 struct Pair { low: int, high: int }
 
 dylib \"intwidth\" {
-    int triple(int);
-    Pair split(int);
+    fn triple(a: int) -> int;
+    fn split(a: int) -> Pair;
 }
 
 fn tripled() {

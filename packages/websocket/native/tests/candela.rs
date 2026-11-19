@@ -42,7 +42,7 @@ fn program(root: &Path, url: &str) -> String {
 {import}
 
 host "test" {{
-    seen(string);
+    fn seen(text: string);
 }}
 
 fn start() {{
@@ -128,7 +128,7 @@ fn a_close_code_the_protocol_reserves_raises() {
 {import}
 
 host "test" {{
-    seen(string);
+    fn seen(text: string);
 }}
 
 fn start() {{
@@ -167,7 +167,7 @@ fn a_server_that_drops_the_connection_is_a_failed_close() {
 {import}
 
 host "test" {{
-    seen(string);
+    fn seen(text: string);
 }}
 
 fn start() {{

@@ -21,7 +21,7 @@ fn program(root: &Path, src: &Path, dest: &Path, include: &str) -> String {
 {import}
 
 host "test" {{
-    seen(string);
+    fn seen(text: string);
 }}
 
 fn start() {{

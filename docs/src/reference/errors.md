@@ -44,6 +44,8 @@ Raised while the file is read, before any type is known.
 | Unclosed delimiter | A `(`, `[` or `{` that is never closed; the report points at the opener |
 | Missing semicolon | A statement not ended with `;` |
 | Missing separator | Array elements, arguments or parameters not separated by `,` |
+| Argument order | An argument passed in order after one passed by name (`positional_after_named`) |
+| `host` or `dylib` entry | An entry written the removed C way, `int f(int);`; the report shows it rewritten as `fn f(a: int) -> int;` (`old_host_signature`) |
 | Inline `if` without `else` | An `if` used as an expression must produce a value on every path |
 | `try` without `catch` | A `try` block needs at least one `catch` clause |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
@@ -122,6 +124,15 @@ and the help names the path call, `Type::name(...)`, and the `self` parameter
 that would make it a method. The reverse, a path call that reaches an `impl`
 function taking `self`, is `path_call_with_receiver`, and the help names the dot
 call.
+
+**Named argument errors.** A call that passes an argument by a name the
+function has no parameter for is `named_argument_unknown`, one that gives a
+parameter twice, in order and by name or by name twice, is
+`named_argument_twice`, and one that passes arguments by name and leaves out a
+parameter with no default is `argument_missing`. An argument passed by name to
+a built-in, a function value or an enum variant, which take theirs in order, is
+`named_argument_unexpected`. See
+[functions](../language/functions.md#default-values-and-named-arguments).
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including a `float` operand of a bitwise operator and a non-`bool` operand of `&&`,

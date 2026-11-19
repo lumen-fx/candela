@@ -3,9 +3,9 @@
 /// The digest covers the string's UTF-8 bytes. md5 and sha1 are for ids and
 /// checksums, not for security.
 dylib "../std_src/hash/hash" {
-    string candela_md5(string);
-    string candela_sha1(string);
-    string candela_sha256(string);
+    fn candela_md5(text: string) -> string;
+    fn candela_sha1(text: string) -> string;
+    fn candela_sha256(text: string) -> string;
 }
 
 /// The md5 digest of `s`, as 32 lowercase hex digits.

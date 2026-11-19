@@ -206,10 +206,12 @@ module.exports = grammar({
 
     parameter_list: ($) => seq('(', sepByTrailing(',', $.parameter), ')'),
 
+    // `size: int = 12`: a call that leaves the argument out passes the default.
     parameter: ($) =>
       seq(
         field('name', $.identifier),
         optional(seq(':', field('type', $._type))),
+        optional(seq('=', field('default', $._expression))),
       ),
 
     return_type: ($) => seq('->', $._type),
@@ -351,15 +353,17 @@ module.exports = grammar({
     // `enum` or `enum[]`: a parameter that takes a variant of any enum.
     enum_reference_type: (_) => seq('enum', repeat(seq('[', ']'))),
 
-    // `int add(int, int);`, or `log(string);` for a function returning null.
-    // Parameters are types only; `...` marks a variadic host function.
+    // `fn add(a: int, b: int) -> int;`: a function declared with a `;` for its
+    // body. `fn log(...);` takes any number of arguments, in a host block.
     function_signature: ($) =>
       seq(
-        optional(field('return_type', $._type)),
+        'fn',
         field('name', $.identifier),
-        '(',
-        optional(choice($.variadic_parameter, sepByTrailing(',', $._type))),
-        ')',
+        field(
+          'parameters',
+          choice($.parameter_list, seq('(', $.variadic_parameter, ')')),
+        ),
+        optional(field('return_type', $.return_type)),
         ';',
       ),
 
@@ -830,7 +834,10 @@ module.exports = grammar({
         ),
       ),
 
-    arguments: ($) => seq('(', sepByTrailing(',', $._expression), ')'),
+    arguments: ($) => seq('(', sepByTrailing(',', choice($._expression, $.named_argument)), ')'),
+
+    // `title: "x"`: an argument passed by its parameter's name.
+    named_argument: ($) => seq(field('name', $.identifier), ':', field('value', $._expression)),
 
     array_literal: ($) => seq('[', sepByTrailing(',', $._expression), ']'),
 

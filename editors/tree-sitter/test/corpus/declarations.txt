@@ -325,9 +325,9 @@ Dynamic library block (pgo/pgo-dynlib.cdl)
 ================================================================================
 
 dylib "pgo_dynlib" {
-    int pgo_add_int(int,int);
-    float pgo_add_float(float,float);
-    int pgo_all_types(int,float,string,int[],float[],string[][],int[][],int);
+    fn pgo_add_int(a: int, b: int) -> int;
+    fn pgo_add_float(a: float, b: float) -> float;
+    fn pgo_all_types(a: int, b: float, c: string, d: int[], e: float[], f: string[][], g: int[][], h: int) -> int;
 }
 
 --------------------------------------------------------------------------------
@@ -337,40 +337,70 @@ dylib "pgo_dynlib" {
     (string_literal)
     (signature_list
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier)
-        (type_identifier))
-      (function_signature
-        (type_identifier)
-        (identifier)
-        (type_identifier)
-        (type_identifier))
-      (function_signature
-        (type_identifier)
-        (identifier)
-        (type_identifier)
-        (type_identifier)
-        (type_identifier)
-        (array_type
-          (type_identifier))
-        (array_type
-          (type_identifier))
-        (array_type
-          (array_type
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
             (type_identifier)))
-        (array_type
-          (array_type
+        (return_type
+          (type_identifier)))
+      (function_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
             (type_identifier)))
-        (type_identifier)))))
+        (return_type
+          (type_identifier)))
+      (function_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (array_type
+              (type_identifier)))
+          (parameter
+            (identifier)
+            (array_type
+              (type_identifier)))
+          (parameter
+            (identifier)
+            (array_type
+              (array_type
+                (type_identifier))))
+          (parameter
+            (identifier)
+            (array_type
+              (array_type
+                (type_identifier))))
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier))))))
 
 ================================================================================
 Host block with a variadic signature (docs/src/integration/embedding.md)
 ================================================================================
 
 host "app" {
-    int width(string);
-    log(...);
+    fn width(a: string) -> int;
+    fn log(...);
 }
 
 --------------------------------------------------------------------------------
@@ -380,9 +410,13 @@ host "app" {
     (string_literal)
     (signature_list
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier))
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier)))
       (function_signature
         (identifier)
         (variadic_parameter)))))
@@ -396,7 +430,7 @@ host "process" {
         cwd: string = ".",
         env: {string: string},
     }
-    bool start(string, StartOptions);
+    fn start(a: string, b: StartOptions) -> bool;
 }
 
 --------------------------------------------------------------------------------
@@ -418,10 +452,16 @@ host "process" {
               (type_identifier)
               (type_identifier)))))
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier)
-        (type_identifier)))))
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier))))))
 
 ================================================================================
 Comments (libs/std/string.cdl, libs/std/tests/test_errors.cdl)

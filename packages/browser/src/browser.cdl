@@ -17,22 +17,22 @@ import "std/json";
 
 @cfg(web)
 host "browser" {
-    bool candela_browser_open_popup(string, string, string);
-    bool candela_browser_close_popup(string);
-    bool candela_browser_post_message(string, any, string);
-    candela_browser_close_window();
-    candela_browser_share(int, {string: any});
-    bool candela_browser_can_share({string: any});
-    candela_browser_download_text(string, string, string);
-    candela_browser_guard_unload(bool);
-    bool candela_browser_match_media(string);
-    candela_browser_watch_media(int, string);
-    candela_browser_pick_file(int, string);
-    candela_browser_request_fullscreen(int, string);
-    candela_browser_exit_fullscreen();
-    bool candela_browser_is_fullscreen();
-    candela_browser_on_message(int);
-    candela_browser_on_fullscreen_change(int);
+    fn candela_browser_open_popup(url: string, name: string, features: string) -> bool;
+    fn candela_browser_close_popup(name: string) -> bool;
+    fn candela_browser_post_message(target: string, data: any, origin: string) -> bool;
+    fn candela_browser_close_window();
+    fn candela_browser_share(id: int, data: {string: any});
+    fn candela_browser_can_share(data: {string: any}) -> bool;
+    fn candela_browser_download_text(filename: string, mime: string, text: string);
+    fn candela_browser_guard_unload(on: bool);
+    fn candela_browser_match_media(query: string) -> bool;
+    fn candela_browser_watch_media(id: int, query: string);
+    fn candela_browser_pick_file(id: int, accept: string);
+    fn candela_browser_request_fullscreen(source: int, id: string);
+    fn candela_browser_exit_fullscreen();
+    fn candela_browser_is_fullscreen() -> bool;
+    fn candela_browser_on_message(id: int);
+    fn candela_browser_on_fullscreen_change(id: int);
 }
 
 /// A file the visitor picked.

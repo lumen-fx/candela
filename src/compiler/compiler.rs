@@ -62,6 +62,7 @@ use compiler_data::StringSlots;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
+use expr::ForeignFn;
 use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
@@ -208,7 +209,7 @@ pub(crate) fn is_check_only() -> bool {
 type PendingDylib = (
     u16,
     u16,
-    Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+    Box<[ForeignFn]>,
     LibHandle,
     (SmolStr, LibraryOrigin),
     Span,
@@ -228,6 +229,7 @@ mod functions;
 #[path = "functions/methods.rs"]
 mod methods;
 
+pub(crate) mod call_args;
 mod copies;
 pub(crate) mod flow;
 mod fold;
@@ -1427,6 +1429,11 @@ pub(crate) fn variant_constructor(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<(u16, u16)> {
+    // A variant takes its payload in order; a call passing an argument by name
+    // is a function's.
+    if args.iter().any(|a| matches!(a, Expr::NamedArg(..))) {
+        return None;
+    }
     let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
     variant_constructor_at(path, &arg_types, span, ctx, state)
 }
@@ -5723,6 +5730,7 @@ fn compile_function_definition(
     span: Span,
     declared_return_type: Option<&(TypeExpr, Span)>,
     type_params: &TypeParams,
+    defaults: &[Option<(Expr, Span)>],
     _v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -5780,6 +5788,9 @@ fn compile_function_definition(
         captures: Box::from([]),
         entry_register: None,
     });
+    let fn_id = (state.fns.len() - 1) as u16;
+    let ids = state.generics.add_param_defaults(ctx.file_idx, defaults);
+    state.generics.set_fn_defaults(fn_id, ids);
 }
 
 fn compile_return(
@@ -7211,7 +7222,15 @@ impl Expr {
                     }
                 }),
             ),
-            Self::FunctionDecl(fn_name, fn_args, fn_code, span, return_type, type_params) => {
+            Self::FunctionDecl(
+                fn_name,
+                fn_args,
+                fn_code,
+                span,
+                return_type,
+                type_params,
+                defaults,
+            ) => {
                 debug_assert!(!uses_id);
                 compile_function_definition(
                     fn_name,
@@ -7220,6 +7239,7 @@ impl Expr {
                     *span,
                     return_type.as_deref(),
                     type_params,
+                    defaults,
                     v,
                     ctx,
                     state,
@@ -7246,6 +7266,25 @@ impl Expr {
                 debug_assert!(!uses_id);
                 compile_eval_block(code, v, ctx, state, output);
                 None
+            }
+            Self::NamedArg(name, _, span) => {
+                call_args::error_named_argument_unexpected(name, *span, ctx.file_idx, state.sources)
+            }
+            Self::DefaultArg(id, _) => {
+                // A default compiles in the file that declared it, where no
+                // variable of the call's scope is visible.
+                let (file_idx, value, _) = state.generics.arg_default(*id).clone();
+                let mut scope: Vec<Variable> = Vec::new();
+                value.compile_form(
+                    &mut scope,
+                    Ctx { file_idx, ..ctx },
+                    state,
+                    output,
+                    tgt_id,
+                    var_assignment,
+                    &[],
+                    uses_id,
+                )
             }
             _ => unsafe { unreachable_unchecked() },
         }
@@ -7701,13 +7740,7 @@ fn load_prelude(
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
     pending_dylibs: &mut Vec<PendingDylib>,
-    pending_host: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: &mut Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     generics: &mut Generics,
     resolver: &ImportResolver,
 ) {
@@ -8328,13 +8361,7 @@ fn parse_toplevel(
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
     pending_dylibs: &mut Vec<PendingDylib>,
-    pending_host: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: &mut Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     generics: &mut Generics,
     resolver: &ImportResolver,
 ) {
@@ -8346,7 +8373,15 @@ fn parse_toplevel(
             .next_if(|(at, _)| *at == index)
             .map(|(_, uses)| uses);
         match expr {
-            Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type, type_params) => {
+            Expr::FunctionDecl(
+                fn_name,
+                fn_args,
+                fn_code,
+                span,
+                fn_return_type,
+                type_params,
+                defaults,
+            ) => {
                 if let Some(uses) = uses {
                     let target = if type_params.is_empty() {
                         UseTarget::Fn(fns.len() as u16)
@@ -8399,6 +8434,8 @@ fn parse_toplevel(
                     }),
                     entry_register: None,
                 });
+                let default_ids = generics.add_param_defaults(src_file_idx, &defaults);
+                generics.set_fn_defaults(fn_id, default_ids);
                 pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type, type_params));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
@@ -8476,7 +8513,7 @@ fn parse_toplevel(
                 } else {
                     fn_signatures
                         .iter()
-                        .map(|(fn_name, args, ret, fn_span)| {
+                        .map(|(fn_name, args, ret, fn_span, params)| {
                             (
                                 fn_name.clone(),
                                 args.iter()
@@ -8484,6 +8521,7 @@ fn parse_toplevel(
                                     .collect(),
                                 qualify_host_type(ret, &host_namespace, &local),
                                 *fn_span,
+                                params.clone(),
                             )
                         })
                         .collect()
@@ -8910,13 +8948,7 @@ fn resolve_types(
     pending_enums: PendingEnums,
     pending_fns: PendingFns,
     pending_dylibs: Vec<PendingDylib>,
-    pending_host: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     file_namespaces: &FileNamespaces,
     dynamic_libs_fns: &mut Vec<DynamicLibFn>,
     host_fns: &mut Vec<HostFnSig>,
@@ -9057,7 +9089,7 @@ fn resolve_types(
         let () = lib;
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
-            .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
+            .map(|(fn_name, fn_args, fn_return_type, fn_name_span, params)| {
                 let fn_args = fn_args
                     .iter()
                     .map(|t| {
@@ -9102,6 +9134,8 @@ fn resolve_types(
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
+                    params: params.names.clone(),
+                    defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
                     return_type: fn_return_type.clone(),
                     id: (dynamic_libs_fns.len() + unbound_dylib_fns) as u16,
                     variadic: false,
@@ -9182,58 +9216,62 @@ fn resolve_types(
     for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
-            .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
-                // A lone `...` sentinel argument marks a variadic host fn: it
-                // takes no fixed argument types, and the call site forwards
-                // every supplied argument to the registered closure.
-                let variadic = fn_args.len() == 1
-                    && matches!(&fn_args[0], TypeExpr::Identifier(s, _) if s.as_str() == "...");
-                let fn_args = if variadic {
-                    Box::from([])
-                } else {
-                    fn_args
-                        .iter()
-                        .map(|t| {
-                            t.to_datatype(&mut TypeCtx {
-                                file_idx: src_file_idx,
-                                namespaces: file_namespaces,
-                                sources,
-                                structs,
-                                enums,
-                                fns,
-                                generics,
+            .map(
+                |(fn_name, fn_args, fn_return_type, _fn_name_span, params)| {
+                    // A lone `...` sentinel argument marks a variadic host fn: it
+                    // takes no fixed argument types, and the call site forwards
+                    // every supplied argument to the registered closure.
+                    let variadic = fn_args.len() == 1
+                        && matches!(&fn_args[0], TypeExpr::Identifier(s, _) if s.as_str() == "...");
+                    let fn_args = if variadic {
+                        Box::from([])
+                    } else {
+                        fn_args
+                            .iter()
+                            .map(|t| {
+                                t.to_datatype(&mut TypeCtx {
+                                    file_idx: src_file_idx,
+                                    namespaces: file_namespaces,
+                                    sources,
+                                    structs,
+                                    enums,
+                                    fns,
+                                    generics,
+                                })
                             })
-                        })
-                        .collect::<Vec<DataType>>()
-                        .into_boxed_slice()
-                };
-                let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
-                    file_idx: src_file_idx,
-                    namespaces: file_namespaces,
-                    sources,
-                    structs,
-                    enums,
-                    fns,
-                    generics,
-                });
-                let return_val = FnSignature {
-                    name: fn_name.clone(),
-                    args: fn_args.clone(),
-                    return_type: fn_return_type.clone(),
-                    id: host_fns.len() as u16,
-                    variadic,
-                };
+                            .collect::<Vec<DataType>>()
+                            .into_boxed_slice()
+                    };
+                    let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
+                        file_idx: src_file_idx,
+                        namespaces: file_namespaces,
+                        sources,
+                        structs,
+                        enums,
+                        fns,
+                        generics,
+                    });
+                    let return_val = FnSignature {
+                        name: fn_name.clone(),
+                        args: fn_args.clone(),
+                        params: params.names.clone(),
+                        defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
+                        return_type: fn_return_type.clone(),
+                        id: host_fns.len() as u16,
+                        variadic,
+                    };
 
-                let mut types = vec![fn_return_type];
-                types.extend(fn_args);
-                host_fns.push(HostFnSig {
-                    types: types.into_boxed_slice(),
-                    namespace: host_namespace.clone(),
-                    name: fn_name.clone(),
-                    variadic,
-                });
-                return_val
-            })
+                    let mut types = vec![fn_return_type];
+                    types.extend(fn_args);
+                    host_fns.push(HostFnSig {
+                        types: types.into_boxed_slice(),
+                        namespace: host_namespace.clone(),
+                        name: fn_name.clone(),
+                        variadic,
+                    });
+                    return_val
+                },
+            )
             .collect();
         dynamic_libs[dynlib_id as usize].fns = resolved.into_boxed_slice();
     }
@@ -9430,13 +9468,7 @@ pub fn compile_profile(
     let mut pending_fns: PendingFns = Vec::with_capacity(2);
     let mut generics = Generics::default();
     let mut pending_dylibs: Vec<PendingDylib> = Vec::new();
-    let mut pending_host: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )> = Vec::new();
+    let mut pending_host: Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)> = Vec::new();
 
     generics.add_impls(parsed.impls, 0);
     let mut pending_attributes = PendingAttributes::default();

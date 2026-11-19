@@ -28,9 +28,9 @@ import "std/event";
 import "std/json";
 
 dylib "../dist/download" {
-    candela_download_start(int, string, string, string, int, int);
-    int candela_download_cancel(int);
-    candela_download_set_max_concurrent(int);
+    fn candela_download_start(id: int, url: string, path: string, checksum: string, timeout_ms: int, max_bytes: int);
+    fn candela_download_cancel(handle: int) -> int;
+    fn candela_download_set_max_concurrent(n: int);
 }
 
 /// How one transfer runs.

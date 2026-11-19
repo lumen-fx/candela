@@ -63,14 +63,20 @@ pub struct SourceFile {
 pub struct Param {
     pub name: String,
     pub ty: Option<String>,
+    /// The `= value` the parameter declares, as written.
+    pub default: Option<String>,
 }
 
 impl Param {
     #[must_use]
     pub fn render(&self) -> String {
-        match &self.ty {
+        let head = match &self.ty {
             Some(ty) => format!("{}: {ty}", self.name),
             None => self.name.clone(),
+        };
+        match &self.default {
+            Some(default) => format!("{head} = {default}"),
+            None => head,
         }
     }
 }
@@ -439,7 +445,8 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
     let functions = out
         .functions
         .iter()
-        .map(|f| function_symbol(f, types, &sources))
+        .enumerate()
+        .map(|(id, f)| function_symbol(out, id, f, types, &sources))
         .collect();
 
     let structs = out
@@ -714,13 +721,32 @@ fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
     entries
 }
 
-fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -> FunctionSymbol {
+fn function_symbol(
+    out: &CompileOutput,
+    id: usize,
+    f: &Function,
+    types: TypeNames<'_>,
+    sources: &[SourceFile],
+) -> FunctionSymbol {
+    let defaults = u16::try_from(id)
+        .ok()
+        .and_then(|id| out.generics.fn_defaults(id))
+        .unwrap_or(&[]);
     let params = f
         .args
         .iter()
-        .map(|(name, ty)| Param {
+        .enumerate()
+        .map(|(k, (name, ty))| Param {
             name: name.to_string(),
             ty: ty.as_ref().map(|t| types.of(t).to_string()),
+            default: defaults.get(k).copied().flatten().and_then(|default| {
+                let (file, _, span) = out.generics.arg_default(default);
+                let text = sources
+                    .get(*file as usize)?
+                    .text
+                    .get(span.start as usize..span.end as usize)?;
+                Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+            }),
         })
         .collect();
 
@@ -1382,7 +1408,7 @@ mod tests {
     /// library is not built yet analyses cleanly.
     #[test]
     fn a_dylib_is_bound_without_its_library() {
-        let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
+        let source = "dylib \"nosuch_lib_xyz\" {\n    fn f(a: int) -> int;\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.errors.is_empty(),

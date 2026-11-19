@@ -395,7 +395,12 @@ See [control flow](../language/control-flow.md).
   `import "std/json";`.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
-- `->` gives the return type in a `dylib` or `host` signature. `=>` means
+- `:` after a name in a call's argument list passes the argument by its
+  parameter's name, as in `window(800, 600, title: "x")`; see
+  [functions](../language/functions.md#default-values-and-named-arguments).
+  `=` after a parameter gives its default, as in `fn f(size: int = 12)`.
+- `->` gives the return type of a function, a `dylib` or `host` function, and a
+  function type, as in `fn(int) -> int`. `=>` means
   "evaluates to": it separates a `match` pattern from its body, and gives a
   function a body of one expression, as in `fn(x) => x * 2`.
 

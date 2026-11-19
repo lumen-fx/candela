@@ -162,8 +162,8 @@ half: a `dylib` block, or candela that raises.
 ```rust
 @cfg(web)
 host "websocket" {
-    candela_websocket_open(int, string);
-    int candela_websocket_send(int, string);
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
 }
 ```
 

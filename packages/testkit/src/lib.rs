@@ -162,7 +162,7 @@ pub fn import(root: &Path, name: &str) -> String {
 /// so far are what the test waits for. Answers every report `test::seen`
 /// received, in order.
 ///
-/// `program` declares `host "test" { seen(string); }` to report through.
+/// `program` declares `host "test" { fn seen(text: string); }` to report through.
 ///
 /// # Panics
 ///

@@ -32,18 +32,18 @@ import "std/json";
 
 @cfg(not(web))
 dylib "../dist/websocket" {
-    candela_websocket_open(int, string);
-    int candela_websocket_send(int, string);
-    int candela_websocket_close(int, int, string);
-    string candela_websocket_state(int);
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
+    fn candela_websocket_close(handle: int, code: int, reason: string) -> int;
+    fn candela_websocket_state(handle: int) -> string;
 }
 
 @cfg(web)
 host "websocket" {
-    candela_websocket_open(int, string);
-    int candela_websocket_send(int, string);
-    int candela_websocket_close(int, int, string);
-    string candela_websocket_state(int);
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
+    fn candela_websocket_close(handle: int, code: int, reason: string) -> int;
+    fn candela_websocket_state(handle: int) -> string;
 }
 
 /// What a connection reports.

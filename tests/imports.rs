@@ -1308,7 +1308,7 @@ fn an_import_takes_a_name_or_items_not_both() {
 /// imported by name. The block's namespace is not repeated.
 #[test]
 fn a_host_struct_is_reached_through_the_module_name() {
-    const ECS: &str = "host \"ecs\" {\n    struct Entity { id: int }\n    bool despawn(Entity);\n}\n\
+    const ECS: &str = "host \"ecs\" {\n    struct Entity { id: int }\n    fn despawn(a: Entity) -> bool;\n}\n\
                        fn make(id: int) -> ecs::Entity => ecs::Entity { id: id };\n";
     let output = run_program(
         "host_struct_by_module",

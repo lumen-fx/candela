@@ -143,6 +143,25 @@ pub fn variant_pattern_binders(pattern: &Expr) -> Box<dyn Iterator<Item = &Expr>
 /// variant's index: `Click { x: int, y: int }` names its two payload places.
 pub type VariantFields = Box<[(u16, Box<[SmolStr]>)]>;
 
+/// The `= value` each parameter of a declaration was declared with and where,
+/// one entry per parameter; empty when no parameter declares one.
+pub type ParamDefaults = Box<[Option<(Expr, Span)>]>;
+
+/// One function a `host` or `dylib` block declares, `fn noise(seed: int);`.
+///
+/// Its name, the parameter types, the return type (`null` for none), where the
+/// name was written, and the parameters' names and defaults. A variadic one,
+/// `fn log(...);`, has the one type `...` and no names.
+pub type ForeignFn = (SmolStr, Box<[TypeExpr]>, TypeExpr, Span, ForeignParams);
+
+/// The names and defaults of a [`ForeignFn`]'s parameters, which a call reads
+/// to put named arguments in place and fill the ones it leaves out.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForeignParams {
+    pub names: Box<[SmolStr]>,
+    pub defaults: ParamDefaults,
+}
+
 /// How a variant takes its payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VariantShape {
@@ -424,13 +443,15 @@ pub enum Expr {
     /// callee's static `Fn` type names the function the same way the type of a
     /// `let`-bound closure does.
     CallValue(Box<Self>, Box<[Self]>, Span, Box<[Span]>),
-    /// FunctionDecl(name, args, code, name_span, return_type, type_params)
+    /// FunctionDecl(name, args, code, name_span, return_type, type_params, defaults)
     ///
     /// `return_type` carries the optional `-> Type` annotation together with the
     /// span of the annotation itself, which is what a mismatch between the
     /// declared and the returned type is reported against. `type_params` names
     /// the type parameters of a generic function (`fn first<T>`) and is empty
-    /// otherwise.
+    /// otherwise. `defaults` holds the `= value` each parameter was declared
+    /// with and where, one entry per parameter, and is empty when none declares
+    /// one.
     FunctionDecl(
         SmolStr,
         Box<[(SmolStr, Option<TypeExpr>)]>,
@@ -438,7 +459,21 @@ pub enum Expr {
         Span,
         ReturnAnnotation,
         TypeParams,
+        ParamDefaults,
     ),
+    /// NamedArg(name, value, name_span)
+    ///
+    /// An argument passed by its parameter's name, `title: "x"`. Only the
+    /// argument list of a call holds one, and the call puts it in place before
+    /// anything compiles it.
+    NamedArg(SmolStr, Box<Self>, Span),
+    /// DefaultArg(default_id, span)
+    ///
+    /// The `= value` a parameter was declared with, standing for the argument a
+    /// call left out; see [`crate::compiler::type_system::Generics::arg_default`].
+    /// It compiles in the file that declared it. Built by the compiler, never
+    /// by the parser.
+    DefaultArg(u32, Span),
 
     ReturnVal(Box<Option<Self>>),
 
@@ -474,11 +509,7 @@ pub enum Expr {
     /// IntForLoop(loop_var_name, first_elem, final_elem, code)
     IntForLoop(SmolStr, Box<Self>, Box<Self>, Box<[Self]>, Span, Span),
     /// ImportDylib(lib_path, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end))
-    ImportDylib(
-        SmolStr,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Span,
-    ),
+    ImportDylib(SmolStr, Box<[ForeignFn]>, Span),
 
     /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end), structs, attributes)
     ///
@@ -491,7 +522,7 @@ pub enum Expr {
     /// block is written in (`@ecs::system`).
     HostBlock(
         SmolStr,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        Box<[ForeignFn]>,
         Span,
         Box<[Self]>,
         Box<[AttributeDecl]>,
@@ -574,6 +605,7 @@ impl Expr {
                 | Self::Map(_, _)
                 | Self::Struct(..)
                 | Self::StructDefault(..)
+                | Self::DefaultArg(..)
                 | Self::NamespacedRef(_, _, _)
                 | Self::GetStructField(_, _, _, _)
                 | Self::InlineCondition(_, _, _, _)
@@ -1115,6 +1147,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::Propagate(obj, _)
         | Expr::Cast(obj, _, _, _)
         | Expr::BoolNeg(obj, _, _)
+        | Expr::NamedArg(_, obj, _)
         | Expr::Neg(obj, _, _)
         | Expr::BitNot(obj, _, _) => {
             scan_free_names(obj, depth, bound, out);
@@ -1174,7 +1207,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::StructDefault(_, _)
         | Expr::StructDeclare(..)
         | Expr::EnumDeclare(..)
-        | Expr::FunctionDecl(_, _, _, _, _, _)
+        | Expr::FunctionDecl(..)
+        | Expr::DefaultArg(..)
         | Expr::ImportDylib(_, _, _)
         | Expr::HostBlock(..)
         | Expr::ImportFile(..)

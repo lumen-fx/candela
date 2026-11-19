@@ -302,3 +302,6 @@
 
 ((comment) @comment
   (#match? @comment "^////"))
+
+(named_argument
+  name: (identifier) @variable.parameter)

@@ -2,8 +2,8 @@
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
 dylib "../std_src/time/time" {
-    int now();
-    string format(int, string);
+    fn now() -> int;
+    fn format(ms: int, pattern: string) -> string;
 }
 
 /// Returns the number of seconds since January 1, 1970, 00:00:00 UTC

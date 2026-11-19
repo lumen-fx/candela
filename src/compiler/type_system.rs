@@ -451,9 +451,55 @@ pub struct Generics {
     /// The field names of the variants declared with named fields, by enum id.
     /// An enum with none has no entry.
     variant_fields: FxHashMap<u16, VariantFields>,
+    /// Every parameter default the program declares: the file it compiles in,
+    /// the value, and where it was written. A call that leaves the argument
+    /// out reaches one through [`Expr::DefaultArg`].
+    arg_defaults: Vec<(u16, Expr, Span)>,
+    /// The defaults of the parameters of each function that declares any, by
+    /// function id, one entry per parameter.
+    fn_defaults: FxHashMap<u16, Box<[Option<u32>]>>,
 }
 
 impl Generics {
+    /// Records the defaults a declaration in file `file_idx` gives its
+    /// parameters, and answers the id each one is reached by.
+    pub fn add_param_defaults(
+        &mut self,
+        file_idx: u16,
+        defaults: &[Option<(Expr, Span)>],
+    ) -> Box<[Option<u32>]> {
+        defaults
+            .iter()
+            .map(|default| {
+                default.as_ref().map(|(value, span)| {
+                    self.arg_defaults.push((file_idx, value.clone(), *span));
+                    (self.arg_defaults.len() - 1) as u32
+                })
+            })
+            .collect()
+    }
+
+    /// Records the defaults of function `fn_id`'s parameters.
+    pub fn set_fn_defaults(&mut self, fn_id: u16, ids: Box<[Option<u32>]>) {
+        if ids.iter().any(Option::is_some) {
+            self.fn_defaults.insert(fn_id, ids);
+        }
+    }
+
+    /// The defaults of function `fn_id`'s parameters, one per parameter,
+    /// `None` when it declares none.
+    #[must_use]
+    pub fn fn_defaults(&self, fn_id: u16) -> Option<&[Option<u32>]> {
+        self.fn_defaults.get(&fn_id).map(|ids| &**ids)
+    }
+
+    /// A parameter default by its id: the file it compiles in, the value, and
+    /// where it was written.
+    #[must_use]
+    pub fn arg_default(&self, id: u32) -> &(u16, Expr, Span) {
+        &self.arg_defaults[id as usize]
+    }
+
     /// Records the named-field variants of enum `id`.
     pub fn set_variant_fields(&mut self, id: u16, fields: VariantFields) {
         if !fields.is_empty() {
@@ -1723,7 +1769,9 @@ fn lower_method(
     file_idx: u16,
     ctx: &mut TypeCtx<'_>,
 ) {
-    let Expr::FunctionDecl(method_name, args, code, name_span, return_type, params) = method else {
+    let Expr::FunctionDecl(method_name, args, code, name_span, return_type, params, defaults) =
+        method
+    else {
         return;
     };
     let mangled = mangle_method(type_name, method_name);
@@ -1781,6 +1829,9 @@ fn lower_method(
         })),
         entry_register: None,
     });
+    let fn_id = (ctx.fns.len() - 1) as u16;
+    let default_ids = ctx.generics.add_param_defaults(file_idx, defaults);
+    ctx.generics.set_fn_defaults(fn_id, default_ids);
     let func = &ctx.fns[ctx.fns.len() - 1];
     if let Some(struct_id) = struct_of_default_fn(&func.name, ctx.structs) {
         check_struct_default_fn(
@@ -2321,6 +2372,28 @@ pub fn resolve_generic_call(
     };
     let args = resolve_call_type_args(fn_id, fn_name, type_args, span, ctx, state);
     (fn_id, args)
+}
+
+/// The types of the arguments a call passes user function `fn_id` after its
+/// first `skip` parameters, with named arguments put in place and the ones it
+/// leaves out filled from their defaults.
+fn bound_arg_types(
+    fn_id: usize,
+    skip: usize,
+    args: &[Expr],
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Vec<DataType> {
+    let bound =
+        crate::compiler::call_args::bind_user_args(fn_id, skip, args, &[], span, ctx, state);
+    bound
+        .as_ref()
+        .map_or(args, |(bound, _)| &**bound)
+        .iter()
+        .map(|arg| arg.infer_type(v, ctx, state))
+        .collect()
 }
 
 /// Raised where `path` is written as a value and names no variant or function.
@@ -2912,7 +2985,7 @@ pub fn collect_direct_fn_calls(
                     expr_stack.push(code);
                 }
             }
-            Expr::FunctionDecl(_, _, x, _, _, _) => expr_stack.extend(x.iter()),
+            Expr::FunctionDecl(_, _, x, ..) => expr_stack.extend(x.iter()),
             Expr::ArrayGetSlice(x, y, z, _) => {
                 expr_stack.push(x);
                 expr_stack.push(y);
@@ -2921,6 +2994,7 @@ pub fn collect_direct_fn_calls(
                 }
             }
             Expr::VarDeclare(_, x, _)
+            | Expr::NamedArg(_, x, _)
             | Expr::VarAssign(_, x, _, _)
             | Expr::Propagate(x, _)
             | Expr::Is(x, _, _, _)
@@ -4541,10 +4615,8 @@ impl Expr {
             Self::CallValue(callee, args, span, _) => {
                 match resolve_callee(callee, *span, v, ctx, state) {
                     Callee::Direct(fn_id) => {
-                        let infered_arg_types = args
-                            .iter()
-                            .map(|x| x.infer_type(v, ctx, state))
-                            .collect::<Vec<DataType>>();
+                        let infered_arg_types =
+                            bound_arg_types(fn_id, 0, args, *span, v, ctx, state);
                         let fn_name = state.fns[fn_id].name.clone();
                         infer_user_fn_return_type(
                             fn_id,
@@ -4571,8 +4643,7 @@ impl Expr {
                 }
                 reject_default_default(namespace, *span, ctx, state);
                 if let Some(fn_id) = path_call_target(namespace, type_args, *span, ctx, state) {
-                    let arg_types: Vec<DataType> =
-                        args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
+                    let arg_types = bound_arg_types(fn_id, 0, args, *span, v, ctx, state);
                     let fn_name = state.fns[fn_id].name.clone();
                     return infer_user_fn_return_type(
                         fn_id,
@@ -4604,10 +4675,7 @@ impl Expr {
                         ctx,
                         state,
                     );
-                    let infered_arg_types = args
-                        .iter()
-                        .map(|x| x.infer_type(v, ctx, state))
-                        .collect::<Vec<DataType>>();
+                    let infered_arg_types = bound_arg_types(fn_id, 0, args, *span, v, ctx, state);
                     return infer_user_fn_return_type(
                         fn_id,
                         &infered_arg_types,
@@ -4621,7 +4689,7 @@ impl Expr {
                 // A qualified enum-variant construction (`Color::Red(x)`) has an
                 // enum type; intercept before the function paths, which is where
                 // `handle_functions` intercepts it too.
-                if namespace.len() >= 2 {
+                if namespace.len() >= 2 && !args.iter().any(|a| matches!(a, Self::NamedArg(..))) {
                     let arg_types = args
                         .iter()
                         .map(|x| x.infer_type(v, ctx, state))
@@ -4659,7 +4727,7 @@ impl Expr {
                             state,
                         );
                     };
-                    let infered_arg_types = infered_args(v, state);
+                    let infered_arg_types = bound_arg_types(fn_id, 0, args, *span, v, ctx, state);
                     return infer_user_fn_return_type(
                         fn_id,
                         &infered_arg_types,
@@ -4689,7 +4757,8 @@ impl Expr {
                     .rfind(|var| var.name.as_str() == fn_name.as_str())
                     .map(|var| var.var_type.clone())
                 {
-                    let infered_arg_types = infered_args(v, state);
+                    let infered_arg_types =
+                        bound_arg_types(fn_id as usize, 0, args, *span, v, ctx, state);
                     return infer_user_fn_return_type(
                         fn_id as usize,
                         &infered_arg_types,
@@ -4701,7 +4770,7 @@ impl Expr {
                     );
                 }
                 if let Some(fn_id) = state.scope(ctx.file_idx).find_function(&[], fn_name) {
-                    let infered_arg_types = infered_args(v, state);
+                    let infered_arg_types = bound_arg_types(fn_id, 0, args, *span, v, ctx, state);
                     return infer_user_fn_return_type(
                         fn_id,
                         &infered_arg_types,
@@ -4765,9 +4834,7 @@ impl Expr {
                         check_receiver(fn_id, method, *fn_span, ctx, state);
                         let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                         arg_types.push(DataType::Struct(struct_id));
-                        for a in args {
-                            arg_types.push(a.infer_type(v, ctx, state));
-                        }
+                        arg_types.extend(bound_arg_types(fn_id, 1, args, *fn_span, v, ctx, state));
                         let call_type_args = if type_args.is_empty() {
                             Vec::new()
                         } else {
@@ -4819,9 +4886,7 @@ impl Expr {
                         check_receiver(fn_id, method, *fn_span, ctx, state);
                         let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                         arg_types.push(DataType::Enum(enum_id));
-                        for a in args {
-                            arg_types.push(a.infer_type(v, ctx, state));
-                        }
+                        arg_types.extend(bound_arg_types(fn_id, 1, args, *fn_span, v, ctx, state));
                         let call_type_args = if type_args.is_empty() {
                             Vec::new()
                         } else {
@@ -4864,9 +4929,7 @@ impl Expr {
                     check_receiver(fn_id, method, *fn_span, ctx, state);
                     let mut arg_types: Vec<DataType> = Vec::with_capacity(args.len() + 1);
                     arg_types.push(obj_type.clone());
-                    for a in args {
-                        arg_types.push(a.infer_type(v, ctx, state));
-                    }
+                    arg_types.extend(bound_arg_types(fn_id, 1, args, *fn_span, v, ctx, state));
                     let call_type_args = if type_args.is_empty() {
                         Vec::new()
                     } else {
@@ -5149,6 +5212,18 @@ impl Expr {
                     entry_register: None,
                 });
                 DataType::Fn(id)
+            }
+            Self::NamedArg(name, _, span) => {
+                crate::compiler::call_args::error_named_argument_unexpected(
+                    name,
+                    *span,
+                    ctx.file_idx,
+                    state.sources,
+                )
+            }
+            Self::DefaultArg(id, _) => {
+                let (file_idx, value, _) = state.generics.arg_default(*id).clone();
+                value.infer_type(&mut Vec::new(), Ctx { file_idx, ..ctx }, state)
             }
             _ => unsafe { unreachable_unchecked() },
         }

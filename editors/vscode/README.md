@@ -57,8 +57,8 @@ attribution details.
   with a decimal point (`[0-9]*.[0-9]+`).
 - Structs: `struct Name { field: type, ... }`; instantiated with
   `Name { field: value }`; fields accessed with `x.field`.
-- Foreign functions: `dylib "path" { rettype name(argtypes); ... }` for dynamic
-  libraries and `host "namespace" { rettype name(argtypes); ... }` for
+- Foreign functions: `dylib "path" { fn name(a: argtypes) -> rettype; ... }` for dynamic
+  libraries and `host "namespace" { fn name(a: argtypes) -> rettype; ... }` for
   host-registered closures. A trailing `...` argument marks a variadic host
   function.
 - Modules: `import "file.cdl";` for a file, `import "std/json";` for a shipped

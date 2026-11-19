@@ -25,8 +25,8 @@ import "std/event";
 import "std/json";
 
 dylib "../dist/process" {
-    candela_process_start(int, string, string[], int, string, string, int);
-    int candela_process_stop(int);
+    fn candela_process_start(id: int, cmd: string, args: string[], arg_count: int, cwd: string, env_json: string, end_at_exit: int);
+    fn candela_process_stop(handle: int) -> int;
 }
 
 /// How a program is started beyond its command line.

@@ -11,6 +11,7 @@ use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::Operand;
+use crate::compiler::expr::ParamDefaults;
 use crate::compiler::expr::RECEIVER;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::UNARY_MINUS_METHOD;
@@ -276,7 +277,7 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         );
     };
     let type_params = parse_type_params(parser);
-    let args = parse_params(parser, false);
+    let (args, defaults) = parse_params(parser, false);
     let return_type = parse_return_annotation(parser);
     let fn_code = parse_fn_body(parser, true);
     Expr::FunctionDecl(
@@ -286,6 +287,7 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
         span,
         return_type,
         type_params,
+        defaults,
     )
 }
 
@@ -294,12 +296,20 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
 /// `self` names the receiver: it is a parameter only of an `impl` function
 /// (`in_impl`), and only the first one, which is what makes that function a
 /// method.
-pub fn parse_params(parser: &mut Parser<'_>, in_impl: bool) -> Vec<(SmolStr, Option<TypeExpr>)> {
+///
+/// A parameter may declare a default, `size: int = 12`, which a call that
+/// leaves the argument out passes instead. The defaults come back one per
+/// parameter, or empty when none declares one.
+pub fn parse_params(
+    parser: &mut Parser<'_>,
+    in_impl: bool,
+) -> (Vec<(SmolStr, Option<TypeExpr>)>, ParamDefaults) {
     parser.next_token_expect(
         Token::LParen,
         "Function parameters must be delimited by parentheses",
     );
     let mut args: Vec<(SmolStr, Option<TypeExpr>)> = Vec::with_capacity(4);
+    let mut defaults: Vec<Option<(Expr, Span)>> = Vec::new();
     loop {
         if parser.peek_token() == Token::RParen {
             parser.next_token();
@@ -320,6 +330,13 @@ pub fn parse_params(parser: &mut Parser<'_>, in_impl: bool) -> Vec<(SmolStr, Opt
                     None
                 },
             ));
+            if parser.peek_token() == Token::Equals {
+                parser.next_token();
+                let start = parser.peek_token_span().start;
+                let value = parse_expr(parser);
+                defaults.resize(args.len() - 1, None);
+                defaults.push(Some((value, (start, parser.last_token_end as u32).into())));
+            }
         } else {
             cold_path();
             parser.error(
@@ -335,7 +352,10 @@ pub fn parse_params(parser: &mut Parser<'_>, in_impl: bool) -> Vec<(SmolStr, Opt
             parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
         }
     }
-    args
+    if !defaults.is_empty() {
+        defaults.resize(args.len(), None);
+    }
+    (args, defaults.into_boxed_slice())
 }
 
 /// Parses the optional `-> Type` return annotation that may follow a function's
@@ -375,6 +395,7 @@ pub fn parse_const(parser: &mut Parser<'_>) -> Expr {
         Rc::from([Expr::ReturnVal(Box::new(Some(value)))]),
         name_span,
         Some(Box::new((ty, type_span))),
+        Box::from([]),
         Box::from([]),
     )
 }
@@ -671,7 +692,9 @@ pub fn parse_impl_block(
 /// Renames a parsed method to the mangled free-function symbol its call sites
 /// resolve to.
 fn mangled_method(method: Expr, type_name: &SmolStr) -> Expr {
-    let Expr::FunctionDecl(name, args, code, name_span, return_type, type_params) = method else {
+    let Expr::FunctionDecl(name, args, code, name_span, return_type, type_params, defaults) =
+        method
+    else {
         cold_path();
         unreachable!("an impl block only ever parses method declarations")
     };
@@ -682,6 +705,7 @@ fn mangled_method(method: Expr, type_name: &SmolStr) -> Expr {
         name_span,
         return_type,
         type_params,
+        defaults,
     )
 }
 
@@ -780,7 +804,7 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
     // so `self` takes the receiver's concrete struct type automatically. An
     // annotation pins the parameter instead, exactly as it does on a free
     // function.
-    let args = parse_params(parser, true);
+    let (args, defaults) = parse_params(parser, true);
     let return_type = parse_return_annotation(parser);
     let code = parse_fn_body(parser, true);
     // `-` has a binary and a unary form and a type may define both, so the
@@ -799,6 +823,7 @@ fn parse_method(parser: &mut Parser<'_>) -> Expr {
         name_span,
         return_type,
         type_params,
+        defaults,
     )
 }
 

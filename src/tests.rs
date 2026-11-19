@@ -6150,7 +6150,7 @@ pub fn every_compile_error_kind_renders_at_its_place() {
             "struct_missing_fields",
         ),
         (
-            "host \"app\" { int rows(string); }\nfn main() { print(app::rows(\"a\", \"b\")); }",
+            "host \"app\" { fn rows(a: string) -> int; }\nfn main() { print(app::rows(\"a\", \"b\")); }",
             "arity_mismatch",
         ),
         (
@@ -6158,7 +6158,7 @@ pub fn every_compile_error_kind_renders_at_its_place() {
             "arity_mismatch_range",
         ),
         (
-            "host \"app\" { int rows(string); }\nfn main() { print(app.rows(\"a\")); }",
+            "host \"app\" { fn rows(a: string) -> int; }\nfn main() { print(app.rows(\"a\")); }",
             "block_dot_call",
         ),
         (
@@ -11956,8 +11956,8 @@ pub fn a_report_colours_the_types_a_call_accepts() {
 #[test]
 pub fn a_call_into_a_host_namespace_names_the_function_it_cannot_find() {
     for src in [
-        "host \"lumen\" { int set_title(); }\nfn main() { lumen::set_titel(); }",
-        "host \"lumen\" { int set_title(); }\nfn main() { let t = lumen::set_titel(); print(t); }",
+        "host \"lumen\" { fn set_title() -> int; }\nfn main() { lumen::set_titel(); }",
+        "host \"lumen\" { fn set_title() -> int; }\nfn main() { let t = lumen::set_titel(); print(t); }",
     ] {
         let d = compile_diag(src, "diag.cdl").unwrap_err();
         assert_wellformed(&d, src);
@@ -16357,6 +16357,76 @@ fn main() { print(P { x: 2 }.make().x); }
     let d = compile_diag(src, "dot.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "method_without_receiver");
+}
+
+/// A parameter may declare a default, and a call may pass arguments by name
+/// after the ones it passes in order. Defaults are filled in where the call is
+/// compiled, each call building its own value.
+#[test]
+pub fn defaults_and_named_arguments() {
+    let src = r#"
+const LIMIT: int = 3;
+fn window(w: int, h: int, title: string = "untitled", resizable: bool = true) -> string {
+    return title + " " + string(w) + "x" + string(h) + " " + string(resizable);
+}
+struct P { x: int }
+impl P {
+    fn new(x: int = 5) -> P => P { x };
+    fn moved(self, dx: int = 1, dy: int = 0) -> P => P { x: self.x + dx + dy };
+}
+fn lim(n: int = LIMIT) -> int => n;
+fn fresh(xs: int[] = []) -> int[] {
+    xs.push(1);
+    return xs;
+}
+fn main() {
+    print(window(800, 600));
+    print(window(800, 600, resizable: false));
+    print(window(h: 2, w: 1, title: "t"));
+    print(P { x: 1 }.moved(dy: 10).x);
+    print(P::new().x);
+    print(lim());
+    print(fresh().len(), fresh().len());
+}
+"#;
+    assert_eq!(
+        run_output(src),
+        "untitled 800x600 true\nuntitled 800x600 false\nt 1x2 true\n12\n5\n3\n1\n1\n"
+    );
+    for (src, code) in [
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, c: 3)); }",
+            "named_argument_unknown",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, a: 3)); }",
+            "named_argument_twice",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(b: 1, 2)); }",
+            "positional_after_named",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(b: 1)); }",
+            "argument_missing",
+        ),
+        ("fn main() { print(x: 1); }", "named_argument_unexpected"),
+        (
+            "host \"app\" { int rows(string); }\nfn main() {}",
+            "old_host_signature",
+        ),
+    ] {
+        let d = compile_diag(src, "named.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+    let src = "dylib \"z\" { string version(int, float[]); }\nfn main() {}";
+    let d = compile_diag(src, "old.cdl").unwrap_err();
+    assert!(
+        d.message
+            .contains("fn version(a: int, b: float[]) -> string;"),
+        "{d:?}"
+    );
 }
 
 /// A function an `impl` block declares is a value by its type's path, and a

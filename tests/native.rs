@@ -428,7 +428,7 @@ fn an_export_calls_into_machine_code() {
 #[test]
 fn a_panic_in_a_host_function_reaches_the_host() {
     let src = r#"
-        host "app" { int boom(int); }
+        host "app" { fn boom(a: int) -> int; }
         fn relay(n: int, k: int) -> int {
             if k == 0 { return app::boom(n); }
             return relay(n, k - 1);

@@ -13,6 +13,8 @@ use crate::compiler::attributes::AttributeParamDecl;
 use crate::compiler::attributes::AttributeTargetKind;
 use crate::compiler::attributes::AttributeUse;
 use crate::compiler::compiler_data::Source;
+use crate::compiler::expr::ForeignFn;
+use crate::compiler::expr::ForeignParams;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
 use crate::compiler::expr::tuple_let_temp;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
@@ -205,6 +207,11 @@ enum ParserErr<'a> {
     /// A type parameter an `impl<T>` declares that is not one of the type's
     /// arguments in the header. Carries the parameter.
     ImplParamUnbound(String),
+    /// An argument passed in order after one passed by name.
+    PositionalAfterNamed,
+    /// A `host` or `dylib` entry written the removed C way, `int f(int);`.
+    /// Carries the entry rewritten the new way, when it could be read.
+    OldHostSignature(String),
 }
 
 impl ParserErr<'_> {
@@ -256,6 +263,8 @@ impl ParserErr<'_> {
             ParserErr::TuplePatternElement => "tuple_pattern_element",
             ParserErr::MisplacedReceiver(_) => "misplaced_receiver",
             ParserErr::ImplParamUnbound(_) => "impl_param_unbound",
+            ParserErr::PositionalAfterNamed => "positional_after_named",
+            ParserErr::OldHostSignature(_) => "old_host_signature",
         }
     }
 }
@@ -400,6 +409,12 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::MisplacedReceiver(false) => &format!(
             "{BLUE}{BOLD}self{RESET} names the receiver of a method, and only a function in an {BLUE}{BOLD}impl{RESET} block has one. Give this parameter another name"
+        ),
+        ParserErr::PositionalAfterNamed => &format!(
+            "An argument passed in order comes before every argument passed by name, as in {BLUE}{BOLD}window(800, 600, title: \"x\"){RESET}"
+        ),
+        ParserErr::OldHostSignature(rewritten) => &format!(
+            "A {BLUE}{BOLD}host{RESET} or {BLUE}{BOLD}dylib{RESET} entry is declared like a function, with named parameters: {BLUE}{BOLD}{rewritten}{RESET}"
         ),
         ParserErr::ImplParamUnbound(param) => &format!(
             "{RED}{BOLD}{param}{RESET} is declared here but is not one of the type's arguments. An impl block's type parameters stand for the type's arguments: {BLUE}{BOLD}impl<T> Cell<T>{RESET}"
@@ -719,7 +734,31 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
             return (Box::from(args), Box::from(arg_markers), end);
         }
         let arg_start: u32 = parser.peek_token_span().start;
-        args.push(parse_expr(parser));
+        // `name: value` passes an argument by the parameter's name. Positional
+        // arguments come first.
+        let mut ahead = parser.input.clone().map(|(t, _)| t.ok());
+        if let (Some(Some(Token::Identifier(name))), Some(Some(Token::Colon))) =
+            (ahead.next(), ahead.next())
+        {
+            let name_span = parser.next_token().1;
+            parser.next_token();
+            let value = parse_expr(parser);
+            args.push(Expr::NamedArg(
+                SmolStr::new(name),
+                Box::new(value),
+                name_span,
+            ));
+        } else {
+            let arg = parse_expr(parser);
+            if matches!(args.last(), Some(Expr::NamedArg(..))) {
+                cold_path();
+                parser.error(
+                    (arg_start, parser.last_token_end as u32).into(),
+                    ParserErr::PositionalAfterNamed,
+                );
+            }
+            args.push(arg);
+        }
         arg_markers.push((arg_start, parser.peek_token_span().start).into());
         if parser.peek_token() == Token::Comma {
             parser.next_token();
@@ -1889,10 +1928,15 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
     Expr::ImportDylib(path, fn_signatures, (start, end).into())
 }
 
-/// Parses a brace-delimited block of typed function signatures shared by
+/// Parses a brace-delimited block of function declarations shared by
 /// `dylib "..." { ... }` and `host "..." { ... }`. The opening `{` must already
 /// have been consumed; this consumes through the closing `}` and returns the
-/// parsed signatures together with the end offset of the `}`.
+/// parsed declarations together with the end offset of the `}`.
+///
+/// Each function is declared the way a candela function is, with named
+/// parameters, defaults and a `-> Type` return, and a `;` in place of the
+/// body: `fn noise(seed: int, octaves: int = 4) -> float;`. `fn log(...);`
+/// takes any number of arguments of any type, in a `host` block.
 ///
 /// `structs` is where a `host` block collects the structs it declares; a
 /// `dylib` block passes `None` and declares none.
@@ -1900,8 +1944,8 @@ fn parse_fn_signature_block(
     parser: &mut Parser<'_>,
     mut structs: Option<&mut Vec<Expr>>,
     mut attributes: Option<&mut Vec<AttributeDecl>>,
-) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
-    let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
+) -> (Box<[ForeignFn]>, u32) {
+    let mut fn_signatures: Vec<ForeignFn> = Vec::new();
     let end: u32;
     loop {
         if parser.peek_token() == Token::RBrace {
@@ -1928,10 +1972,7 @@ fn parse_fn_signature_block(
             structs.push(declared);
             continue;
         }
-        // `attribute name ... on fn;`. A function that returns a type named
-        // `attribute` is written `attribute name(int);`, which the parameter
-        // list tells apart: an attribute's parameters are named, and one with
-        // none is followed by `on`.
+        // `attribute name ... on fn;`.
         if parser.peek_token() == Token::Identifier("attribute")
             && let Some(attributes) = attributes.as_deref_mut()
             && opens_attribute_decl(parser)
@@ -1940,82 +1981,129 @@ fn parse_fn_signature_block(
             attributes.push(parse_attribute_decl(parser, start.start));
             continue;
         }
-
-        let type_start = parser.peek_token();
-        let span = parser.peek_token_span();
-        let first = parse_type(parser);
-        let fn_name_span: Span;
-        let (return_type, fn_name) = if parser.peek_token() == Token::LParen {
-            if let TypeExpr::Identifier(name, span) = first {
-                fn_name_span = span;
-                (
-                    TypeExpr::Identifier(SmolStr::new_static("null"), span),
-                    name,
-                )
-            } else {
-                parser.error(
-                    span,
-                    ParserErr::UnexpectedToken(
-                        Token::Identifier(""),
-                        type_start,
-                        "Function names must be identifiers.",
-                    ),
-                );
-            }
+        if parser.peek_token() != Token::Function {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(
+                span,
+                ParserErr::OldHostSignature(old_signature_rewritten(parser)),
+            );
+        }
+        parser.next_token();
+        let (t, fn_name_span) = parser.next_token();
+        let Token::Identifier(fn_name) = t else {
+            cold_path();
+            parser.error(
+                fn_name_span,
+                ParserErr::UnexpectedToken(
+                    Token::Identifier(""),
+                    t,
+                    "Function names must be identifiers.",
+                ),
+            );
+        };
+        let (types, params) = if parser
+            .input
+            .clone()
+            .nth(1)
+            .is_some_and(|(t, _)| t == Ok(Token::Ellipsis))
+        {
+            // `fn log(...)`: any number of arguments of any type, delivered
+            // to the registered closure as a slice. Carried through as a
+            // reserved sentinel type the host resolver recognises.
+            parser.next_token();
+            let span = parser.next_token().1;
+            parser.next_token_expect(Token::RParen, "Unmatched '('");
+            (
+                Box::from([TypeExpr::Identifier(SmolStr::new_static("..."), span)]),
+                ForeignParams::default(),
+            )
         } else {
-            let (next_token, span) = parser.next_token();
-            fn_name_span = span;
-            let fn_name = if let Token::Identifier(name) = next_token {
-                SmolStr::new(name)
-            } else {
-                cold_path();
-                parser.error(
-                    span,
-                    ParserErr::UnexpectedToken(
-                        Token::Identifier(""),
-                        next_token,
-                        "Function names must be identifiers.",
-                    ),
-                );
-            };
-            (first, fn_name)
+            let (args, defaults) = blocks::parse_params(parser, false);
+            let mut types = Vec::with_capacity(args.len());
+            let mut names = Vec::with_capacity(args.len());
+            for (name, ty) in args {
+                let Some(ty) = ty else {
+                    cold_path();
+                    parser.error(
+                        fn_name_span,
+                        ParserErr::UnexpectedTokenStr(
+                            "a type",
+                            Token::Comma,
+                            "Every parameter of a host or dylib function declares its type: fn f(x: int).",
+                        ),
+                    );
+                };
+                types.push(ty);
+                names.push(name);
+            }
+            (
+                types.into_boxed_slice(),
+                ForeignParams {
+                    names: names.into_boxed_slice(),
+                    defaults,
+                },
+            )
+        };
+        let return_type = if parser.peek_token() == Token::Arrow {
+            parser.next_token();
+            parse_type(parser)
+        } else {
+            TypeExpr::Identifier(SmolStr::new_static("null"), fn_name_span)
         };
         parser.next_token_expect(
-            Token::LParen,
-            "Function arguments must be delimited by parentheses",
-        );
-        let mut args: Vec<TypeExpr> = Vec::with_capacity(2);
-        loop {
-            if parser.peek_token() == Token::RParen {
-                break;
-            }
-            // `...` marks a variadic host function: it accepts any number of
-            // arguments of any type, delivered to the registered closure as a
-            // slice. Carried through as a reserved sentinel type the host
-            // resolver recognises (meaningless in a `dylib` block).
-            if parser.peek_token() == Token::Ellipsis {
-                let span = parser.peek_token_span();
-                parser.next_token();
-                args.push(TypeExpr::Identifier(SmolStr::new_static("..."), span));
-                break;
-            }
-            args.push(parse_type(parser));
-            if parser.peek_token() == Token::Comma {
-                parser.next_token();
-            } else if !(parser.peek_token() == Token::RParen) {
-                cold_path();
-                let span = parser.peek_token_span();
-                parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
-            }
-        }
-        parser.next_token_expect(Token::RParen, "Unmatched ')'");
-        parser.next_token_expect(
             Token::SemiColon,
-            "Function definitions must end with a semicolon",
+            "A host or dylib function declaration ends with ';'",
         );
-        fn_signatures.push((fn_name, Box::from(args), return_type, fn_name_span));
+        fn_signatures.push((
+            SmolStr::new(fn_name),
+            types,
+            return_type,
+            fn_name_span,
+            params,
+        ));
     }
     (fn_signatures.into_boxed_slice(), end)
+}
+
+/// The removed C-style entry ahead, `int f(int, string);`, rewritten the way
+/// it is declared now, for the error that refuses it. The parameters get
+/// placeholder names, since the old form had none.
+fn old_signature_rewritten(parser: &Parser<'_>) -> String {
+    let text = parser.ctx.src.contents.as_str();
+    let start = parser
+        .input
+        .clone()
+        .next()
+        .map_or(text.len(), |(_, span)| span.start);
+    let rest = &text[start.min(text.len())..];
+    let entry = rest.split([';', '}']).next().unwrap_or_default().trim();
+    let Some((head, args)) = entry.split_once('(') else {
+        return String::from("fn name(x: int) -> int;");
+    };
+    let mut head: Vec<&str> = head.split_whitespace().collect();
+    let name = head.pop().unwrap_or("name");
+    let ret = head.join(" ");
+    let params: Vec<String> = args
+        .trim_end_matches(')')
+        .split(',')
+        .map(str::trim)
+        .filter(|ty| !ty.is_empty())
+        .enumerate()
+        .map(|(i, ty)| {
+            if ty == "..." {
+                ty.to_owned()
+            } else {
+                format!("{}: {ty}", char::from(b'a' + (i % 26) as u8))
+            }
+        })
+        .collect();
+    let ret = if ret.is_empty() {
+        String::new()
+    } else {
+        format!(" -> {ret}")
+    };
+    format!("fn {name}({}){ret};", params.join(", "))
 }
 
 /// Parses a `host "namespace" { signatures... }` block. The namespace names a

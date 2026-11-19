@@ -24,8 +24,8 @@ import "std/event";
 import "std/json";
 
 dylib "../dist/archive" {
-    candela_archive_extract(int, string, string, string[], int);
-    candela_archive_set_max_concurrent(int);
+    fn candela_archive_extract(id: int, src: string, dest: string, include: string[], include_len: int);
+    fn candela_archive_set_max_concurrent(n: int);
 }
 
 /// Which files an extraction keeps.

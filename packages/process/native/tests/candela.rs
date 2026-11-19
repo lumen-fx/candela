@@ -19,7 +19,7 @@ fn program(root: &Path, call: &str) -> String {
 {import}
 
 host "test" {{
-    seen(string);
+    fn seen(text: string);
 }}
 
 fn report(e: process::Event) {{

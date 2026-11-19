@@ -473,7 +473,7 @@ Candela:
 
 ```rust
 dylib "./bench_ffi" {
-    int increment(int);
+    fn increment(a: int) -> int;
 }
 
 fn main() {
