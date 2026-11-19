@@ -53,8 +53,14 @@ your buffer:
 - Hover on a struct, a function, or a built-in.
 - Completion of keywords, built-ins, and the functions and structs in the
   compiled program, with `.` as a trigger character.
-- Outline of the `fn` and `struct` declarations in the file.
-- Go to definition, including into an imported file.
+- Signature help inside a call's parentheses.
+- Outline of the `fn` and `struct` declarations in the file, and a symbol
+  search over the project.
+- Go to definition, including into an imported file, find usages and rename
+  across the files of a package, and highlighting of the other uses of the
+  name under the caret.
+- Semantic highlighting, inlay hints for a `let`'s type and a call's
+  parameter names, and quick fixes for a missing standard library import.
 
 See [`lsp/README.md`](../../lsp/README.md) for what each of those covers and
 where the server simplifies.
@@ -64,8 +70,7 @@ where the server simplifies.
 - LSP4IJ has to be installed first. It is the LSP client, and it is what makes
   the plugin work in Community-edition IDEs.
 - The plugin does not ship `candela-lsp`; the candela toolchain does.
-- The server offers no formatting, rename, find usages, or signature help, so
-  the plugin does not either.
+- The server offers no formatting, so the plugin does not either.
 - There are no `candela` run or build actions.
 - The plugin is not on the JetBrains Marketplace. Install the zip from disk.
 - Enabling or disabling it takes an IDE restart, because it registers the
