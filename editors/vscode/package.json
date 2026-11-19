@@ -44,6 +44,18 @@
     "vscode-languageclient": "^10.1.0"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "candela.restartServer",
+        "title": "Restart Language Server",
+        "category": "Candela"
+      },
+      {
+        "command": "candela.showOutput",
+        "title": "Show Language Server Output",
+        "category": "Candela"
+      }
+    ],
     "languages": [
       {
         "id": "candela",
@@ -80,7 +92,7 @@
         "candela.languageServerPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`. Set this to point at a locally-built server, e.g. one built from the repo's `lsp/` crate."
+          "markdownDescription": "Path to the `candela-lsp` binary. Leave empty to use `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`, or else the one the candela installer put beside `candela` (`~/.candela`, or `%LOCALAPPDATA%\\Programs\\Candela` on Windows). Set this to point at a locally-built server, e.g. one built from the repo's `lsp/` crate. Changing it restarts the server."
         },
         "candela.importRoots": {
           "type": "object",
