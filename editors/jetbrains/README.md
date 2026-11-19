@@ -9,15 +9,12 @@ Use it if you write candela in a JetBrains IDE. The extension in
 
 ## Quick start
 
-1. Build the language server:
+1. Install the candela toolchain, which puts `candela-lsp` beside `candela`,
+   or build the language server from this repository:
 
    ```sh
-   cargo build -p candela-lsp
+   cargo build --release -p candela-lsp
    ```
-
-   Do not build it with `--release`. That profile aborts on panic, and the
-   server turns a compiler panic into a diagnostic, so a release build stops at
-   the first error you type.
 
 2. Build the plugin:
 
@@ -66,7 +63,7 @@ where the server simplifies.
 
 - LSP4IJ has to be installed first. It is the LSP client, and it is what makes
   the plugin work in Community-edition IDEs.
-- The plugin does not ship `candela-lsp`. Build it from this repository.
+- The plugin does not ship `candela-lsp`; the candela toolchain does.
 - The server offers no formatting, rename, find usages, or signature help, so
   the plugin does not either.
 - There are no `candela` run or build actions.

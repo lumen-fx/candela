@@ -37,6 +37,7 @@ jobs:
         run: |
           cargo build --bin candela
           cargo build -p candela-vm --bin candela-vm
+          cargo build -p candela-lsp
 
       - name: Build stdlib dylibs
         run: |
@@ -53,6 +54,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist" | Out-Null
           Copy-Item "target/debug/candela.exe" "dist/"
           Copy-Item "target/debug/candela-vm.exe" "dist/"
+          Copy-Item "target/debug/candela-lsp.exe" "dist/"
           Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
@@ -80,6 +82,7 @@ jobs:
           $expected = @(
             "candela.exe",
             "candela-vm.exe",
+            "candela-lsp.exe",
             "receipt",
             "libs\std\list.cdl",
             "libs\std_src\math\math.dll",
