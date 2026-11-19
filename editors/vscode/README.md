@@ -3,7 +3,8 @@
 Editor support for the Candela language (`.cdl` files): TextMate syntax
 highlighting, language configuration (comments, brackets, auto-closing,
 indentation), snippets, and a language server client (live diagnostics,
-hover, completion, signature help, outline, go-to-definition, references)
+hover, completion, signature help, outline, go-to-definition, references,
+rename)
 backed by `candela-lsp`.
 
 Candela is the scripting language of the Lumen UI framework. It is a fork of
@@ -44,7 +45,7 @@ attribution details.
   `importlib`, and `print`.
 - A language server client that launches `candela-lsp` over stdio for live
   diagnostics, hover, completion, signature help, document symbols (outline),
-  go-to-definition and find references. See `../../lsp/README.md` for the
+  go-to-definition, find references and rename. See `../../lsp/README.md` for the
   exact scope of each.
 
 ## Language facts

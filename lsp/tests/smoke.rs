@@ -1147,3 +1147,79 @@ async fn references_reach_every_file_of_the_package() {
     let _ = std::fs::remove_dir_all(&dir);
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Rename edits every file of the package that names the function, leaves a
+/// local of the same name alone, and turns down a builtin and a bad name.
+#[tokio::test]
+async fn rename_edits_the_whole_package() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("rename");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({}), &[(main_uri.as_str(), main_text.as_str())]).await;
+    let at = |line: u32, character: u32| json!({ "textDocument": { "uri": main_uri }, "position": { "line": line, "character": character } });
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 7, "method": "textDocument/prepareRename", "params": at(4, 16) }),
+    )
+    .await;
+    let prepared = response(&mut stdout, 7).await;
+    assert_eq!(prepared["result"]["start"]["character"], 15, "{prepared}");
+    assert_eq!(prepared["result"]["end"]["character"], 19, "{prepared}");
+
+    let mut params = at(4, 16);
+    params["newName"] = json!("surface");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 8, "method": "textDocument/rename", "params": params }),
+    )
+    .await;
+    let edit = response(&mut stdout, 8).await;
+    let changes = edit["result"]["changes"]
+        .as_object()
+        .expect("changes by file");
+    let mut counts: Vec<(String, usize)> = changes
+        .iter()
+        .map(|(uri, edits)| {
+            let edits = edits.as_array().expect("edits");
+            assert!(edits.iter().all(|e| e["newText"] == "surface"), "{edit}");
+            (
+                uri.rsplit('/').next().unwrap_or_default().to_owned(),
+                edits.len(),
+            )
+        })
+        .collect();
+    counts.sort();
+    assert_eq!(
+        counts,
+        vec![
+            ("geo.cdl".to_owned(), 1),
+            ("main.cdl".to_owned(), 2),
+            ("report.cdl".to_owned(), 1),
+        ],
+        "{edit}"
+    );
+
+    // `print` is a builtin; `2x` is not a name.
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 9, "method": "textDocument/prepareRename", "params": at(4, 6) }),
+    )
+    .await;
+    let builtin = response(&mut stdout, 9).await;
+    assert!(builtin["error"]["message"].is_string(), "{builtin}");
+    let mut bad = at(4, 16);
+    bad["newName"] = json!("2x");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 10, "method": "textDocument/rename", "params": bad }),
+    )
+    .await;
+    let bad = response(&mut stdout, 10).await;
+    assert!(
+        bad["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("not a name")),
+        "{bad}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

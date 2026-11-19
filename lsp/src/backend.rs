@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tower_lsp::jsonrpc::Result as RpcResult;
+use tower_lsp::jsonrpc::{Error as RpcError, ErrorCode, Result as RpcResult};
 use tower_lsp::lsp_types::Diagnostic as LspDiagnostic;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -857,6 +857,35 @@ impl Inner {
         RefSearch { found, unread }
     }
 
+    /// Why the declaration under the cursor cannot be renamed, if it cannot.
+    fn rename_refused(&self, decl: &Decl, text: &str, summary: &ProgramSummary) -> Option<String> {
+        if decl.std {
+            return Some(format!(
+                "`{}` is declared in the standard library",
+                decl.name
+            ));
+        }
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        if !folders.is_empty() && !folders.iter().any(|f| decl.file.starts_with(f)) {
+            return Some(format!(
+                "`{}` is declared outside the workspace, in {}",
+                decl.name,
+                decl.file.display()
+            ));
+        }
+        if summary.sources.first().is_none_or(|s| s.text != text) {
+            return Some("the file does not parse as it stands; fix that first".to_owned());
+        }
+        if decl.local && refs::bound_by_pattern(text, &decl.name) {
+            return Some(format!(
+                "`{}` is also bound by a match arm or a catch clause in this file, which \
+                 renaming cannot tell apart; rename it by hand",
+                decl.name
+            ));
+        }
+        None
+    }
+
     /// Says in the editor's log which files a search could not read.
     async fn report_unread(&self, search: &RefSearch) {
         for path in &search.unread {
@@ -897,6 +926,16 @@ fn resolver_with(settings: &ImportSettings, overlays: Vec<(PathBuf, String)>) ->
         resolver.set_overlay(path, Arc::from(text));
     }
     resolver
+}
+
+/// A request the server turns down, with the reason the editor shows.
+fn refused(message: String) -> RpcError {
+    RpcError {
+        // RequestFailed: the request was valid, and it could not be done.
+        code: ErrorCode::ServerError(-32803),
+        message: message.into(),
+        data: None,
+    }
 }
 
 /// The directory to search for references to an item declared in `file`:
@@ -1064,6 +1103,10 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -1361,5 +1404,62 @@ impl LanguageServer for Backend {
             }
         }
         Ok(Some(locations))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> RpcResult<Option<PrepareRenameResponse>> {
+        let Some((decl, (s, e), text, summary)) = self
+            .inner
+            .declaration_at(&params.text_document.uri, params.position)
+        else {
+            return Err(refused("nothing here can be renamed".to_owned()));
+        };
+        if let Some(why) = self.inner.rename_refused(&decl, &text, &summary) {
+            return Err(refused(why));
+        }
+        Ok(Some(PrepareRenameResponse::Range(
+            LineIndex::new(&text).range(s, e),
+        )))
+    }
+
+    async fn rename(&self, params: RenameParams) -> RpcResult<Option<WorkspaceEdit>> {
+        let p = params.text_document_position;
+        let Some((decl, _, text, summary)) =
+            self.inner.declaration_at(&p.text_document.uri, p.position)
+        else {
+            return Err(refused("nothing here can be renamed".to_owned()));
+        };
+        if let Some(why) = self.inner.rename_refused(&decl, &text, &summary) {
+            return Err(refused(why));
+        }
+        let new_name = params.new_name.trim();
+        if !refs::valid_name(new_name) {
+            return Err(refused(format!("`{new_name}` is not a name")));
+        }
+        let search = self.inner.find_references(&decl, &summary).await;
+        if let Some(path) = search.unread.first() {
+            // A partial rename would leave the program broken without
+            // saying where.
+            return Err(refused(format!(
+                "{} does not compile, so its uses of `{}` cannot be found; fix it first",
+                path.display(),
+                decl.name
+            )));
+        }
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for file in &search.found {
+            let Some(uri) = self.inner.uri_for(&file.path) else {
+                continue;
+            };
+            let index = LineIndex::new(&file.text);
+            changes.entry(uri).or_default().extend(
+                file.ranges
+                    .iter()
+                    .map(|&(s, e)| TextEdit::new(index.range(s, e), new_name.to_owned())),
+            );
+        }
+        Ok(Some(WorkspaceEdit::new(changes)))
     }
 }

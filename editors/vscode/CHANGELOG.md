@@ -4,9 +4,10 @@
 
 - With a `candela-lsp` from the same release: Find All References (Shift+F12)
   lists every use of a function, type, field, method, variant or local, across
-  the files of its package, including files that are not open. Completion and
-  signature help no longer wait for a check of the whole program on each
-  keystroke.
+  the files of its package, including files that are not open. Rename Symbol
+  (F2) renames it everywhere those references are, and says why when it
+  cannot. Completion and signature help no longer wait for a check of the
+  whole program on each keystroke.
 
 ## 0.6.0
 
