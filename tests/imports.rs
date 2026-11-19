@@ -495,7 +495,7 @@ fn aliased_generic_type_is_named_in_every_type_position() {
                 "shapes.cdl",
                 "enum Slot<T> { Filled(T), Empty }\n\
                  struct Cell<T> { value: T }\n\
-                 impl Cell<T> { fn get(self) -> T { return self.value; } }\n",
+                 impl<T> Cell<T> { fn get(self) -> T { return self.value; } }\n",
             ),
             (
                 "prog.cdl",
@@ -544,11 +544,11 @@ fn two_modules_can_each_declare_the_same_generic_name() {
         &[
             (
                 "left.cdl",
-                "struct Slot<T> { tag: string, held: T }\n                 impl Slot<T> { fn label(self) -> string { return self.tag; } }\n",
+                "struct Slot<T> { tag: string, held: T }\n                 impl<T> Slot<T> { fn label(self) -> string { return self.tag; } }\n",
             ),
             (
                 "right.cdl",
-                "struct Slot<T> { held: T }\n                 impl Slot<T> { fn label(self) -> string { return \"right\"; } }\n",
+                "struct Slot<T> { held: T }\n                 impl<T> Slot<T> { fn label(self) -> string { return \"right\"; } }\n",
             ),
             (
                 "prog.cdl",

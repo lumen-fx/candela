@@ -21,7 +21,7 @@ struct Set<T> {
     items: {T: bool},
 }
 
-impl Set<T> {
+impl<T> Set<T> {
     /// A new empty set: `Set<int>::new()`, naming the member type.
     fn new() -> Set<T> {
         return Set<T>{ items: {} };

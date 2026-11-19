@@ -81,7 +81,7 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 
 ## Methods
 
-The helpers are methods on the option value, defined in an `impl Option<T>`
+The helpers are methods on the option value, defined in an `impl<T> Option<T>`
 block.
 
 ### is_some

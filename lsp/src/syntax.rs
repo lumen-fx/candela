@@ -484,8 +484,15 @@ pub fn scope_at(toks: &Tokens<'_>, n: usize) -> Scope {
                 }
             }
             ";" => pending.clear(),
-            "impl" if toks.is_ident(i + 1) => {
+            "impl" if toks.is_ident(i + 1) || toks.s(i + 1) == "<" => {
                 let mut j = i + 1;
+                // `impl<T> Cell<T>`: skip the block's own parameter list.
+                if toks.s(j) == "<" {
+                    while j < n && toks.s(j) != ">" {
+                        j += 1;
+                    }
+                    j += 1;
+                }
                 let ty = parse_type(toks, &mut j, n);
                 pending_impl = Some(ty.render());
                 i = j;

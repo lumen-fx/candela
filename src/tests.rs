@@ -6462,7 +6462,7 @@ pub fn a_generic_types_method_calls_itself() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> {
+        impl<T> Cell<T> {
             fn sum(self, n) {
                 if n <= 0 { return 0; }
                 return n + self.sum(n - 1);
@@ -10755,7 +10755,7 @@ pub fn generic_struct_and_impl() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> {
+        impl<T> Cell<T> {
             fn get(self) -> T { return self.value; }
         }
         fn main() {
@@ -10813,7 +10813,7 @@ pub fn generic_struct_literal_without_type_arguments() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let c = Cell{ value: 12 };
             print(c.get());
@@ -10829,7 +10829,7 @@ pub fn generic_struct_literal_without_type_arguments() {
 pub fn generic_struct_literal_takes_a_parameter_through_a_list_or_map_field() {
     let src = "
         struct Stack<T> { items: T[] }
-        impl Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
+        impl<T> Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
         struct Names<T> { by: {string: T}, count: int }
         fn main() {
             let s = Stack { items: [1, 2] };
@@ -10851,7 +10851,7 @@ pub fn generic_instantiations_are_distinct_types() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let i = Cell<int>{ value: 2 };
             let s = Cell<string>{ value: \"ab\" };
@@ -10974,7 +10974,7 @@ pub fn a_block_leaves_the_function_table_alone() {
         String::from(
             "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn apply(f, n) { return f(n); }
         fn main() {
             let i = 0;
@@ -11076,7 +11076,7 @@ pub fn nested_generic_instantiation() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let inner = Cell<int>{ value: 4 };
             let outer = Cell<Cell<int>>{ value: inner };
@@ -11130,7 +11130,7 @@ pub fn generic_and_concrete_impl_on_one_type() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         impl Cell<int> { fn double(self) -> int { return self.value * 2; } }
         fn main() {
             let c = Cell<int>{ value: 5 };
@@ -11147,7 +11147,7 @@ pub fn a_method_takes_explicit_type_arguments() {
     run_and_check_registers!(
         "
         struct Box<T> { value: T }
-        impl Box<T> {
+        impl<T> Box<T> {
             fn get(self) -> T { return self.value; }
             fn tagged<U>(self, extra: U) -> U { return extra; }
         }
@@ -11165,7 +11165,7 @@ pub fn a_method_type_argument_left_off_is_inferred() {
     run_and_check_registers!(
         "
         struct Box<T> { value: T }
-        impl Box<T> {
+        impl<T> Box<T> {
             fn tagged<U>(self, extra: U) -> U { return extra; }
         }
         fn main() {
@@ -11187,7 +11187,7 @@ pub fn a_method_type_argument_picks_the_specialisation() {
         impl Kind<int> { fn code(self) -> int { return 1; } }
         impl Kind<string> { fn code(self) -> int { return 2; } }
         struct Maker<T> { seed: T }
-        impl Maker<T> {
+        impl<T> Maker<T> {
             fn code_of<U>(self) -> int { return Kind<U>{ n: 0 }.code(); }
         }
         fn main() {
@@ -11409,7 +11409,7 @@ pub fn a_method_wins_over_a_field_of_the_same_name() {
     run_and_check_registers!(
         "
         struct S<T> { cb: T }
-        impl S<T> { fn cb(self, n) { return 7; } }
+        impl<T> S<T> { fn cb(self, n) { return 7; } }
         fn main() {
             let s = S { cb: fn(x) { return x * 2; } };
             print(s.cb(21));
@@ -11441,7 +11441,7 @@ pub fn generic_type_in_a_struct_field() {
         "
         struct Cell<T> { value: T }
         struct Pair { left: Cell<int>, right: Cell<string> }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let p = Pair{ left: Cell<int>{ value: 6 }, right: Cell<string>{ value: \"hi\" } };
             print(p.left.get() + p.right.get().len());
@@ -11459,7 +11459,7 @@ pub fn generic_declared_in_an_imported_module() {
     std::fs::write(
         &lib,
         "struct Boxed<T> { item: T }\n\
-         impl Boxed<T> { fn item(self) -> T { return self.item; } }\n\
+         impl<T> Boxed<T> { fn item(self) -> T { return self.item; } }\n\
          fn wrap<T>(x) { return Boxed<T>{ item: x }; }\n",
     )
     .unwrap();
@@ -11548,7 +11548,7 @@ pub fn type_arguments_on_a_plain_function() {
 pub fn type_arguments_on_a_method_that_takes_none() {
     let err = compile_diag(
         "struct Box<T> { value: T }
-         impl Box<T> { fn get(self) -> T { return self.value; } }
+         impl<T> Box<T> { fn get(self) -> T { return self.value; } }
          fn main() { let b = Box<int>{ value: 1 }; print(b.get<int>()); }",
         "generics.cdl",
     )
@@ -11607,7 +11607,7 @@ pub fn impl_on_a_generic_type_needs_its_arguments() {
 pub fn one_method_defined_by_two_impl_blocks() {
     let err = compile_diag(
         "struct Cell<T> { value: T }
-         impl Cell<T> { fn get(self) -> T { return self.value; } }
+         impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
          impl Cell<int> { fn get(self) -> int { return 0; } }
          fn main() { let c = Cell<int>{ value: 1 }; print(c.get()); }",
         "generics.cdl",
@@ -13781,7 +13781,7 @@ pub fn a_generic_type_defines_an_operator_once() {
         "
         struct Pair<T> { a: T, b: T }
 
-        impl Pair<T> {
+        impl<T> Pair<T> {
             fn +(self, other: Pair<T>) -> Pair<T> {
                 return Pair<T> { a: self.a + other.a, b: self.b + other.b };
             }
@@ -15164,7 +15164,7 @@ fn main() {
 pub fn a_generic_struct_default_function() {
     let src = "
 struct Cell<T> { value: T, n: int }
-impl Cell<T> { fn default() { return Cell<T> { n: 3, .. }; } }
+impl<T> Cell<T> { fn default() { return Cell<T> { n: 3, .. }; } }
 struct Holder { c: Cell<int> }
 fn main() {
     let a = Cell<string>::default();
@@ -15216,7 +15216,7 @@ fn main() { print(S::default().x); }
         (
             "
 struct Cell<T> { value: T }
-impl Cell<T> { fn default(self) -> Cell<T> { return self; } }
+impl<T> Cell<T> { fn default(self) -> Cell<T> { return self; } }
 fn main() { print(Cell<int>::default().value); }
 ",
             "default",
@@ -16288,7 +16288,7 @@ pub fn receiverless_impl_functions_are_called_by_path() {
         enum Color { Red, Green }
         impl Color { fn first() -> Color => Color::Red; }
         struct Stack<T> { items: T[] }
-        impl Stack<T> {
+        impl<T> Stack<T> {
             fn new() -> Stack<T> => Stack<T> { items: [] };
             fn push(self, x: T) { self.items.push(x); }
         }
@@ -16362,6 +16362,34 @@ fn main() { print(P { x: 2 }.make().x); }
     assert_eq!(d.code, "method_without_receiver");
 }
 
+/// An `impl` block on a generic type declares the parameters it binds,
+/// `impl<T> Cell<T>`, so a type that happens to be named `T` does not turn the
+/// block into an impl for that one instantiation.
+#[test]
+pub fn generic_impl_declares_its_parameters() {
+    let src = "
+struct T { a: int }
+struct Cell<T> { v: T }
+impl<T> Cell<T> { fn get(self) -> T => self.v; }
+fn main() { print(Cell<int> { v: 1 }.get(), Cell<T> { v: T { a: 2 } }.get().a); }
+";
+    assert_eq!(run_output(src), "1\n2\n");
+    let src = "
+struct Cell<T> { v: T }
+impl Cell<T> { fn get(self) -> T => self.v; }
+fn main() { print(Cell<int> { v: 1 }.get()); }
+";
+    let d = compile_diag(src, "undeclared.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "impl_undeclared_type_parameter");
+    assert!(d.message.contains("impl<T> Cell<T>"), "{d:?}");
+    let src = "struct P { x: int }\nimpl<T> P { fn get(self) => self.x; }\nfn main() {}";
+    let d = compile_diag(src, "unbound.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "impl_param_unbound");
+    assert_eq!(&src[d.span.clone()], "<T>", "{d:?}");
+}
+
 /// A field written alone in a struct literal takes the variable of its name,
 /// alongside fields written with a value and a closing `..`.
 #[test]
@@ -16406,7 +16434,7 @@ fn main() {
     // A generic type's constructor is reached through its instantiation.
     let src = "
 struct Cell<T> { v: T }
-impl Cell<T> {
+impl<T> Cell<T> {
     fn of(v: T) -> Cell<T> => Cell<T> { v: v };
     fn get(self) -> T => self.v;
 }

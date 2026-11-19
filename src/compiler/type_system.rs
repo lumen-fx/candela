@@ -369,11 +369,13 @@ enum TemplateBody {
 /// An `impl` block written against a generic type, kept until the type is
 /// instantiated.
 ///
-/// `args` is the header as written: `impl Cell<T>` applies to every
+/// `args` is the header as written: `impl<T> Cell<T>` applies to every
 /// instantiation and binds `T`, `impl Cell<int>` applies to that one.
 #[derive(Debug)]
 pub struct ImplTemplate {
     pub type_name: SmolStr,
+    /// The type parameters the block declares, `impl<T>`.
+    pub params: TypeParams,
     pub args: Box<[TypeExpr]>,
     /// The methods, as [`Expr::FunctionDecl`] carrying the plain method name.
     /// The name is mangled per instantiated type when the block is lowered.
@@ -1327,7 +1329,7 @@ pub fn instantiate(
 
 /// Lowers every `impl` block that applies to a freshly instantiated type.
 ///
-/// A generic block (`impl Cell<T>`) binds its parameters from the
+/// A generic block (`impl<T> Cell<T>`) binds its parameters from the
 /// instantiation's arguments; a concrete one (`impl Cell<int>`) applies only
 /// when the arguments match. Each method becomes an ordinary free function
 /// named `Cell<int>#get`, exactly as a method on a plain type does.
@@ -1358,16 +1360,37 @@ fn lower_impls(
             continue;
         }
         let header = ctx.generics.impls[idx].args.clone();
+        let params = ctx.generics.impls[idx].params.clone();
         let mut frame: Vec<(SmolStr, DataType)> = Vec::with_capacity(header.len());
         let mut applies = true;
         for (header_arg, arg) in header.iter().zip(args) {
             match header_arg {
-                // A bare name that is not a type of its own is a parameter the
-                // header introduces, bound to whatever this instantiation
-                // passes. Anything else is a concrete type the header pins, and
-                // the block applies only when the argument is that type.
-                TypeExpr::Identifier(pname, _) if is_type_parameter(pname, impl_file, ctx) => {
+                // A name the block declares, `impl<T> Cell<T>`, is bound to
+                // whatever this instantiation passes. Anything else is a
+                // concrete type the header pins, and the block applies only
+                // when the argument is that type.
+                TypeExpr::Identifier(pname, _) if params.contains(pname) => {
                     frame.push((pname.clone(), arg.clone()));
+                }
+                TypeExpr::Identifier(pname, pspan) if is_type_parameter(pname, impl_file, ctx) => {
+                    cold_path();
+                    let written = ctx.sources[impl_file as usize]
+                        .contents
+                        .get(std::ops::Range::from(ctx.generics.impls[idx].span))
+                        .unwrap_or_default()
+                        .trim_start_matches("impl")
+                        .trim();
+                    crate::compiler::compiler_errors::error_type_test(
+                        "Undeclared type parameter",
+                        &format!("{pname} names no type, and the impl block does not declare it"),
+                        Some(&format!(
+                            "Declare the block's type parameters after impl: impl<{pname}> {written}"
+                        )),
+                        "impl_undeclared_type_parameter",
+                        *pspan,
+                        impl_file,
+                        ctx.sources,
+                    );
                 }
                 other => {
                     let mut inner = ctx.reborrow(impl_file);

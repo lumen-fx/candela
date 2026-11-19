@@ -1587,7 +1587,7 @@ struct Cell<T> {
     value: T,
 }
 
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T {
         return self.value;
     }

@@ -252,13 +252,13 @@ module.exports = grammar({
     // Methods lower to mangled free functions, so an impl block holds nothing
     // but `fn` declarations.
     //
-    // An `impl` on a generic type names type arguments in its header, either a
-    // parameter it binds for the methods (`impl Cell<T>`) or the concrete
-    // instantiation the block applies to (`impl Signal<int>`). Both are spelt
-    // as a type argument list.
+    // An `impl` on a generic type declares the parameters it binds for the
+    // methods after the keyword (`impl<T> Cell<T>`), or names the concrete
+    // instantiation the block applies to (`impl Signal<int>`).
     impl_block: ($) =>
       seq(
         'impl',
+        optional(field('type_parameters', $.type_parameters)),
         field('type', $._type_identifier),
         optional(field('type_arguments', $.type_arguments)),
         '{',

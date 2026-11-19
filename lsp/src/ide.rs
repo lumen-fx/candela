@@ -1605,7 +1605,7 @@ fn vec2(x: float, y: float) -> Vec2 { return Vec2 { x: x, y: y }; }
 
 struct Transform { position: Vec2 = Vec2 { .. }, rotation: float = 0.0 }
 struct State<S> { now: S, next: S }
-impl State<S> {
+impl<S> State<S> {
     fn set(self, s: S) { self.next = s; }
 }
 

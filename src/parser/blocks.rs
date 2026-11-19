@@ -579,7 +579,7 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
 /// the VM only ever sees ordinary calls. The receiver's static type resolves a
 /// `recv.method(...)` call site back to the matching mangled symbol.
 ///
-/// A block whose header names type arguments (`impl Cell<T>`, `impl Cell<int>`)
+/// A block whose header names type arguments (`impl<T> Cell<T>`, `impl Cell<int>`)
 /// has no instantiated type to mangle against yet: it is kept as a template in
 /// `impls` and lowered the same way once the type is instantiated.
 pub fn parse_impl_block(
@@ -589,6 +589,9 @@ pub fn parse_impl_block(
 ) {
     let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Impl);
+    let params_start = parser.peek_token_span().start;
+    let params = parse_type_params(parser);
+    let params_span: Span = (params_start, parser.last_token_end as u32).into();
     let (next_token, type_span) = parser.next_token();
     let type_name = if let Token::Identifier(id) = next_token {
         SmolStr::new(id)
@@ -608,6 +611,16 @@ pub fn parse_impl_block(
     } else {
         Box::from([])
     };
+    // Every parameter the block declares is one of the type's arguments,
+    // which is what binds it: `impl<T> Cell<T>`.
+    if let Some(unused) = params.iter().find(|param| {
+        !type_args
+            .iter()
+            .any(|arg| matches!(arg, TypeExpr::Identifier(name, _) if name == *param))
+    }) {
+        cold_path();
+        parser.error(params_span, ParserErr::ImplParamUnbound(unused.to_string()));
+    }
     let header_span: Span = (start, parser.last_token_end as u32).into();
     parser.next_token_expect(Token::LBrace, "impl blocks must start with '{'.");
     let mut methods: Vec<Expr> = Vec::with_capacity(4);
@@ -645,6 +658,7 @@ pub fn parse_impl_block(
     } else {
         impls.push(ImplTemplate {
             type_name,
+            params,
             args: type_args,
             methods: Box::from(methods),
             // Stamped with the file it came from when it is registered.

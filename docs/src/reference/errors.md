@@ -55,6 +55,7 @@ Raised while the file is read, before any type is known.
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
+| `impl` parameters | A type parameter `impl<T>` declares that is not one of the type's arguments in the header (`impl_param_unbound`) |
 | Receiver | A parameter named `self` that is not the first parameter of an `impl` function, or a `self` parameter on a function outside an `impl` block (`misplaced_receiver`) |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function. A flat chain of operators, `a + b + c + ...`, is not nesting and compiles at any length |
@@ -197,7 +198,10 @@ generic type are reported the same way.
 declaration, type arguments on a name that declares none, type arguments on a
 built-in method, a name in a declaration that is neither a type nor one of its
 type parameters, and a generic type whose own fields name a deeper instantiation
-of itself without end. See [generics](../language/generics.md).
+of itself without end. A bare name in a generic `impl` header that is neither a
+type nor a parameter the block declares is `impl_undeclared_type_parameter`,
+and the help shows the header with `impl<T>`. See
+[generics](../language/generics.md).
 
 **Import and library errors.** An import path that cannot be read, an item
 named in an import that the module does not declare

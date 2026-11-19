@@ -240,7 +240,7 @@ fn method_program_round_trips_and_runs() {
 const GENERIC_PROGRAM: &str = "
 struct Cell<T> { value: T }
 
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T { return self.value; }
     fn tagged<U>(self, extra: U) -> U { return extra; }
 }

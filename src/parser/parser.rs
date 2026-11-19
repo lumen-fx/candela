@@ -202,6 +202,9 @@ enum ParserErr<'a> {
     /// A parameter named `self` anywhere but first in an `impl` function
     /// (true) or in a function outside an `impl` block (false).
     MisplacedReceiver(bool),
+    /// A type parameter an `impl<T>` declares that is not one of the type's
+    /// arguments in the header. Carries the parameter.
+    ImplParamUnbound(String),
 }
 
 impl ParserErr<'_> {
@@ -252,6 +255,7 @@ impl ParserErr<'_> {
             ParserErr::TupleOfOne => "tuple_of_one",
             ParserErr::TuplePatternElement => "tuple_pattern_element",
             ParserErr::MisplacedReceiver(_) => "misplaced_receiver",
+            ParserErr::ImplParamUnbound(_) => "impl_param_unbound",
         }
     }
 }
@@ -396,6 +400,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ),
         ParserErr::MisplacedReceiver(false) => &format!(
             "{BLUE}{BOLD}self{RESET} names the receiver of a method, and only a function in an {BLUE}{BOLD}impl{RESET} block has one. Give this parameter another name"
+        ),
+        ParserErr::ImplParamUnbound(param) => &format!(
+            "{RED}{BOLD}{param}{RESET} is declared here but is not one of the type's arguments. An impl block's type parameters stand for the type's arguments: {BLUE}{BOLD}impl<T> Cell<T>{RESET}"
         ),
         ParserErr::TuplePatternElement => &format!(
             "Each place in a {BLUE}{BOLD}let{RESET} pattern is a name, {BLUE}{BOLD}_{RESET}, or another pattern in parentheses: {BLUE}{BOLD}let (a, (b, _)) = t;{RESET}"

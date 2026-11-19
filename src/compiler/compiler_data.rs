@@ -179,7 +179,7 @@ pub struct FnGenerics {
     /// The `-> Type` annotation as written.
     pub return_type: ReturnAnnotation,
     /// Type parameters already bound because the enclosing type was
-    /// instantiated: `impl Cell<T>` lowered for `Cell<int>` binds `T` to `int`
+    /// instantiated: `impl<T> Cell<T>` lowered for `Cell<int>` binds `T` to `int`
     /// in every one of its methods.
     pub bindings: Box<[(SmolStr, DataType)]>,
     /// File the declaration was written in, whose scope its annotations resolve

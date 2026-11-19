@@ -87,7 +87,7 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 
 ## Methods
 
-The helpers are methods on the result value, defined in an `impl Result<T, E>`
+The helpers are methods on the result value, defined in an `impl<T, E> Result<T, E>`
 block.
 
 ### is_ok

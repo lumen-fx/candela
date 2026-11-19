@@ -21,7 +21,7 @@ enum Option<T> {
     None,
 }
 
-impl Option<T> {
+impl<T> Option<T> {
     /// True when the option holds a value.
     fn is_some(self) => match self {
         Some(_) => true,

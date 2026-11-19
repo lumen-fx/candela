@@ -469,7 +469,7 @@ enum Slot<T> {
 fn first<T>(items: T[]) -> T {
     return items[0];
 }
-impl Cell<T> {
+impl<T> Cell<T> {
     fn tagged<U>(self, extra: U) -> U {
         return extra;
     }
@@ -523,6 +523,8 @@ impl Signal<int> {
           (identifier)
           (integer_literal)))))
   (impl_block
+    (type_parameters
+      (type_identifier))
     (type_identifier)
     (type_arguments
       (type_identifier))
