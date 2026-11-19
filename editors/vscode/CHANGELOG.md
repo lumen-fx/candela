@@ -12,6 +12,9 @@ With a `candela-lsp` from the same release:
 - Placing the cursor on a name highlights its other uses in the file.
 - Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, types and
   constants of every `.cdl` file in the workspace.
+- Semantic highlighting: types, functions, methods, fields, enum variants,
+  parameters, locals, modules and attributes color by what they are, as the
+  compiler reads them, wherever the grammar could not tell from the spelling.
 - Completion and signature help no longer wait for a check of the whole
   program on each keystroke.
 

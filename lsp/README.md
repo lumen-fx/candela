@@ -148,6 +148,17 @@ the current text, so `bird.` completes while the line around it is unfinished.
   parameters, with the one being written highlighted; inside `@name(...)`, the
   attribute's parameters.
 
+- **Semantic tokens.** What each name in the buffer is, so a type, a
+  function, a method, a field, a variant, a parameter, a local, a type
+  parameter, a module, an attribute and a macro color by what they are rather
+  than by what the grammar guessed: `namespace`, `type`, `struct`, `enum`,
+  `enumMember`, `function`, `method`, `property`, `parameter`, `variable`,
+  `decorator`, `macro` and `typeParameter`, with `declaration` on the name a
+  declaration introduces and `defaultLibrary` on a builtin type or function.
+  Keywords, literals and comments are left to the grammar. The tokens are
+  worked out from the current text and the last check, like completion; a
+  client that supports it is asked to fetch them again after each check.
+
 - **Document symbols / outline.** The functions, structs and enums the buffer
   declares.
 
@@ -221,6 +232,8 @@ These are deliberate, and the source refers here for them.
   fields, methods and variants, two locals of one name in different
   functions, and a builtin, which has no declaration. It also covers which
   names a rename accepts and which bindings make it refuse.
+- `src/semantic.rs` unit-tests the class of each kind of declaration and of
+  a use of each.
 - `src/symbols.rs` unit-tests the declarations read from a file's tokens
   and the query match.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
@@ -246,6 +259,7 @@ These are deliberate, and the source refers here for them.
   same name, and turns down a builtin and a name that is not one. Document
   highlight marks a local's declaration, assignment and read, and not a local
   of the same name in another function. Workspace symbols list a file of
-  the workspace folder nobody opened.
+  the workspace folder nobody opened, and semantic tokens decode against the
+  legend the server announces.
 
 Run both with `cargo test -p candela-lsp`.

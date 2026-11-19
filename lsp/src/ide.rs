@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 };
 
 /// The builtin types a type annotation can name.
-const BUILTIN_TYPES: &[&str] = &["int", "float", "bool", "string", "any"];
+pub const BUILTIN_TYPES: &[&str] = &["int", "float", "bool", "string", "any"];
 
 /// A declaration the cursor can be on.
 #[derive(Debug, Clone)]

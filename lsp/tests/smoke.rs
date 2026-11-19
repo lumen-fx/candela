@@ -1311,3 +1311,72 @@ async fn workspace_symbols_cover_files_nobody_opened() {
     let _ = std::fs::remove_dir_all(&dir);
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;
 }
+
+/// Semantic tokens come back over the protocol in the legend's terms: a
+/// struct's name, a variant and a builtin type each carry their own type.
+#[tokio::test]
+async fn semantic_tokens_name_what_each_name_is() {
+    let text = "struct Point { x: int = 0 }\nenum Mode { On, Off }\nfn main() {\n    let m = Mode::On;\n    let p = Point { x: 1 };\n    print(p.x);\n}\n";
+    let uri = "file:///tmp/candela-lsp-semantic.cdl";
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} }
+        }),
+    )
+    .await;
+    let init = response(&mut stdout, 1).await;
+    let legend: Vec<String> =
+        init["result"]["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"]
+            .as_array()
+            .expect("a legend")
+            .iter()
+            .map(|t| t.as_str().unwrap_or_default().to_owned())
+            .collect();
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": text } }
+        }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/semanticTokens/full",
+            "params": { "textDocument": { "uri": uri } }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let data: Vec<u64> = found["result"]["data"]
+        .as_array()
+        .expect("token data")
+        .iter()
+        .map(|v| v.as_u64().unwrap_or(0))
+        .collect();
+    // Decode to (line, column, type name).
+    let (mut line, mut col) = (0u64, 0u64);
+    let mut named = Vec::new();
+    for t in data.chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        named.push((line, col, legend[t[3] as usize].clone()));
+    }
+    for want in [
+        (0, 7, "struct"),
+        (0, 18, "type"),
+        (1, 12, "enumMember"),
+        (3, 18, "enumMember"),
+        (5, 12, "property"),
+    ] {
+        assert!(
+            named.contains(&(want.0, want.1, want.2.to_owned())),
+            "{want:?} in {named:?}"
+        );
+    }
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

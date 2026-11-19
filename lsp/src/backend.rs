@@ -17,6 +17,7 @@ use crate::checks::{self, Found};
 use crate::ide::Ide;
 use crate::line_index::{self, LineIndex};
 use crate::refs::{self, Decl};
+use crate::semantic;
 use crate::symbols::{self, Declared};
 use candela::Diagnostic as CdlDiagnostic;
 use candela::PackageCheck;
@@ -194,6 +195,9 @@ struct Inner {
     /// What each workspace file declares, as of its modification time, so
     /// a symbol search reads only the files that changed since the last.
     declared: Mutex<HashMap<PathBuf, (std::time::SystemTime, Vec<Declared>)>>,
+    /// Whether the client asks again for semantic tokens when told to,
+    /// which the server does after a check brings in new declarations.
+    refresh_tokens: std::sync::atomic::AtomicBool,
 }
 
 /// The references to one declaration found in one file.
@@ -231,6 +235,7 @@ impl Backend {
                 checking: tokio::sync::Mutex::new(()),
                 folders: RwLock::new(Vec::new()),
                 declared: Mutex::new(HashMap::new()),
+                refresh_tokens: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -410,16 +415,30 @@ impl Inner {
         };
         // An older text's summary still serves hover and completion while
         // the newer one is being checked.
+        let mut refreshed = false;
         if let Some(mut doc) = self.docs.get_mut(uri) {
             let current = doc.generation == generation;
             if let Some(summary) = &outcome.summary
                 && (current || doc.last_good.is_none())
             {
                 doc.last_good = Some(summary.clone());
+                refreshed = true;
             }
             if current {
                 doc.compiled_generation = generation;
             }
+        }
+        // Tokens were worked out against the summary before; the client asks
+        // again with this one.
+        if refreshed
+            && self
+                .refresh_tokens
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let _ = client.semantic_tokens_refresh().await;
+            });
         }
         if self.generation(uri) != Some(generation) {
             return;
@@ -1145,6 +1164,16 @@ impl LanguageServer for Backend {
         {
             folders.push(root.clone());
         }
+        let refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|t| t.refresh_support)
+            .unwrap_or(false);
+        self.inner
+            .refresh_tokens
+            .store(refresh, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut f) = self.inner.folders.write() {
             *f = folders
                 .iter()
@@ -1181,6 +1210,19 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: semantic::TYPES.to_vec(),
+                                token_modifiers: semantic::MODIFIERS.to_vec(),
+                            },
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: None,
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                        },
+                    ),
+                ),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -1513,6 +1555,24 @@ impl LanguageServer for Backend {
             })
             .collect();
         Ok(Some(highlights))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> RpcResult<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        // Like completion, from the last check: the names are read from the
+        // current text, and a check that brings in new declarations asks
+        // the client to fetch them again.
+        let summary = self.inner.typing_summary(uri).unwrap_or_default();
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic::tokens(&text, &summary),
+        })))
     }
 
     async fn symbol(
