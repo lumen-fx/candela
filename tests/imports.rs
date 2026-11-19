@@ -312,6 +312,63 @@ fn aliased_module_sees_its_own_enum() {
     );
 }
 
+/// A bare variant resolves among the enums its own module reaches, so two
+/// modules that each declare `Done` keep their own, whichever is imported
+/// first, and a bare name from a module imported under its name does not
+/// reach into it (candela #261).
+#[test]
+fn bare_variants_resolve_in_their_own_module() {
+    let output = run_program(
+        "variant_scope",
+        &[
+            (
+                "a.cdl",
+                "enum AEvent { Done(string, int), Failed(string) }\n\
+                 fn make() -> AEvent { return Done(\"a\", 1); }\n",
+            ),
+            (
+                "b.cdl",
+                "enum BEvent { Done(string), Failed(string) }\n\
+                 fn make() -> BEvent { return Done(\"b\"); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"./a.cdl\";\n\
+                 import \"./b.cdl\";\n\
+                 fn main() { print(string(a::make())); print(string(b::make())); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Done(\"a\",1)") && stdout.contains("Done(\"b\")"),
+        "{stdout}"
+    );
+
+    let output = run_program(
+        "variant_scope_unreached",
+        &[
+            ("a.cdl", "enum AEvent { Done(string) }\n"),
+            (
+                "prog.cdl",
+                "import \"./a.cdl\";\n\
+                 fn main() { print(string(Done(\"x\"))); print(string(a::AEvent::Done(\"y\"))); }\n",
+            ),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "a bare variant reached another module"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("a::AEvent::Done"), "{stderr}");
+}
+
 /// A variant of an aliased module's enum is reached through the alias and the
 /// enum: `shapes::Shape::Circle(1)`, with or without a payload, and the same
 /// path in a `match` arm.

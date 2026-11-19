@@ -83,6 +83,11 @@ A variant with no payload, written bare, names no type arguments of a
 [generic](generics.md) enum, and is accepted wherever an instantiation that
 names them is expected.
 
+A variant written on its own reaches the enums the file declares or imports by
+name, and the prelude's `Option` and `Result`. Two modules that each declare a
+`Done` variant keep their own, and a variant of an enum another module declares
+is written through that module.
+
 An enum from a module bound with `as` is reached through the alias and then the
 enum, because a variant belongs to its enum rather than to the module:
 `shapes::Shape::Circle(1)`. A [generic](generics.md) enum carries its type

@@ -558,6 +558,35 @@ pub fn error_unknown_or_uncallable(
     if let Some(var) = v.iter().rev().find(|var| var.name == fn_name) {
         error_type_not_callable(&var.var_type, span, file_idx, sources, types);
     }
+    // A variant of an enum another module declares is reached through the
+    // module and the enum, not by its bare name.
+    if let Some((alias, enum_name)) = scope.children.iter().find_map(|(alias, ns)| {
+        ns.symbols.iter().find_map(|(name, kind)| match kind {
+            SymbolKind::Enum(id)
+                if types.enums[*id as usize]
+                    .variants
+                    .iter()
+                    .any(|variant| variant.name == fn_name) =>
+            {
+                Some((alias.clone(), name.clone()))
+            }
+            _ => None,
+        })
+    }) {
+        error_type_test(
+            "Unknown function",
+            &format!(
+                "{fn_name} is a variant of {enum_name}, which the module bound as {alias} declares"
+            ),
+            Some(&format!(
+                "A bare variant name reaches the enums this file declares or imports by name. Write {alias}::{enum_name}::{fn_name}, or import {enum_name} by name"
+            )),
+            "unknown_function",
+            span,
+            file_idx,
+            sources,
+        );
+    }
     error_unknown_function(fn_name, span, scope, file_idx, sources);
 }
 

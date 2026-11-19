@@ -1363,12 +1363,27 @@ fn build_struct(
     dest_reg
 }
 
+/// Whether a bare variant name written in file `file_idx` reaches enum `id`:
+/// the file declares the enum or imports it by name, or the enum is an
+/// instantiation of a generic enum the file reaches that way or the prelude
+/// declares. An enum another module declares is reached through its path.
+pub(crate) fn enum_in_scope(id: u16, file_idx: u16, state: &State<'_>) -> bool {
+    let scope = state.scope(file_idx);
+    if let Some((template, _)) = state.generics.instantiation_of(&DataType::Enum(id)) {
+        return state.generics.template_in_scope(template, scope);
+    }
+    scope
+        .symbols
+        .iter()
+        .any(|(_, kind)| matches!(kind, SymbolKind::Enum(e) if *e == id))
+}
+
 /// Resolves a call/reference path to an enum variant `(enum_id, variant_idx)`,
 /// if it names one. A qualified path (`Color::Red`, `mod::Color::Red`) resolves
 /// the enum by its leading segments and the variant by the last segment; a bare
-/// name (`Some`, `None`) resolves by searching every registered enum for a
-/// variant with that name, first match winning. Never raises a compile error,
-/// so callers use it to intercept otherwise-unknown call/reference paths.
+/// name (`Some`, `None`) resolves among the enums the file reaches (see
+/// [`enum_in_scope`]), first match winning. Never raises a compile error, so
+/// callers use it to intercept otherwise-unknown call/reference paths.
 pub(crate) fn resolve_enum_variant(
     path: &[SmolStr],
     file_idx: u16,
@@ -1386,7 +1401,9 @@ pub(crate) fn resolve_enum_variant(
         Some((eid as u16, vidx as u16))
     } else if let Some(name) = path.first() {
         for e in state.enums.iter() {
-            if let Some(vidx) = e.variants.iter().position(|vt| &vt.name == name) {
+            if let Some(vidx) = e.variants.iter().position(|vt| &vt.name == name)
+                && enum_in_scope(e.id, file_idx, state)
+            {
                 return Some((e.id, vidx as u16));
             }
         }
@@ -1819,7 +1836,7 @@ pub(crate) fn variant_field_names(
             let template = if let [enum_module @ .., enum_name, _] = path {
                 find_template(enum_module, enum_name, scope, state.generics)
             } else {
-                state.generics.enum_template_with_variant(name)
+                state.generics.enum_template_with_variant_in(name, scope)
             };
             template
                 .and_then(|t| state.generics.template_variant_fields(t, name))

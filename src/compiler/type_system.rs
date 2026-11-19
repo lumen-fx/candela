@@ -663,6 +663,48 @@ impl Generics {
         })
     }
 
+    /// The same, among the generic enums a bare name written in `scope`
+    /// reaches: those the file declares or imports by name, and the prelude's.
+    #[must_use]
+    pub fn enum_template_with_variant_in(&self, variant: &str, scope: &Namespace) -> Option<usize> {
+        let mut found = None;
+        for (i, t) in self.templates.iter().enumerate() {
+            let declares = match &t.body {
+                TemplateBody::Enum(variants) => variants.iter().any(|(name, _, _)| name == variant),
+                TemplateBody::Struct(_) => false,
+            };
+            if !declares || !self.template_in_scope(i, scope) {
+                continue;
+            }
+            // The file's own reach wins over the prelude's, and the last
+            // declaration of the name over earlier ones.
+            if found.is_none_or(|f| self.reaches_everywhere(f) || !self.reaches_everywhere(i)) {
+                found = Some(i);
+            }
+        }
+        found
+    }
+
+    /// Whether a bare name written in `scope` reaches template `template`.
+    #[must_use]
+    pub fn template_in_scope(&self, template: usize, scope: &Namespace) -> bool {
+        self.reaches_everywhere(template)
+            || scope
+                .symbols
+                .iter()
+                .any(|(_, kind)| matches!(kind, SymbolKind::Template(t) if *t as usize == template))
+    }
+
+    /// Whether template `template` is the prelude's, whose names every file
+    /// reaches without an import.
+    #[must_use]
+    fn reaches_everywhere(&self, template: usize) -> bool {
+        self.prelude_templates.contains(&template)
+            || self
+                .prelude_files
+                .contains(&self.templates[template].file_idx)
+    }
+
     /// Whether the only generic enums declaring a variant called `variant` are
     /// the prelude's.
     #[must_use]
@@ -2083,11 +2125,12 @@ pub fn variant_constructor_at(
         && state.generics.only_the_prelude_declares(variant)
         && let Some(own) = state.enums.iter().find_map(|e| {
             let idx = e.variants.iter().position(|vt| vt.name == *variant)?;
-            state
+            (state
                 .generics
                 .instantiation_of(&DataType::Enum(e.id))
                 .is_none()
-                .then_some((e.id, idx as u16))
+                && crate::compiler::enum_in_scope(e.id, ctx.file_idx, state))
+            .then_some((e.id, idx as u16))
         })
     {
         return Some(own);
@@ -2112,7 +2155,9 @@ pub fn resolve_variant_constructor(
     } else {
         (
             &path[..0],
-            state.generics.enum_template_with_variant(&variant)?,
+            state
+                .generics
+                .enum_template_with_variant_in(&variant, state.scope(ctx.file_idx))?,
         )
     };
     let params: Vec<SmolStr> = state.generics.params(template).to_vec();
