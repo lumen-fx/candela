@@ -176,6 +176,9 @@
 (field_initializer
   name: (identifier) @variable.member)
 
+(variant_field
+  name: (identifier) @variable.member)
+
 (field_expression
   field: (identifier) @variable.member)
 

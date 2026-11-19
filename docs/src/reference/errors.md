@@ -194,6 +194,14 @@ See [types](../language/types.md#testing-a-type-with-is).
 definitions. Two `impl` blocks that define one method for the same instantiated
 generic type are reported the same way.
 
+**Variant shape errors.** A variant declared with named fields is built and
+matched by name, and one with a positional payload in parentheses; writing one
+the other way is `variant_payload_shape`. A named-field literal or pattern that
+leaves out a field is `variant_field_missing` (a pattern may end in `..` to skip
+the rest; a literal may not), one naming a field the variant does not declare is
+`variant_field_unknown`, and one naming a field twice is `variant_field_twice`.
+See [enums](../language/enums.md).
+
 **Generic type errors.** Type arguments whose count does not match the
 declaration, type arguments on a name that declares none, type arguments on a
 built-in method, a name in a declaration that is neither a type nor one of its

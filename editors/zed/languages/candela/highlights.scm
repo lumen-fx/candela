@@ -130,6 +130,9 @@
 (field_initializer
   name: (identifier) @property)
 
+(variant_field
+  name: (identifier) @property)
+
 (field_expression
   field: (identifier) @property)
 

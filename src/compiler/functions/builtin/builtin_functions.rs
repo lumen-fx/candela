@@ -400,6 +400,7 @@ pub fn builtin_functions(
                     args,
                     span,
                     args_indexes,
+                    false,
                     v,
                     ctx,
                     state,

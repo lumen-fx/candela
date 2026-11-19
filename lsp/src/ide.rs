@@ -1282,11 +1282,7 @@ fn struct_item(s: &StructSymbol, rank: &str) -> CompletionItem {
 }
 
 fn variant_item(e: &EnumSymbol, v: &VariantSymbol, label: &str, rank: &str) -> CompletionItem {
-    let detail = if v.payload.is_empty() {
-        format!("{}::{}", e.name, v.name)
-    } else {
-        format!("{}::{}({})", e.name, v.name, v.payload.join(", "))
-    };
+    let detail = format!("{}::{}{}", e.name, v.name, v.shape());
     CompletionItem {
         label: label.to_owned(),
         kind: Some(CompletionItemKind::ENUM_MEMBER),
@@ -1308,13 +1304,7 @@ fn enum_header(e: &EnumSymbol) -> String {
     let variants: Vec<String> = e
         .variants
         .iter()
-        .map(|v| {
-            if v.payload.is_empty() {
-                v.name.clone()
-            } else {
-                format!("{}({})", v.name, v.payload.join(", "))
-            }
-        })
+        .map(|v| format!("{}{}", v.name, v.shape()))
         .collect();
     format!("enum {} {{ {} }}", e.name, variants.join(", "))
 }
@@ -1407,11 +1397,7 @@ pub fn hover_markdown(sym: &Symbol<'_>) -> String {
             (enum_header(e), with_members(&e.doc, "Variants", members))
         }
         Symbol::Variant(e, v) => {
-            let code = if v.payload.is_empty() {
-                format!("{}::{}", e.name, v.name)
-            } else {
-                format!("{}::{}({})", e.name, v.name, v.payload.join(", "))
-            };
+            let code = format!("{}::{}{}", e.name, v.name, v.shape());
             (
                 code,
                 if v.doc.is_empty() {

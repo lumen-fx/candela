@@ -45,6 +45,7 @@ use crate::compiler::compiler_errors::error_unknown_type;
 use crate::compiler::compiler_errors::error_unknown_type_param;
 use crate::compiler::compiler_errors::error_unknown_type_with_namespace;
 use crate::compiler::compiler_errors::error_unknown_variable;
+use crate::compiler::expr::VariantFields;
 use crate::compiler::expr::closure_free_names;
 use crate::compiler::functions::Callee;
 use crate::compiler::functions::reject_default_default;
@@ -336,6 +337,9 @@ struct TypeTemplate {
     /// The `= value` each field of a struct template was declared with, empty
     /// when none was; handed to every instantiation.
     defaults: Box<[Option<(Expr, Span)>]>,
+    /// The field names of an enum template's variants declared with named
+    /// fields; handed to every instantiation.
+    variant_fields: VariantFields,
 }
 
 /// The `= value` a struct's fields were declared with, and the file the
@@ -443,9 +447,30 @@ pub struct Generics {
     /// a program imported one by name first. Their templates are bare names
     /// everywhere.
     prelude_files: Vec<u16>,
+    /// The field names of the variants declared with named fields, by enum id.
+    /// An enum with none has no entry.
+    variant_fields: FxHashMap<u16, VariantFields>,
 }
 
 impl Generics {
+    /// Records the named-field variants of enum `id`.
+    pub fn set_variant_fields(&mut self, id: u16, fields: VariantFields) {
+        if !fields.is_empty() {
+            self.variant_fields.insert(id, fields);
+        }
+    }
+
+    /// The field names variant `variant` of enum `id` was declared with,
+    /// `None` for a variant whose payload is positional.
+    #[must_use]
+    pub fn variant_fields(&self, id: u16, variant: u16) -> Option<&[SmolStr]> {
+        self.variant_fields
+            .get(&id)?
+            .iter()
+            .find(|(idx, _)| *idx == variant)
+            .map(|(_, names)| &**names)
+    }
+
     /// How many generic declarations are registered.
     #[must_use]
     pub const fn template_count(&self) -> usize {
@@ -646,6 +671,34 @@ impl Generics {
             .is_some_and(|template| self.prelude_templates.contains(&template))
     }
 
+    /// The field names a variant of generic enum `template` was declared
+    /// with: `None` when it declares no such variant, `Some(None)` when its
+    /// payload is positional.
+    #[must_use]
+    pub fn template_variant_fields(
+        &self,
+        template: usize,
+        variant: &str,
+    ) -> Option<Option<&[SmolStr]>> {
+        let decl = &self.templates[template];
+        let TemplateBody::Enum(variants) = &decl.body else {
+            return None;
+        };
+        let idx = variants.iter().position(|(name, _, _)| name == variant)?;
+        Some(
+            decl.variant_fields
+                .iter()
+                .find(|(i, _)| usize::from(*i) == idx)
+                .map(|(_, names)| &**names),
+        )
+    }
+
+    /// Whether `template` declares a struct rather than an enum.
+    #[must_use]
+    pub fn is_struct_template(&self, template: usize) -> bool {
+        matches!(self.templates[template].body, TemplateBody::Struct(_))
+    }
+
     /// The payload a variant of a generic enum declares, unresolved.
     #[must_use]
     fn variant_payload(&self, template: usize, variant: &str) -> Option<&[TypeExpr]> {
@@ -693,6 +746,7 @@ impl Generics {
             file_idx,
             body: TemplateBody::Struct(fields),
             defaults,
+            variant_fields: Box::from([]),
         });
         (self.templates.len() - 1) as u32
     }
@@ -725,6 +779,7 @@ impl Generics {
             file_idx: 0,
             body: TemplateBody::Struct(fields),
             defaults: Box::from([]),
+            variant_fields: Box::from([]),
         });
         self.templates.len() - 1
     }
@@ -737,6 +792,7 @@ impl Generics {
         params: TypeParams,
         file_idx: u16,
         variants: Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
+        variant_fields: VariantFields,
     ) -> u32 {
         self.templates.push(TypeTemplate {
             name,
@@ -744,6 +800,7 @@ impl Generics {
             file_idx,
             body: TemplateBody::Enum(variants),
             defaults: Box::from([]),
+            variant_fields,
         });
         (self.templates.len() - 1) as u32
     }
@@ -1274,6 +1331,8 @@ pub fn instantiate(
             id,
             name_span: span,
         });
+        let fields = ctx.generics.templates[template_idx].variant_fields.clone();
+        ctx.generics.set_variant_fields(id, fields);
         DataType::Enum(id)
     };
     ctx.generics.instantiations.push(Instantiation {
@@ -4929,6 +4988,18 @@ impl Expr {
                 }
             }
             Self::Struct(namespace, fields, span, type_args, base) => {
+                if let Some((enum_id, ..)) = crate::compiler::named_variant_literal(
+                    namespace,
+                    fields,
+                    type_args,
+                    base.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                ) {
+                    return DataType::Enum(enum_id);
+                }
                 DataType::Struct(literal_struct_id(
                     namespace,
                     fields,

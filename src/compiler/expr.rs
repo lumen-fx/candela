@@ -128,6 +128,21 @@ pub fn tuple_elements(expr: &Expr) -> Option<Vec<(&Expr, Span)>> {
     }
 }
 
+/// The expressions a variant pattern binds through, as written: `Some(x)`
+/// gives `x`, `Click { x, y: py }` gives `x` and `py`. Empty for any other
+/// expression.
+pub fn variant_pattern_binders(pattern: &Expr) -> Box<dyn Iterator<Item = &Expr> + '_> {
+    match pattern {
+        Expr::FunctionCall(args, ..) => Box::new(args.iter()),
+        Expr::Struct(_, fields, ..) => Box::new(fields.iter().map(|(_, value, _, _)| value)),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
+/// The field names of an enum's variants declared with named fields, by the
+/// variant's index: `Click { x: int, y: int }` names its two payload places.
+pub type VariantFields = Box<[(u16, Box<[SmolStr]>)]>;
+
 /// What an import adds to the scope of the file that writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportBinding {
@@ -300,12 +315,17 @@ pub enum Expr {
     /// field of a struct type left to its default lower to. Built by the
     /// compiler, never by the parser.
     StructDefault(u16, Span),
-    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params)
+    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params, field_names)
+    ///
+    /// `field_names` names the payload of each variant declared with named
+    /// fields, `Click { x: int, y: int }`, by the variant's index. The payload
+    /// itself stays positional, in declaration order.
     EnumDeclare(
         SmolStr,
         Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
         Span,
         TypeParams,
+        VariantFields,
     ),
     /// NamespacedRef(path, span, type_args)
     ///
@@ -1014,8 +1034,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
                 for pattern in patterns {
                     if tuple_elements(pattern).is_some() {
                         scan_tuple_pattern(pattern, depth, bound, out);
-                    } else if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
-                        for binder in binders {
+                    } else if matches!(pattern, Expr::FunctionCall(..) | Expr::Struct(..)) {
+                        for binder in variant_pattern_binders(pattern) {
                             if let Expr::Var(name, _) = binder {
                                 bound.push(name.clone());
                             }
@@ -1044,8 +1064,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::Is(operand, target, _, _) => {
             scan_free_names(operand, depth, bound, out);
-            if let IsTarget::Variant(Expr::FunctionCall(binders, _, _, _, _)) = &**target {
-                for binder in binders {
+            if let IsTarget::Variant(pattern) = &**target {
+                for binder in variant_pattern_binders(pattern) {
                     if let Expr::Var(name, _) = binder {
                         bound.push(name.clone());
                     }
@@ -1144,7 +1164,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::NamespacedRef(_, _, _)
         | Expr::StructDefault(_, _)
         | Expr::StructDeclare(..)
-        | Expr::EnumDeclare(_, _, _, _)
+        | Expr::EnumDeclare(..)
         | Expr::FunctionDecl(_, _, _, _, _, _)
         | Expr::ImportDylib(_, _, _)
         | Expr::HostBlock(..)

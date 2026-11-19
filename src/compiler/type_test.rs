@@ -730,10 +730,10 @@ pub fn captured_binders(condition: &Expr, scope: &[Expr]) -> Vec<SmolStr> {
         let Expr::Is(_, target, _, _) = conjunct else {
             continue;
         };
-        let IsTarget::Variant(Expr::FunctionCall(binders, _, _, _, _)) = &**target else {
+        let IsTarget::Variant(pattern) = &**target else {
             continue;
         };
-        for binder in binders {
+        for binder in super::expr::variant_pattern_binders(pattern) {
             let Expr::Var(name, _) = binder else {
                 continue;
             };

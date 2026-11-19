@@ -170,6 +170,7 @@ fn parse_generic_term(
     path: Box<[SmolStr]>,
     type_args: Box<[TypeExpr]>,
     start: u32,
+    allow_struct: bool,
 ) -> Expr {
     let span: Span = (start, parser.last_token_end as u32).into();
     match parser.peek_token() {
@@ -192,6 +193,10 @@ fn parse_generic_term(
             if parser.peek_token_opt() == Some(Token::LParen) {
                 parser.next_token();
                 parse_fn_call(parser, namespace, span, type_args)
+            } else if parser.peek_token_opt() == Some(Token::LBrace) && allow_struct {
+                // `Slot<int>::Filled { value: 1 }`: a variant with named fields.
+                parser.next_token();
+                parse_struct(parser, namespace, start, type_args)
             } else {
                 Expr::NamespacedRef(namespace, span, type_args)
             }
@@ -256,7 +261,13 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                     ) =>
                 {
                     let type_args = parse_type_args(parser);
-                    parse_generic_term(parser, Box::from([SmolStr::new(s)]), type_args, start)
+                    parse_generic_term(
+                        parser,
+                        Box::from([SmolStr::new(s)]),
+                        type_args,
+                        start,
+                        allow_struct,
+                    )
                 }
                 // NAMESPACE
                 Some(Token::DoubleColon) => {
@@ -301,7 +312,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                             ) =>
                         {
                             let type_args = parse_type_args(parser);
-                            parse_generic_term(parser, namespace, type_args, start)
+                            parse_generic_term(parser, namespace, type_args, start, allow_struct)
                         }
                         // A bare namespaced identifier: a nullary enum-variant
                         // construction (`Color::Red`), resolved by the compiler.

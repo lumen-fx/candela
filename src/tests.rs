@@ -16362,6 +16362,64 @@ fn main() { print(P { x: 2 }.make().x); }
     assert_eq!(d.code, "method_without_receiver");
 }
 
+/// A variant may name its payload, `Click { x: int, y: int }`: it is built and
+/// matched by field name, in any order, with field shorthand, and a pattern may
+/// skip fields with `..`.
+#[test]
+pub fn enum_variants_with_named_fields() {
+    let src = "
+enum Event { Click { x: int, y: int }, Key(string), Quit }
+enum Slot<T> { Filled { value: T, count: int }, Empty }
+fn describe(e: Event) -> string => match e {
+    Event::Click { x, y: py } => \"click \" + string(x) + \",\" + string(py),
+    Key(k) => \"key \" + k,
+    Quit => \"quit\",
+};
+fn main() {
+    let y = 4;
+    print(describe(Event::Click { y, x: 3 }));
+    print(describe(Event::Key(\"a\")));
+    let e = Event::Click { x: 1, y: 2 };
+    if (e is Event::Click { x, .. }) { print(x); }
+    let s = Slot<string>::Filled { value: \"v\", count: 2 };
+    match s { Filled { value, count } => print(value, count), Empty => print(0) }
+    let t = Filled { value: 1.5, count: 1 };
+    match t { Filled { value, .. } => print(value), Empty => print(0) }
+}
+";
+    assert_eq!(run_output(src), "click 3,4\nkey a\n1\nv\n2\n1.5\n");
+    for (src, code) in [
+        (
+            "enum E { A { x: int } }\nfn main() { let e = E::A(1); }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A(int) }\nfn main() { let e = E::A { x: 1 }; }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A { x: int, y: int } }\nfn main() { let e = E::A { x: 1 }; }",
+            "variant_field_missing",
+        ),
+        (
+            "enum E { A { x: int } }\nfn main() { let e = E::A { x: 1, z: 2 }; }",
+            "variant_field_unknown",
+        ),
+        (
+            "enum E { A { x: int }, B }\nfn main() { match E::B { A(x) => print(x), B => print(0) } }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A { x: int, y: int }, B }\nfn main() { match E::B { A { x } => print(x), B => print(0) } }",
+            "variant_field_missing",
+        ),
+    ] {
+        let d = compile_diag(src, "named.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
 /// An `impl` block on a generic type declares the parameters it binds,
 /// `impl<T> Cell<T>`, so a type that happens to be named `T` does not turn the
 /// block into an impl for that one instantiation.

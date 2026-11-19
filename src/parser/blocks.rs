@@ -953,6 +953,7 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
     let type_params = parse_type_params(parser);
     parser.next_token_expect(Token::LBrace, "Expected '{'");
     let mut variants: Vec<(SmolStr, Box<[TypeExpr]>, Span)> = Vec::with_capacity(4);
+    let mut field_names: Vec<(u16, Box<[SmolStr]>)> = Vec::new();
     loop {
         if parser.peek_token() == Token::RBrace {
             parser.next_token();
@@ -990,6 +991,44 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
                 }
             }
             parser.next_token_expect(Token::RParen, "Unmatched '('");
+        } else if parser.peek_token() == Token::LBrace {
+            // Named fields: `Click { x: int, y: int }`. The payload keeps
+            // their order, and the names are what a literal and a pattern
+            // write them by.
+            parser.next_token();
+            let mut names: Vec<SmolStr> = Vec::new();
+            loop {
+                if parser.peek_token() == Token::RBrace {
+                    break;
+                }
+                let (field, field_span) = parser.next_token();
+                let Token::Identifier(field) = field else {
+                    cold_path();
+                    parser.error(
+                        field_span,
+                        ParserErr::UnexpectedToken(
+                            Token::Identifier(""),
+                            field,
+                            "Variant field names must be identifiers.",
+                        ),
+                    );
+                };
+                parser.next_token_expect(
+                    Token::Colon,
+                    "A colon must separate a field from its type.",
+                );
+                names.push(SmolStr::new(field));
+                payload.push(parse_type(parser));
+                if parser.peek_token() == Token::Comma {
+                    parser.next_token();
+                } else if parser.peek_token() != Token::RBrace {
+                    cold_path();
+                    let span = parser.peek_token_span();
+                    parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
+                }
+            }
+            parser.next_token_expect(Token::RBrace, "Unmatched '{'");
+            field_names.push((variants.len() as u16, Box::from(names)));
         }
         variants.push((variant_name, Box::from(payload), v_span));
         let (sep, sep_span) = parser.next_token();
@@ -1010,5 +1049,11 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
             break;
         }
     }
-    Expr::EnumDeclare(enum_name, Box::from(variants), span, type_params)
+    Expr::EnumDeclare(
+        enum_name,
+        Box::from(variants),
+        span,
+        type_params,
+        Box::from(field_names),
+    )
 }

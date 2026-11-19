@@ -2370,8 +2370,9 @@ pub fn error_operator_method(
     )
 }
 
-/// A mistake in an `is` or an `as`, reported at the whole expression with an
-/// optional help line. `code` is what a `catch` and an editor read.
+/// A mistake reported at one span with an optional help line: an `is` or an
+/// `as`, a variant written with the wrong shape, a header naming no type.
+/// `code` is what a `catch` and an editor read.
 #[cold]
 #[inline(never)]
 pub fn error_type_test(

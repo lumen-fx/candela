@@ -169,8 +169,32 @@ impl StructSymbol {
 pub struct VariantSymbol {
     pub name: String,
     pub payload: Vec<String>,
+    /// The field names of a variant declared with named fields, one per
+    /// payload place; empty for a positional payload.
+    pub fields: Vec<String>,
     pub span: Span,
     pub doc: String,
+}
+
+impl VariantSymbol {
+    /// The payload as a declaration writes it after the name: `(int, string)`,
+    /// ` { x: int, y: int }`, or nothing for a variant without one.
+    #[must_use]
+    pub fn shape(&self) -> String {
+        if self.payload.is_empty() {
+            String::new()
+        } else if self.fields.is_empty() {
+            format!("({})", self.payload.join(", "))
+        } else {
+            let fields: Vec<String> = self
+                .fields
+                .iter()
+                .zip(&self.payload)
+                .map(|(name, ty)| format!("{name}: {ty}"))
+                .collect();
+            format!(" {{ {} }}", fields.join(", "))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -465,9 +489,15 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                 variants: e
                     .variants
                     .iter()
-                    .map(|v| VariantSymbol {
+                    .enumerate()
+                    .map(|(idx, v)| VariantSymbol {
                         name: v.name.to_string(),
                         payload: v.payload.iter().map(|t| types.of(t).to_string()).collect(),
+                        fields: u16::try_from(idx)
+                            .ok()
+                            .and_then(|idx| out.generics.variant_fields(e.id, idx))
+                            .map(|names| names.iter().map(ToString::to_string).collect())
+                            .unwrap_or_default(),
                         span: v.name_span,
                         doc: own_line_doc(text, v.name_span.start as usize),
                     })

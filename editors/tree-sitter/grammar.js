@@ -244,8 +244,16 @@ module.exports = grammar({
 
     enum_variant_list: ($) => seq('{', sepByTrailing(',', $.enum_variant), '}'),
 
+    // A payload is positional, `Click(int, int)`, or named, `Click { x: int }`.
     enum_variant: ($) =>
-      seq(field('name', $.identifier), optional(field('payload', $.payload_type_list))),
+      seq(
+        field('name', $.identifier),
+        optional(field('payload', choice($.payload_type_list, $.variant_field_list))),
+      ),
+
+    variant_field_list: ($) => seq('{', sepByTrailing(',', $.variant_field), '}'),
+
+    variant_field: ($) => seq(field('name', $.identifier), ':', field('type', $._type)),
 
     payload_type_list: ($) => seq('(', sepByTrailing(',', $._type), ')'),
 
@@ -861,8 +869,9 @@ module.exports = grammar({
 
     struct_base: ($) => seq('..', optional(field('value', $._expression))),
 
+    // A field written alone, `Point { x, y }`, takes the variable of its name.
     field_initializer: ($) =>
-      seq(field('name', $.identifier), ':', field('value', $._expression)),
+      seq(field('name', $.identifier), optional(seq(':', field('value', $._expression)))),
 
     // An anonymous function. It takes no return annotation. Its body is a
     // block, or `=> expr`, which runs as far as the expression does, so

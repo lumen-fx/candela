@@ -56,7 +56,7 @@ pub fn parse_expr_with_precedence(
                 );
             }
             lhs = if peek == Token::Is {
-                let target = parse_is_target(input);
+                let target = parse_is_target(input, allow_struct);
                 let target_span = (rhs_start, input.last_token_end as u32).into();
                 Expr::Is(Box::new(lhs), Box::new(target), operand_span, target_span)
             } else {
@@ -486,17 +486,21 @@ const COMPARISON_PRECEDENCE: u8 = 4;
 /// written that way; anything else is read as a type, and a bare name that
 /// turns out to be a variant with no payload (`None`) is resolved as one by
 /// the compiler.
-fn parse_is_target(parser: &mut Parser<'_>) -> IsTarget {
-    if variant_pattern_ahead(parser) {
-        IsTarget::Variant(parse_term(parser, false))
+///
+/// A variant with named fields, `Click { x, y }`, is a pattern too, where a
+/// struct literal could stand; in the condition of an `if` or a `while` the
+/// braces would open the body, so there the test goes in parentheses.
+fn parse_is_target(parser: &mut Parser<'_>, allow_struct: bool) -> IsTarget {
+    if variant_pattern_ahead(parser, allow_struct) {
+        IsTarget::Variant(parse_term(parser, allow_struct))
     } else {
         IsTarget::Type(parse_type(parser))
     }
 }
 
 /// Whether the tokens ahead are `Name(`, or `A::B(` with any number of path
-/// segments.
-fn variant_pattern_ahead(parser: &Parser<'_>) -> bool {
+/// segments, or the same followed by `{` where a struct literal may stand.
+fn variant_pattern_ahead(parser: &Parser<'_>, allow_struct: bool) -> bool {
     let mut tokens = parser.input.clone().map(|(t, _)| t.ok());
     let mut next = || tokens.next().flatten();
     if !matches!(next(), Some(Token::Identifier(_))) {
@@ -505,6 +509,7 @@ fn variant_pattern_ahead(parser: &Parser<'_>) -> bool {
     loop {
         match next() {
             Some(Token::LParen) => return true,
+            Some(Token::LBrace) => return allow_struct,
             Some(Token::DoubleColon) => {
                 if !matches!(next(), Some(Token::Identifier(_))) {
                     return false;

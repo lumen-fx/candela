@@ -69,6 +69,7 @@ use expr::Operand;
 use expr::Span;
 use expr::StructRest;
 use expr::UNARY_MINUS_METHOD;
+use expr::VariantFields;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::const_read;
@@ -110,6 +111,7 @@ use type_system::check_if_returns_void;
 use type_system::check_operator_method;
 use type_system::check_struct_default_fn;
 use type_system::collect_direct_fn_calls;
+use type_system::find_template;
 use type_system::infer_user_fn_return_type;
 use type_system::let_type_fits;
 use type_system::literal_struct_id;
@@ -1411,6 +1413,32 @@ pub(crate) fn variant_constructor(
     variant_constructor_at(path, &arg_types, span, ctx, state)
 }
 
+/// A struct-shaped literal that builds a variant declared with named fields,
+/// `Event::Click { x: 1, y: 2 }`: the enum and variant it builds and the
+/// payload in declared order with the span of each value. `None` for a struct
+/// literal.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn named_variant_literal(
+    path: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    type_args: &[TypeExpr],
+    rest: Option<&(StructRest, Span)>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(u16, u16, Vec<Expr>, Vec<Span>)> {
+    let names = named_variant_fields(path, span, ctx, state)?;
+    let variant = &path[path.len() - 1];
+    let (args, spans) = order_named_fields(&names, fields, rest, variant, span, false, ctx, state);
+    let (enum_id, variant_idx) = if type_args.is_empty() {
+        variant_constructor(path, &args, span, v, ctx, state)?
+    } else {
+        resolve_generic_variant(path, type_args, span, ctx, state)
+    };
+    Some((enum_id, variant_idx, args, spans))
+}
+
 /// Lowers an enum-variant construction (`Color::Red`, `Some(x)`) to a fresh
 /// enum value. The object-pool template holds the variant tag at element 0 and
 /// the payload at elements `1..`; constant payloads are baked into the template
@@ -1423,6 +1451,7 @@ pub(crate) fn compile_enum_construction(
     args: &[Expr],
     span: Span,
     args_indexes: &[Span],
+    by_name: bool,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -1432,6 +1461,29 @@ pub(crate) fn compile_enum_construction(
     let variant_name = variant.name.clone();
     let payload_types = variant.payload.clone();
     let arity = payload_types.len();
+    // A variant declared with named fields is built by name, and one declared
+    // with a positional payload in order: one spelling per variant.
+    if !by_name
+        && let Some(names) = state.generics.variant_fields(enum_id, variant_idx)
+        && !names.is_empty()
+    {
+        compiler_errors::error_type_test(
+            "Variant built in order",
+            &format!("{variant_name} names its fields"),
+            Some(&format!(
+                "Build it with braces: {variant_name} {{ {} }}",
+                names
+                    .iter()
+                    .map(|n| format!("{n}: ..."))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            "variant_payload_shape",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
 
     compiler_errors::check_args(
         args,
@@ -1526,6 +1578,7 @@ fn compile_enum_definition(
     variants: &[(SmolStr, Box<[TypeExpr]>, Span)],
     span: Span,
     type_params: &TypeParams,
+    fields: &VariantFields,
     ctx: Ctx,
     state: &mut State<'_>,
 ) {
@@ -1535,6 +1588,7 @@ fn compile_enum_definition(
             type_params.clone(),
             ctx.file_idx,
             Box::from(variants),
+            fields.clone(),
         );
         state
             .scope_mut(ctx.file_idx)
@@ -1549,6 +1603,7 @@ fn compile_enum_definition(
         id: enum_id,
         name_span: span,
     });
+    state.generics.set_variant_fields(enum_id, fields.clone());
     state
         .scope_mut(ctx.file_idx)
         .symbols
@@ -1591,21 +1646,57 @@ pub(crate) fn resolve_variant_pattern(
             Expr::Var(name, span) => (std::slice::from_ref(name), &[], Vec::new(), *span),
             Expr::NamespacedRef(path, span, type_args) => (path, type_args, Vec::new(), *span),
             Expr::FunctionCall(args, namespace, span, _, type_args) => {
-                let mut binders = Vec::with_capacity(args.len());
-                for arg in args {
-                    if let Expr::Var(binder, _) = arg {
-                        binders.push(binder.clone());
-                    } else {
-                        compiler_errors::error_enum(
-                            "Invalid match pattern",
-                            "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
-                            *span,
-                            ctx.file_idx,
-                            state.sources,
-                        );
-                    }
+                if let Some(Some(names)) = variant_field_names(namespace, ctx, state)
+                    && !names.is_empty()
+                {
+                    compiler_errors::error_type_test(
+                        "Variant written in order",
+                        &format!("{} names its fields", namespace[namespace.len() - 1]),
+                        Some(&format!(
+                            "Write the pattern with braces: {} {{ {} }}",
+                            namespace.join("::"),
+                            names.join(", ")
+                        )),
+                        "variant_payload_shape",
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
                 }
-                (&**namespace, type_args, binders, *span)
+                (
+                    &**namespace,
+                    type_args,
+                    variant_binders(args, *span, ctx, state),
+                    *span,
+                )
+            }
+            Expr::Struct(namespace, fields, span, type_args, rest) => {
+                let variant = &namespace[namespace.len() - 1];
+                let Some(names) = named_variant_fields(namespace, *span, ctx, state) else {
+                    compiler_errors::error_enum(
+                        "Invalid match pattern",
+                        "A match on an enum expects variant patterns, e.g. Circle(r) or Click { x, y }",
+                        *span,
+                        ctx.file_idx,
+                        state.sources,
+                    );
+                };
+                let (values, _) = order_named_fields(
+                    &names,
+                    fields,
+                    rest.as_deref(),
+                    variant,
+                    *span,
+                    true,
+                    ctx,
+                    state,
+                );
+                (
+                    &**namespace,
+                    type_args,
+                    variant_binders(&values, *span, ctx, state),
+                    *span,
+                )
             }
             _ => compiler_errors::error_enum(
                 "Invalid match pattern",
@@ -1665,6 +1756,159 @@ pub(crate) fn resolve_variant_pattern(
     (variant_idx, binders)
 }
 
+/// The field names of the variant a struct-shaped literal or pattern names,
+/// `Event::Click { x: 1, y: 2 }`, in declaration order.
+///
+/// `None` when the path names a struct, which the literal builds, or nothing a
+/// variant could be. A variant whose payload is positional is reported here:
+/// it is written with parentheses.
+pub(crate) fn named_variant_fields(
+    path: &[SmolStr],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<Box<[SmolStr]>> {
+    match variant_field_names(path, ctx, state)? {
+        Some(names) => Some(names),
+        None => compiler_errors::error_type_test(
+            "Variant written with braces",
+            &format!(
+                "{} takes its payload in order, not by field name",
+                path[path.len() - 1]
+            ),
+            Some(&format!(
+                "Write it with parentheses: {}(...)",
+                path[path.len() - 1]
+            )),
+            "variant_payload_shape",
+            span,
+            ctx.file_idx,
+            state.sources,
+        ),
+    }
+}
+
+/// The field names of the variant `path` names: `Some(None)` for a variant
+/// whose payload is positional, `None` for a path that names a struct or no
+/// variant.
+pub(crate) fn variant_field_names(
+    path: &[SmolStr],
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<Option<Box<[SmolStr]>>> {
+    let (name, module) = path.split_last()?;
+    let scope = state.scope(ctx.file_idx);
+    let names_struct = scope.resolve(module).is_some_and(|ns| {
+        ns.symbols
+            .iter()
+            .any(|(n, kind)| n == name && matches!(kind, SymbolKind::Struct(_)))
+    }) || find_template(module, name, scope, state.generics)
+        .is_some_and(|t| state.generics.is_struct_template(t));
+    if names_struct {
+        return None;
+    }
+    let fields: Option<Option<Box<[SmolStr]>>> =
+        if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, ctx.file_idx, state) {
+            Some(
+                state
+                    .generics
+                    .variant_fields(enum_id, variant_idx)
+                    .map(Box::from),
+            )
+        } else {
+            let template = if let [enum_module @ .., enum_name, _] = path {
+                find_template(enum_module, enum_name, scope, state.generics)
+            } else {
+                state.generics.enum_template_with_variant(name)
+            };
+            template
+                .and_then(|t| state.generics.template_variant_fields(t, name))
+                .map(|f| f.map(Box::from))
+        };
+    fields
+}
+
+/// The values a named-field variant literal or pattern gives, put in the
+/// variant's declared order, each with the span it was written at.
+///
+/// A literal writes every field once. A pattern may end in `..`, which leaves
+/// the fields it does not name unbound, and each value is the name the field
+/// binds (`x` alone binds `x`, `x: px` binds `px`).
+pub(crate) fn order_named_fields(
+    names: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    rest: Option<&(StructRest, Span)>,
+    variant: &str,
+    span: Span,
+    pattern: bool,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> (Vec<Expr>, Vec<Span>) {
+    if let Some((written, rest_span)) = rest
+        && (!pattern || written.base().is_some())
+    {
+        compiler_errors::error_type_test(
+            "Variant literal with ..",
+            &format!("{variant} has no default to fill fields from"),
+            Some("Give every field a value"),
+            "variant_field_missing",
+            *rest_span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    for (i, (field, _, field_span, _)) in fields.iter().enumerate() {
+        if !names.contains(field) {
+            compiler_errors::error_type_test(
+                "Unknown variant field",
+                &format!("{variant} has no field {field}"),
+                Some(&format!("Its fields are {}", names.join(", "))),
+                "variant_field_unknown",
+                *field_span,
+                ctx.file_idx,
+                state.sources,
+            );
+        }
+        if fields[..i].iter().any(|(earlier, ..)| earlier == field) {
+            compiler_errors::error_type_test(
+                "Variant field written twice",
+                &format!("{field} is already given"),
+                None,
+                "variant_field_twice",
+                *field_span,
+                ctx.file_idx,
+                state.sources,
+            );
+        }
+    }
+    let mut values = Vec::with_capacity(names.len());
+    let mut spans = Vec::with_capacity(names.len());
+    for name in names {
+        if let Some((_, value, _, value_span)) = fields.iter().find(|(f, ..)| f == name) {
+            values.push(value.clone());
+            spans.push(*value_span);
+        } else if pattern && rest.is_some() {
+            values.push(Expr::Var(SmolStr::new_static("_"), span));
+            spans.push(span);
+        } else {
+            compiler_errors::error_type_test(
+                "Missing variant field",
+                &format!("{variant} needs a value for {name}"),
+                Some(if pattern {
+                    "Name every field, or end the pattern with .. to skip the rest"
+                } else {
+                    "Give every field a value"
+                }),
+                "variant_field_missing",
+                span,
+                ctx.file_idx,
+                state.sources,
+            );
+        }
+    }
+    (values, spans)
+}
+
 /// The enum and variant a qualified pattern with no type arguments names.
 ///
 /// The segments in front of the variant are the enum name and, before it, the
@@ -1706,13 +1950,32 @@ fn resolve_qualified_pattern_enum(
     (pattern_enum as u16, variant_idx as u16)
 }
 
+/// The names a variant pattern binds, one per payload place.
+fn variant_binders(args: &[Expr], span: Span, ctx: Ctx, state: &State<'_>) -> Vec<SmolStr> {
+    args.iter()
+        .map(|arg| {
+            let Expr::Var(binder, _) = arg else {
+                compiler_errors::error_enum(
+                    "Invalid match pattern",
+                    "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
+                    span,
+                    ctx.file_idx,
+                    state.sources,
+                );
+            };
+            binder.clone()
+        })
+        .collect()
+}
+
 /// The span a variant pattern was written at, or `fallback` for one that
 /// carries none of its own.
 const fn pattern_span(pattern: &Expr, fallback: Span) -> Span {
     match pattern {
         Expr::Var(_, span)
         | Expr::NamespacedRef(_, span, _)
-        | Expr::FunctionCall(_, _, span, _, _) => *span,
+        | Expr::FunctionCall(_, _, span, _, _)
+        | Expr::Struct(_, _, span, _, _) => *span,
         _ => fallback,
     }
 }
@@ -6008,6 +6271,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -6053,6 +6317,29 @@ impl Expr {
             }
             Self::Struct(namespace, fields, span, type_args, base) => {
                 debug_assert!(uses_id);
+                if let Some((enum_id, variant_idx, args, spans)) = named_variant_literal(
+                    namespace,
+                    fields,
+                    type_args,
+                    base.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                ) {
+                    return Some(compile_enum_construction(
+                        enum_id,
+                        variant_idx,
+                        &args,
+                        *span,
+                        &spans,
+                        true,
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    ));
+                }
                 Some(compile_struct_literal(
                     namespace,
                     fields,
@@ -6641,9 +6928,9 @@ impl Expr {
                 );
                 None
             }
-            Self::EnumDeclare(name, variants, span, type_params) => {
+            Self::EnumDeclare(name, variants, span, type_params, fields) => {
                 debug_assert!(!uses_id);
-                compile_enum_definition(name, variants, *span, type_params, ctx, state);
+                compile_enum_definition(name, variants, *span, type_params, fields, ctx, state);
                 None
             }
             Self::Match(scrutinee, arms, wildcard, span, true) => {
@@ -6687,6 +6974,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -6702,6 +6990,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -8095,7 +8384,7 @@ fn parse_toplevel(
                     Box::from([]),
                 ));
             }
-            Expr::EnumDeclare(name, variants, span, type_params) => {
+            Expr::EnumDeclare(name, variants, span, type_params, fields) => {
                 if let Some(uses) = uses {
                     let target = if type_params.is_empty() {
                         UseTarget::Enum(enums.len() as u16)
@@ -8110,6 +8399,7 @@ fn parse_toplevel(
                         type_params,
                         src_file_idx,
                         variants,
+                        fields,
                     );
                     namespace
                         .symbols
@@ -8124,6 +8414,7 @@ fn parse_toplevel(
                     name_span: span,
                 });
                 namespace.symbols.push((name, SymbolKind::Enum(enum_id)));
+                generics.set_variant_fields(enum_id, fields);
                 pending_enums.push((enum_id, src_file_idx, variants));
             }
             // A browser has no file system and no library loader. The std
