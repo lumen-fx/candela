@@ -12,6 +12,7 @@
 //! for each open program that imports the package, and what it reports is
 //! published beside the compiler's errors (see `crate::checks`).
 
+use crate::actions;
 use crate::analysis::{self, ProgramSummary};
 use crate::checks::{self, Found};
 use crate::hints;
@@ -1225,6 +1226,13 @@ impl LanguageServer for Backend {
                 document_highlight_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        resolve_provider: None,
+                    },
+                )),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -1602,6 +1610,40 @@ impl LanguageServer for Backend {
             index.offset(params.range.end),
         );
         Ok(Some(hints::hints(&text, &summary, start, end)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> RpcResult<Option<CodeActionResponse>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&text);
+        let mut out: CodeActionResponse = Vec::new();
+        for d in &params.context.diagnostics {
+            if d.source.as_deref() != Some("candela") {
+                continue;
+            }
+            let Some(NumberOrString::String(code)) = &d.code else {
+                continue;
+            };
+            let (start, end) = (index.offset(d.range.start), index.offset(d.range.end));
+            for fix in actions::fixes(&text, code, &d.message, start, end) {
+                let edits = fix
+                    .edits
+                    .into_iter()
+                    .map(|(s, e, new)| TextEdit::new(index.range(s, e), new))
+                    .collect();
+                out.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: fix.title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![d.clone()]),
+                    edit: Some(WorkspaceEdit::new(HashMap::from([(uri.clone(), edits)]))),
+                    is_preferred: Some(fix.preferred),
+                    ..CodeAction::default()
+                }));
+            }
+        }
+        Ok(Some(out))
     }
 
     async fn symbol(

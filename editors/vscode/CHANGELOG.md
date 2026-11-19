@@ -18,6 +18,9 @@ With a `candela-lsp` from the same release:
 - Inlay hints show the type a `let` takes from its value and the parameter
   each argument of a call lands on. VS Code's `editor.inlayHints.enabled`
   turns them off.
+- Quick fixes (Ctrl+.): add the import a standard library function or module
+  needs and call it through its module, and make a float-to-int truncation
+  explicit with `int(...)`.
 - Completion and signature help no longer wait for a check of the whole
   program on each keystroke.
 

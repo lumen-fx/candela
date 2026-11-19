@@ -106,6 +106,15 @@ the current text, so `bird.` completes while the line around it is unfinished.
 - **Document sync.** Full-document sync (`didOpen`/`didChange`/`didClose`); each
   change replaces the whole buffer.
 
+- **Quick fixes.** A code action for the diagnostics whose help names one
+  fix: a standard library function or module used without its import gets
+  the `import` added after the file's other imports, and the call spelled
+  through the module when the help says so (`sqrt(x)` becomes
+  `math::sqrt(x)`, `assert_eq` becomes `assert::eq`); an item of an imported
+  module called by its bare name is called through the module
+  (`json::parse`); and an `implicit_float_to_int` warning wraps the value in
+  `int(...)`. The fix is read from the diagnostic's code and help text.
+
 - **Completion.** What is offered depends on where the cursor is:
   - after `value.`, the fields and methods of the value's type. The type is
     followed from a parameter's annotation, a `let`, a `for` pattern
@@ -241,6 +250,9 @@ These are deliberate, and the source refers here for them.
   fields, methods and variants, two locals of one name in different
   functions, and a builtin, which has no declaration. It also covers which
   names a rename accepts and which bindings make it refuse.
+- `src/actions.rs` compiles a program with each fixable diagnostic, applies
+  the fix, and checks the diagnostic is gone, so a change to the help text a
+  fix reads fails here.
 - `src/hints.rs` unit-tests which `let`s get a type and which arguments a
   parameter name, including a generic call and a function named for its
   parameter.
@@ -272,6 +284,7 @@ These are deliberate, and the source refers here for them.
   highlight marks a local's declaration, assignment and read, and not a local
   of the same name in another function. Workspace symbols list a file of
   the workspace folder nobody opened, and semantic tokens decode against the
-  legend the server announces. Inlay hints answer for the range asked.
+  legend the server announces. Inlay hints answer for the range asked, and
+  a diagnostic sent back with a code action request gets its quick fix.
 
 Run both with `cargo test -p candela-lsp`.
