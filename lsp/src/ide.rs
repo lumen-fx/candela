@@ -83,6 +83,18 @@ impl<'a> Ide<'a> {
         self.toks.text
     }
 
+    /// The buffer's tokens.
+    #[must_use]
+    pub const fn tokens(&self) -> &Tokens<'a> {
+        &self.toks
+    }
+
+    /// Moves the cursor, keeping the tokens: a feature that resolves every
+    /// name of a file cuts it into tokens once.
+    pub fn set_offset(&mut self, offset: usize) {
+        self.offset = offset.min(self.text().len());
+    }
+
     /// Where the identifier the cursor is typing starts.
     fn word_start(&self) -> usize {
         let before = &self.text()[..self.offset];
@@ -925,6 +937,19 @@ impl<'a> Ide<'a> {
                 && let Some(f) = st.fields.iter().find(|f| f.name == name)
             {
                 return Some(Symbol::Field(st, f));
+            }
+        }
+        // A variant's name in its enum's declaration.
+        if matches!(prev, "{" | ",") {
+            let open = t.open_brackets(i);
+            if let Some(&brace) = open.last()
+                && t.s(brace) == "{"
+                && brace >= 2
+                && t.s(brace - 2) == "enum"
+                && let Some(e) = self.enum_for(t.s(brace - 1))
+                && let Some(v) = e.variants.iter().find(|v| v.name == name)
+            {
+                return Some(Symbol::Variant(e, v));
             }
         }
         // A method's name in its `impl` block.

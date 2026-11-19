@@ -1060,3 +1060,90 @@ fn canonical_dir(name: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).expect("create dir");
     dir.canonicalize().expect("canonical dir")
 }
+
+/// A package of three files: `geo.cdl` declares, `main.cdl` (open) and
+/// `report.cdl` (never opened) import it. Returns the folder and each file's
+/// URI and text.
+fn geo_package(tag: &str) -> (std::path::PathBuf, [(String, String); 3]) {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create package dir");
+    std::fs::write(
+        dir.join("candela.toml"),
+        "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write manifest");
+    let files = [
+        (
+            "geo.cdl",
+            "struct Box { w: int = 1, h: int = 1 }\n\nfn area(b: Box) -> int { return b.w * b.h; }\n",
+        ),
+        (
+            "main.cdl",
+            "import \"./geo.cdl\";\n\nfn main() {\n    let b = geo::Box { w: 2, .. };\n    print(geo::area(b));\n    print(geo::area(b) + b.w);\n}\n",
+        ),
+        (
+            "report.cdl",
+            "import \"./geo.cdl\";\n\nfn report() -> int {\n    let area = 3;\n    return geo::area(geo::Box { .. }) + area;\n}\n",
+        ),
+    ];
+    let out = files.map(|(name, text)| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("write file");
+        (file_uri(&path), text.to_owned())
+    });
+    (dir, out)
+}
+
+/// The `(uri file name, line)` of each location in a response, sorted.
+fn places(result: &Value) -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = result
+        .as_array()
+        .expect("a list of locations")
+        .iter()
+        .map(|l| {
+            let uri = l["uri"].as_str().unwrap_or_default();
+            let name = uri.rsplit('/').next().unwrap_or_default().to_owned();
+            (name, l["range"]["start"]["line"].as_u64().unwrap_or(99))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Find references reaches the declaring file, the open file, and a file of
+/// the package nobody opened, and leaves out a local spelled the same.
+#[tokio::test]
+async fn references_reach_every_file_of_the_package() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("refs");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({}), &[(main_uri.as_str(), main_text.as_str())]).await;
+    // `area` in `print(geo::area(b));`, line 4.
+    let refs = |id: i64, include: bool| {
+        json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/references",
+            "params": {
+                "textDocument": { "uri": main_uri },
+                "position": { "line": 4, "character": 16 },
+                "context": { "includeDeclaration": include }
+            }
+        })
+    };
+    write_message(&mut stdin, &refs(7, true)).await;
+    let found = response(&mut stdout, 7).await;
+    assert_eq!(
+        places(&found["result"]),
+        vec![
+            ("geo.cdl".to_owned(), 2),
+            ("main.cdl".to_owned(), 4),
+            ("main.cdl".to_owned(), 5),
+            ("report.cdl".to_owned(), 4),
+        ],
+        "{found}"
+    );
+    write_message(&mut stdin, &refs(8, false)).await;
+    let found = response(&mut stdout, 8).await;
+    assert_eq!(places(&found["result"]).len(), 3, "{found}");
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

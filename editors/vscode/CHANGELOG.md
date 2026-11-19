@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- With a `candela-lsp` from the same release: Find All References (Shift+F12)
+  lists every use of a function, type, field, method, variant or local, across
+  the files of its package, including files that are not open. Completion and
+  signature help no longer wait for a check of the whole program on each
+  keystroke.
+
 ## 0.6.0
 
 - The extension warns when the `candela-lsp` it starts is older than itself,
