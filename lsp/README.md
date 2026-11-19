@@ -165,6 +165,16 @@ the current text, so `bird.` completes while the line around it is unfinished.
   local's references stay in its own file. A local spelled like a function
   is told apart from it, as go-to-definition tells them apart.
 
+- **Rename.** Renames a declaration and every reference to it, in each file
+  of the package, open or not. It is turned down, with the reason, for a
+  builtin, an item of the standard library or one declared outside the
+  workspace, a new name that is not an identifier or is a keyword, a buffer
+  that does not parse, and a file holding a reference that does not compile.
+  A local is not renamed while a `match` arm or a `catch` clause in its file
+  binds the same name, since the server does not follow those bindings. A
+  name the new one would collide with is not checked; the next check reports
+  the collision.
+
 ## Known simplifications
 
 These are deliberate, and the source refers here for them.
@@ -198,7 +208,8 @@ These are deliberate, and the source refers here for them.
   and the type of each expression form a local can be declared with.
 - `src/refs.rs` unit-tests finding a declaration from a use and from itself,
   fields, methods and variants, two locals of one name in different
-  functions, and a builtin, which has no declaration.
+  functions, and a builtin, which has no declaration. It also covers which
+  names a rename accepts and which bindings make it refuse.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
@@ -217,6 +228,8 @@ These are deliberate, and the source refers here for them.
   imported file, and closes the buffer. Two more check that the server
   reports the extension's version, and that a save runs a package's check
   once for the program holding the saved file, not again for the watcher's
-  report of it.
+  report of it. On a package of three files, one of them never opened, find
+  references reaches all three and rename edits each, past a local of the
+  same name, and turns down a builtin and a name that is not one.
 
 Run both with `cargo test -p candela-lsp`.

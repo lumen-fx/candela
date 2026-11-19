@@ -7,8 +7,10 @@
 //! file and span. Nothing here keeps an index; the backend decides which
 //! files to read (see `Inner::reference_files`).
 
-use crate::analysis::ProgramSummary;
+use crate::analysis::{ProgramSummary, is_identifier};
+use crate::builtins::{ITEM_KEYWORDS, STATEMENT_KEYWORDS};
 use crate::ide::Ide;
+use crate::syntax::Tokens;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -175,6 +177,57 @@ pub fn occurrences(
     found
 }
 
+/// Whether `name` is something a declaration can be renamed to.
+#[must_use]
+pub fn valid_name(name: &str) -> bool {
+    is_identifier(name) && !STATEMENT_KEYWORDS.contains(&name) && !ITEM_KEYWORDS.contains(&name)
+}
+
+/// Whether `text` binds `name` somewhere the server does not follow: a
+/// `match` arm's pattern or a `catch` clause. A local of that name could
+/// then not be told apart from the binding, so renaming it is refused
+/// rather than guessed.
+#[must_use]
+pub fn bound_by_pattern(text: &str, name: &str) -> bool {
+    let toks = Tokens::new(text);
+    let pattern_part = |i: usize| {
+        toks.is_ident(i) && toks.s(i) != "fn" || matches!(toks.s(i), "(" | ")" | "," | "::" | "|")
+    };
+    (0..toks.toks.len()).any(|i| {
+        if !toks.is_ident(i) || toks.s(i) != name {
+            return false;
+        }
+        if i > 0 && toks.s(i - 1) == "catch" {
+            return true;
+        }
+        // A run of pattern tokens that ends in `=>`, read back from the
+        // `=>` to where the arm starts: a `{`, `}` or `,` outside the
+        // pattern's own parentheses.
+        let mut j = i + 1;
+        while j < toks.toks.len() && pattern_part(j) {
+            j += 1;
+        }
+        if toks.s(j) != "=>" {
+            return false;
+        }
+        let mut k = j;
+        let mut depth = 0i32;
+        loop {
+            if k == 0 {
+                return false;
+            }
+            k -= 1;
+            match toks.s(k) {
+                ")" => depth += 1,
+                "(" => depth -= 1,
+                "{" | "}" | "," if depth == 0 => return k < i,
+                _ if pattern_part(k) => {}
+                _ => return false,
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +313,17 @@ fn main() {
         let s = summary();
         let offset = SRC.find("print").unwrap();
         assert!(declaration(SRC, &s, &path(), offset).is_none());
+    }
+
+    #[test]
+    fn names_and_pattern_bindings() {
+        assert!(valid_name("renamed_2"));
+        assert!(!valid_name("2x"));
+        assert!(!valid_name("match"));
+        assert!(!valid_name("a-b"));
+        assert!(bound_by_pattern(SRC, "n"));
+        assert!(!bound_by_pattern(SRC, "total"));
+        assert!(bound_by_pattern("try { f(); } catch e { print(e); }", "e"));
+        assert!(!bound_by_pattern("let f = fn(x) => x + 1;", "x"));
     }
 }
