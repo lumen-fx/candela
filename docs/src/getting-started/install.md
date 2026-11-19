@@ -187,7 +187,8 @@ grammar, which also drives structural selection and bracket matching. Both live
 in the repository, under `editors/`.
 
 - **VS Code.** Install the Candela extension from the Marketplace or Open VSX.
-  Set `candela.languageServerPath` to use a server that is not on your path,
+  It finds `candela-lsp` on your path or in the directory the installer used.
+  Set `candela.languageServerPath` to use another server,
   and `candela.importRoots` to name a package a script imports without a
   manifest, such as a host program's module:
   `{ "engine": "~/engine/module" }`. `candela.diagnosticsDelay` sets how long

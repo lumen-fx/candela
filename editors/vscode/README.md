@@ -77,21 +77,32 @@ attribution details.
 
 This extension launches `candela-lsp` (a separate crate at `../../lsp/`
 in this repo) as a subprocess over stdio, the same transport every LSP client
-uses. The extension does not include the server. Install the one that matches
-it:
+uses. The extension does not include the server; the candela toolchain
+installs it beside `candela`. To build it from source instead:
 
 ```sh
 cargo install --locked --git https://github.com/lumen-fx/candela candela-lsp
 ```
 
-That puts `candela-lsp` (or `candela-lsp.exe` on Windows) on `PATH`, where the
-extension looks by default; set `candela.languageServerPath` to use a specific
-binary instead, such as one built with `cargo build --release -p candela-lsp`
-from the repo root. The server reports its version, the extension's own: when
-it is older, the extension says so and names the file it started, since an
-old server can show only the first error of a file or misread newer syntax.
-The Output panel's "Candela Language Server" channel lists the version and
-path of the server running.
+The extension starts `candela.languageServerPath` when it is set. Otherwise it
+starts `candela-lsp` (or `candela-lsp.exe` on Windows) from `PATH`, and when
+`PATH` has none, the one the installer put in `CANDELA_PREFIX`, `~/.candela`,
+or `%LOCALAPPDATA%\Programs\Candela` on Windows. That last step covers an
+editor started from a desktop launcher, whose `PATH` often lacks the
+directory the installer added to your shell. Changing
+`candela.languageServerPath` restarts the server.
+
+The server reports its version, the extension's own: when it is older, the
+extension says so and names the file it started, since an old server can show
+only the first error of a file or misread newer syntax. The Output panel's
+"Candela Language Server" channel lists the version and path of the server
+running.
+
+Two commands, in the Command Palette:
+
+- **Candela: Restart Language Server** stops the server and starts it again,
+  finding it afresh. Use it after installing a new toolchain.
+- **Candela: Show Language Server Output** opens the server's output channel.
 
 A script that imports a package no manifest lists, such as the module a host
 program ships (`import "engine" { * };`), needs the server to know where it
@@ -125,8 +136,8 @@ compiler's errors, on any file it names, including settings files. Set
 `candela.packageChecks` to `false` to turn this off; it is off in a workspace
 you have not trusted.
 
-If `candela-lsp` cannot be started, the extension shows an error message
-instead of failing silently; the syntax highlighting/snippets/language
+If `candela-lsp` cannot be started, the extension shows an error message with
+buttons to open the setting and the output, instead of failing silently; the syntax highlighting/snippets/language
 configuration above keep working either way, since those do not depend on the
 server.
 

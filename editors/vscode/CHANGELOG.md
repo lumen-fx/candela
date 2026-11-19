@@ -2,6 +2,13 @@
 
 ## 0.7.0
 
+- The extension finds the `candela-lsp` the toolchain installer put beside
+  `candela` when it is not on `PATH`, as happens in an editor started from a
+  desktop launcher. Changing `candela.languageServerPath` restarts the server.
+- New commands: "Candela: Restart Language Server" and "Candela: Show
+  Language Server Output". The error shown when the server cannot start
+  offers to open the setting or the output.
+
 With a `candela-lsp` from the same release:
 
 - Find All References (Shift+F12) lists every use of a function, type, field,
