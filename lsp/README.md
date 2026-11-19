@@ -151,6 +151,13 @@ the current text, so `bird.` completes while the line around it is unfinished.
 - **Document symbols / outline.** The functions, structs and enums the buffer
   declares.
 
+- **Workspace symbols.** The functions, methods, constants, structs and enums
+  declared in every `.cdl` file of the workspace folders and the open
+  buffers, whose names hold the query's characters in order, ignoring case
+  (`mkth` finds `make_thing`). Files are read from their text, without a
+  compile, so a file that does not compile is listed too; what a file declares
+  is kept until it changes on disk. At most 500 answer one query.
+
 - **Go-to-definition.** From a use of a function, method, struct, enum,
   variant, field, attribute or local to where it is declared, including into an
   imported module and a package from `importRoots`. A call written
@@ -214,6 +221,8 @@ These are deliberate, and the source refers here for them.
   fields, methods and variants, two locals of one name in different
   functions, and a builtin, which has no declaration. It also covers which
   names a rename accepts and which bindings make it refuse.
+- `src/symbols.rs` unit-tests the declarations read from a file's tokens
+  and the query match.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
@@ -236,6 +245,7 @@ These are deliberate, and the source refers here for them.
   references reaches all three and rename edits each, past a local of the
   same name, and turns down a builtin and a name that is not one. Document
   highlight marks a local's declaration, assignment and read, and not a local
-  of the same name in another function.
+  of the same name in another function. Workspace symbols list a file of
+  the workspace folder nobody opened.
 
 Run both with `cargo test -p candela-lsp`.

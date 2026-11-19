@@ -12,6 +12,7 @@ mod checks;
 mod ide;
 mod line_index;
 mod refs;
+mod symbols;
 mod syntax;
 
 use backend::Backend;
