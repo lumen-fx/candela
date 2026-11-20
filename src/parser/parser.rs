@@ -17,6 +17,7 @@ use crate::compiler::expr::ForeignFn;
 use crate::compiler::expr::ForeignParams;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
 use crate::compiler::expr::PatternLet;
+use crate::compiler::expr::TRAILING_ARG;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
 use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::FnTypeExpr;
@@ -744,7 +745,22 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
     let mut arg_markers: Vec<Span> = Vec::with_capacity(4);
     loop {
         if parser.peek_token() == Token::RParen {
-            let end = parser.next_token().1.end;
+            let mut end = parser.next_token().1.end;
+            // `xs.each() fn(x) { ... }`: a closure right after the closing
+            // parenthesis is the argument of the callee's last parameter.
+            if parser.peek_token_opt() == Some(Token::Function)
+                && second_token_is(parser, Token::LParen)
+            {
+                let start = parser.peek_token_span().start;
+                let closure = term::parse_term(parser, true);
+                end = parser.last_token_end as u32;
+                args.push(Expr::NamedArg(
+                    SmolStr::new_static(TRAILING_ARG),
+                    Box::new(closure),
+                    (start, end).into(),
+                ));
+                arg_markers.push((start, end).into());
+            }
             return (Box::from(args), Box::from(arg_markers), end);
         }
         let arg_start: u32 = parser.peek_token_span().start;
@@ -1201,6 +1217,9 @@ fn parse_line(input: &mut Parser<'_>, peek: Token<'_>, tail: Tail) -> (Expr, Blo
             };
             (line_code, end)
         }
+        // `xs.each() fn(x) { ... }` ends in the closure's block, which ends
+        // the statement the way the block of an `if` does.
+        _ if is_value && ends_in_trailing_block(input, &line_code) => (line_code, end),
         // A function body does not end in its value the way a block used as
         // a value does, so the help names the `return` that hands one back.
         Some(Token::RBrace) if tail == Tail::FnBody && is_value => {
@@ -1279,6 +1298,19 @@ fn error_unclosed_delimiter(
         &message,
         "unclosed_delimiter",
     )
+}
+
+/// Whether `e`, just read, is a call whose last argument is a closure after
+/// the parentheses with a `{ ... }` body.
+fn ends_in_trailing_block(parser: &Parser<'_>, e: &Expr) -> bool {
+    let (Expr::FunctionCall(args, ..)
+    | Expr::ObjFunctionCall(_, args, ..)
+    | Expr::CallValue(_, args, ..)) = e
+    else {
+        return false;
+    };
+    matches!(args.last(), Some(Expr::NamedArg(name, ..)) if name == TRAILING_ARG)
+        && parser.ctx.src.contents.as_bytes()[..parser.last_token_end].ends_with(b"}")
 }
 
 #[cold]

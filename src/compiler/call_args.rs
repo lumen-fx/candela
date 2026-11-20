@@ -14,6 +14,7 @@ use super::compiler_errors;
 use super::expr::Expr;
 use super::expr::METHOD_SEP;
 use super::expr::Span;
+use super::expr::TRAILING_ARG;
 use smol_strc::SmolStr;
 
 /// The parameters a call binds its arguments against.
@@ -49,7 +50,35 @@ pub fn bind(
     let mut slots: Vec<Option<(Expr, Span)>> = vec![None; params.names.len()];
     for (i, arg) in args.iter().enumerate() {
         let arg_span = arg_spans.get(i).copied().unwrap_or(span);
-        if let Expr::NamedArg(name, value, name_span) = arg {
+        if let Expr::NamedArg(name, value, closure_span) = arg
+            && name == TRAILING_ARG
+        {
+            // The closure after the call binds the last parameter.
+            let Some(idx) = slots
+                .len()
+                .checked_sub(1)
+                .filter(|&idx| slots[idx].is_none())
+            else {
+                compiler_errors::error_type_test(
+                    "Closure after a full call",
+                    &match params.names.last() {
+                        Some(last) => format!(
+                            "{}'s last parameter, {last}, already has a value in this call",
+                            params.callee
+                        ),
+                        None => format!("{} takes no arguments", params.callee),
+                    },
+                    Some(
+                        "A closure after the call is the argument of the last parameter. Leave that one out of the parentheses",
+                    ),
+                    "trailing_closure_extra",
+                    *closure_span,
+                    file_idx,
+                    sources,
+                );
+            };
+            slots[idx] = Some(((**value).clone(), arg_span));
+        } else if let Expr::NamedArg(name, value, name_span) = arg {
             let Some(idx) = params.names.iter().position(|p| p == name) else {
                 compiler_errors::error_type_test(
                     "Unknown parameter name",

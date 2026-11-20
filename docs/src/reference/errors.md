@@ -148,7 +148,10 @@ parameter twice, in order and by name or by name twice, is
 parameter with no default is `argument_missing`. An argument passed by name to
 a built-in, a function value or an enum variant, which take theirs in order, is
 `named_argument_unexpected`. See
-[functions](../language/functions.md#default-values-and-named-arguments).
+[functions](../language/functions.md#default-values-and-named-arguments). A
+closure written after a call whose last parameter already has an argument, or
+after a call to a function that takes none, is `trailing_closure_extra`; see
+[functions](../language/functions.md#a-closure-after-the-call).
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including a `float` operand of a bitwise operator and a non-`bool` operand of `&&`,

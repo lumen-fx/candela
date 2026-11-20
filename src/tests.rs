@@ -18028,3 +18028,38 @@ fn main() {
         assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
     }
 }
+
+#[test]
+pub fn a_closure_follows_the_call() {
+    let src = r#"
+struct Button { label: string }
+impl Button {
+    fn on(self, event: string, handler: fn(string) -> string) -> string => handler(self.label + ":" + event);
+}
+fn download(url: string, retries: int = 3, done: fn(string, int)) {
+    done(url, retries);
+}
+fn twice(f: fn(int) -> int) -> int => f(f(1));
+fn main() {
+    let xs = [1, 2, 3];
+    xs.each() fn(x) { print(x * 10); }
+    print(xs.map() fn(x) => x + 1);
+    print(xs.reduce(0) fn(acc, x) => acc + x);
+    let b = Button { label: "ok" };
+    print(b.on("click") fn(e) { return e + "!"; });
+    download("a") fn(url, n) { print(url, n); }
+    download("b", retries: 1) fn(url, n) { print(url, n); }
+    print(twice() fn(n) => n * 3);
+    let call = fn(f) => f(4);
+    print(call() fn(n) => n - 1);
+}
+"#;
+    assert_eq!(
+        run_output_std(src),
+        "10\n20\n30\n[2,3,4]\n6\nok:click!\na\n3\nb\n1\n9\n3\n"
+    );
+    let src = "fn f(a: int, g: fn(int) -> int) -> int => g(a);\nfn main() { print(f(1, fn(x) => x) fn(x) => x); }";
+    let d = compile_diag(src, "trailing.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "trailing_closure_extra", "{d:?}");
+}

@@ -1526,3 +1526,85 @@ fn half(n: int) -> int!string {
             (binary_expression
               (identifier)
               (integer_literal))))))))
+
+================================================================================
+A closure after the call (docs/src/language/functions.md)
+================================================================================
+
+fn main() {
+    xs.each() fn(x) { print(x); }
+    download("a", retries: 1) fn(url, n) { print(url); }
+    let ys = xs.map() fn(x) => x.len();
+    print(twice() fn(n) => n * 3);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (closure_expression
+              (parameter_list
+                (parameter
+                  (identifier)))
+              (block
+                (expression_statement
+                  (call_expression
+                    (identifier)
+                    (arguments
+                      (identifier)))))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (string_literal)
+            (named_argument
+              (identifier)
+              (integer_literal))
+            (closure_expression
+              (parameter_list
+                (parameter
+                  (identifier))
+                (parameter
+                  (identifier)))
+              (block
+                (expression_statement
+                  (call_expression
+                    (identifier)
+                    (arguments
+                      (identifier)))))))))
+      (let_declaration
+        (identifier)
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (closure_expression
+              (parameter_list
+                (parameter
+                  (identifier)))
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (arguments))))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (identifier)
+              (arguments
+                (closure_expression
+                  (parameter_list
+                    (parameter
+                      (identifier)))
+                  (binary_expression
+                    (identifier)
+                    (integer_literal)))))))))))

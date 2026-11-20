@@ -21,6 +21,18 @@ use std::{hint::unreachable_unchecked, rc::Rc};
 /// distinct from a free `fn len`.
 pub const METHOD_SEP: char = '#';
 
+/// The name a closure written after a call's closing parenthesis is passed
+/// under, `xs.each() fn(x) { ... }`. No program can write it, so it never
+/// collides with a parameter.
+pub const TRAILING_ARG: &str = "[trailing]";
+
+/// Whether `arg` is passed by a name the program wrote, as opposed to in
+/// order or as the closure after the call.
+#[must_use]
+pub fn is_named_arg(arg: &Expr) -> bool {
+    matches!(arg, Expr::NamedArg(name, ..) if name != TRAILING_ARG)
+}
+
 /// The parameter name that makes an `impl` function a method.
 ///
 /// An `impl` function whose first parameter is named `self` takes the value in
@@ -423,7 +435,10 @@ pub enum Expr {
     ///
     /// An argument passed by its parameter's name, `title: "x"`. Only the
     /// argument list of a call holds one, and the call puts it in place before
-    /// anything compiles it.
+    /// anything compiles it. A closure written after a call's closing
+    /// parenthesis comes as one named [`TRAILING_ARG`]: it binds the callee's
+    /// last parameter, and a callee without parameter names takes it as its
+    /// last argument in order.
     NamedArg(SmolStr, Box<Self>, Span),
     /// DefaultArg(default_id, span)
     ///

@@ -96,6 +96,28 @@ fn main() {}
     assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(5));
 }
 
+/// A closure after a call to a variadic host function is its last argument.
+#[test]
+fn a_closure_follows_a_host_call() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_variadic("app", "count", |args: &[Value]| {
+        Ok(Value::Int(args.len() as i64))
+    });
+    let src = r#"
+host "app" {
+    fn count(...) -> int;
+}
+
+fn total() -> int {
+    return app::count(1, 2) fn(y) => y;
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(3));
+}
+
 /// A host block is a namespace, reached with `::`. A dot on the block's name
 /// is a compile error whose help names the `::` spelling, for a call used as a
 /// value and for one written as a statement.

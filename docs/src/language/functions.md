@@ -444,6 +444,36 @@ one signature to be a value of; wrap it in an anonymous function that calls it.
 The standard library's list helpers take functions this way, so `map`, `filter`,
 and `reduce` are ordinary calls; see [Collections](collections.md).
 
+### A closure after the call
+
+When a function's last parameter is a function, write the closure after the
+closing parenthesis instead of inside it. The call reads like a block that
+belongs to it, which suits handlers and callbacks.
+
+```rust
+fn download(url: string, retries: int = 3, done: fn(string, int)) {
+    done(url, retries);
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    xs.each() fn(x) {
+        print(x * 10);
+    }
+    print(xs.map() fn(x) => x + 1);
+    print(xs.reduce(0) fn(acc, x) => acc + x);
+    download("a.txt") fn(url, tries) {
+        print(url, tries);
+    }
+}
+```
+
+The closure is the argument of the last parameter, so the parentheses hold the
+others, by position or by name, and leave that one out; passing it both ways is
+an error. A call ending in a `{ ... }` closure ends the statement the way an
+`if` does, with no `;` after it. A closure written with `=>` runs as far as an
+expression can, so a call after its value belongs to the value.
+
 ## Function types
 
 `fn(A, B) -> R` is the type of a position that holds a function taking an `A`

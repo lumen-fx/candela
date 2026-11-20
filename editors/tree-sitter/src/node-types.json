@@ -2,7 +2,18 @@
   {
     "type": "arguments",
     "named": true,
-    "fields": {},
+    "fields": {
+      "closure": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "closure_expression",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
       "required": false,

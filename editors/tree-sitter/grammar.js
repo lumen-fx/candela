@@ -85,6 +85,9 @@ module.exports = grammar({
     // The same choice after a `.`, where the name is a field or the method of
     // a call that may name type arguments.
     [$.field_expression, $.method_call_expression, $.qualified_identifier],
+    // A call ending in a block-bodied closure is a whole statement or the
+    // start of a longer expression; what follows the closure tells.
+    [$._block_closure, $.closure_expression],
   ],
 
   rules: {
@@ -505,7 +508,36 @@ module.exports = grammar({
     // A block-bodied expression stands alone as a statement; anything else
     // needs the semicolon.
     expression_statement: ($) =>
-      choice(seq($._expression, ';'), prec(1, $.if_expression), prec(1, $.match_expression)),
+      choice(
+        seq($._expression, ';'),
+        prec(1, $.if_expression),
+        prec(1, $.match_expression),
+        prec(1, alias($._block_closure_call, $.call_expression)),
+        prec(1, alias($._block_closure_method_call, $.method_call_expression)),
+      ),
+
+    // A call ending in a closure with a block body stands alone as a
+    // statement, the way an `if` does.
+    _block_closure_call: ($) =>
+      seq(field('function', $._callee), field('arguments', alias($._block_closure_arguments, $.arguments))),
+
+    _block_closure_method_call: ($) =>
+      seq(
+        field('receiver', $._expression),
+        '.',
+        field('method', choice($.identifier, $.qualified_identifier)),
+        field('arguments', alias($._block_closure_arguments, $.arguments)),
+      ),
+
+    _block_closure_arguments: ($) =>
+      seq(
+        '(',
+        sepByTrailing(',', choice($._expression, $.named_argument)),
+        ')',
+        field('closure', alias($._block_closure, $.closure_expression)),
+      ),
+
+    _block_closure: ($) => seq('fn', field('parameters', $.parameter_list), field('body', $.block)),
 
     // `let pattern = value;`, and `let pattern = value else { ... };` where
     // the pattern can fail and the block leaves.
@@ -745,6 +777,8 @@ module.exports = grammar({
         $.struct_literal,
         $.call_expression,
         $.method_call_expression,
+        alias($._trailing_closure_call, $.call_expression),
+        alias($._trailing_closure_method_call, $.method_call_expression),
         $.field_expression,
         $.index_expression,
         $.slice_expression,
@@ -940,6 +974,30 @@ module.exports = grammar({
       ),
 
     arguments: ($) => seq('(', sepByTrailing(',', choice($._expression, $.named_argument)), ')'),
+
+    // A closure right after the parentheses is the argument of the callee's
+    // last parameter: `xs.each() fn(x) { ... }`. Such a call is never itself
+    // called or followed by a `.`: a closure's `=>` value runs to the end of
+    // the expression.
+    _trailing_closure_call: ($) =>
+      prec.right(
+        PREC.postfix,
+        seq(field('function', $._callee), field('arguments', alias($._trailing_closure_arguments, $.arguments))),
+      ),
+
+    _trailing_closure_method_call: ($) =>
+      prec.right(
+        PREC.postfix,
+        seq(
+          field('receiver', $._expression),
+          '.',
+          field('method', choice($.identifier, $.qualified_identifier)),
+          field('arguments', alias($._trailing_closure_arguments, $.arguments)),
+        ),
+      ),
+
+    _trailing_closure_arguments: ($) =>
+      seq('(', sepByTrailing(',', choice($._expression, $.named_argument)), ')', field('closure', $.closure_expression)),
 
     // `title: "x"`: an argument passed by its parameter's name.
     named_argument: ($) => seq(field('name', $.identifier), ':', field('value', $._expression)),

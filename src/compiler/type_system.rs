@@ -4804,7 +4804,7 @@ impl Expr {
                 // A qualified enum-variant construction (`Color::Red(x)`) has an
                 // enum type; intercept before the function paths, which is where
                 // `handle_functions` intercepts it too.
-                if namespace.len() >= 2 && !args.iter().any(|a| matches!(a, Self::NamedArg(..))) {
+                if namespace.len() >= 2 && !args.iter().any(crate::compiler::expr::is_named_arg) {
                     let arg_types = args
                         .iter()
                         .map(|x| x.infer_type(v, ctx, state))
@@ -5319,6 +5319,9 @@ impl Expr {
                     entry_register: None,
                 });
                 DataType::Fn(id)
+            }
+            Self::NamedArg(name, value, _) if name == crate::compiler::expr::TRAILING_ARG => {
+                value.infer_type(v, ctx, state)
             }
             Self::NamedArg(name, _, span) => {
                 crate::compiler::call_args::error_named_argument_unexpected(

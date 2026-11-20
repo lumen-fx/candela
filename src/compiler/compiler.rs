@@ -71,12 +71,14 @@ use expr::Operand;
 use expr::PatternLet;
 use expr::Span;
 use expr::StructRest;
+use expr::TRAILING_ARG;
 use expr::UNARY_MINUS_METHOD;
 use expr::VariantFields;
 use expr::VariantShape;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::const_read;
+use expr::is_named_arg;
 use expr::mangle_method;
 use functions::handle_functions;
 use functions::handle_value_call;
@@ -1444,7 +1446,7 @@ pub(crate) fn variant_constructor(
 ) -> Option<(u16, u16)> {
     // A variant takes its payload in order; a call passing an argument by name
     // is a function's.
-    if args.iter().any(|a| matches!(a, Expr::NamedArg(..))) {
+    if args.iter().any(is_named_arg) {
         return None;
     }
     let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
@@ -7215,6 +7217,18 @@ impl Expr {
                 compile_eval_block(code, v, ctx, state, output);
                 None
             }
+            // The closure after a call whose callee takes its arguments in
+            // order is its last one.
+            Self::NamedArg(name, value, _) if name == TRAILING_ARG => value.compile_form(
+                v,
+                ctx,
+                state,
+                output,
+                tgt_id,
+                var_assignment,
+                remaining_code,
+                uses_id,
+            ),
             Self::NamedArg(name, _, span) => {
                 call_args::error_named_argument_unexpected(name, *span, ctx.file_idx, state.sources)
             }

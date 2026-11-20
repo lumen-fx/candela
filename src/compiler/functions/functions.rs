@@ -541,7 +541,13 @@ fn foreign_bound_args(
         .fns
         .iter()
         .find(|sig| sig.name == fn_name)?;
-    let named = args.iter().any(|arg| matches!(arg, Expr::NamedArg(..)));
+    // A variadic function takes a closure after the call as one more argument
+    // in order.
+    let named = if sig.variadic {
+        args.iter().any(crate::compiler::expr::is_named_arg)
+    } else {
+        args.iter().any(|arg| matches!(arg, Expr::NamedArg(..)))
+    };
     if !named && (args.len() >= sig.params.len() || sig.defaults.is_empty()) {
         return None;
     }
