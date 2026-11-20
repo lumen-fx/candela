@@ -407,7 +407,8 @@ async fn an_import_root_from_the_settings_reaches_completion_and_definition() {
     )
     .expect("write manifest");
     let game = dir.join("game.cdl");
-    let compiles = "import \"engine\" { * };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
+    let compiles =
+        "import \"engine\" { system, Spot };\n\n@system\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, compiles).expect("write game");
     let uri = file_uri(&game);
 
@@ -539,7 +540,7 @@ async fn settings_changed_later_apply_to_open_buffers() {
     )
     .expect("write module");
     let game = dir.join("game.cdl");
-    let text = "import \"kit\" { * };\n\n@tag\n@tag\nfn run() {\n    print(add(1, 2));\n}\n";
+    let text = "import \"kit\" { tag, add };\n\n@tag\n@tag\nfn run() {\n    print(add(1, 2));\n}\n";
     std::fs::write(&game, text).expect("write game");
     let uri = file_uri(&game);
 
@@ -680,7 +681,7 @@ async fn a_definition_through_an_export_import_lands_in_the_declaring_file() {
     std::fs::create_dir_all(package.join("src/parts")).expect("create package dir");
     std::fs::write(
         package.join("src/main.cdl"),
-        "export import \"engine/parts/spot\" { * };\n",
+        "export import \"engine/parts/spot\" { Spot };\n",
     )
     .expect("write package entry");
     std::fs::write(
@@ -689,7 +690,7 @@ async fn a_definition_through_an_export_import_lands_in_the_declaring_file() {
     )
     .expect("write package part");
     let game = dir.join("game.cdl");
-    let text = "import \"engine\" { * };\n\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
+    let text = "import \"engine\" { Spot };\n\nfn walk(s: Spot) {\n    s.x += 1.0;\n}\n";
     std::fs::write(&game, text).expect("write game");
     let uri = file_uri(&game);
 
@@ -861,7 +862,7 @@ async fn an_unsaved_change_to_an_import_checks_its_importer() {
     let lib_text = "fn half(x: float) -> float { return x / 2.0; }\n";
     std::fs::write(&lib, lib_text).expect("write lib");
     let game = dir.join("game.cdl");
-    let game_text = "import \"lib.cdl\" { * };\n\nfn main() {\n    print(half(3.0));\n}\n";
+    let game_text = "import \"lib.cdl\" { half };\n\nfn main() {\n    print(half(3.0));\n}\n";
     std::fs::write(&game, game_text).expect("write game");
     let lib_uri = file_uri(&lib);
     let game_uri = file_uri(&game);
@@ -924,7 +925,7 @@ async fn a_package_check_runs_after_a_save() {
     .expect("write check");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let game = dir.join("game.cdl");
-    let text = "import \"engine\" { * };\n\nfn main() {\n    print(speed());\n}\n";
+    let text = "import \"engine\" { speed };\n\nfn main() {\n    print(speed());\n}\n";
     std::fs::write(&game, text).expect("write game");
     std::fs::write(dir.join("settings.toml"), "[a]\nb = 1\n").expect("write settings");
     let uri = format!("file://{}", game.display());
@@ -1009,8 +1010,8 @@ async fn a_save_runs_the_package_check_once_per_program() {
     .expect("write check");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let part_text =
-        "import \"engine\" { * };\n\nfn twice() -> float {\n    return speed() * 2.0;\n}\n";
-    let game_text = "import \"engine\" { * };\nimport \"part.cdl\" { * };\n\nfn main() {\n    print(twice());\n}\n";
+        "import \"engine\" { speed };\n\nfn twice() -> float {\n    return speed() * 2.0;\n}\n";
+    let game_text = "import \"engine\" { speed };\nimport \"part.cdl\" { twice };\n\nfn main() {\n    print(twice());\n}\n";
     let part = dir.join("part.cdl");
     let game = dir.join("game.cdl");
     std::fs::write(&part, part_text).expect("write part");

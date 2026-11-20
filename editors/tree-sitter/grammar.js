@@ -185,13 +185,8 @@ module.exports = grammar({
         ';',
       ),
 
-    // `{ eq, ne }` names items; `{ * }` brings in every item of the module.
-    import_items: ($) =>
-      seq(
-        '{',
-        choice(seq(sepBy1(',', field('item', $.identifier)), optional(',')), field('glob', '*')),
-        '}',
-      ),
+    // `{ eq, ne }` names the items an import brings in.
+    import_items: ($) => seq('{', sepBy1(',', field('item', $.identifier)), optional(','), '}'),
 
     function_declaration: ($) =>
       seq(

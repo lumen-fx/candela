@@ -92,7 +92,7 @@ The Output panel's "Candela Language Server" channel lists the version and
 path of the server running.
 
 A script that imports a package no manifest lists, such as the module a host
-program ships (`import "engine" { * };`), needs the server to know where it
+program ships (`import "engine";`), needs the server to know where it
 is. Name it in `candela.importRoots`, a map from the name the script imports
 to the package's directory or its `.cdl` file:
 

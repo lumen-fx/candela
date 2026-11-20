@@ -1360,101 +1360,25 @@ fn a_host_struct_is_reached_through_the_module_name() {
     assert!(!output.status.success(), "the namespace is not repeated");
 }
 
-/// `import "m" { * };` brings in every item the module declares; a
-/// declaration of the importing file shadows an imported one of its name, and
-/// an attribute its host block declares is reached bare.
+/// `import "m" { * };` is an error whose help names the two spellings that
+/// replace it: a list of items, and the module bound under its name.
 #[test]
-fn a_glob_import_brings_every_item() {
-    let output = run_program(
+fn a_glob_import_is_an_error_naming_lists_and_paths() {
+    let output = check_program(
         "glob",
         &[
-            (
-                "a.cdl",
-                "struct Vec2 { x: float = 0.0 }\n\
-                 impl Vec2 { fn len(self) -> float { return self.x; } }\n\
-                 const SPEED: float = 2.5;\n\
-                 fn only_a() -> string { return \"a\"; }\n\
-                 host \"tags\" { attribute marker on struct; }\n",
-            ),
-            ("b.cdl", "fn only_b() -> string { return \"b\"; }\n"),
+            ("a.cdl", "fn only_a() -> string { return \"a\"; }\n"),
             (
                 "prog.cdl",
-                "import \"a.cdl\" { * };\n\
-                 import \"b.cdl\" { * };\n\
-                 @marker\nstruct Tag { n: int = 1 }\n\
-                 fn only_a() -> string { return \"local\"; }\n\
-                 fn main() { print(only_a(), only_b(), Vec2 { x: 2.0 }.len(), Tag { .. }.n, SPEED); }\n",
+                "import \"a.cdl\" { * };\nfn main() { print(only_a()); }\n",
             ),
         ],
     );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "local\nb\n2.0\n1\n2.5\n"
-    );
-}
-
-/// A name two glob imports both bring in is an error where it is used, and
-/// naming it in an item import picks one.
-#[test]
-fn a_name_two_globs_bring_in_is_ambiguous_where_used() {
-    let modules = [
-        (
-            "a.cdl",
-            "fn shared() -> int { return 1; }\nfn only_a() -> int { return 3; }\n",
-        ),
-        ("b.cdl", "fn shared() -> int { return 2; }\n"),
-    ];
-    let unused = run_program(
-        "glob_unused",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(only_a()); }\n",
-            ),
-        ],
-    );
-    assert!(
-        unused.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&unused.stderr)
-    );
-    let used = run_program(
-        "glob_used",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(shared()); }\n",
-            ),
-        ],
-    );
-    assert!(!used.status.success());
-    assert!(String::from_utf8_lossy(&used.stderr).contains("Ambiguous import"));
-    let picked = run_program(
-        "glob_picked",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nimport \"b.cdl\" { shared };\nfn main() { print(shared()); }\n",
-            ),
-        ],
-    );
-    assert!(
-        picked.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&picked.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&picked.stdout), "2\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not an import list"), "stderr: {stderr}");
+    assert!(stderr.contains("{ Circle, area }"), "stderr: {stderr}");
+    assert!(stderr.contains("shapes::Circle"), "stderr: {stderr}");
 }
 
 /// `export import` passes what it brings in on to the files importing the
@@ -1480,17 +1404,17 @@ fn an_export_import_passes_its_items_on() {
             ),
             (
                 "parts/all.cdl",
-                "export import \"./shapes.cdl\" { * };\n\
-                 export import \"./tags.cdl\" { * };\n",
+                "export import \"./shapes.cdl\" { Vec2, Kind, SIDE, area };\n\
+                 export import \"./tags.cdl\" { marker };\n",
             ),
             (
                 "lib.cdl",
-                "export import \"./parts/all.cdl\" { * };\n\
+                "export import \"./parts/all.cdl\" { Vec2, Kind, SIDE, area, marker };\n\
                  fn own() -> string { return \"own\"; }\n",
             ),
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\n\
+                "import \"lib.cdl\" { own, area, Vec2, Kind, SIDE, marker };\n\
                  import \"lib.cdl\";\n\
                  @marker\nstruct Tag { n: int = 1 }\n\
                  fn main() { print(own(), area(), Vec2 { x: 2.0 }.len(), Kind::Square, SIDE, Tag { .. }.n, lib::area()); }\n",
@@ -1508,9 +1432,8 @@ fn an_export_import_passes_its_items_on() {
     );
 }
 
-/// A list passes on only the items it names, a plain import passes on
-/// nothing, and a declaration of the module's own shadows an item an
-/// `export import` brought in.
+/// A list passes on only the items it names, and a plain import passes on
+/// nothing.
 #[test]
 fn an_export_import_passes_on_only_what_the_module_shows() {
     let modules = [
@@ -1518,14 +1441,12 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
             "a.cdl",
             "fn named() -> int { return 1; }\nfn unnamed() -> int { return 2; }\n",
         ),
-        ("c.cdl", "fn shadowed() -> string { return \"c\"; }\n"),
         ("b.cdl", "fn hidden() -> int { return 3; }\n"),
         (
             "lib.cdl",
             "export import \"./a.cdl\" { named };\n\
-             export import \"./c.cdl\" { * };\n\
-             import \"./b.cdl\" { * };\n\
-             fn shadowed() -> string { return \"lib\"; }\n",
+             import \"./b.cdl\" { hidden };\n\
+             fn own() -> string { return \"lib\"; }\n",
         ),
     ];
     let named = run_program(
@@ -1534,10 +1455,9 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
             modules[0],
             modules[1],
             modules[2],
-            modules[3],
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\nfn main() { print(named(), shadowed()); }\n",
+                "import \"lib.cdl\" { named, own };\nfn main() { print(named(), own()); }\n",
             ),
         ],
     );
@@ -1548,16 +1468,10 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
     );
     assert_eq!(String::from_utf8_lossy(&named.stdout), "1\nlib\n");
     for (test, call) in [("export_unnamed", "unnamed"), ("export_plain", "hidden")] {
-        let prog = format!("import \"lib.cdl\" {{ * }};\nfn main() {{ print({call}()); }}\n");
+        let prog = format!("import \"lib.cdl\" {{ {call} }};\nfn main() {{ print({call}()); }}\n");
         let output = run_program(
             test,
-            &[
-                modules[0],
-                modules[1],
-                modules[2],
-                modules[3],
-                ("prog.cdl", &prog),
-            ],
+            &[modules[0], modules[1], modules[2], ("prog.cdl", &prog)],
         );
         assert!(!output.status.success(), "{call} should not reach prog.cdl");
     }
@@ -1577,7 +1491,7 @@ fn an_export_import_without_items_is_an_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("export import"), "stderr: {stderr}");
-    assert!(stderr.contains("{ * }"), "stderr: {stderr}");
+    assert!(stderr.contains("{ Circle, area }"), "stderr: {stderr}");
 }
 
 /// `export` in front of anything but an import is an error that shows the
@@ -1611,7 +1525,7 @@ fn an_export_import_list_passes_on_a_named_types_methods() {
             ("lib.cdl", "export import \"./shapes.cdl\" { Vec2 };\n"),
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\nfn main() { print(Vec2 { x: 2.5 }.len()); }\n",
+                "import \"lib.cdl\" { Vec2 };\nfn main() { print(Vec2 { x: 2.5 }.len()); }\n",
             ),
         ],
     );

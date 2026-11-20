@@ -7,7 +7,7 @@ import "pgo_import_test.cdl";
 import "std/json" as j;
 import "std/assert" { eq, is_true };
 import "std/set" { Set, };
-export import "./parts.cdl" { * };
+export import "./parts.cdl" { Part };
 
 --------------------------------------------------------------------------------
 
@@ -30,7 +30,8 @@ export import "./parts.cdl" { * };
       (identifier)))
   (import_declaration
     (string_literal)
-    (import_items)))
+    (import_items
+      (identifier))))
 
 ================================================================================
 Function declaration
@@ -1066,10 +1067,10 @@ struct Edge {
                   (type_identifier))))))))))
 
 ================================================================================
-Glob imports, constants and enum attributes
+Imports, constants and enum attributes
 ================================================================================
 
-import "drift" { * };
+import "drift" { Ready };
 
 const GROUND: float = 400.0;
 
@@ -1089,7 +1090,8 @@ fn crash() {}
 (source_file
   (import_declaration
     (string_literal)
-    (import_items))
+    (import_items
+      (identifier)))
   (const_declaration
     (identifier)
     (type_identifier)

@@ -4332,19 +4332,9 @@
     "type": "import_items",
     "named": true,
     "fields": {
-      "glob": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "*",
-            "named": false
-          }
-        ]
-      },
       "item": {
         "multiple": true,
-        "required": false,
+        "required": true,
         "types": [
           {
             "type": "identifier",

@@ -172,6 +172,8 @@ enum ParserErr<'a> {
     /// `export import` that binds the module under a name instead of naming
     /// the items it passes on.
     ExportImportWithoutItems,
+    /// `import "m" { * };`: an import names its items or binds the module.
+    GlobImport,
     /// `name!(` whose region the file ends before closing.
     UnterminatedMacroRegion(&'a str),
     /// `name!(...)` with no expander registered for `name`.
@@ -256,6 +258,7 @@ impl ParserErr<'_> {
             ParserErr::ImportAliasWithItems => "import_alias_with_items",
             ParserErr::ImportItemsEmpty => "import_items_empty",
             ParserErr::ExportImportWithoutItems => "export_import_without_items",
+            ParserErr::GlobImport => "glob_import",
             ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
             ParserErr::UnknownMacro(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
@@ -381,7 +384,10 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             "Name at least one item between the braces, or drop them to bind the module: {BLUE}{BOLD}import \"std/json\";{RESET}"
         ),
         ParserErr::ExportImportWithoutItems => &format!(
-            "An {BLUE}{BOLD}export import{RESET} passes items on to the files importing this one, so it names them: {BLUE}{BOLD}export import \"./shapes.cdl\" {{ * }};{RESET} or {BLUE}{BOLD}{{ Circle, area }}{RESET}"
+            "An {BLUE}{BOLD}export import{RESET} passes items on to the files importing this one, so it names them: {BLUE}{BOLD}export import \"./shapes.cdl\" {{ Circle, area }};{RESET}"
+        ),
+        ParserErr::GlobImport => &format!(
+            "An import names the items it brings in, {BLUE}{BOLD}import \"./shapes.cdl\" {{ Circle, area }};{RESET}, or binds the module to reach them through, {BLUE}{BOLD}import \"./shapes.cdl\";{RESET} and then {BLUE}{BOLD}shapes::Circle{RESET}. {RED}{BOLD}{{ * }}{RESET} is not an import list"
         ),
         ParserErr::UnterminatedMacroRegion(name) => &format!(
             "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
@@ -1450,22 +1456,13 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         }
         parser.next_token();
         let mut items: Vec<(SmolStr, Span)> = Vec::new();
-        // `{ * }`: every item of the module.
+        // `{ * }` is refused, naming the two spellings that bring items in.
         if parser.peek_token() == Token::OpMul {
-            let star = parser.next_token().1;
-            end = parser
-                .next_token_expect(
-                    Token::RBrace,
-                    "A glob import is written { * }, with nothing else in the braces",
-                )
-                .end;
-            binding = Some(ImportBinding::Glob(star));
+            cold_path();
+            let star = parser.peek_token_span();
+            parser.error(star, ParserErr::GlobImport);
         }
-        let glob = binding.is_some();
         loop {
-            if glob {
-                break;
-            }
             let (token, span) = parser.next_token();
             match token {
                 Token::RBrace => {
@@ -1506,22 +1503,15 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
                 }
             }
         }
-        if !matches!(binding, Some(ImportBinding::Glob(_))) {
-            if items.is_empty() {
-                cold_path();
-                parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
-            }
-            binding = Some(ImportBinding::Items(items.into_boxed_slice()));
+        if items.is_empty() {
+            cold_path();
+            parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
         }
+        binding = Some(ImportBinding::Items(items.into_boxed_slice()));
     }
     // An `export import` passes on what it brings in, so it has to bring
     // items in rather than bind a name.
-    if exported.is_some()
-        && !matches!(
-            binding,
-            Some(ImportBinding::Items(_) | ImportBinding::Glob(_))
-        )
-    {
+    if exported.is_some() && !matches!(binding, Some(ImportBinding::Items(_))) {
         cold_path();
         parser.error((start, end).into(), ParserErr::ExportImportWithoutItems);
     }
@@ -2355,7 +2345,7 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
                 ParserErr::UnexpectedToken(
                     Token::Import,
                     next,
-                    "export goes in front of an import: export import \"./shapes.cdl\" { * };",
+                    "export goes in front of an import: export import \"./shapes.cdl\" { Circle };",
                 ),
             );
         }

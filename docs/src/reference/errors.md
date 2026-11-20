@@ -55,7 +55,7 @@ Raised while the file is read, before any type is known.
 | Pattern | A token where a pattern goes that no pattern starts with (`pattern_expected`); `else` after a `let` whose pattern is a name alone, which always fits (`let_else_on_name`); a `let ... else` block that can reach its end instead of leaving (`let_else_must_leave`). See [patterns](../language/control-flow.md#patterns) |
 | `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
-| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`); an `export import` with no items (`export_import_without_items`) |
+| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`); an `export import` with no items (`export_import_without_items`); `{ * }` in place of a list (`glob_import`) |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |

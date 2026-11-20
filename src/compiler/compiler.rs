@@ -7300,9 +7300,6 @@ pub struct Namespace {
     /// For a module bound by an import, its path as the import wrote it
     /// (`std/json`, `./geometry.cdl`), for a message to name it by.
     pub import_path: SmolStr,
-    /// Names two glob imports both bring in, with the modules they come from.
-    /// Using one is an error; declaring one of the file's own resolves it.
-    pub ambiguous: Vec<(SmolStr, SmolStr, SmolStr)>,
 }
 
 /// The scope of every file in the program, keyed by its index in `sources`.
@@ -8054,37 +8051,6 @@ fn module_exports(namespace: &Namespace) -> Namespace {
     exports
 }
 
-/// A file's scope indexed by name, which a glob import binds against instead
-/// of searching the scope once per name it brings in. It stands for the
-/// scope and the glob list it was built from while only glob imports edit
-/// them; an import that edits them otherwise drops it.
-struct GlobIndex {
-    /// The kind of each name's first symbol in the scope.
-    in_scope: FxHashMap<SmolStr, SymbolKind>,
-    /// The names glob imports brought in.
-    globbed: FxHashSet<SmolStr>,
-    /// The names two glob imports made ambiguous.
-    ambiguous: FxHashSet<SmolStr>,
-}
-
-impl GlobIndex {
-    fn of(namespace: &Namespace, globbed: &[(SmolStr, SmolStr)]) -> Self {
-        let mut in_scope: FxHashMap<SmolStr, SymbolKind> = FxHashMap::default();
-        for (name, kind) in &namespace.symbols {
-            in_scope.entry(name.clone()).or_insert(*kind);
-        }
-        Self {
-            in_scope,
-            globbed: globbed.iter().map(|(name, _)| name.clone()).collect(),
-            ambiguous: namespace
-                .ambiguous
-                .iter()
-                .map(|(name, _, _)| name.clone())
-                .collect(),
-        }
-    }
-}
-
 /// Adds what one import brings in to the scope of the file that writes it.
 ///
 /// `exports` is what the module declares. A namespace binding puts it behind
@@ -8099,8 +8065,6 @@ fn bind_import(
     file_path: &Path,
     module_display: &SmolStr,
     merged_symbol_origins: &mut Vec<(SmolStr, SmolStr)>,
-    globbed: &mut Vec<(SmolStr, SmolStr)>,
-    index: &mut Option<GlobIndex>,
     span: Span,
     src_file_idx: u16,
     sources: &[Source],
@@ -8132,8 +8096,6 @@ fn bind_import(
             ));
         }
         ImportBinding::Items(items) => {
-            // This arm edits the scope without keeping the glob index.
-            *index = None;
             for (item, item_span) in items {
                 let found: Vec<(SmolStr, SymbolKind)> = exports
                     .symbols
@@ -8169,12 +8131,6 @@ fn bind_import(
                     Vec::new()
                 };
                 for (name, kind) in found.into_iter().chain(methods) {
-                    // A name a glob brought in gives way to one the file names.
-                    if let Some(at) = globbed.iter().position(|(n, _)| *n == name) {
-                        globbed.remove(at);
-                        namespace.symbols.retain(|(n, _)| *n != name);
-                        namespace.ambiguous.retain(|(n, _, _)| *n != name);
-                    }
                     if let Some((_, existing)) = namespace.symbols.iter().find(|(n, _)| *n == name)
                     {
                         // The same underlying symbol arriving through two
@@ -8203,80 +8159,17 @@ fn bind_import(
                 }
             }
         }
-        ImportBinding::Glob(_) => {
-            let GlobIndex {
-                in_scope,
-                globbed: globbed_names,
-                ambiguous: ambiguous_names,
-            } = index.get_or_insert_with(|| GlobIndex::of(namespace, globbed));
-            // Types the file declares itself: their own methods stay theirs,
-            // and the imported type's methods do not attach to them.
-            let shadowed_types: FxHashSet<SmolStr> = exports
-                .symbols
-                .iter()
-                .filter(|(name, kind)| {
-                    !matches!(kind, SymbolKind::Fn(_))
-                        && !globbed_names.contains(name)
-                        && in_scope.contains_key(name)
-                })
-                .map(|(name, _)| name.clone())
-                .collect();
-            for (name, kind) in exports.symbols {
-                if (name == "main" && matches!(kind, SymbolKind::Fn(_)))
-                    || name.starts_with(type_system::ANON_FN_PREFIX)
-                {
-                    continue;
-                }
-                if let Some((type_name, _)) = name.split_once(METHOD_SEP)
-                    && shadowed_types.contains(type_name)
-                {
-                    continue;
-                }
-                match in_scope.get(&name) {
-                    None if ambiguous_names.contains(&name) => {}
-                    None => {
-                        globbed.push((name.clone(), module_display.clone()));
-                        globbed_names.insert(name.clone());
-                        in_scope.insert(name.clone(), kind);
-                        namespace.symbols.push((name, kind));
-                    }
-                    Some(existing) if symbol_ids_equal(*existing, kind) => {}
-                    Some(_) => {
-                        // Another glob brought this name in: neither wins.
-                        if globbed_names.contains(&name)
-                            && let Some(at) = globbed.iter().position(|(n, _)| *n == name)
-                        {
-                            let (_, first) = globbed[at].clone();
-                            namespace.symbols.retain(|(n, _)| *n != name);
-                            in_scope.remove(&name);
-                            ambiguous_names.insert(name.clone());
-                            namespace
-                                .ambiguous
-                                .push((name, first, module_display.clone()));
-                        }
-                        // Otherwise the file declares or names it: it shadows.
-                    }
-                }
-            }
-        }
     }
 }
 
 /// The items an `export import` with `binding` brings in from a module that
-/// shows `exports`: every item for `{ * }`, and for a list the named items
-/// with the methods of each named type.
+/// shows `exports`: the named items with the methods of each named type.
 fn reexported(exports: &Namespace, binding: &ImportBinding) -> Vec<(SmolStr, SymbolKind)> {
     let shown = |name: &SmolStr, kind: &SymbolKind| {
         let own_main = name == "main" && matches!(kind, SymbolKind::Fn(_));
         !own_main && !name.starts_with(type_system::ANON_FN_PREFIX)
     };
     match binding {
-        ImportBinding::Glob(_) => exports
-            .symbols
-            .iter()
-            .filter(|(name, kind)| shown(name, kind))
-            .cloned()
-            .collect(),
         ImportBinding::Items(items) => exports
             .symbols
             .iter()
@@ -8566,14 +8459,9 @@ fn parse_toplevel(
     // Names merged into this file's scope by bare imports, with the module
     // each came from; consulted to report both sources on a collision.
     let mut merged_symbol_origins: Vec<(SmolStr, SmolStr)> = Vec::new();
-    // Names glob imports brought in, with the module each came from: a
-    // later explicit item replaces one, and a second glob makes it ambiguous.
-    let mut globbed: Vec<(SmolStr, SmolStr)> = Vec::new();
     // What each `export import` brought in, which joins what this file shows
     // its importers once every import is bound.
     let mut passed_on: Vec<(SmolStr, SymbolKind)> = Vec::new();
-    // The file's scope by name, for glob imports to bind against.
-    let mut glob_index: Option<GlobIndex> = None;
 
     for import in imports {
         match import {
@@ -8840,8 +8728,6 @@ fn parse_toplevel(
                     &file_path,
                     &module_display,
                     &mut merged_symbol_origins,
-                    &mut globbed,
-                    &mut glob_index,
                     span,
                     src_file_idx,
                     sources,
@@ -8853,8 +8739,7 @@ fn parse_toplevel(
 
     // An item an `export import` brought in joins what this file shows, when
     // the file's scope still holds it: a declaration of the file's own that
-    // shadows it is what importers see, and a name two globs made ambiguous
-    // is passed on by neither.
+    // shadows it is what importers see.
     if !passed_on.is_empty() {
         let shown = files.entry(file_path.to_path_buf()).or_default();
         // Indexed by name, since every name passed on is looked up in both.

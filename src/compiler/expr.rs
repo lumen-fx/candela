@@ -133,11 +133,6 @@ pub enum ImportBinding {
     /// of its name, merged into the file's own scope. The module itself is
     /// bound under no name.
     Items(Box<[(SmolStr, Span)]>),
-    /// `import "drift" { * };`: every item the module declares, merged into
-    /// the file's scope. A declaration of the file's own of the same name
-    /// shadows the imported one; a name two glob imports both bring in is
-    /// ambiguous, and an error only where the file uses it.
-    Glob(Span),
 }
 
 /// Where a struct literal written with `..` takes the fields it does not

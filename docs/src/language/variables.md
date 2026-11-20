@@ -102,7 +102,7 @@ fn main() {
 ```
 
 A constant is read by its bare name anywhere in the file, and in files that
-import it by name or with `{ * }`. The value is checked against the declared
+import it by name. The value is checked against the declared
 type. Each read computes the value from its expression again, so a constant
 holding a struct or a list hands each reader a value of its own: changing what
 one read gave changes nothing else. Keep a constant's expression to values that
