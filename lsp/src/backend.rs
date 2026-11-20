@@ -1,8 +1,8 @@
 //! The `tower_lsp::LanguageServer` implementation: wires document sync,
-//! diagnostics, hover, completion, signature help, document symbols, and
-//! go-to-definition to the analysis in `crate::analysis` (a thin wrapper
-//! around candela's own compile) and the position-based features in
-//! `crate::ide`.
+//! diagnostics, hover, completion, signature help, document symbols,
+//! go-to-definition and the reference features to the analysis in
+//! `crate::analysis` (a thin wrapper around candela's own compile), the
+//! position-based features in `crate::ide`, and `crate::refs`.
 //!
 //! Diagnostics are worked out off the request path. Every open buffer is
 //! checked as the root of a program, a moment after the last change to it or
@@ -12,10 +12,15 @@
 //! for each open program that imports the package, and what it reports is
 //! published beside the compiler's errors (see `crate::checks`).
 
+use crate::actions;
 use crate::analysis::{self, ProgramSummary};
 use crate::checks::{self, Found};
+use crate::hints;
 use crate::ide::Ide;
-use crate::line_index;
+use crate::line_index::{self, LineIndex};
+use crate::refs::{self, Decl};
+use crate::semantic;
+use crate::symbols::{self, Declared};
 use candela::Diagnostic as CdlDiagnostic;
 use candela::PackageCheck;
 use candela::compiler::imports::ImportResolver;
@@ -25,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tower_lsp::jsonrpc::Result as RpcResult;
+use tower_lsp::jsonrpc::{Error as RpcError, ErrorCode, Result as RpcResult};
 use tower_lsp::lsp_types::Diagnostic as LspDiagnostic;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -187,7 +192,39 @@ struct Inner {
     /// Held while a package check runs: one runs at a time, and a check
     /// waiting for it that a newer one replaced by then does not run.
     checking: tokio::sync::Mutex<()>,
+    /// The editor's workspace folders, canonical.
+    folders: RwLock<Vec<PathBuf>>,
+    /// What each workspace file declares, as of its modification time, so
+    /// a symbol search reads only the files that changed since the last.
+    declared: Mutex<HashMap<PathBuf, (std::time::SystemTime, Vec<Declared>)>>,
+    /// Whether the client asks again for semantic tokens and inlay hints
+    /// when told to, which the server does after a check brings in new
+    /// declarations.
+    refresh_tokens: std::sync::atomic::AtomicBool,
+    refresh_hints: std::sync::atomic::AtomicBool,
 }
+
+/// The references to one declaration found in one file.
+struct FileRefs {
+    path: PathBuf,
+    text: String,
+    ranges: Vec<(usize, usize)>,
+}
+
+/// What a search for references read.
+struct RefSearch {
+    found: Vec<FileRefs>,
+    /// Files that name the declaration but did not compile, so their
+    /// references could not be told apart.
+    unread: Vec<PathBuf>,
+}
+
+/// The most `.cdl` files a search for references reads from a package, or
+/// a symbol search from the workspace.
+const MAX_PACKAGE_FILES: usize = 2000;
+
+/// The most symbols a workspace symbol search answers with.
+const MAX_SYMBOLS: usize = 500;
 
 impl Backend {
     #[must_use]
@@ -200,6 +237,10 @@ impl Backend {
                 roots: Mutex::new(HashMap::new()),
                 published: Mutex::new(HashSet::new()),
                 checking: tokio::sync::Mutex::new(()),
+                folders: RwLock::new(Vec::new()),
+                declared: Mutex::new(HashMap::new()),
+                refresh_tokens: std::sync::atomic::AtomicBool::new(false),
+                refresh_hints: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -272,6 +313,18 @@ impl Inner {
         }
     }
 
+    /// The summary completion and signature help read: the last good
+    /// compile's, whatever has been typed since. Both read what the cursor
+    /// is on from the current text, and the debounced check after the change
+    /// refreshes the summary, so a keystroke never waits for a compile of
+    /// the whole program. A document that has never compiled is compiled now.
+    fn typing_summary(&self, uri: &Url) -> Option<ProgramSummary> {
+        if let Some(summary) = self.docs.get(uri)?.last_good.clone() {
+            return Some(summary);
+        }
+        self.current_or_cached_summary(uri)
+    }
+
     fn doc_text(&self, uri: &Url) -> Option<String> {
         self.docs.get(uri).map(|d| d.text.clone())
     }
@@ -280,7 +333,7 @@ impl Inner {
     fn request(&self, uri: &Url, position: Position) -> Option<(String, ProgramSummary, usize)> {
         let text = self.doc_text(uri)?;
         let summary = self.current_or_cached_summary(uri)?;
-        let offset = line_index::position_to_offset(&text, position) as usize;
+        let offset = line_index::position_to_offset(&text, position);
         Some((text, summary, offset))
     }
 
@@ -367,16 +420,35 @@ impl Inner {
         };
         // An older text's summary still serves hover and completion while
         // the newer one is being checked.
+        let mut refreshed = false;
         if let Some(mut doc) = self.docs.get_mut(uri) {
             let current = doc.generation == generation;
             if let Some(summary) = &outcome.summary
                 && (current || doc.last_good.is_none())
             {
                 doc.last_good = Some(summary.clone());
+                refreshed = true;
             }
             if current {
                 doc.compiled_generation = generation;
             }
+        }
+        // Tokens and hints were worked out against the summary before; the
+        // client asks again with this one.
+        let load = |flag: &std::sync::atomic::AtomicBool| {
+            refreshed && flag.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        let (tokens, hints) = (load(&self.refresh_tokens), load(&self.refresh_hints));
+        if tokens || hints {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                if tokens {
+                    let _ = client.semantic_tokens_refresh().await;
+                }
+                if hints {
+                    let _ = client.inlay_hint_refresh().await;
+                }
+            });
         }
         if self.generation(uri) != Some(generation) {
             return;
@@ -555,8 +627,9 @@ impl Inner {
             .flat_map(|s| s.sources.iter().map(|f| (f.path.as_str(), f.text.as_str())))
             .collect();
         let mut by_file: HashMap<Url, Vec<LspDiagnostic>> = HashMap::new();
+        let root_index = LineIndex::new(root_text);
         let mut place = |d: &CdlDiagnostic, severity: DiagnosticSeverity| {
-            let (uri, diagnostic) = self.place(d, severity, root, root_path, root_text, &texts);
+            let (uri, diagnostic) = self.place(d, severity, root, root_path, &root_index, &texts);
             by_file.entry(uri).or_default().push(diagnostic);
         };
         for d in &outcome.errors {
@@ -571,7 +644,7 @@ impl Inner {
                     .entry(root.clone())
                     .or_default()
                     .push(LspDiagnostic {
-                        range: range_of(root_text, start, end),
+                        range: root_index.range(start, end),
                         severity: Some(DiagnosticSeverity::WARNING),
                         code: Some(NumberOrString::String(code.to_owned())),
                         source: Some("candela".to_owned()),
@@ -592,12 +665,12 @@ impl Inner {
         severity: DiagnosticSeverity,
         root: &Url,
         root_path: &str,
-        root_text: &str,
+        root_index: &LineIndex<'_>,
         texts: &HashMap<&str, &str>,
     ) -> (Url, LspDiagnostic) {
         let locate = |filename: &str, span: &std::ops::Range<usize>| -> Option<(Url, Range)> {
             if filename == root_path || filename.is_empty() {
-                return Some((root.clone(), range_of(root_text, span.start, span.end)));
+                return Some((root.clone(), root_index.range(span.start, span.end)));
             }
             let uri = Url::from_file_path(filename).ok()?;
             let text = texts
@@ -699,6 +772,250 @@ impl Inner {
         }
     }
 
+    /// The canonical path of an open document's file.
+    fn doc_path(&self, uri: &Url) -> Option<PathBuf> {
+        self.docs.get(uri).map(|d| d.path.clone())
+    }
+
+    /// The declaration under the cursor of an open document, and the range
+    /// of the name the cursor is on.
+    fn declaration_at(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<(Decl, (usize, usize), String, ProgramSummary)> {
+        let (text, summary, offset) = self.request(uri, position)?;
+        let path = self.doc_path(uri)?;
+        let (decl, under) = refs::declaration(&text, &summary, &path, offset)?;
+        Some((decl, under, text, summary))
+    }
+
+    /// The files a reference to `decl` can be in: a local's own file, or
+    /// for anything else the files of the program `summary` describes, the
+    /// open buffers, and every `.cdl` file of the package (or workspace
+    /// folder) holding the declaration.
+    fn reference_files(&self, decl: &Decl, summary: &ProgramSummary) -> Vec<PathBuf> {
+        let mut files = vec![decl.file.clone()];
+        if decl.local {
+            return files;
+        }
+        let mut add = |path: PathBuf| {
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        };
+        for source in summary.sources.iter().skip(1).filter(|s| !s.is_std) {
+            add(canonical(Path::new(&source.path)));
+        }
+        for doc in self.docs.iter() {
+            add(doc.path.clone());
+        }
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        if let Some(root) = package_root(&decl.file, &folders) {
+            for path in cdl_files(&root, MAX_PACKAGE_FILES) {
+                add(path);
+            }
+        }
+        if let Some(path) = summary
+            .sources
+            .first()
+            .map(|s| canonical(Path::new(&s.path)))
+        {
+            add(path);
+        }
+        files
+    }
+
+    /// Every reference to `decl` in the files that can hold one. An open
+    /// buffer is read as it stands; any other file that spells the name is
+    /// compiled as the root of a program, against the open buffers' text.
+    async fn find_references(&self, decl: &Decl, summary: &ProgramSummary) -> RefSearch {
+        let files = self.reference_files(decl, summary);
+        let mut found = Vec::new();
+        let mut closed = Vec::new();
+        for path in files {
+            let open = self
+                .docs
+                .iter()
+                .find(|d| d.path == path)
+                .map(|d| d.key().clone());
+            match open {
+                Some(uri) => {
+                    let (Some(text), Some(summary)) =
+                        (self.doc_text(&uri), self.current_or_cached_summary(&uri))
+                    else {
+                        continue;
+                    };
+                    let ranges = refs::occurrences(&text, &summary, &path, decl);
+                    if !ranges.is_empty() {
+                        found.push(FileRefs { path, text, ranges });
+                    }
+                }
+                None => closed.push(path),
+            }
+        }
+        let settings = self.settings();
+        let overlays: Vec<(PathBuf, String)> = self
+            .docs
+            .iter()
+            .map(|d| (d.path.clone(), d.text.clone()))
+            .collect();
+        let decl = decl.clone();
+        let mut unread = Vec::new();
+        // The compiles run off the async threads; the resolver is built on
+        // the thread that uses it.
+        let read = tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            let mut unread = Vec::new();
+            for path in closed {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if !text.contains(decl.name.as_str()) {
+                    continue;
+                }
+                let resolver = resolver_with(&settings, overlays.clone());
+                let outcome = analysis::analyze(&text, &path.to_string_lossy(), &resolver);
+                let Some(summary) = outcome.summary else {
+                    unread.push(path);
+                    continue;
+                };
+                let ranges = refs::occurrences(&text, &summary, &path, &decl);
+                if !ranges.is_empty() {
+                    out.push(FileRefs { path, text, ranges });
+                }
+            }
+            (out, unread)
+        })
+        .await;
+        if let Ok((more, missed)) = read {
+            found.extend(more);
+            unread = missed;
+        }
+        RefSearch { found, unread }
+    }
+
+    /// Why the declaration under the cursor cannot be renamed, if it cannot.
+    fn rename_refused(&self, decl: &Decl, text: &str, summary: &ProgramSummary) -> Option<String> {
+        if decl.std {
+            return Some(format!(
+                "`{}` is declared in the standard library",
+                decl.name
+            ));
+        }
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        if !folders.is_empty() && !folders.iter().any(|f| decl.file.starts_with(f)) {
+            return Some(format!(
+                "`{}` is declared outside the workspace, in {}",
+                decl.name,
+                decl.file.display()
+            ));
+        }
+        if summary.sources.first().is_none_or(|s| s.text != text) {
+            return Some("the file does not parse as it stands; fix that first".to_owned());
+        }
+        if decl.local && refs::bound_by_pattern(text, &decl.name) {
+            return Some(format!(
+                "`{}` is also bound by a match arm or a catch clause in this file, which \
+                 renaming cannot tell apart; rename it by hand",
+                decl.name
+            ));
+        }
+        None
+    }
+
+    /// The declarations matching `query` in the workspace's `.cdl` files and
+    /// the open buffers.
+    fn workspace_symbols(&self, query: &str) -> Vec<SymbolInformation> {
+        let folders = self.folders.read().map(|f| f.clone()).unwrap_or_default();
+        let open: HashMap<PathBuf, (Url, String)> = self
+            .docs
+            .iter()
+            .map(|d| (d.path.clone(), (d.key().clone(), d.text.clone())))
+            .collect();
+        let mut files: Vec<PathBuf> = folders
+            .iter()
+            .flat_map(|f| cdl_files(f, MAX_PACKAGE_FILES))
+            .collect();
+        files.extend(open.keys().cloned());
+        files.sort();
+        files.dedup();
+        let mut out = Vec::new();
+        let Ok(mut cache) = self.declared.lock() else {
+            return out;
+        };
+        cache.retain(|path, _| files.binary_search(path).is_ok());
+        for path in files {
+            let (uri, text, declared) = if let Some((uri, text)) = open.get(&path) {
+                (uri.clone(), text.clone(), symbols::declarations(text))
+            } else {
+                let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let declared = match cache.get(&path) {
+                    Some((at, d)) if *at == modified => d.clone(),
+                    _ => {
+                        let d = symbols::declarations(&text);
+                        cache.insert(path.clone(), (modified, d.clone()));
+                        d
+                    }
+                };
+                let Ok(uri) = Url::from_file_path(&path) else {
+                    continue;
+                };
+                (uri, text, declared)
+            };
+            let mut index = None;
+            for d in declared
+                .into_iter()
+                .filter(|d| symbols::matches(&d.name, query))
+            {
+                let index = index.get_or_insert_with(|| LineIndex::new(&text));
+                #[allow(deprecated)]
+                out.push(SymbolInformation {
+                    name: d.name,
+                    kind: d.kind,
+                    tags: None,
+                    deprecated: None,
+                    location: Location::new(uri.clone(), index.range(d.start, d.end)),
+                    container_name: d.container,
+                });
+                if out.len() >= MAX_SYMBOLS {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
+    /// Says in the editor's log which files a search could not read.
+    async fn report_unread(&self, search: &RefSearch) {
+        for path in &search.unread {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!(
+                        "candela-lsp: {} does not compile, so its references were not searched",
+                        path.display()
+                    ),
+                )
+                .await;
+        }
+    }
+
+    /// The URI an edit or a location for `path` names: the open buffer's
+    /// own when the file is open.
+    fn uri_for(&self, path: &Path) -> Option<Url> {
+        self.docs
+            .iter()
+            .find(|d| d.path == path)
+            .map(|d| d.key().clone())
+            .or_else(|| Url::from_file_path(path).ok())
+    }
+
     fn apply_settings(&self, value: &Value) {
         let settings = ImportSettings::from_json(value);
         if let Ok(mut s) = self.settings.write() {
@@ -714,6 +1031,64 @@ fn resolver_with(settings: &ImportSettings, overlays: Vec<(PathBuf, String)>) ->
         resolver.set_overlay(path, Arc::from(text));
     }
     resolver
+}
+
+/// A request the server turns down, with the reason the editor shows.
+fn refused(message: String) -> RpcError {
+    RpcError {
+        // RequestFailed: the request was valid, and it could not be done.
+        code: ErrorCode::ServerError(-32803),
+        message: message.into(),
+        data: None,
+    }
+}
+
+/// The directory to search for references to an item declared in `file`:
+/// the nearest one above it holding a `candela.toml`, or else the workspace
+/// folder it is in.
+fn package_root(file: &Path, folders: &[PathBuf]) -> Option<PathBuf> {
+    let dir = file.parent()?;
+    for ancestor in dir.ancestors() {
+        if ancestor.join("candela.toml").is_file() {
+            return Some(ancestor.to_path_buf());
+        }
+        if folders.iter().any(|f| f == ancestor) {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// The `.cdl` files under `root`, canonical, at most `max` of them. Hidden
+/// directories and build output (`target`, `node_modules`) are skipped.
+fn cdl_files(root: &Path, max: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                    stack.push(entry.path());
+                }
+            } else if name.ends_with(".cdl") {
+                out.push(canonical(&entry.path()));
+                if out.len() >= max {
+                    return out;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The check commands of the packages a program's files belong to, once
@@ -737,10 +1112,7 @@ fn package_checks(summary: &ProgramSummary, checked: &Path) -> Vec<PackageCheck>
 }
 
 fn range_of(text: &str, start: usize, end: usize) -> Range {
-    Range::new(
-        line_index::offset_to_position(text, u32::try_from(start).unwrap_or(u32::MAX)),
-        line_index::offset_to_position(text, u32::try_from(end).unwrap_or(u32::MAX)),
-    )
+    LineIndex::new(text).range(start, end)
 }
 
 /// The editor location of a span in one of the program's files. The
@@ -764,13 +1136,13 @@ fn location_for(
 
 #[allow(deprecated)]
 fn document_symbol(
-    text: &str,
+    index: &LineIndex<'_>,
     name: &str,
     detail: String,
     kind: SymbolKind,
     span: candela::compiler::expr::Span,
 ) -> DocumentSymbol {
-    let range = range_of(text, span.start as usize, span.end as usize);
+    let range = index.range(span.start as usize, span.end as usize);
     DocumentSymbol {
         name: name.to_owned(),
         detail: Some(detail),
@@ -788,6 +1160,41 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
         if let Some(options) = &params.initialization_options {
             self.inner.apply_settings(options);
+        }
+        #[allow(deprecated)]
+        let mut folders: Vec<Url> = params
+            .workspace_folders
+            .iter()
+            .flatten()
+            .map(|f| f.uri.clone())
+            .collect();
+        #[allow(deprecated)]
+        if folders.is_empty()
+            && let Some(root) = &params.root_uri
+        {
+            folders.push(root.clone());
+        }
+        let workspace = params.capabilities.workspace.as_ref();
+        let tokens = workspace
+            .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|t| t.refresh_support)
+            .unwrap_or(false);
+        let hints = workspace
+            .and_then(|w| w.inlay_hint.as_ref())
+            .and_then(|t| t.refresh_support)
+            .unwrap_or(false);
+        self.inner
+            .refresh_tokens
+            .store(tokens, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .refresh_hints
+            .store(hints, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut f) = self.inner.folders.write() {
+            *f = folders
+                .iter()
+                .filter_map(|u| u.to_file_path().ok())
+                .map(|p| canonical(&p))
+                .collect();
         }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -815,6 +1222,34 @@ impl LanguageServer for Backend {
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        resolve_provider: None,
+                    },
+                )),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: semantic::TYPES.to_vec(),
+                                token_modifiers: semantic::MODIFIERS.to_vec(),
+                            },
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: None,
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                        },
+                    ),
+                ),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -998,9 +1433,9 @@ impl LanguageServer for Backend {
         // A buffer that never compiled still gets keywords and builtins.
         let summary = self
             .inner
-            .current_or_cached_summary(&p.text_document.uri)
+            .typing_summary(&p.text_document.uri)
             .unwrap_or_default();
-        let offset = line_index::position_to_offset(&text, p.position) as usize;
+        let offset = line_index::position_to_offset(&text, p.position);
         let items = Ide::new(&text, &summary, offset).completions();
         Ok(Some(CompletionResponse::Array(items)))
     }
@@ -1010,10 +1445,13 @@ impl LanguageServer for Backend {
         params: SignatureHelpParams,
     ) -> RpcResult<Option<SignatureHelp>> {
         let p = params.text_document_position_params;
-        let Some((text, summary, offset)) = self.inner.request(&p.text_document.uri, p.position)
+        let uri = &p.text_document.uri;
+        let (Some(text), Some(summary)) =
+            (self.inner.doc_text(uri), self.inner.typing_summary(uri))
         else {
             return Ok(None);
         };
+        let offset = line_index::position_to_offset(&text, p.position);
         Ok(Ide::new(&text, &summary, offset).signature_help())
     }
 
@@ -1026,6 +1464,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let text = summary.sources.first().map_or("", |s| s.text.as_str());
+        let text = &LineIndex::new(text);
         let mut symbols = Vec::new();
         for f in summary.own_functions() {
             let kind = if f.is_const {
@@ -1080,5 +1519,194 @@ impl LanguageServer for Backend {
             None => None,
         };
         Ok(location.map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
+        let p = params.text_document_position;
+        let Some((decl, _, _, summary)) =
+            self.inner.declaration_at(&p.text_document.uri, p.position)
+        else {
+            return Ok(None);
+        };
+        let search = self.inner.find_references(&decl, &summary).await;
+        self.inner.report_unread(&search).await;
+        let mut locations = Vec::new();
+        for file in &search.found {
+            let Some(uri) = self.inner.uri_for(&file.path) else {
+                continue;
+            };
+            let index = LineIndex::new(&file.text);
+            for &(s, e) in &file.ranges {
+                if !params.context.include_declaration
+                    && file.path == decl.file
+                    && decl.name_range == Some((s, e))
+                {
+                    continue;
+                }
+                locations.push(Location::new(uri.clone(), index.range(s, e)));
+            }
+        }
+        Ok(Some(locations))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> RpcResult<Option<Vec<DocumentHighlight>>> {
+        let p = params.text_document_position_params;
+        let uri = &p.text_document.uri;
+        let Some((decl, _, text, summary)) = self.inner.declaration_at(uri, p.position) else {
+            return Ok(None);
+        };
+        let Some(path) = self.inner.doc_path(uri) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&text);
+        let highlights = refs::occurrences(&text, &summary, &path, &decl)
+            .into_iter()
+            .map(|(s, e)| {
+                let written = decl.name_range == Some((s, e)) && decl.file == path
+                    || refs::assigned_at(&text, e);
+                DocumentHighlight {
+                    range: index.range(s, e),
+                    kind: Some(if written {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    }),
+                }
+            })
+            .collect();
+        Ok(Some(highlights))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> RpcResult<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        // Like completion, from the last check: the names are read from the
+        // current text, and a check that brings in new declarations asks
+        // the client to fetch them again.
+        let summary = self.inner.typing_summary(uri).unwrap_or_default();
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic::tokens(&text, &summary),
+        })))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> RpcResult<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        let summary = self.inner.typing_summary(uri).unwrap_or_default();
+        let index = LineIndex::new(&text);
+        let (start, end) = (
+            index.offset(params.range.start),
+            index.offset(params.range.end),
+        );
+        Ok(Some(hints::hints(&text, &summary, start, end)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> RpcResult<Option<CodeActionResponse>> {
+        let uri = &params.text_document.uri;
+        let Some(text) = self.inner.doc_text(uri) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&text);
+        let mut out: CodeActionResponse = Vec::new();
+        for d in &params.context.diagnostics {
+            if d.source.as_deref() != Some("candela") {
+                continue;
+            }
+            let Some(NumberOrString::String(code)) = &d.code else {
+                continue;
+            };
+            let (start, end) = (index.offset(d.range.start), index.offset(d.range.end));
+            for fix in actions::fixes(&text, code, &d.message, start, end) {
+                let edits = fix
+                    .edits
+                    .into_iter()
+                    .map(|(s, e, new)| TextEdit::new(index.range(s, e), new))
+                    .collect();
+                out.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: fix.title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![d.clone()]),
+                    edit: Some(WorkspaceEdit::new(HashMap::from([(uri.clone(), edits)]))),
+                    is_preferred: Some(fix.preferred),
+                    ..CodeAction::default()
+                }));
+            }
+        }
+        Ok(Some(out))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> RpcResult<Option<Vec<SymbolInformation>>> {
+        Ok(Some(self.inner.workspace_symbols(&params.query)))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> RpcResult<Option<PrepareRenameResponse>> {
+        let Some((decl, (s, e), text, summary)) = self
+            .inner
+            .declaration_at(&params.text_document.uri, params.position)
+        else {
+            return Err(refused("nothing here can be renamed".to_owned()));
+        };
+        if let Some(why) = self.inner.rename_refused(&decl, &text, &summary) {
+            return Err(refused(why));
+        }
+        Ok(Some(PrepareRenameResponse::Range(
+            LineIndex::new(&text).range(s, e),
+        )))
+    }
+
+    async fn rename(&self, params: RenameParams) -> RpcResult<Option<WorkspaceEdit>> {
+        let p = params.text_document_position;
+        let Some((decl, _, text, summary)) =
+            self.inner.declaration_at(&p.text_document.uri, p.position)
+        else {
+            return Err(refused("nothing here can be renamed".to_owned()));
+        };
+        if let Some(why) = self.inner.rename_refused(&decl, &text, &summary) {
+            return Err(refused(why));
+        }
+        let new_name = params.new_name.trim();
+        if !refs::valid_name(new_name) {
+            return Err(refused(format!("`{new_name}` is not a name")));
+        }
+        let search = self.inner.find_references(&decl, &summary).await;
+        if let Some(path) = search.unread.first() {
+            // A partial rename would leave the program broken without
+            // saying where.
+            return Err(refused(format!(
+                "{} does not compile, so its uses of `{}` cannot be found; fix it first",
+                path.display(),
+                decl.name
+            )));
+        }
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for file in &search.found {
+            let Some(uri) = self.inner.uri_for(&file.path) else {
+                continue;
+            };
+            let index = LineIndex::new(&file.text);
+            changes.entry(uri).or_default().extend(
+                file.ranges
+                    .iter()
+                    .map(|&(s, e)| TextEdit::new(index.range(s, e), new_name.to_owned())),
+            );
+        }
+        Ok(Some(WorkspaceEdit::new(changes)))
     }
 }

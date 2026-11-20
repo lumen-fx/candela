@@ -61,7 +61,9 @@ Every feature re-analyses the buffer by calling candela's compiler (parse,
 type-check, and codegen, without running `main`, so editing has no script side
 effects) and reads the symbol tables it returns; a request on a buffer that
 has not changed, nor any file it imports, since its last check reuses that
-check's tables. A per-document cache keeps the
+check's tables. Completion and signature help always answer from the last
+check, so a keystroke never waits for a compile; the check that follows the
+change brings in what was just declared. A per-document cache keeps the
 last successful compile's tables, so the features below keep working while a
 buffer is mid-edit and not yet compiling. What the cursor is on is read from
 the current text, so `bird.` completes while the line around it is unfinished.
@@ -103,6 +105,15 @@ the current text, so `bird.` completes while the line around it is unfinished.
 
 - **Document sync.** Full-document sync (`didOpen`/`didChange`/`didClose`); each
   change replaces the whole buffer.
+
+- **Quick fixes.** A code action for the diagnostics whose help names one
+  fix: a standard library function or module used without its import gets
+  the `import` added after the file's other imports, and the call spelled
+  through the module when the help says so (`sqrt(x)` becomes
+  `math::sqrt(x)`, `assert_eq` becomes `assert::eq`); an item of an imported
+  module called by its bare name is called through the module
+  (`json::parse`); and an `implicit_float_to_int` warning wraps the value in
+  `int(...)`. The fix is read from the diagnostic's code and help text.
 
 - **Completion.** What is offered depends on where the cursor is:
   - after `value.`, the fields and methods of the value's type. The type is
@@ -146,13 +157,63 @@ the current text, so `bird.` completes while the line around it is unfinished.
   parameters, with the one being written highlighted; inside `@name(...)`, the
   attribute's parameters.
 
+- **Semantic tokens.** What each name in the buffer is, so a type, a
+  function, a method, a field, a variant, a parameter, a local, a type
+  parameter, a module, an attribute and a macro color by what they are rather
+  than by what the grammar guessed: `namespace`, `type`, `struct`, `enum`,
+  `enumMember`, `function`, `method`, `property`, `parameter`, `variable`,
+  `decorator`, `macro` and `typeParameter`, with `declaration` on the name a
+  declaration introduces and `defaultLibrary` on a builtin type or function.
+  Keywords, literals and comments are left to the grammar. The tokens are
+  worked out from the current text and the last check, like completion; a
+  client that supports it is asked to fetch them again after each check.
+
+- **Inlay hints.** After a `let` that writes no type, the type its value
+  has, when the server can follow it and the value does not spell it already
+  (a lone literal, `Point { .. }`, `Mode::On`, `Point::origin()`); a type
+  holding `any` or a generic parameter is left out. Before each argument of a
+  call to a function the program declares, the name of the parameter it
+  lands on, unless the argument already reads as that name (`area(width)`,
+  `area(box.width)`) or the function is named for it (`set_width(w)`). A
+  client that supports it is asked for them again after each check.
+
 - **Document symbols / outline.** The functions, structs and enums the buffer
   declares.
+
+- **Workspace symbols.** The functions, methods, constants, structs and enums
+  declared in every `.cdl` file of the workspace folders and the open
+  buffers, whose names hold the query's characters in order, ignoring case
+  (`mkth` finds `make_thing`). Files are read from their text, without a
+  compile, so a file that does not compile is listed too; what a file declares
+  is kept until it changes on disk. At most 500 answer one query.
 
 - **Go-to-definition.** From a use of a function, method, struct, enum,
   variant, field, attribute or local to where it is declared, including into an
   imported module and a package from `importRoots`. A call written
   `geo::area(...)` goes to the `area` of the module bound as `geo`.
+
+- **Find references.** Every name that go-to-definition takes to the same
+  declaration: in the declaring file, the files of the program, the open
+  buffers, and every `.cdl` file of the package that declares it (the
+  directory of the nearest `candela.toml`, or else the workspace folder). A
+  file nobody opened is read from disk and checked as the root of a program;
+  one that does not compile is skipped, and the editor's log names it. A
+  local's references stay in its own file. A local spelled like a function
+  is told apart from it, as go-to-definition tells them apart.
+
+- **Document highlight.** The references in the current buffer to what the
+  cursor is on; the declaration and an assignment (`x = 1`, `x += 1`) are
+  marked as writes, the rest as reads.
+
+- **Rename.** Renames a declaration and every reference to it, in each file
+  of the package, open or not. It is turned down, with the reason, for a
+  builtin, an item of the standard library or one declared outside the
+  workspace, a new name that is not an identifier or is a keyword, a buffer
+  that does not parse, and a file holding a reference that does not compile.
+  A local is not renamed while a `match` arm or a `catch` clause in its file
+  binds the same name, since the server does not follow those bindings. A
+  name the new one would collide with is not checked; the next check reports
+  the collision.
 
 ## Known simplifications
 
@@ -165,6 +226,9 @@ These are deliberate, and the source refers here for them.
   found by matching its name at its recorded position in each file.
 - A method of a generic struct is known once the program uses an
   instantiation of the struct (`State<Phase>`).
+- References are searched in the package that declares the item, the open
+  files and the programs they import. Another package that depends on it is
+  searched only while one of its files is open.
 - Inside one function body, an error in a statement drops that statement, and a
   `let` it declared takes the type its value would have had, or `any` when that
   cannot be worked out either. A later error that follows only from the dropped
@@ -182,6 +246,20 @@ These are deliberate, and the source refers here for them.
   and the attribute warnings against a small game written for a host that
   declares its attributes in a `host` block, the way an engine module does,
   and the type of each expression form a local can be declared with.
+- `src/refs.rs` unit-tests finding a declaration from a use and from itself,
+  fields, methods and variants, two locals of one name in different
+  functions, and a builtin, which has no declaration. It also covers which
+  names a rename accepts and which bindings make it refuse.
+- `src/actions.rs` compiles a program with each fixable diagnostic, applies
+  the fix, and checks the diagnostic is gone, so a change to the help text a
+  fix reads fails here.
+- `src/hints.rs` unit-tests which `let`s get a type and which arguments a
+  parameter name, including a generic call and a function named for its
+  parameter.
+- `src/semantic.rs` unit-tests the class of each kind of declaration and of
+  a use of each.
+- `src/symbols.rs` unit-tests the declarations read from a file's tokens
+  and the query match.
 - `src/line_index.rs` unit-tests the byte-offset to LSP `Position` conversion,
   including a multi-byte character and an out-of-range clamp. LSP columns are
   UTF-16 code units.
@@ -200,6 +278,13 @@ These are deliberate, and the source refers here for them.
   imported file, and closes the buffer. Two more check that the server
   reports the extension's version, and that a save runs a package's check
   once for the program holding the saved file, not again for the watcher's
-  report of it.
+  report of it. On a package of three files, one of them never opened, find
+  references reaches all three and rename edits each, past a local of the
+  same name, and turns down a builtin and a name that is not one. Document
+  highlight marks a local's declaration, assignment and read, and not a local
+  of the same name in another function. Workspace symbols list a file of
+  the workspace folder nobody opened, and semantic tokens decode against the
+  legend the server announces. Inlay hints answer for the range asked, and
+  a diagnostic sent back with a code action request gets its quick fix.
 
 Run both with `cargo test -p candela-lsp`.

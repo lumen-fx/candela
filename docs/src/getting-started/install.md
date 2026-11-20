@@ -1,9 +1,10 @@
 # Install
 
-candela installs as two programs: `candela`, the compiler that also runs source
-files and hosts the REPL, and `candela-vm`, the runtime that runs compiled
-artifacts. Both land together, along with the standard library and `lpm`, the
-client that fetches the packages a project depends on.
+candela installs as three programs: `candela`, the compiler that also runs
+source files and hosts the REPL, `candela-vm`, the runtime that runs compiled
+artifacts, and `candela-lsp`, the language server editors start. They land
+together, along with the standard library and `lpm`, the client that fetches
+the packages a project depends on.
 
 ## Linux and macOS
 
@@ -107,7 +108,8 @@ Windows installs from a package rather than the script. Download and run
 
 The package installs per user, under `%LOCALAPPDATA%\Programs\Candela`, so it
 never asks for administrator rights. It adds that directory to your `PATH` and
-ships `candela.exe`, `candela-vm.exe` and the standard library. Open a new
+ships `candela.exe`, `candela-vm.exe`, `candela-lsp.exe` and the standard
+library. Open a new
 terminal afterwards so the updated `PATH` takes effect.
 
 A portable `candela-windows-x86_64.zip` is published alongside the package for
@@ -174,8 +176,11 @@ On top of diagnostics it gives completion that knows what the cursor is
 on (a value's fields and methods, an enum's variants, a struct literal's
 missing fields, an attribute's parameters and values), hover with a
 declaration's [doc comment](../language/modules.md#documenting-a-module) and a
-link to its documentation, signature help, go-to-definition, and a document
-outline.
+link to its documentation, signature help, go-to-definition, find references
+and rename across the files of a package, a document outline, a symbol
+search over the workspace, semantic highlighting that colors each name by
+what it declares, inlay hints for a `let`'s type and a call's parameter
+names, and quick fixes that add a missing standard library import.
 Every editor below finds it as `candela-lsp` on your path.
 
 Highlighting comes from one of two grammars. VS Code and the IntelliJ-based
@@ -184,7 +189,8 @@ grammar, which also drives structural selection and bracket matching. Both live
 in the repository, under `editors/`.
 
 - **VS Code.** Install the Candela extension from the Marketplace or Open VSX.
-  Set `candela.languageServerPath` to use a server that is not on your path,
+  It finds `candela-lsp` on your path or in the directory the installer used.
+  Set `candela.languageServerPath` to use another server,
   and `candela.importRoots` to name a package a script imports without a
   manifest, such as a host program's module:
   `{ "engine": "~/engine/module" }`. `candela.diagnosticsDelay` sets how long

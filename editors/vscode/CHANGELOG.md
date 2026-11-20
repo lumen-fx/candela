@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.0
+
+- The extension finds the `candela-lsp` the toolchain installer put beside
+  `candela` when it is not on `PATH`, as happens in an editor started from a
+  desktop launcher. Changing `candela.languageServerPath` restarts the server.
+- New commands: "Candela: Restart Language Server" and "Candela: Show
+  Language Server Output". The error shown when the server cannot start
+  offers to open the setting or the output.
+
+With a `candela-lsp` from the same release:
+
+- Find All References (Shift+F12) lists every use of a function, type, field,
+  method, variant or local, across the files of its package, including files
+  that are not open.
+- Rename Symbol (F2) renames it everywhere those references are, and says why
+  when it cannot.
+- Placing the cursor on a name highlights its other uses in the file.
+- Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, types and
+  constants of every `.cdl` file in the workspace.
+- Semantic highlighting: types, functions, methods, fields, enum variants,
+  parameters, locals, modules and attributes color by what they are, as the
+  compiler reads them, wherever the grammar could not tell from the spelling.
+- Inlay hints show the type a `let` takes from its value and the parameter
+  each argument of a call lands on. VS Code's `editor.inlayHints.enabled`
+  turns them off.
+- Quick fixes (Ctrl+.): add the import a standard library function or module
+  needs and call it through its module, and make a float-to-int truncation
+  explicit with `int(...)`.
+- Completion and signature help no longer wait for a check of the whole
+  program on each keystroke.
+
 ## 0.6.0
 
 - The extension warns when the `candela-lsp` it starts is older than itself,

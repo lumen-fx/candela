@@ -79,7 +79,9 @@ type the file reaches only through an imported module's name names both ways
 to write it: `parse(s)` after `import "std/json";` points at `json::parse(s)`
 and at `import "std/json" { parse };`. A std function that lost its module's
 name from its own is reported with the new spelling: `assert_eq` points at
-`assert::eq`, `random_int` at `random::int`.
+`assert::eq`, `random_int` at `random::int`. In an editor, the language
+server offers each of these as a quick fix that writes the import and the
+spelling.
 A method a map no longer has is `no_such_method` with the spelling that
 replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
 for `get_or`. A renamed string or list method is reported the same way:
@@ -298,7 +300,7 @@ server shows them in the editor. Each carries a code like an error does.
 | --- | --- |
 | `unannotated_host_parameter` | A function in the file being built that nothing in the program calls leaves a parameter bare, and the file declares `main`. A file with no `main` is a library, whose importers call its functions, so it gets no such warning. A host calling it by name passes that parameter as `any`, so its body is checked that way. The warning points at the function's name; annotate the parameter with the type the host passes |
 | `no_host_entry_point` | The body of such a function does not compile with its bare parameters typed `any`. The message carries the error the body raised and the span points at it. A packaged `.cdlb` has no entry point for the function, so a host call to it fails as an unknown function |
-| `implicit_float_to_int` | A `float` goes where an `int` is expected (an argument, a declared variable, a field, a return value, an element) and is truncated toward zero there, dropping its fraction. The warning points at the value; write `int(x)` to make the truncation explicit. Standard library code is not warned about. See [types](../language/types.md#numbers-convert-between-int-and-float) |
+| `implicit_float_to_int` | A `float` goes where an `int` is expected (an argument, a declared variable, a field, a return value, an element) and is truncated toward zero there, dropping its fraction. The warning points at the value; write `int(x)` to make the truncation explicit, which the language server offers as a quick fix. Standard library code is not warned about. See [types](../language/types.md#numbers-convert-between-int-and-float) |
 | `unraisable_catch_kind` | A `catch "kind"` in the program's own files names a kind that no built-in error carries and no string literal anywhere in the program, a `throw` or otherwise, spells. Such a clause never runs, which is what a misspelt kind looks like. The check reads literals only: a kind built at run time and caught by a name the program never writes as a literal is warned about |
 
 ## Runtime errors

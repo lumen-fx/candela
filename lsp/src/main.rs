@@ -5,12 +5,17 @@
 //! client (including `vscode-languageclient`, wired up in
 //! `editors/vscode`) expects by default.
 
+mod actions;
 mod analysis;
 mod backend;
 mod builtins;
 mod checks;
+mod hints;
 mod ide;
 mod line_index;
+mod refs;
+mod semantic;
+mod symbols;
 mod syntax;
 
 use backend::Backend;

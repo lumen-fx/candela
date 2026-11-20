@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 };
 
 /// The builtin types a type annotation can name.
-const BUILTIN_TYPES: &[&str] = &["int", "float", "bool", "string", "any"];
+pub const BUILTIN_TYPES: &[&str] = &["int", "float", "bool", "string", "any"];
 
 /// A declaration the cursor can be on.
 #[derive(Debug, Clone)]
@@ -81,6 +81,18 @@ impl<'a> Ide<'a> {
 
     fn text(&self) -> &'a str {
         self.toks.text
+    }
+
+    /// The buffer's tokens.
+    #[must_use]
+    pub const fn tokens(&self) -> &Tokens<'a> {
+        &self.toks
+    }
+
+    /// Moves the cursor, keeping the tokens: a feature that resolves every
+    /// name of a file cuts it into tokens once.
+    pub fn set_offset(&mut self, offset: usize) {
+        self.offset = offset.min(self.text().len());
     }
 
     /// Where the identifier the cursor is typing starts.
@@ -927,6 +939,19 @@ impl<'a> Ide<'a> {
                 return Some(Symbol::Field(st, f));
             }
         }
+        // A variant's name in its enum's declaration.
+        if matches!(prev, "{" | ",") {
+            let open = t.open_brackets(i);
+            if let Some(&brace) = open.last()
+                && t.s(brace) == "{"
+                && brace >= 2
+                && t.s(brace - 2) == "enum"
+                && let Some(e) = self.enum_for(t.s(brace - 1))
+                && let Some(v) = e.variants.iter().find(|v| v.name == name)
+            {
+                return Some(Symbol::Variant(e, v));
+            }
+        }
         // A method's name in its `impl` block.
         if prev == "fn" {
             let scope = self.scope(i);
@@ -1115,27 +1140,8 @@ impl<'a> Ide<'a> {
         }
         let active = t.split_commas(paren + 1, n).len() - 1;
         let name = t.s(paren - 1);
-        let callee = paren - 1;
-        let f = if callee > 0 && t.s(callee - 1) == "." {
-            let chain = t.chain_start(callee - 1);
-            let scope = self.scope(chain);
-            let infer = Infer::new(t, self.summary, &scope);
-            match infer.expr(chain, callee - 1) {
-                Ty::Named(ty) => self.summary.method(&ty, name),
-                _ => None,
-            }
-        } else if callee > 0 && t.s(callee - 1) == "fn" {
-            return None;
-        } else {
-            let (path, _) = self.path_before(callee);
-            let label = if path.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{path}::{name}")
-            };
-            if let Some(e) = self.enum_for(&path)
-                && let Some(v) = e.variants.iter().find(|v| v.name == name)
-            {
+        let f = match self.called(paren)? {
+            Called::Variant(e, v) => {
                 return Some(signature(
                     &format!("{}::{}", e.name, v.name),
                     &v.payload,
@@ -1144,13 +1150,8 @@ impl<'a> Ide<'a> {
                     active,
                 ));
             }
-            self.summary.function(&label).or_else(|| {
-                let ty = self
-                    .enum_for(&path)
-                    .map(|e| e.name.clone())
-                    .or_else(|| self.struct_for(&path).map(|s| s.name.clone()))?;
-                self.summary.method(&ty, name)
-            })
+            Called::Function(f) => Some(f),
+            Called::Unknown => None,
         };
         if let Some(f) = f {
             let params: Vec<String> = f
@@ -1185,6 +1186,59 @@ impl<'a> Ide<'a> {
             active_signature: Some(0),
             active_parameter: u32::try_from(active).ok(),
         })
+    }
+}
+
+/// What the parentheses of a call call.
+pub enum Called<'a> {
+    Function(&'a FunctionSymbol),
+    Variant(&'a EnumSymbol, &'a VariantSymbol),
+    /// A builtin, or a name the summary does not know.
+    Unknown,
+}
+
+impl<'a> Ide<'a> {
+    /// What the call whose `(` is the token at `paren` calls, or `None` when
+    /// the parentheses are not a call's: a declaration's parameter list.
+    #[must_use]
+    pub fn called(&self, paren: usize) -> Option<Called<'a>> {
+        let t = &self.toks;
+        if paren == 0 || !t.is_ident(paren - 1) {
+            return None;
+        }
+        let name = t.s(paren - 1);
+        let callee = paren - 1;
+        let f = if callee > 0 && t.s(callee - 1) == "." {
+            let chain = t.chain_start(callee - 1);
+            let scope = self.scope(chain);
+            let infer = Infer::new(t, self.summary, &scope);
+            match infer.expr(chain, callee - 1) {
+                Ty::Named(ty) => self.summary.method(&ty, name),
+                _ => None,
+            }
+        } else if callee > 0 && t.s(callee - 1) == "fn" {
+            return None;
+        } else {
+            let (path, _) = self.path_before(callee);
+            let label = if path.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{path}::{name}")
+            };
+            if let Some(e) = self.enum_for(&path)
+                && let Some(v) = e.variants.iter().find(|v| v.name == name)
+            {
+                return Some(Called::Variant(e, v));
+            }
+            self.summary.function(&label).or_else(|| {
+                let ty = self
+                    .enum_for(&path)
+                    .map(|e| e.name.clone())
+                    .or_else(|| self.struct_for(&path).map(|s| s.name.clone()))?;
+                self.summary.method(&ty, name)
+            })
+        };
+        Some(f.map_or(Called::Unknown, Called::Function))
     }
 }
 

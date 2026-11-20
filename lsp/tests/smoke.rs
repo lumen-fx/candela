@@ -1061,3 +1061,404 @@ fn canonical_dir(name: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).expect("create dir");
     dir.canonicalize().expect("canonical dir")
 }
+
+/// A package of three files: `geo.cdl` declares, `main.cdl` (open) and
+/// `report.cdl` (never opened) import it. Returns the folder and each file's
+/// URI and text.
+fn geo_package(tag: &str) -> (std::path::PathBuf, [(String, String); 3]) {
+    let dir = std::env::temp_dir().join(format!("candela_lsp_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create package dir");
+    std::fs::write(
+        dir.join("candela.toml"),
+        "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write manifest");
+    let files = [
+        (
+            "geo.cdl",
+            "struct Box { w: int = 1, h: int = 1 }\n\nfn area(b: Box) -> int { return b.w * b.h; }\n",
+        ),
+        (
+            "main.cdl",
+            "import \"./geo.cdl\";\n\nfn main() {\n    let b = geo::Box { w: 2, .. };\n    print(geo::area(b));\n    print(geo::area(b) + b.w);\n}\n",
+        ),
+        (
+            "report.cdl",
+            "import \"./geo.cdl\";\n\nfn report() -> int {\n    let area = 3;\n    return geo::area(geo::Box { .. }) + area;\n}\n",
+        ),
+    ];
+    let out = files.map(|(name, text)| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("write file");
+        (file_uri(&path), text.to_owned())
+    });
+    (dir, out)
+}
+
+/// The `(uri file name, line)` of each location in a response, sorted.
+fn places(result: &Value) -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = result
+        .as_array()
+        .expect("a list of locations")
+        .iter()
+        .map(|l| {
+            let uri = l["uri"].as_str().unwrap_or_default();
+            let name = uri.rsplit('/').next().unwrap_or_default().to_owned();
+            (name, l["range"]["start"]["line"].as_u64().unwrap_or(99))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Find references reaches the declaring file, the open file, and a file of
+/// the package nobody opened, and leaves out a local spelled the same.
+#[tokio::test]
+async fn references_reach_every_file_of_the_package() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("refs");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({}), &[(main_uri.as_str(), main_text.as_str())]).await;
+    // `area` in `print(geo::area(b));`, line 4.
+    let refs = |id: i64, include: bool| {
+        json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/references",
+            "params": {
+                "textDocument": { "uri": main_uri },
+                "position": { "line": 4, "character": 16 },
+                "context": { "includeDeclaration": include }
+            }
+        })
+    };
+    write_message(&mut stdin, &refs(7, true)).await;
+    let found = response(&mut stdout, 7).await;
+    assert_eq!(
+        places(&found["result"]),
+        vec![
+            ("geo.cdl".to_owned(), 2),
+            ("main.cdl".to_owned(), 4),
+            ("main.cdl".to_owned(), 5),
+            ("report.cdl".to_owned(), 4),
+        ],
+        "{found}"
+    );
+    write_message(&mut stdin, &refs(8, false)).await;
+    let found = response(&mut stdout, 8).await;
+    assert_eq!(places(&found["result"]).len(), 3, "{found}");
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Rename edits every file of the package that names the function, leaves a
+/// local of the same name alone, and turns down a builtin and a bad name.
+#[tokio::test]
+async fn rename_edits_the_whole_package() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("rename");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({}), &[(main_uri.as_str(), main_text.as_str())]).await;
+    let at = |line: u32, character: u32| json!({ "textDocument": { "uri": main_uri }, "position": { "line": line, "character": character } });
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 7, "method": "textDocument/prepareRename", "params": at(4, 16) }),
+    )
+    .await;
+    let prepared = response(&mut stdout, 7).await;
+    assert_eq!(prepared["result"]["start"]["character"], 15, "{prepared}");
+    assert_eq!(prepared["result"]["end"]["character"], 19, "{prepared}");
+
+    let mut params = at(4, 16);
+    params["newName"] = json!("surface");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 8, "method": "textDocument/rename", "params": params }),
+    )
+    .await;
+    let edit = response(&mut stdout, 8).await;
+    let changes = edit["result"]["changes"]
+        .as_object()
+        .expect("changes by file");
+    let mut counts: Vec<(String, usize)> = changes
+        .iter()
+        .map(|(uri, edits)| {
+            let edits = edits.as_array().expect("edits");
+            assert!(edits.iter().all(|e| e["newText"] == "surface"), "{edit}");
+            (
+                uri.rsplit('/').next().unwrap_or_default().to_owned(),
+                edits.len(),
+            )
+        })
+        .collect();
+    counts.sort();
+    assert_eq!(
+        counts,
+        vec![
+            ("geo.cdl".to_owned(), 1),
+            ("main.cdl".to_owned(), 2),
+            ("report.cdl".to_owned(), 1),
+        ],
+        "{edit}"
+    );
+
+    // `print` is a builtin; `2x` is not a name.
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 9, "method": "textDocument/prepareRename", "params": at(4, 6) }),
+    )
+    .await;
+    let builtin = response(&mut stdout, 9).await;
+    assert!(builtin["error"]["message"].is_string(), "{builtin}");
+    let mut bad = at(4, 16);
+    bad["newName"] = json!("2x");
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 10, "method": "textDocument/rename", "params": bad }),
+    )
+    .await;
+    let bad = response(&mut stdout, 10).await;
+    assert!(
+        bad["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("not a name")),
+        "{bad}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Document highlight marks a local's uses in its own function, the
+/// declaration and an assignment as writes, and leaves the other function's
+/// local of the same name alone.
+#[tokio::test]
+async fn document_highlight_marks_reads_and_writes() {
+    let text = "fn a() -> int {\n    let n = 1;\n    n += 1;\n    return n;\n}\n\nfn b() -> int {\n    let n = 2;\n    return n;\n}\n";
+    let uri = "file:///tmp/candela-lsp-highlight.cdl";
+    let (mut child, mut stdin, mut stdout) = open_files(json!({}), &[(uri, text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/documentHighlight",
+            "params": { "textDocument": { "uri": uri }, "position": { "line": 3, "character": 11 } }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let marks: Vec<(u64, u64)> = found["result"]
+        .as_array()
+        .expect("highlights")
+        .iter()
+        .map(|h| {
+            (
+                h["range"]["start"]["line"].as_u64().unwrap_or(99),
+                h["kind"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    // Read is 2, write is 3.
+    assert_eq!(marks, vec![(1, 3), (2, 3), (3, 2)], "{found}");
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Workspace symbols list the declarations of every file in the workspace
+/// folder, open or not, filtered by the query.
+#[tokio::test]
+async fn workspace_symbols_cover_files_nobody_opened() {
+    let (dir, [_, (main_uri, main_text), _]) = geo_package("symbols");
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": file_uri(&dir), "capabilities": {} }
+        }),
+    )
+    .await;
+    let _ = response(&mut stdout, 1).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": main_uri, "languageId": "candela", "version": 1, "text": main_text } }
+        }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 7, "method": "workspace/symbol", "params": { "query": "r" } }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let mut names: Vec<(String, String)> = found["result"]
+        .as_array()
+        .expect("symbols")
+        .iter()
+        .map(|s| {
+            let uri = s["location"]["uri"].as_str().unwrap_or_default();
+            (
+                s["name"].as_str().unwrap_or_default().to_owned(),
+                uri.rsplit('/').next().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    names.sort();
+    // `area` and `report` hold an `r`; `Box` and `main` do not.
+    assert_eq!(
+        names,
+        vec![
+            ("area".to_owned(), "geo.cdl".to_owned()),
+            ("report".to_owned(), "report.cdl".to_owned()),
+        ],
+        "{found}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Semantic tokens come back over the protocol in the legend's terms: a
+/// struct's name, a variant and a builtin type each carry their own type.
+#[tokio::test]
+async fn semantic_tokens_name_what_each_name_is() {
+    let text = "struct Point { x: int = 0 }\nenum Mode { On, Off }\nfn main() {\n    let m = Mode::On;\n    let p = Point { x: 1 };\n    print(p.x);\n}\n";
+    let uri = "file:///tmp/candela-lsp-semantic.cdl";
+    let (mut child, mut stdin, mut stdout) = spawn_server().await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} }
+        }),
+    )
+    .await;
+    let init = response(&mut stdout, 1).await;
+    let legend: Vec<String> =
+        init["result"]["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"]
+            .as_array()
+            .expect("a legend")
+            .iter()
+            .map(|t| t.as_str().unwrap_or_default().to_owned())
+            .collect();
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": uri, "languageId": "candela", "version": 1, "text": text } }
+        }),
+    )
+    .await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/semanticTokens/full",
+            "params": { "textDocument": { "uri": uri } }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let data: Vec<u64> = found["result"]["data"]
+        .as_array()
+        .expect("token data")
+        .iter()
+        .map(|v| v.as_u64().unwrap_or(0))
+        .collect();
+    // Decode to (line, column, type name).
+    let (mut line, mut col) = (0u64, 0u64);
+    let mut named = Vec::new();
+    for t in data.chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        named.push((line, col, legend[t[3] as usize].clone()));
+    }
+    for want in [
+        (0, 7, "struct"),
+        (0, 18, "type"),
+        (1, 12, "enumMember"),
+        (3, 18, "enumMember"),
+        (5, 12, "property"),
+    ] {
+        assert!(
+            named.contains(&(want.0, want.1, want.2.to_owned())),
+            "{want:?} in {named:?}"
+        );
+    }
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// Inlay hints over the protocol: a `let`'s type after its name and a
+/// parameter's name before its argument, only inside the asked range.
+#[tokio::test]
+async fn inlay_hints_name_types_and_parameters() {
+    let text = "fn area(width: int, height: int) -> int { return width * height; }\n\nfn main() {\n    let a = area(2, 3);\n    let b = area(4, 5);\n}\n";
+    let uri = "file:///tmp/candela-lsp-hints.cdl";
+    let (mut child, mut stdin, mut stdout) = open_files(json!({}), &[(uri, text)]).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/inlayHint",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": { "start": { "line": 3, "character": 0 }, "end": { "line": 4, "character": 0 } }
+            }
+        }),
+    )
+    .await;
+    let found = response(&mut stdout, 7).await;
+    let hints: Vec<(u64, u64, String)> = found["result"]
+        .as_array()
+        .expect("hints")
+        .iter()
+        .map(|h| {
+            (
+                h["position"]["line"].as_u64().unwrap_or(99),
+                h["position"]["character"].as_u64().unwrap_or(99),
+                h["label"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        hints,
+        vec![
+            (3, 9, ": int".to_owned()),
+            (3, 17, "width:".to_owned()),
+            (3, 20, "height:".to_owned()),
+        ],
+        "{found}"
+    );
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}
+
+/// A diagnostic the editor sends back with a code action request gets the
+/// fix its help text names: here the import a std function needs.
+#[tokio::test]
+async fn a_missing_import_is_a_quick_fix() {
+    let text = "fn main() {\n    print(sqrt(2.0));\n}\n";
+    let uri = "file:///tmp/candela-lsp-actions.cdl";
+    let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../libs");
+    let (mut child, mut stdin, mut stdout) =
+        open_files(json!({ "libPath": lib }), &[(uri, text)]).await;
+    let found = diagnostics_for(&mut stdout, uri, |d| !d.is_empty()).await;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "textDocument/codeAction",
+            "params": {
+                "textDocument": { "uri": uri },
+                "range": found[0]["range"],
+                "context": { "diagnostics": found }
+            }
+        }),
+    )
+    .await;
+    let actions = response(&mut stdout, 7).await;
+    let action = &actions["result"][0];
+    assert_eq!(action["kind"], "quickfix", "{actions}");
+    assert_eq!(action["isPreferred"], true, "{actions}");
+    let edits = action["edit"]["changes"][uri]
+        .as_array()
+        .expect("edits on the buffer");
+    let texts: Vec<&str> = edits.iter().filter_map(|e| e["newText"].as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["import \"std/math\";\n", "math::sqrt"],
+        "{actions}"
+    );
+    shutdown_and_exit(&mut child, stdin, &mut stdout).await;
+}

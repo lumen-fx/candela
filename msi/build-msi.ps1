@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Point -StageDir at a directory whose contents are exactly what should land
-    in the install folder: candela.exe, candela-vm.exe, the receipt, the libs/
-    tree, and the license files. Everything in it is harvested into the package.
+    in the install folder: candela.exe, candela-vm.exe, candela-lsp.exe, the
+    receipt, the libs/ tree, and the license files. Everything in it is harvested into the package.
 
     Requires the WiX command line tool on PATH:
         dotnet tool install --global wix --version 6.0.1
@@ -40,7 +40,7 @@ if (-not (Get-ChildItem -LiteralPath $stage)) {
     throw "StageDir '$stage' is empty."
 }
 
-foreach ($required in @('candela.exe', 'candela-vm.exe', 'receipt', 'libs')) {
+foreach ($required in @('candela.exe', 'candela-vm.exe', 'candela-lsp.exe', 'receipt', 'libs')) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) {
         throw "StageDir '$stage' is missing '$required'."
     }

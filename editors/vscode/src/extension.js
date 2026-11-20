@@ -8,7 +8,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { window, workspace } = require('vscode');
+const { commands, window, workspace } = require('vscode');
 const {
   DidChangeConfigurationNotification,
   LanguageClient,
@@ -18,21 +18,58 @@ const {
 /** @type {import('vscode-languageclient/node').LanguageClient | undefined} */
 let client;
 
+/** The server's file name on this platform. */
+const SERVER = process.platform === 'win32' ? 'candela-lsp.exe' : 'candela-lsp';
+
 /**
- * Resolves the `candela-lsp` binary to launch.
- *
- * Defaults to `candela-lsp` on PATH (installed the same way the `candela`
- * CLI itself is), but honors the `candela.languageServerPath` setting so a
- * locally-built server (e.g. from `lsp/`, built with `cargo build -p
- * candela-lsp`; see that crate's README for why not `--release`) can be
- * pointed at during development.
+ * The directories the candela installers put the toolchain in, which hold
+ * `candela-lsp` beside `candela`: `CANDELA_PREFIX` or `~/.candela` for
+ * install.sh, and the per-user folder the Windows installer uses.
+ */
+function installDirs() {
+  const dirs = [];
+  if (process.env.CANDELA_PREFIX) {
+    dirs.push(process.env.CANDELA_PREFIX);
+  }
+  dirs.push(path.join(os.homedir(), '.candela'));
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    dirs.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'Candela'));
+  }
+  return dirs;
+}
+
+/** Whether `file` exists and can be run. */
+function runnable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Resolves the `candela-lsp` binary to launch: the `candela.languageServerPath`
+ * setting when it is set, else `candela-lsp` on PATH, else the one the
+ * toolchain installer put beside `candela`. An editor started from a desktop
+ * launcher often has a PATH without the installer's directory, which the
+ * last step covers.
  */
 function resolveServerCommand() {
   const configured = workspace.getConfiguration('candela').get('languageServerPath');
   if (typeof configured === 'string' && configured.trim().length > 0) {
     return configured;
   }
-  return process.platform === 'win32' ? 'candela-lsp.exe' : 'candela-lsp';
+  if (whichCommand(SERVER) !== SERVER) {
+    return SERVER;
+  }
+  for (const dir of installDirs()) {
+    const candidate = path.join(dir, SERVER);
+    if (runnable(candidate)) {
+      return candidate;
+    }
+  }
+  return SERVER;
 }
 
 /** This extension's version: the `candela-lsp` it needs reports the same. */
@@ -57,11 +94,8 @@ function whichCommand(command) {
   }
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     const candidate = path.join(dir, command);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
+    if (dir && runnable(candidate)) {
       return candidate;
-    } catch (_) {
-      // not in this directory
     }
   }
   return command;
@@ -76,15 +110,14 @@ function checkServerVersion(command) {
   const info = client && client.initializeResult && client.initializeResult.serverInfo;
   const found = info && info.version ? info.version : '(no version reported)';
   const where = whichCommand(command);
-  client.outputChannel.appendLine(`candela-lsp ${found} at ${where}`);
+  outputChannel.appendLine(`candela-lsp ${found} at ${where}`);
   if (info && info.version && compareVersions(info.version, VERSION) >= 0) {
     return;
   }
   window.showWarningMessage(
     `Candela: ${where} is candela-lsp ${found}, older than this extension (${VERSION}), ` +
-      'so errors and completions may be missing or wrong. Install the matching server: ' +
-      `cargo install --locked --git https://github.com/lumen-fx/candela candela-lsp, ` +
-      'or point "candela.languageServerPath" at one.',
+      'so errors and completions may be missing or wrong. Update the candela toolchain, ' +
+      'which installs the matching server, or point "candela.languageServerPath" at one.',
   );
 }
 
@@ -141,7 +174,8 @@ const SETTINGS = [
   'candela.packageChecks',
 ];
 
-function activate(context) {
+/** Starts the language client, reading the settings afresh. */
+function startClient() {
   const command = resolveServerCommand();
 
   /** @type {import('vscode-languageclient/node').ServerOptions} */
@@ -159,6 +193,9 @@ function activate(context) {
       fileEvents: workspace.createFileSystemWatcher('**/*.{cdl,toml}'),
     },
     initializationOptions: serverSettings(),
+    // One channel for the life of the extension, so a restart keeps what
+    // the previous server wrote.
+    outputChannel,
   };
 
   client = new LanguageClient(
@@ -168,10 +205,54 @@ function activate(context) {
     clientOptions,
   );
 
-  // If `candela-lsp` isn't installed/on PATH, `client.start()` rejects;
-  // surface that instead of leaving the extension silently inert. `client`
-  // itself is stopped in `deactivate()`, not registered as a disposable
-  // here, since `LanguageClient` does not implement `vscode.Disposable`.
+  // If `candela-lsp` is not installed, `client.start()` rejects; say so
+  // instead of leaving the extension silently inert.
+  return client.start().then(
+    () => checkServerVersion(command),
+    (err) => {
+      window
+        .showErrorMessage(
+          `Candela: failed to start candela-lsp ("${command}"). Install the candela ` +
+            'toolchain, which includes it, or set "candela.languageServerPath". ' +
+            `(${err && err.message ? err.message : err})`,
+          'Open Settings',
+          'Show Output',
+        )
+        .then((choice) => {
+          if (choice === 'Open Settings') {
+            commands.executeCommand('workbench.action.openSettings', 'candela.languageServerPath');
+          } else if (choice === 'Show Output') {
+            outputChannel.show(true);
+          }
+        });
+    },
+  );
+}
+
+/** Stops the running client, if any, and starts a new one. */
+async function restartClient() {
+  if (client) {
+    const old = client;
+    client = undefined;
+    try {
+      await old.stop();
+    } catch (_) {
+      // A server that never started has nothing to stop.
+    }
+  }
+  await startClient();
+}
+
+/** @type {import('vscode').LogOutputChannel | undefined} */
+let outputChannel;
+
+function activate(context) {
+  // A log channel: the language client writes leveled messages to it.
+  outputChannel = window.createOutputChannel('Candela Language Server', { log: true });
+
+  // `client` itself is stopped in `deactivate()`, not registered as a
+  // disposable here, since `LanguageClient` does not implement
+  // `vscode.Disposable`.
   const sendSettings = () => {
     if (client) {
       client.sendNotification(DidChangeConfigurationNotification.type, {
@@ -180,20 +261,20 @@ function activate(context) {
     }
   };
   context.subscriptions.push(
+    outputChannel,
+    commands.registerCommand('candela.restartServer', restartClient),
+    commands.registerCommand('candela.showOutput', () => outputChannel.show(true)),
     workspace.onDidChangeConfiguration((event) => {
-      if (SETTINGS.some((name) => event.affectsConfiguration(name))) {
+      if (event.affectsConfiguration('candela.languageServerPath')) {
+        restartClient();
+      } else if (SETTINGS.some((name) => event.affectsConfiguration(name))) {
         sendSettings();
       }
     }),
     workspace.onDidGrantWorkspaceTrust(sendSettings),
   );
 
-  client.start().then(() => checkServerVersion(command), (err) => {
-    window.showErrorMessage(
-      `Candela: failed to start candela-lsp ("${command}"). Install it or set ` +
-        `"candela.languageServerPath" in your settings. (${err && err.message ? err.message : err})`,
-    );
-  });
+  startClient();
 }
 
 function deactivate() {

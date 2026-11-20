@@ -42,7 +42,8 @@
 
     <!--
       The payload is harvested from the staged tree, so candela.exe,
-      candela-vm.exe, the receipt, the libs/ tree and the license files land
+      candela-vm.exe, candela-lsp.exe, the receipt, the libs/ tree and the
+      license files land
       beside one another exactly as they were staged. The compiler resolves the
       standard library from a libs/ directory next to its own executable, which
       is why the tree has to stay intact.
@@ -64,8 +65,8 @@
             Value="[INSTALLFOLDER]"
             KeyPath="yes" />
         <!--
-          Both executables sit at the install root, so one PATH entry covers
-          candela and candela-vm, the same pair the unix installer symlinks.
+          The executables sit at the install root, so one PATH entry covers
+          candela, candela-vm and candela-lsp, as the unix installer's does.
         -->
         <Environment
             Id="PATH"
