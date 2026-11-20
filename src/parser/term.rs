@@ -25,6 +25,7 @@ use crate::parser::blocks::parse_match_arms;
 use crate::parser::blocks::parse_value_block;
 use crate::parser::blocks::parse_value_block_after;
 use crate::parser::expand_macro;
+use crate::parser::expand_macro_path;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
@@ -273,6 +274,16 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                         start,
                         allow_struct,
                     )
+                }
+                // A MACRO BEHIND A MODULE'S NAME: m::name!( ... )
+                Some(Token::DoubleColon)
+                    if matches!(parser.input.clone().nth(1), Some((Ok(Token::Macro(_)), _))) =>
+                {
+                    parser.next_token();
+                    let (Token::Macro(region), m_span) = parser.next_token() else {
+                        unreachable!("the token after '::' was read as a macro");
+                    };
+                    expand_macro_path(parser, s, region, (t_span.start, m_span.end).into())
                 }
                 // NAMESPACE
                 Some(Token::DoubleColon) => {

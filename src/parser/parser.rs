@@ -49,21 +49,27 @@ use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
 use blocks::parse_while_block;
 use candela_vm::errors::build_report;
+use declared_macros::MacroDef;
+use declared_macros::MacroScope;
 use lexer::LexErr;
 use lexer::MacroToken;
 use lexer::parse_string;
 use logos::SpannedIter;
 use parser_expr::add_op;
 use parser_expr::parse_expr;
+use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
+use std::cell::RefCell;
 use std::hint::{cold_path, unreachable_unchecked};
 use std::io::Write;
 use std::iter::Peekable;
+use std::rc::Rc;
 
 use lexer::Token;
 use logos::Logos;
 
 mod blocks;
+pub mod declared_macros;
 mod lexer;
 mod parser_expr;
 mod pattern;
@@ -109,6 +115,15 @@ struct Parser<'a> {
     param_lets: Vec<Expr>,
     /// The indices in the file's items of its `const` declarations.
     consts: Vec<usize>,
+    /// The macros the file has declared or imported so far, which a use
+    /// further down expands through. Shared with the parsers of expansions.
+    macros: Rc<RefCell<MacroScope>>,
+    /// The names of the macros the file declares, in order.
+    declared_macros: Vec<SmolStr>,
+    /// Set when the macro use about to be read is a whole statement,
+    /// `name!(...);`, where an expansion that is a block runs as one and needs
+    /// no value.
+    macro_statement: std::cell::Cell<bool>,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -184,6 +199,19 @@ enum ParserErr<'a> {
     MacroExpansionTrailingTokens(&'a str),
     /// Macros expanded into one another past [`MAX_EXPANSION_DEPTH`].
     MacroRecursionLimit(&'a str),
+    /// A `macro` declaration that does not have the shape one has; carries
+    /// what is wrong.
+    MacroDeclaration(String),
+    /// (the use as the macro writes it, what did not match)
+    MacroNoMatch(String, String),
+    /// A macro name the file already declares or imports.
+    MacroDeclaredTwice(String),
+    /// A use of a macro the file declares further down.
+    MacroDeclaredBelow(&'a str),
+    /// `module::name!(...)` where the module offers no such macro.
+    UnknownMacroPath(String),
+    /// A name of the form `t$1`, which only a macro expansion writes.
+    ExpansionName,
     /// Terms, blocks or types nested past [`MAX_NESTING_DEPTH`].
     NestingTooDeep,
     /// An operator token after `fn` in an `impl` block that a type cannot
@@ -260,10 +288,15 @@ impl ParserErr<'_> {
             ParserErr::ExportImportWithoutItems => "export_import_without_items",
             ParserErr::GlobImport => "glob_import",
             ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
-            ParserErr::UnknownMacro(_) => "unknown_macro",
+            ParserErr::UnknownMacro(_) | ParserErr::UnknownMacroPath(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
             ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
+            ParserErr::MacroDeclaration(_) => "macro_declaration",
+            ParserErr::MacroNoMatch(..) => "macro_no_match",
+            ParserErr::MacroDeclaredTwice(_) => "macro_declared_twice",
+            ParserErr::MacroDeclaredBelow(_) => "macro_declared_below",
+            ParserErr::ExpansionName => "expansion_name",
             ParserErr::NestingTooDeep => "nesting_too_deep",
             ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
             ParserErr::AttributeWrongTarget => "attribute_wrong_target",
@@ -289,6 +322,7 @@ const fn lex_err(e: LexErr) -> ParserErr<'static> {
         LexErr::FloatExponentMissingDigits => ParserErr::FloatExponentMissingDigits,
         LexErr::UnterminatedString => ParserErr::UnterminatedString,
         LexErr::SingleQuote => ParserErr::SingleQuote,
+        LexErr::ExpansionName => ParserErr::ExpansionName,
     }
 }
 
@@ -393,13 +427,29 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
         ),
         ParserErr::UnknownMacro(name) => &format!(
-            "No macro named {RED}{BOLD}{name}!{RESET} is registered. Macros come from the program embedding candela, which decides what each one means"
+            "No macro named {RED}{BOLD}{name}!{RESET} is in scope. A macro is declared with {BLUE}{BOLD}macro {name}(...) => ...;{RESET} above its use, imported from a module, or registered by the program embedding candela"
         ),
         ParserErr::MacroExpansionFailed(name, message) => {
             &format!("The {BLUE}{BOLD}{name}!{RESET} macro rejected this region: {message}")
         }
         ParserErr::MacroExpansionTrailingTokens(name) => &format!(
             "The {BLUE}{BOLD}{name}!{RESET} macro expanded to more than one expression. A macro stands where an expression stands, so it expands to exactly one"
+        ),
+        ParserErr::MacroDeclaration(ref message) => message.as_str(),
+        ParserErr::MacroNoMatch(usage, message) => &format!(
+            "This use does not match {BLUE}{BOLD}{usage}{RESET}: {message}"
+        ),
+        ParserErr::MacroDeclaredTwice(name) => &format!(
+            "This file already has a macro {RED}{BOLD}{name}!{RESET}. Rename one of them"
+        ),
+        ParserErr::MacroDeclaredBelow(name) => &format!(
+            "The macro {RED}{BOLD}{name}!{RESET} is declared further down. A macro is declared above its first use, the way an import is"
+        ),
+        ParserErr::UnknownMacroPath(path) => &format!(
+            "The module offers no macro {RED}{BOLD}{path}!{RESET}. A module offers the macros it declares and the ones its export imports name"
+        ),
+        ParserErr::ExpansionName => &format!(
+            "A name with {RED}{BOLD}${RESET} and digits is how a macro expansion keeps the names its template binds apart, so a program cannot write one"
         ),
         ParserErr::MacroRecursionLimit(name) => &format!(
             "Expanding this macro reached {RED}{BOLD}{name}!{RESET} more than {MAX_EXPANSION_DEPTH} macros deep. An expansion may use another macro, but the chain has to end"
@@ -809,6 +859,7 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
 /// Expands one `name!( ... )` invocation and parses what the expander returned
 /// in its place. `span` covers the whole invocation.
 fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr {
+    let statement = parser.macro_statement.take();
     let Some(body) = region.body else {
         cold_path();
         parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
@@ -818,6 +869,14 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
     if parser.inactive > 0 {
         return Expr::Null;
     }
+    let declared = parser.macros.borrow().get(region.name).cloned();
+    if let Some(def) = declared {
+        return expand_declared(parser, &def, region.name, body, span, statement);
+    }
+    if declared_below(parser, region.name, span) {
+        cold_path();
+        parser.error(span, ParserErr::MacroDeclaredBelow(region.name));
+    }
     // Held until this expansion is parsed, so a macro reached through a chain
     // of other macros counts the whole chain. At the cap `span` is already the
     // outermost invocation, which is the one the reader wrote.
@@ -825,7 +884,9 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
         parser.error(span, ParserErr::MacroRecursionLimit(region.name));
     };
     match macros::expand(region.name, body) {
-        Expansion::Text(expansion) => parse_expansion(parser, region.name, &expansion, span),
+        Expansion::Text(expansion) => {
+            parse_expansion(parser, region.name, &expansion, span, statement)
+        }
         Expansion::Null => Expr::Null,
         Expansion::Unknown => {
             cold_path();
@@ -851,13 +912,92 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
     }
 }
 
+/// Expands `module::name!( ... )`, a macro reached through the name an import
+/// bound its module under.
+fn expand_macro_path(
+    parser: &Parser<'_>,
+    module: &str,
+    region: MacroToken<'_>,
+    span: Span,
+) -> Expr {
+    let statement = parser.macro_statement.take();
+    let Some(body) = region.body else {
+        cold_path();
+        parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
+    };
+    if parser.inactive > 0 {
+        return Expr::Null;
+    }
+    let path = format!("{module}::{}", region.name);
+    let declared = parser.macros.borrow().get(path.as_str()).cloned();
+    let Some(def) = declared else {
+        cold_path();
+        parser.error(span, ParserErr::UnknownMacroPath(path));
+    };
+    expand_declared(parser, &def, region.name, body, span, statement)
+}
+
+/// Expands a use of a macro the program declares and parses the result in
+/// its place.
+fn expand_declared(
+    parser: &Parser<'_>,
+    def: &MacroDef,
+    name: &str,
+    body: &str,
+    span: Span,
+    statement: bool,
+) -> Expr {
+    let Some(_level) = macros::Depth::enter() else {
+        parser.error(span, ParserErr::MacroRecursionLimit(name));
+    };
+    let text = declared_macros::expand(def, body).unwrap_or_else(|message| {
+        cold_path();
+        parser.error(span, ParserErr::MacroNoMatch(def.usage(), message));
+    });
+    // An expansion inside another is part of the outer one's text.
+    if parser.span_override.is_none() {
+        macros::record_expansion(&parser.ctx.src.filename, span, &text);
+    }
+    parse_expansion(parser, name, &text, span, statement)
+}
+
+/// Whether the file declares a macro `name` after `span`, where a use above
+/// it cannot reach it.
+fn declared_below(parser: &Parser<'_>, name: &str, span: Span) -> bool {
+    let rest = parser
+        .ctx
+        .src
+        .contents
+        .get(span.end as usize..)
+        .unwrap_or("");
+    let mut from = 0;
+    while let Some(at) = rest[from..].find("macro") {
+        let after = rest[from + at + 5..].trim_start();
+        if let Some(tail) = after.strip_prefix(name)
+            && tail.trim_start().starts_with('(')
+        {
+            return true;
+        }
+        from += at + 5;
+    }
+    false
+}
+
 /// Parses `expansion` as a single expression, placed at the macro invocation
 /// `span`. The expanded text is not in any file, so every span it produces is
 /// the invocation's own; a program compiled from it reports against the macro
 /// the reader wrote, not against text they cannot see.
-fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span: Span) -> Expr {
+fn parse_expansion(
+    parser: &Parser<'_>,
+    macro_name: &str,
+    expansion: &str,
+    span: Span,
+    statement: bool,
+) -> Expr {
     let mut sub = Parser {
-        input: Token::lexer(expansion).spanned().peekable(),
+        input: Token::lexer_with_extras(expansion, true)
+            .spanned()
+            .peekable(),
         ctx: ParserCtx {
             src: parser.ctx.src,
             cfg: parser.ctx.cfg,
@@ -870,8 +1010,21 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         loops: parser.loops,
         param_lets: Vec::new(),
         consts: Vec::new(),
+        macros: Rc::clone(&parser.macros),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
     };
-    let expr = parse_expr(&mut sub);
+    // A block, an `if`, a `match` or a loop standing as a whole statement
+    // runs as one, and needs no value.
+    let expr = match sub.peek_token_opt() {
+        Some(Token::LBrace) if statement => {
+            Expr::EvalBlock(Box::from(blocks::parse_block_in(&mut sub, Tail::Value).0))
+        }
+        Some(Token::If | Token::Match | Token::While | Token::For | Token::Loop) if statement => {
+            parse_statement(&mut sub, Tail::No).map_or(Expr::Null, |(e, _)| e)
+        }
+        _ => parse_expr(&mut sub),
+    };
     if sub.peek_token_opt().is_some() {
         cold_path();
         sub.error(span, ParserErr::MacroExpansionTrailingTokens(macro_name));
@@ -991,12 +1144,27 @@ fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEn
         Token::Struct => Some(parse_struct_declare(parser)),
         Token::Enum => Some(parse_enum_declare(parser)),
         Token::RBrace => None,
-        t => return Some(parse_line(parser, t, tail)),
+        t => {
+            parser.macro_statement.set(macro_statement_ahead(parser));
+            return Some(parse_line(parser, t, tail));
+        }
     };
     statement.map(|statement| {
         let end = BlockEnd::of(&statement);
         (statement, end)
     })
+}
+
+/// Whether the statement ahead is one macro use and its `;`: `name!(...);`
+/// or `module::name!(...);`.
+fn macro_statement_ahead(parser: &Parser<'_>) -> bool {
+    let at = |n: usize| parser.input.clone().nth(n).and_then(|(t, _)| t.ok());
+    let macro_at = match at(0) {
+        Some(Token::Macro(_)) => 0,
+        Some(Token::Identifier(_)) if at(1) == Some(Token::DoubleColon) => 2,
+        _ => return false,
+    };
+    matches!(at(macro_at), Some(Token::Macro(_))) && at(macro_at + 1) == Some(Token::SemiColon)
 }
 
 fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
@@ -1532,6 +1700,9 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         Token::SemiColon,
         "Import statements must end with a semicolon",
     );
+    if parser.inactive == 0 {
+        bind_imported_macros(parser, &path, is_logical, &binding, (start, end).into());
+    }
     Expr::ImportFile(
         path,
         binding,
@@ -1539,6 +1710,39 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         (start, end).into(),
         exported.is_some(),
     )
+}
+
+/// Puts the macros the imported module offers in the file's scope: behind
+/// the module's name, or by name for the ones an item list names.
+fn bind_imported_macros(
+    parser: &Parser<'_>,
+    path: &str,
+    is_logical: bool,
+    binding: &ImportBinding,
+    span: Span,
+) {
+    let Some(offered) = macros::module_macros(path, is_logical) else {
+        return;
+    };
+    match binding {
+        ImportBinding::Namespace(module) => {
+            for def in offered.iter() {
+                bind_macro(
+                    parser,
+                    SmolStr::new(format!("{module}::{}", def.name)),
+                    Rc::clone(def),
+                    span,
+                );
+            }
+        }
+        ImportBinding::Items(items) => {
+            for (item, item_span) in items {
+                if let Some(def) = offered.iter().find(|def| def.name == *item) {
+                    bind_macro(parser, item.clone(), Rc::clone(def), *item_span);
+                }
+            }
+        }
+    }
 }
 
 /// The name an import binds its module under when it says no other: the last
@@ -2326,6 +2530,16 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
         parse_impl_block(parser, output, impls);
         return;
     }
+    if t == Token::Identifier("macro") && macro_decl_ahead(parser) {
+        let (_, start) = parser.next_token();
+        let def = declared_macros::parse_macro_decl(parser);
+        if parser.inactive == 0 {
+            let span = (start.start, parser.last_token_end as u32).into();
+            parser.declared_macros.push(def.name.clone());
+            bind_macro(parser, def.name.clone(), Rc::new(def), span);
+        }
+        return;
+    }
     if t == Token::Identifier("const") {
         if parser.inactive == 0 {
             parser.consts.push(output.len());
@@ -2365,6 +2579,21 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
             parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'enum' (enum declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
         }
     });
+}
+
+/// Puts `def` in the file's macro scope under `key`, the name a use writes.
+/// A key the scope already holds for another macro is an error at `span`.
+fn bind_macro(parser: &Parser<'_>, key: SmolStr, def: Rc<MacroDef>, span: Span) {
+    let mut scope = parser.macros.borrow_mut();
+    if let Some(existing) = scope.get(&key) {
+        if Rc::ptr_eq(existing, &def) {
+            return;
+        }
+        drop(scope);
+        cold_path();
+        parser.error(span, ParserErr::MacroDeclaredTwice(key.to_string()));
+    }
+    scope.insert(key, def);
 }
 
 /// Reads the run of attributes in front of an item or a statement. Answers
@@ -2775,6 +3004,8 @@ pub struct ParsedFile {
     pub attributes: Vec<(usize, Box<[AttributeUse]>)>,
     /// The indices in `code` of the functions that are `const` declarations.
     pub consts: Vec<usize>,
+    /// The names of the macros the file declares.
+    pub macros: Vec<SmolStr>,
 }
 
 #[must_use]
@@ -2782,27 +3013,94 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
     let mut impls: Vec<ImplTemplate> = Vec::new();
     let mut attributes = Vec::new();
     let cfg = cfg::active();
-    let code = parse_file(
-        &mut Parser {
-            input: Token::lexer(input).spanned().peekable(),
-            ctx: ParserCtx { src, cfg: &cfg },
-            last_token_end: 0,
-            span_override: None,
-            nesting: 0,
-            pending_gt: None,
-            inactive: 0,
-            loops: 0,
-            param_lets: Vec::new(),
-            consts: Vec::new(),
-        },
-        &mut impls,
-        &mut attributes,
-    );
+    let mut parser = Parser {
+        input: Token::lexer(input).spanned().peekable(),
+        ctx: ParserCtx { src, cfg: &cfg },
+        last_token_end: 0,
+        span_override: None,
+        nesting: 0,
+        pending_gt: None,
+        inactive: 0,
+        loops: 0,
+        param_lets: Vec::new(),
+        consts: Vec::new(),
+        macros: Rc::default(),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
+    };
+    let code = parse_file(&mut parser, &mut impls, &mut attributes);
     ParsedFile {
         code: code.0,
         impls,
         attributes,
         consts: code.1,
+        macros: parser.declared_macros,
+    }
+}
+
+/// The macros a module offers the files that import it: the ones it declares
+/// and the ones its `export import`s name.
+///
+/// Only the module's top level is read, and only for those two forms; the
+/// rest of it is parsed when the module itself is.
+#[must_use]
+pub fn module_macros(src: &Source) -> Vec<Rc<MacroDef>> {
+    let cfg = cfg::active();
+    let mut parser = Parser {
+        input: Token::lexer(&src.contents).spanned().peekable(),
+        ctx: ParserCtx { src, cfg: &cfg },
+        last_token_end: 0,
+        span_override: None,
+        nesting: 0,
+        pending_gt: None,
+        inactive: 0,
+        loops: 0,
+        param_lets: Vec::new(),
+        consts: Vec::new(),
+        macros: Rc::default(),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
+    };
+    let mut offered: Vec<Rc<MacroDef>> = Vec::new();
+    let mut depth = 0u32;
+    while let Some(t) = parser.peek_token_opt() {
+        if depth == 0 && t == Token::Identifier("macro") && macro_decl_ahead(&parser) {
+            parser.next_token();
+            offered.push(Rc::new(declared_macros::parse_macro_decl(&mut parser)));
+            continue;
+        }
+        if depth == 0 && t == Token::Identifier("export") && second_token_is(&parser, Token::Import)
+        {
+            let (_, span) = parser.next_token();
+            let before: FxHashSet<SmolStr> = parser.macros.borrow().keys().cloned().collect();
+            parse_file_import(&mut parser, Some(span));
+            let scope = parser.macros.borrow();
+            offered.extend(
+                scope
+                    .iter()
+                    .filter(|(name, _)| !before.contains(*name) && !name.contains("::"))
+                    .map(|(_, def)| Rc::clone(def)),
+            );
+            continue;
+        }
+        let (t, _) = parser.next_token();
+        if matches!(t, Token::LBrace | Token::LParen | Token::LBracket) {
+            depth += 1;
+        } else if matches!(t, Token::RBrace | Token::RParen | Token::RBracket) {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    offered
+}
+
+/// Whether the `macro` the parser stands on opens a declaration,
+/// `macro name(`.
+fn macro_decl_ahead(parser: &Parser<'_>) -> bool {
+    let at = |n: usize| parser.input.clone().nth(n).and_then(|(t, _)| t.ok());
+    match at(1) {
+        Some(Token::Identifier(_)) => at(2) == Some(Token::LParen),
+        Some(Token::Macro(_)) => true,
+        _ => false,
     }
 }
 

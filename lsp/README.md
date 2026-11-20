@@ -148,7 +148,9 @@ the current text, so `bird.` completes while the line around it is unfinished.
   written the way a compiler error writes them. A function with an
   unannotated parameter also lists the signatures its call sites gave it.
   When the package that declares the item names a `docs` URL in its
-  `candela.toml`, the hover ends in an "Open docs" link to the item.
+  `candela.toml`, the hover ends in an "Open docs" link to the item. Over a
+  use of a macro the program declares, the hover shows the candela the use
+  expands to; an error inside that expansion is reported at the use.
 
 - **Completion documentation.** Each item carries the summary line of its doc
   comment: the first paragraph.

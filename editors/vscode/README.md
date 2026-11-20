@@ -67,11 +67,11 @@ attribution details.
   library. An import binds the module under its name (`json::parse`);
   `import "..." as alias;` picks the name, and `import "..." { a, b };` brings
   the named items into the file's scope.
-- Macros: `name!( ... )` hands the raw region between the parentheses to the
-  program embedding candela, which returns candela source to parse in its
-  place. The region ends at the parenthesis that balances the one that opened
-  it, skipping parentheses inside a string or after `//`. candela defines no
-  macros of its own and never reads a region.
+- Macros: `macro name($x: expr) => template;` declarations, with their
+  fragments and `$x` uses colored, and `name!( ... )` and `module::name!( ... )`
+  uses. A host macro's region is raw text, colored as such; it ends at the
+  parenthesis that balances the one that opened it, skipping parentheses inside
+  a string or after `//`.
 
 ## Language server
 

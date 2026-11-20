@@ -175,6 +175,23 @@
 
 ; Macros
 
+"macro" @keyword
+
+(macro_declaration
+  name: (identifier) @function.macro)
+
+(macro_fragment
+  "$" @punctuation.special
+  name: (identifier) @variable.parameter
+  kind: (identifier) @type.builtin)
+
+(macro_variable
+  "$" @punctuation.special
+  name: (identifier) @variable.parameter)
+
+(macro_invocation
+  module: (identifier) @module)
+
 (macro_invocation
   name: (identifier) @function.macro)
 

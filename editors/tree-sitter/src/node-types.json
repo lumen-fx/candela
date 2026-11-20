@@ -4865,6 +4865,68 @@
     }
   },
   {
+    "type": "macro_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "macro_pattern",
+            "named": true
+          }
+        ]
+      },
+      "template": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "macro_template",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "macro_fragment",
+    "named": true,
+    "fields": {
+      "kind": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "macro_invocation",
     "named": true,
     "fields": {
@@ -4878,6 +4940,110 @@
           }
         ]
       },
+      "module": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "macro_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "macro_fragment",
+          "named": true
+        },
+        {
+          "type": "macro_invocation",
+          "named": true
+        },
+        {
+          "type": "macro_punctuation",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "macro_template",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "macro_invocation",
+          "named": true
+        },
+        {
+          "type": "macro_punctuation",
+          "named": true
+        },
+        {
+          "type": "macro_variable",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "macro_variable",
+    "named": true,
+    "fields": {
       "name": {
         "multiple": false,
         "required": true,
@@ -8017,6 +8183,10 @@
           "named": true
         },
         {
+          "type": "macro_declaration",
+          "named": true
+        },
+        {
           "type": "struct_declaration",
           "named": true
         }
@@ -9438,6 +9608,10 @@
     "named": false
   },
   {
+    "type": "$",
+    "named": false
+  },
+  {
     "type": "%",
     "named": false
   },
@@ -9711,7 +9885,15 @@
     "named": false
   },
   {
+    "type": "macro",
+    "named": false
+  },
+  {
     "type": "macro_body",
+    "named": true
+  },
+  {
+    "type": "macro_punctuation",
     "named": true
   },
   {

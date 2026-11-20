@@ -348,6 +348,9 @@ pub struct ProgramSummary {
     pub attribute_uses: Vec<AttributeUseSymbol>,
     /// The names the buffer can write.
     pub scope: Vec<ScopeEntry>,
+    /// Each use in the buffer of a macro the program declares: its byte
+    /// range and the candela it expanded to.
+    pub expansions: Vec<(usize, usize, String)>,
 }
 
 /// The result of analyzing one buffer: the errors the compile found, and a
@@ -394,9 +397,17 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
     // exists only on another target is not.
     // Warnings are collected, never printed: the server talks to the editor
     // over stdio, where a report would corrupt the protocol.
+    let buffer = path.clone();
     let (checked, errors) = macros.scope(move || {
         collect_diagnostics(move || collect_warnings(move || check_only(owned, &path, &resolver)))
     });
+    // The compile recorded what each use of a declared macro expanded to;
+    // hover shows it.
+    let expansions: Vec<(usize, usize, String)> = candela::macros::take_expansions()
+        .into_iter()
+        .filter(|e| e.filename == buffer.as_str())
+        .map(|e| (e.span.start, e.span.end, e.text))
+        .collect();
     match checked {
         None => AnalysisOutcome {
             errors,
@@ -405,7 +416,10 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
         },
         Some((out, warnings)) => AnalysisOutcome {
             errors,
-            summary: Some(build_summary(&out)),
+            summary: Some(ProgramSummary {
+                expansions,
+                ..build_summary(&out)
+            }),
             warnings,
         },
     }
@@ -590,6 +604,7 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
         attributes,
         attribute_uses,
         scope: scope_entries(out.namespaces.root()),
+        expansions: Vec::new(),
     }
 }
 
@@ -1130,6 +1145,33 @@ mod tests {
         );
         let summary = outcome.summary.expect("a summary is produced");
         assert!(summary.functions.iter().any(|f| f.name == "main"));
+    }
+
+    /// A use of a macro the program declares records what it expanded to,
+    /// which hover shows, and an error inside the expansion is reported at
+    /// the use.
+    #[test]
+    fn a_declared_macro_shows_its_expansion_and_reports_at_its_use() {
+        let source = "macro twice($x: expr) => { let t = $x; t + t };\nfn main() {\n    print(twice!(2));\n}\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        let summary = outcome.summary.expect("a summary is produced");
+        let at = source.find("twice!(2)").unwrap();
+        let offset = at + 2;
+        let hover = crate::ide::Ide::new(source, &summary, offset)
+            .hover()
+            .expect("hover over the use");
+        assert!(hover.contains("{ let t = 2 ; t + t }"), "{hover}");
+
+        let source =
+            "macro half($x: expr) => $x / \"two\";\nfn main() {\n    print(half!(2));\n}\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        let error = outcome
+            .errors
+            .first()
+            .expect("the expansion does not type-check");
+        let at = source.find("half!(2)").unwrap();
+        assert_eq!(error.span, at..at + "half!(2)".len(), "{error:?}");
     }
 
     /// Code under a `@cfg` the server does not enable is dropped before names

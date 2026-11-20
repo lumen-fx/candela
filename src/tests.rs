@@ -18063,3 +18063,70 @@ fn main() {
     assert_wellformed(&d, src);
     assert_eq!(d.code, "trailing_closure_extra", "{d:?}");
 }
+
+#[test]
+pub fn declared_macros_expand_where_used() {
+    let src = r#"
+macro square($x: expr) => $x * $x;
+macro unless($c: expr, $body: block) => if !$c $body else {};
+macro swap($a: ident, $b: ident) => { let t = $a; $a = $b; $b = t; };
+macro add_ten($x: expr) => { let n = 10; $x + n };
+macro make($T: type, $v: expr) => { let p: $T = $v; p };
+macro first_some($o: expr) => match $o { Some(v) => v, None => 0 };
+macro apply($f: ident, $x: expr) => [$x].map(fn(v) => $f(v))[0];
+macro cube($x: expr) => $x * square!($x);
+macro pair($a: expr => $b: expr) => ($a, $b);
+fn inc(x: int) -> int => x + 1;
+fn main() {
+    let t = 1;
+    let u = 2;
+    print(square!(t + 1));
+    swap!(t, u);
+    print(t, u);
+    let n = 1;
+    print(add_ten!(n));
+    unless!(t > 5, { print("small"); });
+    print(make!(int, 4));
+    let v = 7;
+    print(first_some!(Some(v + 1)));
+    print(apply!(inc, v));
+    print(cube!(2));
+    print(pair!(1 => "a"));
+}
+"#;
+    assert_eq!(
+        run_output_std(src),
+        "4\n2\n1\n11\nsmall\n4\n8\n8\n8\n(1,\"a\")\n"
+    );
+    for (src, code) in [
+        (
+            "fn main() { print(sq!(2)); }\nmacro sq($x: expr) => $x * $x;\n",
+            "macro_declared_below",
+        ),
+        (
+            "macro sq($x: expr, $y: expr) => $x * $y;\nfn main() { print(sq!(2)); }\n",
+            "macro_no_match",
+        ),
+        (
+            "macro sq($x: expr $y: expr) => $x * $y;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: thing) => $x;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: expr) => $y;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: expr) => $x;\nmacro sq($x: expr) => $x;\nfn main() {}\n",
+            "macro_declared_twice",
+        ),
+        ("fn main() { let t$1 = 2; print(t$1); }\n", "expansion_name"),
+    ] {
+        let d = compile_diag(src, "macros.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}

@@ -53,10 +53,16 @@ pub enum LexErr {
     UnterminatedString,
     /// A `'`, which opens nothing: strings are written in double quotes.
     SingleQuote,
+    /// A name such as `t$1`, which only a macro expansion writes: it is how a
+    /// name a macro's template binds stays apart from the names around it.
+    ExpansionName,
 }
 
 #[derive(Logos, Debug, PartialEq, Clone, Copy)]
 #[logos(error = LexErr)]
+// True while lexing the text a macro expanded to, the one place a name of the
+// form `t$1` may stand.
+#[logos(extras = bool)]
 #[logos(skip r"[ \t\r\n\f]+")] // Ignore whitespace
 #[logos(skip(r"//[^\n\r]*", allow_greedy = true))] // Ignore comments
 pub enum Token<'a> {
@@ -222,6 +228,10 @@ pub enum Token<'a> {
     /// `@`: opens an attribute, as in `@cfg(web)`.
     #[token("@")]
     At,
+    /// `$`: names a fragment in a macro declaration, `$x: expr`, and stands for
+    /// what it matched in the template.
+    #[token("$")]
+    Dollar,
     /// `?`: after an `Option` or a `Result`, hands a `None` or an `Err` back
     /// to the caller and reads the value out of a `Some` or an `Ok`.
     #[token("?")]
@@ -251,6 +261,7 @@ pub enum Token<'a> {
     Macro(MacroToken<'a>),
 
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice())]
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*\$[0-9]+", expansion_name)]
     Identifier(&'a str),
 
     // Three spellings of the same type: a decimal point, an exponent, or both.
@@ -322,6 +333,17 @@ fn read_float<'a>(lex: &Lexer<'a, Token<'a>>) -> Result<f64, LexErr> {
 const fn unterminated_string<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<&'a str, LexErr> {
     cold_path();
     Err(LexErr::UnterminatedString)
+}
+
+/// A name a macro's template binds, renamed apart for one expansion. Only the
+/// text an expansion produced may hold one.
+fn expansion_name<'a>(lex: &Lexer<'a, Token<'a>>) -> Result<&'a str, LexErr> {
+    if lex.extras {
+        Ok(lex.slice())
+    } else {
+        cold_path();
+        Err(LexErr::ExpansionName)
+    }
 }
 
 const fn single_quote<'a>(_: &mut Lexer<'a, Token<'a>>) -> Result<&'a str, LexErr> {

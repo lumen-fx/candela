@@ -103,9 +103,64 @@ module.exports = grammar({
         $.struct_declaration,
         $.enum_declaration,
         $.const_declaration,
+        $.macro_declaration,
         $.impl_block,
         $.dylib_block,
         $.host_block,
+      ),
+
+    // `macro name($x: expr, $y: expr) => template;`: a pattern of fragments
+    // and literal tokens, and the candela the use expands to, with `$x` where
+    // a fragment goes. Both are read as tokens here; the compiler reads the
+    // template once a use fills it in.
+    macro_declaration: ($) =>
+      seq(
+        'macro',
+        field('name', $.identifier),
+        '(',
+        field('pattern', alias(repeat($._macro_pattern_token), $.macro_pattern)),
+        ')',
+        '=>',
+        field('template', alias(repeat1($._macro_token), $.macro_template)),
+        ';',
+      ),
+
+    // `$x: expr`: a fragment the use fills in, and the kind of syntax it takes.
+    macro_fragment: ($) =>
+      seq('$', field('name', $.identifier), ':', field('kind', $.identifier)),
+
+    // `$x` in a template: the text the use gave fragment `x`.
+    macro_variable: ($) => seq('$', field('name', $.identifier)),
+
+    _macro_pattern_token: ($) =>
+      choice(
+        $.macro_fragment,
+        seq('(', repeat($._macro_pattern_token), ')'),
+        seq('[', repeat($._macro_pattern_token), ']'),
+        seq('{', repeat($._macro_pattern_token), '}'),
+        $._macro_leaf,
+      ),
+
+    _macro_token: ($) =>
+      choice(
+        $.macro_variable,
+        seq('(', repeat($._macro_token_inner), ')'),
+        seq('[', repeat($._macro_token_inner), ']'),
+        seq('{', repeat($._macro_token_inner), '}'),
+        $._macro_leaf,
+      ),
+
+    // Inside brackets a `;` belongs to the template.
+    _macro_token_inner: ($) => choice($._macro_token, ';'),
+
+    _macro_leaf: ($) =>
+      choice(
+        $.identifier,
+        $.string_literal,
+        $.integer_literal,
+        $.float_literal,
+        $.macro_invocation,
+        alias(token(prec(-1, /[^\s\w()\[\]{};$"]+/)), $.macro_punctuation),
       ),
 
     // `const NAME: Type = value;`: a bare NAME reads the value.
@@ -1076,6 +1131,7 @@ module.exports = grammar({
     // operator.
     macro_invocation: ($) =>
       seq(
+        optional(seq(field('module', $.identifier), '::')),
         field('name', $.identifier),
         token.immediate('!('),
         optional(field('body', $.macro_body)),

@@ -1256,3 +1256,75 @@ fn first(xs: int[]) -> int? {
         (identifier))
       (return_statement
         (identifier)))))
+
+================================================================================
+Macro declarations and uses (docs/src/language/macros.md)
+================================================================================
+
+import "./util.cdl";
+macro swap($a: ident, $b: ident) => { let t = $a; $a = $b; $b = t; };
+macro cube($x: expr) => $x * square!($x);
+fn main() {
+    swap!(a, b);
+    print(util::twice!(3));
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (string_literal))
+  (macro_declaration
+    (identifier)
+    (macro_pattern
+      (macro_fragment
+        (identifier)
+        (identifier))
+      (macro_punctuation)
+      (macro_fragment
+        (identifier)
+        (identifier)))
+    (macro_template
+      (identifier)
+      (identifier)
+      (macro_punctuation)
+      (macro_variable
+        (identifier))
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (macro_variable
+        (identifier))
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (identifier)))
+  (macro_declaration
+    (identifier)
+    (macro_pattern
+      (macro_fragment
+        (identifier)
+        (identifier)))
+    (macro_template
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (macro_invocation
+        (identifier)
+        (macro_body))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (macro_invocation
+          (identifier)
+          (macro_body)))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (macro_invocation
+              (identifier)
+              (identifier)
+              (macro_body))))))))

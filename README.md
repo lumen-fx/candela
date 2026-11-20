@@ -95,9 +95,10 @@ Run `candela` with no arguments for a REPL.
 - **Embedding.** A Rust host registers functions of its own, calls a script's
   functions by name, and exchanges values with it, either compiling the source
   in-process or loading a `.cdlb` with the compiler left out.
-- **Macros the host defines.** `name!( ... )` hands the raw region between the
-  parentheses to the embedding program, which returns candela source to parse in
-  its place. candela ships no macros of its own and never interprets a region.
+- **Macros, when you want them.** `macro name($x: expr) => template;` declares
+  a macro in candela, and `name!( ... )` uses it; a host can also register
+  macros in its own language behind the same `!`. Nothing in the language or
+  the standard library needs one.
 - **Attributes the host defines.** A `host` block declares attributes such as
   `attribute system(writes: type[] = []) on fn;`, and a script writes them on
   its functions and structs. The compiler checks every use, and the host reads

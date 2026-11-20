@@ -92,8 +92,8 @@ fn main() {
 }
 ```
 
-An item is a function, a struct, an enum, a constant or an attribute the module
-declares; naming a type brings the functions its `impl` blocks declare along
+An item is a function, a struct, an enum, a constant, an attribute or a macro
+the module declares; naming a type brings the functions its `impl` blocks declare along
 with it. This form binds no module name. Naming an item
 the module does not declare is a compile error that lists the ones it does. The
 same module may be imported both ways, one import under its name and one with

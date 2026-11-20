@@ -1555,3 +1555,47 @@ fn export_stays_a_name_elsewhere() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
 }
+
+/// A module's macros import like its functions: behind the module's name, by
+/// name in a list, and passed on by an `export import` that names them.
+#[test]
+fn macros_import_and_export_like_functions() {
+    let output = run_program(
+        "macros",
+        &[
+            (
+                "util.cdl",
+                "macro twice($e: expr) => $e + $e;\nfn helper() -> int { return 7; }\n",
+            ),
+            (
+                "facade.cdl",
+                "export import \"./util.cdl\" { twice, helper };\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"./util.cdl\";\n\
+                 import \"./facade.cdl\" { twice, helper };\n\
+                 fn main() { print(util::twice!(3), twice!(helper())); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n14\n");
+    let missing = check_program(
+        "macros_missing",
+        &[
+            ("util.cdl", "fn helper() -> int { return 7; }\n"),
+            (
+                "prog.cdl",
+                "import \"./util.cdl\";\nfn main() { print(util::twice!(3)); }\n",
+            ),
+        ],
+    );
+    assert!(!missing.status.success());
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(stderr.contains("util::twice!"), "stderr: {stderr}");
+}

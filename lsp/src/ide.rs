@@ -1023,6 +1023,16 @@ impl<'a> Ide<'a> {
     /// to the item's documentation when its package says where that lives.
     #[must_use]
     pub fn hover(&self) -> Option<String> {
+        // On a use of a macro the program declares, what it expands to.
+        if let Some((_, _, text)) = self
+            .summary
+            .expansions
+            .iter()
+            .filter(|(start, end, _)| (*start..*end).contains(&self.offset))
+            .min_by_key(|(start, end, _)| end - start)
+        {
+            return Some(format!("Expands to:\n```candela\n{text}\n```"));
+        }
         let sym = self.symbol()?;
         let mut text = hover_markdown(&sym);
         if let Some(link) = self.docs_link(&sym) {

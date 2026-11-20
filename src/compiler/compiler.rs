@@ -25,7 +25,9 @@ use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
 use crate::instr::LibFunc;
+use crate::macros;
 use crate::parser;
+use crate::parser::declared_macros::MacroDef;
 use crate::rt::FnValue;
 use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
@@ -7300,6 +7302,10 @@ pub struct Namespace {
     /// For a module bound by an import, its path as the import wrote it
     /// (`std/json`, `./geometry.cdl`), for a message to name it by.
     pub import_path: SmolStr,
+    /// The macros the module offers: the ones it declares and the ones its
+    /// `export import`s name. The parser expands them; an import list may
+    /// name one.
+    pub macros: Vec<SmolStr>,
 }
 
 /// The scope of every file in the program, keyed by its index in `sources`.
@@ -7650,6 +7656,100 @@ fn library_module(
     }
 }
 
+thread_local! {
+    /// The file being parsed, which a relative import's macros are looked up
+    /// beside.
+    static PARSING: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
+    /// The macros of each module read so far in this compile, by its path. A
+    /// module being read is in here with none, so an import cycle ends.
+    static MODULE_MACROS: RefCell<FxHashMap<PathBuf, Rc<[Rc<MacroDef>]>>> =
+        RefCell::new(FxHashMap::default());
+}
+
+/// Parses `src`, the file at `path`, with relative imports' macros looked up
+/// beside it.
+fn parse_at(path: &Path, src: &Source) -> parser::ParsedFile {
+    let previous = PARSING.with(|p| p.replace(path.to_path_buf()));
+    let parsed = parser::parse(&src.contents, src);
+    PARSING.with(|p| *p.borrow_mut() = previous);
+    parsed
+}
+
+/// The file an import names and its text, found the way the import itself
+/// resolves it, or `None` when it cannot be read; the import reports that.
+fn import_text(
+    path: &str,
+    is_logical: bool,
+    importer: &Path,
+    resolver: &ImportResolver,
+) -> Option<(PathBuf, SmolStr, String)> {
+    let library = library_module(path, resolver);
+    let carried_text = |file: &Path| {
+        library
+            .as_ref()
+            .filter(|(at, _)| at == file)
+            .and_then(|(_, text)| *text)
+    };
+    let file = if is_logical {
+        library.as_ref()?.0.clone()
+    } else {
+        let beside = importer
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path);
+        real_path(&beside)
+            .ok()
+            .or_else(|| library.as_ref().map(|(at, _)| at.clone()))?
+    };
+    if let Some(text) = carried_text(&file) {
+        return Some((
+            file,
+            carried_module_filename(path, resolver),
+            String::from(text),
+        ));
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    return None;
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        let text = match resolver.overlay(&file) {
+            Some(text) => String::from(text),
+            None => std::fs::read_to_string(&file).ok()?,
+        };
+        let name = SmolStr::from(file.to_string_lossy().as_ref());
+        Some((file, name, text))
+    }
+}
+
+/// Installs, for the compile about to run, how a file's imports reach the
+/// macros their modules declare.
+fn install_macro_loader(resolver: &ImportResolver) -> macros::LoaderGuard {
+    MODULE_MACROS.with(|m| m.borrow_mut().clear());
+    let resolver = resolver.clone();
+    macros::install_loader(Rc::new(move |path: &str, is_logical: bool| {
+        let importer = PARSING.with(|p| p.borrow().clone());
+        let (file, filename, text) = import_text(path, is_logical, &importer, &resolver)?;
+        if let Some(known) = MODULE_MACROS.with(|m| m.borrow().get(&file).cloned()) {
+            return Some(known);
+        }
+        // A module that writes neither `macro` nor `export` declares no macro
+        // and passes none on, so it is not read twice.
+        if !text.contains("macro") && !text.contains("export") {
+            return Some(Rc::from([]));
+        }
+        MODULE_MACROS.with(|m| m.borrow_mut().insert(file.clone(), Rc::from([])));
+        let src = Source {
+            filename,
+            contents: text,
+        };
+        let previous = PARSING.with(|p| p.replace(file.clone()));
+        let offered: Rc<[Rc<MacroDef>]> = parser::module_macros(&src).into();
+        PARSING.with(|p| *p.borrow_mut() = previous);
+        MODULE_MACROS.with(|m| m.borrow_mut().insert(file, Rc::clone(&offered)));
+        Some(offered)
+    }))
+}
+
 /// The name a module the compiler carries is reported under: the file of that
 /// name in the library directory when there is one, so a report and an
 /// editor's go-to-definition point at a file that exists, and its library path
@@ -7719,7 +7819,7 @@ fn load_prelude(
             filename: carried_module_filename(rel, resolver),
             contents: String::from(text),
         });
-        let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+        let parsed = parse_at(&path, sources.last().unwrap());
         generics.add_impls(parsed.impls, child_src_idx);
 
         let mut child_namespace = Namespace::default();
@@ -7727,6 +7827,7 @@ fn load_prelude(
             parsed.code,
             parsed.attributes,
             &parsed.consts,
+            &parsed.macros,
             attrs,
             &path,
             child_src_idx,
@@ -8105,6 +8206,10 @@ fn bind_import(
                     })
                     .cloned()
                     .collect();
+                // A macro the import names was put in scope by the parser.
+                if found.is_empty() && exports.macros.contains(&item) {
+                    continue;
+                }
                 if found.is_empty() {
                     compiler_errors::error_import_item_not_exported(
                         &item,
@@ -8210,6 +8315,7 @@ fn parse_toplevel(
     code: Vec<Expr>,
     item_attributes: Vec<(usize, Box<[AttributeUse]>)>,
     consts: &[usize],
+    declared_macros: &[SmolStr],
     attrs: &mut PendingAttributes,
     file_path: &Path,
     src_file_idx: u16,
@@ -8454,6 +8560,7 @@ fn parse_toplevel(
         }
     }
 
+    namespace.macros.extend(declared_macros.iter().cloned());
     files.insert(file_path.to_path_buf(), module_exports(namespace));
 
     // Names merged into this file's scope by bare imports, with the module
@@ -8462,6 +8569,8 @@ fn parse_toplevel(
     // What each `export import` brought in, which joins what this file shows
     // its importers once every import is bound.
     let mut passed_on: Vec<(SmolStr, SymbolKind)> = Vec::new();
+    // The macros an `export import` names, which the file offers too.
+    let mut passed_on_macros: Vec<SmolStr> = Vec::new();
 
     for import in imports {
         match import {
@@ -8671,8 +8780,7 @@ fn parse_toplevel(
                     });
 
                     // Parse the imported file's contents
-                    let parsed =
-                        parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+                    let parsed = parse_at(&file_path, sources.last().unwrap());
                     generics.add_impls(parsed.impls, child_src_idx);
 
                     let mut child_namespace = Namespace::default();
@@ -8681,6 +8789,7 @@ fn parse_toplevel(
                         parsed.code,
                         parsed.attributes,
                         &parsed.consts,
+                        &parsed.macros,
                         attrs,
                         &file_path,
                         child_src_idx,
@@ -8720,6 +8829,14 @@ fn parse_toplevel(
                 };
                 if exported {
                     passed_on.extend(reexported(&child_namespace, &binding));
+                    if let ImportBinding::Items(items) = &binding {
+                        passed_on_macros.extend(
+                            items
+                                .iter()
+                                .filter(|(item, _)| child_namespace.macros.contains(item))
+                                .map(|(item, _)| item.clone()),
+                        );
+                    }
                 }
                 bind_import(
                     namespace,
@@ -8735,6 +8852,12 @@ fn parse_toplevel(
             }
             _ => unsafe { unreachable_unchecked() },
         }
+    }
+
+    if !passed_on_macros.is_empty() {
+        let shown = files.entry(file_path.to_path_buf()).or_default();
+        shown.macros.extend(passed_on_macros.iter().cloned());
+        namespace.macros.extend(passed_on_macros);
     }
 
     // An item an `export import` brought in joins what this file shows, when
@@ -9282,7 +9405,8 @@ pub fn compile_profile(
         contents,
     };
 
-    let parsed = parser::parse(&main_src.contents, &main_src);
+    let _macro_loader = install_macro_loader(resolver);
+    let parsed = parse_at(&loaded_file_key(PathBuf::from(filename)), &main_src);
 
     #[cfg(not(target_arch = "wasm32"))]
     if debug {
@@ -9332,6 +9456,7 @@ pub fn compile_profile(
         parsed.code,
         parsed.attributes,
         &parsed.consts,
+        &parsed.macros,
         &mut pending_attributes,
         &main_path,
         0,
