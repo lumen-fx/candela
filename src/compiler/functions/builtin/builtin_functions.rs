@@ -19,6 +19,7 @@ use crate::compiler::compiler_errors::check_args_range;
 use crate::compiler::compiler_errors::error_unknown_or_uncallable;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
+use crate::instr::LibFuncVoid;
 use smol_strc::SmolStr;
 
 /// Compiles an argument on its way to text. A function called only by its name
@@ -112,6 +113,17 @@ pub fn builtin_functions(
                 let id = compile_text_arg(arg, v, ctx, state, output);
                 output.push(Instr::Print(id));
                 state.free_reg(id, v);
+            }
+            None
+        }
+        "eprint" => {
+            for arg in args {
+                let id = compile_text_arg(arg, v, ctx, state, output);
+                state.free_reg(id, v);
+                let text = state.alloc_reg();
+                output.push(Instr::CallLibFunc(LibFunc::Str, id, text));
+                output.push(Instr::CallLibFuncVoid(LibFuncVoid::Eprint, text, 0));
+                state.free_reg(text, v);
             }
             None
         }

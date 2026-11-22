@@ -41,6 +41,25 @@ A stream that refuses the write costs the line, not the run. `program | head -1`
 leaves standard output with no reader, and the prints that follow go nowhere
 while the program runs to the end as it otherwise would.
 
+### eprint
+
+```rust
+eprint(value, ...)
+```
+
+Writes each argument to standard error, one per line, with the same text
+`print` gives. Use it for errors and progress that should stay out of a
+program's output when that output is piped somewhere. What the program printed
+to standard output before the call goes out first, so a terminal showing both
+streams keeps them in order.
+
+```rust
+fn main() {
+    print("result");
+    eprint("done in 3 steps");
+}
+```
+
 ### input
 
 ```rust

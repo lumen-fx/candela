@@ -431,6 +431,8 @@ pub enum LibFuncVoid {
     /// event::on(source, handler): the closure that receives the source's
     /// events.
     EventOn = 9,
+    /// eprint(text): one line to stderr, after what stdout holds so far.
+    Eprint = 10,
 }
 
 impl Instr {

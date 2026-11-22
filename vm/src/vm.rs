@@ -3662,6 +3662,13 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             Instr::CallLibFunc(LibFunc::EventSource, _, dest) => {
                 regs[dest] = Data::int(crate::events::new_source());
             }
+            Instr::CallLibFuncVoid(LibFuncVoid::Eprint, text, _) => {
+                // What the program printed before this line goes out first,
+                // so a terminal showing both streams keeps their order.
+                let _ = handle.flush();
+                let mut err = crate::captured_output::stderr();
+                outln!(err, "{}", regs[text].as_str(str_pool));
+            }
             Instr::CallLibFuncVoid(LibFuncVoid::EventOn, source, handler) => {
                 let source = regs[source].as_int();
                 gc.pin(str_pool, source, regs[handler]);

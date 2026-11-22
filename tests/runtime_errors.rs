@@ -1332,3 +1332,22 @@ fn the_first_value_of_a_reassigned_variable_reports_its_own_place() {
         "the report points into the list module, got:\n{prelude}"
     );
 }
+
+/// `eprint` writes to standard error, with the text `print` would give, and
+/// leaves standard output to `print`.
+#[test]
+fn eprint_writes_to_standard_error() {
+    let done = finish(
+        "eprint",
+        r#"
+fn main() {
+    print("out");
+    eprint("err", 3, [1, 2]);
+}
+"#,
+        "",
+    );
+    assert!(done.succeeded, "{}", done.stderr);
+    assert_eq!(done.stdout, "out\n");
+    assert_eq!(done.stderr, "err\n3\n[1,2]\n");
+}

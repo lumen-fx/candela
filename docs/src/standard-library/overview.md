@@ -78,7 +78,7 @@ What a program reaches for on every other line needs no import:
   defines it (`s.capitalize()`, `xs.map(f)`, `m.get(k)`, `"42".parse<int>()`).
 - `Option` and `Result`, with `Some`, `None`, `Ok`, `Err` and their methods.
 - [`Range`](range.md), the type of `a..b`, with its methods.
-- The free built-ins: `print`, `input`, `exit`, `argv`, `type` and the
+- The free built-ins: `print`, `eprint`, `input`, `exit`, `argv`, `type` and the
   conversions. They are listed in [built-in functions](builtins.md).
 
 ```rust

@@ -2544,7 +2544,7 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
         return Some(t);
     }
     Some(match name {
-        "print" | "exit" | "throw" => DataType::Null,
+        "print" | "eprint" | "exit" | "throw" => DataType::Null,
         "type" | "string" | "input" => DataType::String,
         "float" => DataType::Float,
         "int" | "the_answer" => DataType::Int,

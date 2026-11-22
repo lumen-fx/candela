@@ -26,6 +26,10 @@ pub const ITEM_KEYWORDS: &[&str] = &[
 pub const BUILTIN_FUNCTIONS: &[(&str, &str)] = &[
     ("print", "print(T)\n\nPrints anything."),
     (
+        "eprint",
+        "eprint(T)\n\nPrints anything to stderr, as one line per argument.",
+    ),
+    (
         "type",
         "type(T) -> string\n\nReturns the type of the object as a string.",
     ),
