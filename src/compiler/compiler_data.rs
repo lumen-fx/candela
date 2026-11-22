@@ -103,6 +103,8 @@ impl std::fmt::Display for NamedType<'_> {
             // The dynamic slot is spelled `any` in a program, and a
             // message about one names it the way the program does.
             DataType::Unknown => write!(f, "any"),
+            // The type of no value is written `()`.
+            DataType::Null => write!(f, "()"),
             other => write!(f, "{other}"),
         }
     }

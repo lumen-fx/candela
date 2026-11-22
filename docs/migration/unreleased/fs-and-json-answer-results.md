@@ -6,7 +6,8 @@ the rest). `fs::read` answers a `string!string`, `fs::list` a
 `string[]!string`, `fs::read_bytes` an `int[]!string`, and `json::parse` an
 `any!string`. `fs::write`, `append`,
 `delete`, `delete_dir`, `mkdir`, `copy` and `write_bytes`, which returned
-nothing, answer `Ok(true)`, a `bool!string`.
+nothing, answer `Ok(())`, a `()!string`: `()` is the type and the value of no
+value.
 
 This affects you if a program reads a value from these functions or catches
 their errors.

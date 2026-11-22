@@ -51,7 +51,7 @@ empty for a window this page did not open.
 
 | Function | Returns | Behaviour |
 | --- | --- | --- |
-| `share(data, on_done)` | nothing | Opens the system share sheet for the `title`, `text` and `url` in `data`; `on_done` receives `Ok(true)` once shared |
+| `share(data, on_done)` | nothing | Opens the system share sheet for the `title`, `text` and `url` in `data`; `on_done` receives `Ok(())` once shared |
 | `can_share(data)` | bool | Whether the browser can share this `data` |
 | `save_text(filename, mime, text)` | nothing | Saves `text` as a file named `filename`, of type `mime`, through the browser's download of a file |
 | `guard_unload(on)` | nothing | While `on`, leaving or reloading the page asks the visitor to confirm |
@@ -68,7 +68,7 @@ empty for a window this page did not open.
 | Function | Returns | Behaviour |
 | --- | --- | --- |
 | `pick_file(accept, on_done)` | nothing | Asks the visitor for a text file, `accept` as in `<input accept>`; `on_done` receives a `browser::PickedFile` |
-| `request_fullscreen(id, on_done)` | nothing | Shows the element with this id fullscreen, or the whole page for `""`; `on_done` receives `Ok(true)` once it is |
+| `request_fullscreen(id, on_done)` | nothing | Shows the element with this id fullscreen, or the whole page for `""`; `on_done` receives `Ok(())` once it is |
 | `exit_fullscreen()` | nothing | Leaves fullscreen |
 | `is_fullscreen()` | bool | Whether something is fullscreen |
 | `on_fullscreen_change(handler)` | nothing | Calls `handler` with the id of the element shown, empty for the whole page, and whether fullscreen started or ended |

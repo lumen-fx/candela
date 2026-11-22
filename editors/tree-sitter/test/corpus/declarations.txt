@@ -1022,6 +1022,70 @@ enum Team { @ui::label("Red team") Red, Blue }
         (identifier)))))
 
 ================================================================================
+The type of no value (docs/src/language/types.md)
+================================================================================
+
+fn save(name: string) -> ()!string {
+    return Ok(());
+}
+
+fn main() {
+    match save("notes") {
+        Ok(()) => print("saved"),
+        Err(e) => print(e),
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (result_type
+        (unit_type)
+        (type_identifier)))
+    (block
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (unit_literal))))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (match_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (string_literal)))
+          (match_arm_list
+            (match_arm
+              (match_pattern
+                (variant_pattern
+                  (type_identifier)
+                  (unit_literal)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (string_literal))))
+            (match_arm
+              (match_pattern
+                (variant_pattern
+                  (type_identifier)
+                  (identifier)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
 Expression bodies with => (docs/src/language/functions.md)
 ================================================================================
 

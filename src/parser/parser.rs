@@ -1846,8 +1846,12 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
         // A parenthesised type, which is what puts a function type under a
         // list suffix: `(fn(int) -> int)[]`. With a comma it is a tuple type,
         // `(int, string)`, the generic struct every tuple of that size
-        // instantiates.
-        let inner = parse_type(parser);
+        // instantiates. Empty, `()`, it is the type of no value.
+        let inner = if parser.peek_token() == Token::RParen {
+            TypeExpr::Identifier(SmolStr::new_static("()"), span)
+        } else {
+            parse_type(parser)
+        };
         if parser.peek_token() == Token::Comma {
             let mut args = vec![inner];
             while parser.peek_token() == Token::Comma {

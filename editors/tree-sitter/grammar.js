@@ -455,6 +455,7 @@ module.exports = grammar({
         $.function_type,
         $.parenthesized_type,
         $.tuple_type,
+        $.unit_type,
       ),
 
     // `fn(int, int) -> int`, the type of a position that holds a function. The
@@ -473,6 +474,9 @@ module.exports = grammar({
       ),
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
+
+    // `()`: the type of no value, which is no tuple.
+    unit_type: (_) => seq('(', ')'),
 
     // `(int, string)`: a tuple type, two or more element types. With one type
     // and no comma the parentheses only group it.
@@ -650,6 +654,7 @@ module.exports = grammar({
         $.string_literal,
         $.boolean_literal,
         $.null_literal,
+        $.unit_literal,
         $.negative_literal,
       ),
 
@@ -837,6 +842,7 @@ module.exports = grammar({
         $.string_literal,
         $.boolean_literal,
         $.null_literal,
+        $.unit_literal,
         $.array_literal,
         $.map_literal,
         $.struct_literal,
@@ -1190,6 +1196,9 @@ module.exports = grammar({
     boolean_literal: (_) => choice('true', 'false'),
 
     null_literal: (_) => 'null',
+
+    // `()`: the value of no value.
+    unit_literal: (_) => seq('(', ')'),
 
     comment: (_) => token(seq('//', /[^\r\n]*/)),
   },

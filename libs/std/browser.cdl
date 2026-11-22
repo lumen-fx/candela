@@ -95,14 +95,14 @@ fn close_window() {
 }
 
 /// Opens the system share sheet for a title, text and url. `on_done` receives
-/// `Ok(true)` once shared, or the reason it was not.
+/// `Ok(())` once shared, or the reason it was not.
 @cfg(web)
-fn share(data: {string: any}, on_done: fn(bool!string)) {
-    let id = event::answer(fn(v) => v as bool, on_done);
+fn share(data: {string: any}, on_done: fn(()!string)) {
+    let id = event::answer(fn(_) => (), on_done);
     browser::candela_browser_share(id, data);
 }
 @cfg(not(web))
-fn share(data: {string: any}, on_done: fn(bool!string)) {
+fn share(data: {string: any}, on_done: fn(()!string)) {
     throw "browser_only";
 }
 
@@ -179,15 +179,15 @@ fn pick_file(accept: string, on_done: fn(PickedFile!string)) {
 }
 
 /// Shows the element with this id fullscreen, or the whole page for `""`.
-/// `on_done` receives `Ok(true)` once it is. Needs a click or key press just
+/// `on_done` receives `Ok(())` once it is. Needs a click or key press just
 /// before.
 @cfg(web)
-fn request_fullscreen(id: string, on_done: fn(bool!string)) {
-    let source = event::answer(fn(v) => v as bool, on_done);
+fn request_fullscreen(id: string, on_done: fn(()!string)) {
+    let source = event::answer(fn(_) => (), on_done);
     browser::candela_browser_request_fullscreen(source, id);
 }
 @cfg(not(web))
-fn request_fullscreen(id: string, on_done: fn(bool!string)) {
+fn request_fullscreen(id: string, on_done: fn(()!string)) {
     throw "browser_only";
 }
 

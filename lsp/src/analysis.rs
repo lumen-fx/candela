@@ -803,7 +803,7 @@ fn function_symbol(
             |(t, _)| Some(types.of(t).to_string()),
         )
         // A function that hands nothing back reads without an arrow.
-        .filter(|r| r != "null");
+        .filter(|r| r != "()");
 
     let method = f
         .name

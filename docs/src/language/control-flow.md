@@ -234,7 +234,7 @@ One pattern grammar serves every place that binds a name: `match` arms, `is`,
 | --- | --- |
 | `_` | anything, and binds nothing |
 | `n`, `rest` | anything, and binds it to the name |
-| `3`, `-1.5`, `"go"`, `true`, `null` | a value equal to the literal |
+| `3`, `-1.5`, `"go"`, `true`, `()` | a value equal to the literal |
 | `1..10`, `1..=9` | a number in the range; `..=` holds the high end too |
 | `(a, b)` | a [tuple](types.md#tuples), element by element |
 | `Point { x, y: py, .. }` | a struct, field by field; `x` alone binds the field `x`, `..` skips the fields it does not name |

@@ -365,7 +365,12 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             }
             Expr::Array(Box::from(elems), Box::from(elem_spans))
         }
-        // LParen Expr RParen, or a tuple: LParen Expr (Comma Expr)+ RParen
+        // LParen Expr RParen, or a tuple: LParen Expr (Comma Expr)+ RParen.
+        // `()` is the value of no value, which runs as the host's `null`.
+        Token::LParen if parser.peek_token() == Token::RParen => {
+            parser.next_token();
+            Expr::Null
+        }
         Token::LParen => {
             let first_start = parser.peek_token_span().start;
             let v = parse_expr(parser);

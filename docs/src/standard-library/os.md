@@ -63,7 +63,7 @@ os::cwd()
 os::set_cwd(path)
 ```
 
-Makes `path` the working directory. Returns `Ok(true)`, or the `fs_*` error
+Makes `path` the working directory. Returns `Ok(())`, or the `fs_*` error
 that says why it could not.
 
 ## platform

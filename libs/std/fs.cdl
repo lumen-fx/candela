@@ -3,7 +3,7 @@
 /// Every function takes the path as a string. One that can fail answers a
 /// `Result` whose error names the cause: `fs_not_found`,
 /// `fs_permission_denied`, `fs_is_a_directory`, `fs_storage_full`, and the
-/// rest. One that has nothing to give back answers `Ok(true)`. A relative path
+/// rest. One that has nothing to give back answers `Ok(())`. A relative path
 /// resolves against the working directory, or against the directory the
 /// embedding host set as the base.
 ///
@@ -31,46 +31,46 @@ fn exists(path: string) -> bool => fs_exists(path);
 
 /// Writes `contents` to `path`, replacing what was there. Creates the file
 /// when it does not exist.
-fn write(path: string, contents: string) -> bool!string {
+fn write(path: string, contents: string) -> ()!string {
     try {
         fs_write(path, contents);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// Appends `contents` to the end of the file at `path`. Creates the file when
 /// it does not exist.
-fn append(path: string, contents: string) -> bool!string {
+fn append(path: string, contents: string) -> ()!string {
     try {
         fs_append(path, contents);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// Deletes the file at `path`. Raises when the path does not exist or names a
 /// directory.
-fn delete(path: string) -> bool!string {
+fn delete(path: string) -> ()!string {
     try {
         fs_delete(path);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// Deletes the empty directory at `path`. Raises when the directory is missing
 /// or still has entries.
-fn delete_dir(path: string) -> bool!string {
+fn delete_dir(path: string) -> ()!string {
     try {
         fs_delete_dir(path);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// True when `path` names a directory.
@@ -88,24 +88,24 @@ fn list(path: string) -> string[]!string {
 
 /// Creates the directory at `path` and every missing directory above it. A
 /// directory that is already there is no error.
-fn mkdir(path: string) -> bool!string {
+fn mkdir(path: string) -> ()!string {
     try {
         fs_mkdir(path);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// Copies the file at `from` to `to`, replacing what was at `to`. Raises
 /// `fs_is_a_directory` when `from` is a directory: copy the files inside it.
-fn copy(from: string, to: string) -> bool!string {
+fn copy(from: string, to: string) -> ()!string {
     try {
         fs_copy(from, to);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// The bytes of the file at `path`, each an int from 0 to 255.
@@ -120,23 +120,23 @@ fn read_bytes(path: string) -> int[]!string {
 /// Writes `bytes` to `path`, replacing what was there. Every element has to be
 /// a byte, 0 to 255; one that is not raises `fs_not_a_byte` and nothing is
 /// written.
-fn write_bytes(path: string, bytes: int[]) -> bool!string {
+fn write_bytes(path: string, bytes: int[]) -> ()!string {
     try {
         fs_write_bytes(path, bytes);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// Moves the file or directory at `from` to `to`, replacing a file at `to`.
-fn rename(from: string, to: string) -> bool!string {
+fn rename(from: string, to: string) -> ()!string {
     try {
         fs_rename(from, to);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// The size of the file at `path`, in bytes.
@@ -160,13 +160,13 @@ fn modified(path: string) -> int!string {
 /// Deletes the file at `path`, or the directory there and everything in it.
 /// Unlike `delete` and `delete_dir`, it does not stop at a directory that
 /// still has entries.
-fn delete_all(path: string) -> bool!string {
+fn delete_all(path: string) -> ()!string {
     try {
         fs_delete_all(path);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// `path` as an absolute path, joined onto the working directory or the base

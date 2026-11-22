@@ -112,6 +112,8 @@
 ((type_identifier) @type.builtin
   (#any-of? @type.builtin "int" "float" "string" "bool" "null" "any"))
 
+(unit_type) @type.builtin
+
 (qualified_type
   module: (type_identifier) @module)
 
@@ -252,6 +254,7 @@
 (boolean_literal) @boolean
 
 (null_literal) @constant.builtin
+(unit_literal) @constant.builtin
 
 ; Operators and punctuation
 

@@ -54,6 +54,11 @@ fn parse_pattern_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Pattern {
     let (t, t_span) = parser.next_token();
     match t {
         Token::Identifier("_") => Pattern::Wildcard(t_span),
+        // `()`: the value of no value, as in `Ok(())`.
+        Token::LParen if parser.peek_token() == Token::RParen => {
+            let close = parser.next_token().1;
+            Pattern::Value(Box::new(Expr::Null), t_span.extend(close))
+        }
         Token::LParen => parse_tuple_pattern(parser, t_span),
         Token::Identifier(name) => parse_named_pattern(parser, name, t_span, allow_struct),
         _ => {

@@ -2326,6 +2326,10 @@
         {
           "type": "SYMBOL",
           "name": "tuple_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "unit_type"
         }
       ]
     },
@@ -2443,6 +2447,19 @@
         {
           "type": "SYMBOL",
           "name": "_type"
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
+    },
+    "unit_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "("
         },
         {
           "type": "STRING",
@@ -3339,6 +3356,10 @@
         {
           "type": "SYMBOL",
           "name": "null_literal"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "unit_literal"
         },
         {
           "type": "SYMBOL",
@@ -4383,6 +4404,10 @@
         {
           "type": "SYMBOL",
           "name": "null_literal"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "unit_literal"
         },
         {
           "type": "SYMBOL",
@@ -6693,6 +6718,19 @@
     "null_literal": {
       "type": "STRING",
       "value": "null"
+    },
+    "unit_literal": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
     },
     "comment": {
       "type": "TOKEN",

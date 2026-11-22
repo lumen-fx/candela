@@ -11,7 +11,7 @@ Every function takes the path as a string. One that can fail answers a
 [`Result`](result.md) whose error names the cause: `fs_not_found`,
 `fs_permission_denied`, `fs_is_a_directory`, `fs_storage_full`, and the rest,
 listed in [the error catalogue](../reference/errors.md). One that has nothing
-to give back answers `Ok(true)`, a `bool!string`. Pass a failure on with `?`,
+to give back answers `Ok(())`, a `()!string`. Pass a failure on with `?`,
 give a fallback with `else`, or test for it with `is Err(e)`; see
 [error handling](../language/error-handling.md).
 
@@ -61,7 +61,7 @@ fs::write(path, contents)
 ```
 
 Writes `contents` to `path`, replacing what was there. Creates the file when it
-does not exist. Returns `Ok(true)`.
+does not exist. Returns `Ok(())`.
 
 ## append
 
@@ -70,7 +70,7 @@ fs::append(path, contents)
 ```
 
 Appends `contents` to the end of the file at `path`. Creates the file when it
-does not exist. Returns `Ok(true)`.
+does not exist. Returns `Ok(())`.
 
 ## delete
 
@@ -78,7 +78,7 @@ does not exist. Returns `Ok(true)`.
 fs::delete(path)
 ```
 
-Deletes the file at `path`. Returns `Ok(true)`, or an `Err` when the path does
+Deletes the file at `path`. Returns `Ok(())`, or an `Err` when the path does
 not exist or names a directory.
 
 ## delete_dir
@@ -87,7 +87,7 @@ not exist or names a directory.
 fs::delete_dir(path)
 ```
 
-Deletes the empty directory at `path`. Returns `Ok(true)`, or an `Err` when the
+Deletes the empty directory at `path`. Returns `Ok(())`, or an `Err` when the
 directory is missing or still has entries.
 
 ## is_dir
@@ -116,7 +116,7 @@ fs::mkdir(path)
 ```
 
 Creates the directory at `path` and every missing directory above it. A
-directory that is already there is no error. Returns `Ok(true)`.
+directory that is already there is no error. Returns `Ok(())`.
 
 ## copy
 
@@ -125,7 +125,7 @@ fs::copy(from, to)
 ```
 
 Copies the file at `from` to `to`, replacing what was at `to`. Returns
-`Ok(true)`, or `Err("fs_is_a_directory")` when `from` is a directory: copy the
+`Ok(())`, or `Err("fs_is_a_directory")` when `from` is a directory: copy the
 files inside it.
 
 ## read_bytes
@@ -145,7 +145,7 @@ fs::write_bytes(path, bytes)
 
 Writes `bytes` to `path`, replacing what was there. Every element has to be a
 byte, 0 to 255; an element that is not gives `Err("fs_not_a_byte")` and
-nothing is written. Returns `Ok(true)`.
+nothing is written. Returns `Ok(())`.
 
 ## rename
 
@@ -154,7 +154,7 @@ fs::rename(from, to)
 ```
 
 Moves the file or directory at `from` to `to`, replacing a file at `to`.
-Returns `Ok(true)`.
+Returns `Ok(())`.
 
 ## size
 
@@ -181,7 +181,7 @@ fs::delete_all(path)
 
 Deletes the file at `path`, or the directory there with everything in it.
 Where `delete` and `delete_dir` refuse a directory that still has entries,
-this does not, so check the path before you call it. Returns `Ok(true)`.
+this does not, so check the path before you call it. Returns `Ok(())`.
 
 ## absolute
 

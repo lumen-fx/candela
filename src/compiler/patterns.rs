@@ -228,6 +228,13 @@ pub fn resolve(pattern: &Pattern, ty: &DataType, ctx: Ctx, state: &mut State<'_>
     match pattern {
         Pattern::Wildcard(_) => Resolved::Any,
         Pattern::Bind(name, _) => Resolved::Bind(name.clone(), ty.clone()),
+        // `()` against the type of no value: there is no other value it
+        // could be, so it fits like `_`.
+        Pattern::Value(value, _)
+            if matches!(**value, Expr::Null) && matches!(ty, DataType::Null) =>
+        {
+            Resolved::Any
+        }
         Pattern::Value(value, span) => Resolved::Equal((**value).clone(), *span),
         Pattern::Range(low, high, inclusive, span) => {
             Resolved::Range((**low).clone(), (**high).clone(), *inclusive, *span)

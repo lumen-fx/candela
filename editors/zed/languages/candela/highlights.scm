@@ -176,6 +176,8 @@
 (boolean_literal) @boolean
 
 (null_literal) @constant
+(unit_literal) @constant
+(unit_type) @type
 
 ; Operators and punctuation
 

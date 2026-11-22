@@ -33,8 +33,8 @@ variant name with any payload in brackets. A string prints bare on its own and
 in quotes inside a list, map, struct or payload, so `print(["a"])` writes
 `["a"]`. A float keeps its decimal point wherever it
 appears, so `print(3.0)` writes `3.0` and `print([3.0])` writes `[3.0]`, the
-same text `string` gives. `null`, the value of a call that returns nothing, prints as
-`null`. An infinity prints as `inf` and a not-a-number as `NaN`.
+same text `string` gives. `()`, the value of a call that returns nothing, prints as
+`null`, the name a host knows it by. An infinity prints as `inf` and a not-a-number as `NaN`.
 A function prints as `<fn>`, wherever it is held.
 
 A stream that refuses the write costs the line, not the run. `program | head -1`
@@ -130,7 +130,7 @@ type(value)
 
 Returns the static type of the expression as a string, resolved at compile time.
 Every answer is spelled the way the same type is written in a program: `int`,
-`float`, `bool`, `string`, `null`, `any` for a dynamic value, `int[]` for a list
+`float`, `bool`, `string`, `()` for no value, `any` for a dynamic value, `int[]` for a list
 of ints, `{string: int}` for a map, `a|b` for a union, the declared name for a
 struct or an enum, and `fn(int) -> int` for a function. A struct or an enum that
 takes type arguments carries them, as in `Cell<int>`. A list or a map names what

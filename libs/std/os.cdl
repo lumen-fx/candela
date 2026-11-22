@@ -51,13 +51,13 @@ fn cwd() -> string!string {
 
 /// Makes `path` the working directory. A relative path resolves against the
 /// current one.
-fn set_cwd(path: string) -> bool!string {
+fn set_cwd(path: string) -> ()!string {
     try {
         os_set_cwd(path);
     } catch e {
         return Err(e);
     }
-    return Ok(true);
+    return Ok(());
 }
 
 /// `linux`, `macos`, `windows`, or `web` in a browser.

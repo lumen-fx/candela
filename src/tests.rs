@@ -7278,7 +7278,7 @@ fn main() { let xs = []; print(pick(xs[0])); }";
     assert_wellformed(&d, src);
     assert_eq!(d.code, "match_not_enum");
     assert!(d.message.contains("variants of enum Value"));
-    assert!(d.message.contains("the matched value is null"));
+    assert!(d.message.contains("the matched value is ()"));
 }
 
 /// A qualified arm pattern used to be reduced to its last segment and looked
@@ -15404,7 +15404,7 @@ pub fn a_list_reverse_returns_nothing() {
             print("abc".reverse());
         }
     "#;
-    assert_eq!(run_output(src), "null\n[3,2,1]\ncba\n");
+    assert_eq!(run_output(src), "()\n[3,2,1]\ncba\n");
 }
 
 /// A slice's bounds are separated by `..`; anything else after the first
@@ -15793,6 +15793,39 @@ pub fn removed_map_methods_name_their_replacement() {
         assert_wellformed(&d, src);
         assert_eq!(d.code, "no_such_method", "{src}");
         assert!(d.message.contains(replacement), "{d:?}");
+    }
+}
+
+/// `()` is the type and the value of no value: a no-value result answers
+/// `Ok(())`, a pattern matches it, and it is no tuple.
+#[test]
+pub fn unit_is_the_type_of_no_value() {
+    let src = r#"
+        fn save(ok: bool) -> ()!string {
+            if !ok { return Err("nope"); }
+            return Ok(());
+        }
+        fn nothing() -> () {}
+        fn main() {
+            let u: () = ();
+            print(type(u), type(nothing()), type(save(true)), u == ());
+            match save(true) {
+                Ok(()) => print("saved"),
+                Err(e) => print(e),
+            }
+            print(save(false) else |e| { print(e); () });
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "()\n()\nResult<(), string>\ntrue\nsaved\nnope\nnull\n"
+    );
+    for (src, code) in [
+        ("fn main() { let (a, b) = (); }", "tuple_pattern_mismatch"),
+        ("fn main() { let x: int = (); }", "variable_type_mismatch"),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {}", d.message);
     }
 }
 

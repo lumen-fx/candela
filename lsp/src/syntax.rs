@@ -348,10 +348,11 @@ pub fn parse_type(toks: &Tokens<'_>, i: &mut usize, end: usize) -> Ty {
                 }
             }
             *i = close + 1;
-            if parts.len() == 1 {
-                parts.pop().unwrap_or(Ty::Unknown)
-            } else {
-                Ty::Tuple(parts)
+            match parts.len() {
+                // `()`, the type of no value, which is no tuple.
+                0 => Ty::Named("()".to_owned()),
+                1 => parts.pop().unwrap_or(Ty::Unknown),
+                _ => Ty::Tuple(parts),
             }
         }
         "{" => {

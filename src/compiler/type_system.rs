@@ -211,7 +211,8 @@ impl TypeExpr {
                 "float" => DataType::Float,
                 "bool" => DataType::Bool,
                 "string" => DataType::String,
-                "null" => DataType::Null,
+                // `()`, the type of no value. The host's `null` is its value.
+                "()" | "null" => DataType::Null,
                 // A dynamically-typed slot. Written `any`; modeled as `Unknown`,
                 // which the type checker already treats permissively. Used for
                 // enum payloads that hold a value of any type (option/result).
@@ -1073,7 +1074,7 @@ fn render_type(t: &DataType, structs: &[Struct], enums: &[EnumType]) -> SmolStr 
         DataType::Float => SmolStr::new_static("float"),
         DataType::Bool => SmolStr::new_static("bool"),
         DataType::String => SmolStr::new_static("string"),
-        DataType::Null => SmolStr::new_static("null"),
+        DataType::Null => SmolStr::new_static("()"),
         DataType::Unknown => SmolStr::new_static("any"),
         DataType::FnValue(sig) => sig.to_smolstr(),
         DataType::Array(inner) => match inner {
@@ -1585,7 +1586,7 @@ fn lower_impls(
 fn is_type_parameter(name: &SmolStr, file_idx: u16, ctx: &TypeCtx<'_>) -> bool {
     if matches!(
         name.as_str(),
-        "int" | "float" | "bool" | "string" | "null" | "any"
+        "int" | "float" | "bool" | "string" | "()" | "null" | "any"
     ) {
         return false;
     }
@@ -2603,7 +2604,7 @@ pub fn format_detailed(t: &DataType, state: &State<'_>) -> SmolStr {
             }
             None => SmolStr::new_static("any[]"),
         },
-        DataType::Null => SmolStr::new_static("null"),
+        DataType::Null => SmolStr::new_static("()"),
         DataType::Unknown => SmolStr::new_static("any"),
         // A position that says what it holds is written the way it was
         // declared. One whose functions the compiler collected names no
