@@ -1,0 +1,106 @@
+/// HTTP: downloading a URL to a file.
+///
+/// `download` starts a transfer and answers a `Transfer` at once. The
+/// transfer runs on a thread of its own and reports to the function given to
+/// `download`: `Received` as bytes arrive, then `Saved` with the path once the
+/// whole file is in place, or `Failed` with the reason. `Saved` or `Failed` is
+/// always the last event.
+///
+///     import "std/http";
+///
+///     fn main() {
+///         http::download("https://example.com/pack.zip", "pack.zip") fn(e) {
+///             match e {
+///                 Received(received, Some(total)) => print(string(received) + " of " + string(total)),
+///                 Received(received, None) => print(string(received)),
+///                 Saved(path) => print("saved " + path),
+///                 Failed(why) => eprint(why),
+///             }
+///         };
+///     }
+///
+/// The destination only ever holds a complete file: the bytes land in a
+/// temporary file beside it that replaces it once the body has arrived and
+/// any checksum matched. A reply that is not a 2xx status fails the transfer.
+/// The program keeps running after `main` returns until every transfer it
+/// started has reported its last event.
+
+import "std/event";
+import "std/json";
+
+dylib "../std_src/net/net" {
+    fn candela_http_download(id: int, url: string, path: string, checksum: string, timeout_ms: int, max_bytes: int);
+    fn candela_http_cancel(handle: int) -> int;
+    fn candela_http_set_max_concurrent(n: int);
+}
+
+/// What a download reports.
+enum Progress {
+    /// How many bytes have arrived, and how many the server said would;
+    /// `None` when it did not say.
+    Received(int, int?),
+    /// The file is in place at this path.
+    Saved(string),
+    /// The transfer did not happen, or was cancelled (the message is then
+    /// `cancelled`).
+    Failed(string),
+}
+
+/// A transfer `download` started.
+struct Transfer {
+    /// The event source its events arrive under, for `event::wait`.
+    id: int,
+}
+
+impl Transfer {
+    /// Cancels the transfer. It then reports `Failed` with the message
+    /// `cancelled`, as its last event. False when it had already finished.
+    fn cancel(self) -> bool => net::candela_http_cancel(self.id) == 1;
+}
+
+/// Downloads `url` to `path` and answers the `Transfer`. A relative `path`
+/// resolves against the base directory the host set, or the working
+/// directory; missing directories on the way are created.
+///
+/// - `checksum`: the digest the file has to match, `sha256:<64 hex digits>`
+///   or `sha1:<40 hex digits>`, or a bare digest whose length names the
+///   algorithm. Empty checks nothing.
+/// - `timeout_ms`: how long a quiet server is waited on, in milliseconds: for
+///   the reply to start, and then for each next piece of the body. 0 waits
+///   indefinitely.
+/// - `max_bytes`: the largest body accepted, in bytes. 0 accepts any size.
+fn download(
+    url: string,
+    path: string,
+    checksum: string = "",
+    timeout_ms: int = 0,
+    max_bytes: int = 0,
+    on_event: fn(Progress),
+) -> Transfer {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    net::candela_http_download(id, url, path, checksum, timeout_ms, max_bytes);
+    return Transfer { id };
+}
+
+/// Caps how many transfers run at once, from 1 to 64; 4 until this is called.
+/// A transfer started past the cap reports `Failed` at once.
+fn set_max_concurrent(n: int) {
+    net::candela_http_set_max_concurrent(n);
+}
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Progress {
+    let fields = json::parse(payload).unwrap() as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "progress" {
+        let total = fields["total"] as int;
+        return Received(fields["received"] as int, if total < 0 { None } else { Some(total) });
+    }
+    if kind == "done" {
+        return Saved(fields["path"] as string);
+    }
+    return Failed(fields["message"] as string);
+}

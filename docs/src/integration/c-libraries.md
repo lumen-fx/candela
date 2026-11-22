@@ -283,8 +283,9 @@ EXPORT void start(int64_t source) {
 
 A library loaded by something other than a candela runtime is never handed a
 table, so a library that may be loaded elsewhere checks for one before posting.
-The first-party packages are written this way; see
-[packages](../packages/index.md).
+The standard library's own native libraries, behind
+[process](../standard-library/process.md) and
+[http](../standard-library/http.md), are written this way.
 
 ## Host functions instead
 

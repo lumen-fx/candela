@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "msi/**"
+      - "scripts/stage-std.sh"
       - "src/update.rs"
       - ".github/workflows/msi-smoke.yml"
       - ".github/workflows/build-artifacts.yml"
@@ -38,12 +39,17 @@ jobs:
           cargo build --bin candela
           cargo build -p candela-vm --bin candela-vm
           cargo build -p candela-lsp
+          cargo build -p candela-std-process -p candela-std-archive -p candela-std-net
 
       - name: Build stdlib dylibs
         run: |
           clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/math/math.dll libs/std_src/math/math.c
           clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/time/time.dll libs/std_src/time/time.c
           clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/random/random.dll libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
+
+      - name: Stage the standard library
+        shell: bash
+        run: scripts/stage-std.sh windows-x86_64 dist target/debug
 
       - name: Install WiX
         run: dotnet tool install --global wix --version 6.0.1
@@ -54,7 +60,6 @@ jobs:
           Copy-Item "target/debug/candela.exe" "dist/"
           Copy-Item "target/debug/candela-vm.exe" "dist/"
           Copy-Item "target/debug/candela-lsp.exe" "dist/"
-          Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
           Compress-Archive -Path "dist/*" -DestinationPath "candela-windows-x86_64.zip"
@@ -85,6 +90,10 @@ jobs:
             "receipt",
             "libs\std\list.cdl",
             "libs\std_src\math\math.dll",
+            "libs\std_src\process\process.dll",
+            "libs\std_src\archive\archive.dll",
+            "libs\std_src\net\net.dll",
+            "libs\std\web\websocket.js",
             "LICENSE"
           )
           foreach ($item in $expected) {

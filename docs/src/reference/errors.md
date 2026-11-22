@@ -368,6 +368,18 @@ Two kinds come from what the call was given rather than from the system:
 | `fs_not_a_byte` | `fs::write_bytes` with an element outside 0 to 255 |
 | `hash_unknown_algorithm` | `hash::file` with an algorithm other than md5, sha1 and sha256 |
 
+### Standard library modules
+
+| Kind | Raised by |
+| --- | --- |
+| `browser_only` | A function of [browser](../standard-library/browser.md) or [js](../standard-library/js.md) called anywhere but in a browser |
+| `websocket_bad_close` | Answered, as an `Err`, by [`socket.close`](../standard-library/websocket.md#close) given a code other than 1000 or 3000 to 4999, or a reason longer than 123 bytes |
+
+The background calls of [process](../standard-library/process.md),
+[http](../standard-library/http.md) and
+[archive](../standard-library/archive.md) raise nothing: a failure arrives as
+the `Failed(message)` event, whose message names the cause.
+
 ### Sorting
 
 | Kind | Raised by |

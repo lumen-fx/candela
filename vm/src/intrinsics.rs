@@ -36,13 +36,6 @@ impl Arg<'_> {
             Self::Str(_) => 0,
         }
     }
-
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Self::Str(s) => s.as_bytes(),
-            Self::Int(_) | Self::Float(_) => &[],
-        }
-    }
 }
 
 /// What an intrinsic hands back to the program.

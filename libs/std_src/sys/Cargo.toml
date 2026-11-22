@@ -1,0 +1,21 @@
+# The Rust side of what a candela runtime hands a native library: the event
+# table `candela_dylib_init` receives, and the string conventions of the C
+# boundary. Every Rust library of the standard library builds on it. It is a
+# plain library, linked into each of their cdylibs; nothing here is a crate
+# anyone else depends on.
+[package]
+name = "candela-std-sys"
+# Never published: it is linked into each standard library native library,
+# which ships inside the toolchain.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The event table and string conventions the candela standard library's native libraries share."
+
+[lib]
+path = "src/lib.rs"
+
+# The table's layout is checked against the runtime's own definition.
+[dev-dependencies]
+candela-vm = { path = "../../../vm" }

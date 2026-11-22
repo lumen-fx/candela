@@ -80,9 +80,9 @@ Run `candela` with no arguments for a REPL.
   pulls a package in from the registry, and `candela run` compiles and runs it
   against what the manifest lists. A package is another place an import
   resolves from, so nothing about importing changes.
-- **Work that finishes later.** The first-party packages run other programs,
-  download files, unpack archives and hold WebSocket connections on threads of
-  their own. What they report arrives in the function you passed, and the
+- **Work that finishes later.** The standard library runs other programs,
+  downloads files, unpacks archives and holds WebSocket connections on threads
+  of its own. What they report arrives in the function you passed, and the
   program keeps running until it has.
 - **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
   artifact, and `candela-vm` runs it. The artifact carries machine code for the

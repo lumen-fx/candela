@@ -14,10 +14,10 @@ The program runs it on its own thread, one event at a time, in the order the
 events were posted, so a handler reads and writes your variables like any
 other code.
 
-Most programs never call this module themselves. A package that starts work
-in the background, such as [process](../packages/process.md) or
-[download](../packages/download.md), uses it to deliver its results to the
-function you pass to its calls. Write one when you are writing such a package:
+Most programs call only `event::wait` themselves. A module that starts work
+in the background, such as [process](process.md) or [http](http.md), uses the
+rest to deliver its results to the function you pass to its calls. Use them
+when you are writing such a module:
 the source goes to the native library, which posts to it from its own threads;
 see [posting events from a library](../integration/c-libraries.md#posting-events-from-a-library).
 

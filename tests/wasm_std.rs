@@ -202,8 +202,8 @@ fn main() {}
     .expect("builds");
     let mut program = load_program(&bytes, &HostRegistry::new()).expect("loads");
     assert_eq!(
-        program.call("root", &[Value::Float(81.0)]).expect("runs"),
-        Value::Float(9.0)
+        program.call("root", &[Value::Float(27.0)]).expect("runs"),
+        Value::Float(3.0)
     );
 }
 

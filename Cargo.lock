@@ -120,30 +120,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "candela-archive"
-version = "0.0.0"
-dependencies = [
- "candela-package-sys",
- "candela-package-testkit",
- "flate2",
- "serde_json",
- "tar",
- "zip",
-]
-
-[[package]]
-name = "candela-download"
-version = "0.0.0"
-dependencies = [
- "candela-package-sys",
- "candela-package-testkit",
- "serde_json",
- "sha1",
- "sha2",
- "ureq",
-]
-
-[[package]]
 name = "candela-lang"
 version = "0.2.1"
 dependencies = [
@@ -179,28 +155,55 @@ dependencies = [
 ]
 
 [[package]]
-name = "candela-package-sys"
+name = "candela-std-archive"
+version = "0.0.0"
+dependencies = [
+ "candela-std-sys",
+ "candela-std-testkit",
+ "flate2",
+ "serde_json",
+ "tar",
+ "zip",
+]
+
+[[package]]
+name = "candela-std-net"
+version = "0.0.0"
+dependencies = [
+ "candela-std-sys",
+ "candela-std-testkit",
+ "rustls",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tungstenite",
+ "ureq",
+ "webpki-roots",
+]
+
+[[package]]
+name = "candela-std-process"
+version = "0.0.0"
+dependencies = [
+ "candela-std-sys",
+ "candela-std-testkit",
+ "rustix",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "candela-std-sys"
 version = "0.0.0"
 dependencies = [
  "candela-vm",
 ]
 
 [[package]]
-name = "candela-package-testkit"
+name = "candela-std-testkit"
 version = "0.0.0"
 dependencies = [
  "candela-lang",
-]
-
-[[package]]
-name = "candela-process"
-version = "0.0.0"
-dependencies = [
- "candela-package-sys",
- "candela-package-testkit",
- "rustix",
- "serde_json",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -221,18 +224,6 @@ dependencies = [
  "smol_strc",
  "wasm-bindgen",
  "zmij",
-]
-
-[[package]]
-name = "candela-websocket"
-version = "0.0.0"
-dependencies = [
- "candela-package-sys",
- "candela-package-testkit",
- "rustls",
- "serde_json",
- "tungstenite",
- "webpki-roots",
 ]
 
 [[package]]

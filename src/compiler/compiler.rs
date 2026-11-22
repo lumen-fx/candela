@@ -1850,10 +1850,12 @@ pub(crate) fn path_fn_value(
     let (arity, returns_null) = state
         .dyn_libs
         .iter()
-        .find(|lib| lib.name == *block)?
-        .fns
-        .iter()
-        .find(|sig| sig.name == *fn_name && !sig.variadic)
+        .filter(|lib| lib.name == *block)
+        .find_map(|lib| {
+            lib.fns
+                .iter()
+                .find(|sig| sig.name == *fn_name && !sig.variadic)
+        })
         .map(|sig| (sig.args.len(), sig.return_type == DataType::Null))?;
     let params: Box<[SmolStr]> = (0..arity)
         .map(|i| format_args!("[{i}]").to_smolstr())

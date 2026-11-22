@@ -2523,8 +2523,8 @@ fn declared_return_type(namespace: &[SmolStr], state: &State<'_>) -> Option<Data
         state
             .dyn_libs
             .iter()
-            .find(|lib| lib.is_host == is_host && lib.name == *block)
-            .and_then(|lib| lib.fns.iter().find(|f| f.name == *fn_name))
+            .filter(|lib| lib.is_host == is_host && lib.name == *block)
+            .find_map(|lib| lib.fns.iter().find(|f| f.name == *fn_name))
             .map(|f| f.return_type.clone())
     };
     declared(true).or_else(|| declared(false))

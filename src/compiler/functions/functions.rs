@@ -415,8 +415,8 @@ pub fn handle_functions(
     } else if let Some((fn_args, returns_null, dyn_id, is_host, is_variadic)) = state
         .dyn_libs
         .iter()
-        .find(|l| l.name == namespace[0])
-        .and_then(|lib| {
+        .filter(|l| l.name == namespace[0])
+        .find_map(|lib| {
             lib.fns.iter().find(|x| x.name == fn_name).map(|sig| {
                 (
                     sig.args.clone(),
@@ -534,13 +534,12 @@ fn foreign_bound_args(
     ctx: Ctx,
     state: &State<'_>,
 ) -> Option<(Box<[Expr]>, Box<[Span]>)> {
+    // Two modules may each bind a block to one library, under one name.
     let sig = state
         .dyn_libs
         .iter()
-        .find(|lib| lib.name == block)?
-        .fns
-        .iter()
-        .find(|sig| sig.name == fn_name)?;
+        .filter(|lib| lib.name == block)
+        .find_map(|lib| lib.fns.iter().find(|sig| sig.name == fn_name))?;
     // A variadic function takes a closure after the call as one more argument
     // in order.
     let named = if sig.variadic {

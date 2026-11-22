@@ -6,8 +6,7 @@ the rest). `fs::read` answers a `string!string`, `fs::list` a
 `string[]!string`, `fs::read_bytes` an `int[]!string`, and `json::parse` an
 `any!string`. `fs::write`, `append`,
 `delete`, `delete_dir`, `mkdir`, `copy` and `write_bytes`, which returned
-nothing, answer `Ok(true)`, a `bool!string`. The `websocket` package's `close`
-answers a `bool!string` too, with `Err("websocket_bad_close")` where it raised.
+nothing, answer `Ok(true)`, a `bool!string`.
 
 This affects you if a program reads a value from these functions or catches
 their errors.

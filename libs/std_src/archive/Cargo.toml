@@ -1,0 +1,26 @@
+# The native library behind `std/archive`: it unpacks zip, tar and tar.gz files
+# on a thread of its own and reports through the program's event queue.
+# The release job ships it as libs/std_src/archive/archive.<ext>, the path the
+# module's `dylib` block names.
+[package]
+name = "candela-std-archive"
+# Never published: it ships inside the toolchain archive.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native library behind candela's std/archive."
+
+[lib]
+name = "candela_std_archive"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candela-std-sys = { path = "../sys" }
+serde_json = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+candela-std-testkit = { path = "../testkit" }

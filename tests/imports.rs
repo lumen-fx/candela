@@ -1599,3 +1599,35 @@ fn macros_import_and_export_like_functions() {
     let stderr = String::from_utf8_lossy(&missing.stderr);
     assert!(stderr.contains("util::twice!"), "stderr: {stderr}");
 }
+
+/// Two modules may each bind their own functions of one library: a call
+/// through the library's name finds the function in whichever block declares
+/// it.
+#[test]
+fn two_modules_bind_one_library_under_one_name() {
+    let output = check_program(
+        "one_library_two_blocks",
+        &[
+            (
+                "a.cdl",
+                "dylib \"./native/shared\" {\n    fn a_only(x: int) -> int;\n}\n\
+                 fn call_a() -> int => shared::a_only(1);\n",
+            ),
+            (
+                "b.cdl",
+                "dylib \"./native/shared\" {\n    fn b_only(x: int) -> int;\n}\n\
+                 fn call_b() -> int => shared::b_only(2);\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"a.cdl\";\nimport \"b.cdl\";\n\
+                 fn main() { print(a::call_a() + b::call_b()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

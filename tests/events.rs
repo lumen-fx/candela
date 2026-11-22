@@ -300,6 +300,7 @@ dylib "ticker" {
 fn main() {
     let ok = event::answer(fn(v) => (v as int) * 2) fn(r) { print(r); };
     ticker::post_json(ok, "{\"value\": 21}");
+    event::wait(ok);
     let bad = event::answer(fn(v) => v as int) fn(r) { print(r); };
     ticker::post_json(bad, "{\"error\": \"nope\"}");
 }

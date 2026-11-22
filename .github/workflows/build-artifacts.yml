@@ -26,10 +26,9 @@ name: build-artifacts
 # WebAssembly, for a host with a browser instead of a file system.
 #
 # Each candela-<os>-<arch> archive holds candela, candela-vm, candela-lsp and
-# the standard library in libs/, the tree install.sh and the MSI lay down.
-#
-# The first-party packages ride along as <name>-<target>.tar.gz, one per
-# package and target; see the packages job.
+# the standard library in libs/, the tree install.sh and the MSI lay down:
+# the modules, their browser halves, and the native libraries some of them
+# bind, C and Rust, built for the archive's target.
 #
 # Every job leaves its output as a run artifact. The caller downloads the lot
 # with merge-multiple and decides what to publish it as.
@@ -178,6 +177,14 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo pgo optimize -- --target ${{ matrix.target }} --features native
 
+      # The standard library's Rust native libraries: process, archive, and
+      # net for http and websocket. A plain release build in a target
+      # directory of its own, like candela-lsp's.
+      - name: Build std native libraries
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --target-dir target-std -p candela-std-process -p candela-std-archive -p candela-std-net
+
       # candela-vm is profiled the same way, on the same workloads compiled to
       # .cdlb by the candela just built, with a profile directory of its own so
       # the two sets of profiles never mix. Every leg builds for the machine it
@@ -228,6 +235,14 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked --target ${{ matrix.target }} --target-dir target-lsp -p candela-lsp
 
+      # dist/libs: the modules whole, the C libraries the steps above built,
+      # and each Rust library at std_src/<name>/<name>.<ext>.
+      - name: Stage the standard library
+        shell: bash
+        run: |
+          artifact=${{ matrix.artifact }}
+          scripts/stage-std.sh "${artifact#candela-}" dist target-std/${{ matrix.target }}/release
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -235,7 +250,6 @@ jobs:
           cp target/${{ matrix.target }}/release/candela dist/
           cp target/${{ matrix.target }}/release/candela-vm dist/
           cp target-lsp/${{ matrix.target }}/release/candela-lsp dist/
-          cp -R libs dist/
           cp LICENSE NOTICE THIRD-PARTY-LICENSE dist/
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
 
@@ -247,7 +261,6 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/candela.exe" "dist/"
           Copy-Item "target/${{ matrix.target }}/release/candela-vm.exe" "dist/"
           Copy-Item "target-lsp/${{ matrix.target }}/release/candela-lsp.exe" "dist/"
-          Copy-Item -Path "libs" -Destination "dist/" -Recurse
           Copy-Item "LICENSE" "dist/"
           Copy-Item "NOTICE" "dist/"
           Copy-Item "THIRD-PARTY-LICENSE" "dist/"
@@ -358,84 +371,12 @@ jobs:
           name: candela-web
           path: candela-web.tar.gz
 
-  # The first-party packages under packages/, one archive per package and
-  # target, named <name>-<target>.tar.gz in the shape build-package.yml packs:
-  # the registry client unpacks them like any other package. A package with a
-  # native half is packed once per desktop target, carrying the library built
-  # for it as dist/<name>.<ext>; one without is packed once, as `any`. They
-  # ride with the toolchain's assets, so a release publishes them from the same
-  # tag and release.yml then tells the registry where they are.
-  packages:
-    name: packages (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-x86_64
-            triple: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: linux-aarch64
-            triple: aarch64-unknown-linux-gnu
-          - os: macos-26-intel
-            target: macos-x86_64
-            triple: x86_64-apple-darwin
-          - os: macos-latest
-            target: macos-aarch64
-            triple: aarch64-apple-darwin
-          - os: windows-latest
-            target: windows-x86_64
-            triple: x86_64-pc-windows-msvc
-          - os: ubuntu-latest
-            target: any
-            triple: ""
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        if: matrix.target != 'any'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          target: ${{ matrix.triple }}
-          rustflags: ""
-
-      # Every native crate under packages/, by the name its manifest gives it,
-      # so a package added there is built without this list changing.
-      - name: Build the native halves
-        if: matrix.target != 'any'
-        shell: bash
-        run: |
-          set -euo pipefail
-          crates=()
-          for manifest in packages/*/native/Cargo.toml; do
-            crates+=(-p "$(awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$manifest")")
-          done
-          cargo build --release --locked --target ${{ matrix.triple }} "${crates[@]}"
-
-      - name: Pack
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ matrix.target }}" = any ]; then
-            scripts/pack-packages.sh any packed
-          else
-            scripts/pack-packages.sh ${{ matrix.target }} packed target/${{ matrix.triple }}/release
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: packages-${{ matrix.target }}
-          path: packed/*.tar.gz
-          if-no-files-found: error
-
   # One checksum file per set of assets, in sha256sum's own format, covering
   # every file the caller is about to publish. install.sh downloads it first
   # and refuses to install an archive whose hash is not the one recorded here.
   sums:
     name: checksum the assets
-    needs: [build, web, packages]
+    needs: [build, web]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
