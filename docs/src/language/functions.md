@@ -415,7 +415,7 @@ fn main() {
 ```
 
 A function is a value by any path that names it: a module's function,
-`math::sqrt`, a function of a `host` or `dylib` block, and a function an `impl`
+`math::cbrt`, a function of a `host` or `dylib` block, and a function an `impl`
 block declares, `Point::new`. A method taken by its path, `Rect::area`, takes
 the receiver as its first argument:
 

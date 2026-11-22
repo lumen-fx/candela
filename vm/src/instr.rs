@@ -383,6 +383,11 @@ pub enum LibFunc {
     /// bytes under the algorithm named by the stored argument, as lowercase
     /// hex.
     HashText = 59,
+    /// x.ceil(). The smallest whole number not less than the source float.
+    Ceil = 60,
+    /// x.trunc(). The source float with its fractional part dropped, toward
+    /// zero.
+    Trunc = 61,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and

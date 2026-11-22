@@ -220,8 +220,8 @@ are the prelude: every program has them with no import, so `xs.map(f)`, `s.capit
 imports at all. Their helpers are methods in `impl` blocks that resolve on the
 receiver's type. Importing one of them by name still works and reaches the same
 module. A call to a name an unimported module declares is a compile error whose
-help names the import, so `sqrt(x)` points at `import "std/math";` and the
-call `math::sqrt(x)`.
+help names the import, so `cbrt(x)` points at `import "std/math";` and the
+call `math::cbrt(x)`.
 
 ## Packages
 

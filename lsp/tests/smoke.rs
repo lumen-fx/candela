@@ -1429,7 +1429,7 @@ async fn inlay_hints_name_types_and_parameters() {
 /// fix its help text names: here the import a std function needs.
 #[tokio::test]
 async fn a_missing_import_is_a_quick_fix() {
-    let text = "fn main() {\n    print(sqrt(2.0));\n}\n";
+    let text = "fn main() {\n    print(cbrt(2.0));\n}\n";
     let uri = "file:///tmp/candela-lsp-actions.cdl";
     let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../libs");
     let (mut child, mut stdin, mut stdout) =
@@ -1457,7 +1457,7 @@ async fn a_missing_import_is_a_quick_fix() {
     let texts: Vec<&str> = edits.iter().filter_map(|e| e["newText"].as_str()).collect();
     assert_eq!(
         texts,
-        vec!["import \"std/math\";\n", "math::sqrt"],
+        vec!["import \"std/math\";\n", "math::cbrt"],
         "{actions}"
     );
     shutdown_and_exit(&mut child, stdin, &mut stdout).await;

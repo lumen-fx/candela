@@ -5,7 +5,9 @@ It has been modified by the candela authors. See the NOTICE file.
 -->
 # math
 
-Trigonometry, logarithms, roots, rounding, and the constants.
+Trigonometry, logarithms, powers, roots, and the constants. Square roots,
+rounding and absolute values are methods on the number itself (`x.sqrt()`,
+`x.round()`, `x.abs()`); see [built-ins](builtins.md).
 
 ```rust
 import "std/math";
@@ -16,14 +18,14 @@ return an int where the underlying operation is integral (`ldexp`, `ilogb`,
 `scalbn`).
 
 None of them raises. An argument outside a function's domain gives the platform's
-floating-point answer, so `math::sqrt(-1.0)` is not-a-number rather than an
+floating-point answer, so `math::log(-1.0)` is not-a-number rather than an
 error. Infinities and not-a-number behave like any other float, and print as
 `inf`, `-inf` and `NaN`. Unlike the usual floating-point rule, not-a-number
 compares equal to itself, so test for it with `string(x) == "NaN"` rather than
 `x != x`.
 
 The module binds a small dynamic library that wraps the platform maths library,
-so it is one of the four std modules that need that library present at run time.
+so it is one of the std modules that need that library present at run time.
 A `.cdlb` built from a program that imports `std/math` records the binding by
 name and re-opens it when the artifact runs; see
 [artifacts](../reference/artifacts.md).
@@ -73,25 +75,17 @@ Four common operations are also built-in methods on a number, with no import:
 
 | Function | Returns |
 | --- | --- |
-| `math::sqrt(x)` | The square root of `x` |
 | `math::cbrt(x)` | The cube root of `x` |
 | `math::hypot(x, y)` | The length of the hypotenuse with sides `x` and `y`, without intermediate overflow |
 | `math::erf(x)` | The error function of `x` |
 | `math::erfc(x)` | The complementary error function, `1 - erf(x)` |
 
-## Rounding and sign
+## Remainder and sign
 
 | Function | Returns |
 | --- | --- |
-| `math::floor(x)` | The largest whole number not greater than `x` |
-| `math::ceil(x)` | The smallest whole number not less than `x` |
-| `math::round(x)` | `x` rounded to the nearest whole number, halves away from zero |
-| `math::trunc(x)` | `x` with its fractional part discarded, towards zero |
 | `math::fmod(x, y)` | The remainder of `x / y`, with the sign of `x` |
 | `math::copysign(x, y)` | The magnitude of `x` with the sign of `y` |
-
-All of these return a float, including `floor`, `ceil`, `round`, and `trunc`.
-Convert with `int(...)` when you want a whole-number type.
 
 ## Constants
 
@@ -107,8 +101,8 @@ Each constant is a function call, so it costs a call and returns a float.
 import "std/math";
 
 fn main() {
-    print(math::sqrt(2.0));
-    print(math::round(math::sin(math::pi() / 2.0)));
-    print(int(math::floor(7.0 / 2.0)));
+    print(math::cbrt(27.0));
+    print(math::sin(math::pi() / 2.0).round());
+    print(math::hypot(3.0, 4.0));
 }
 ```

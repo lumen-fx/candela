@@ -26,12 +26,7 @@ dylib "../std_src/math/math" {
     fn candela_hypot(x: float, y: float) -> float;
     fn candela_erf(x: float) -> float;
     fn candela_erfc(x: float) -> float;
-    fn candela_sqrt(x: float) -> float;
     fn candela_pow(base: float, exp: float) -> float;
-    fn candela_floor(x: float) -> float;
-    fn candela_ceil(x: float) -> float;
-    fn candela_round(x: float) -> float;
-    fn candela_trunc(x: float) -> float;
     fn candela_fmod(x: float, y: float) -> float;
     fn candela_copysign(x: float, sign: float) -> float;
 }
@@ -63,12 +58,7 @@ fn cbrt(x) { return math::candela_cbrt(x); }
 fn hypot(x, y) { return math::candela_hypot(x, y); }
 fn erf(x) { return math::candela_erf(x); }
 fn erfc(x) { return math::candela_erfc(x); }
-fn sqrt(x) { return math::candela_sqrt(x); }
 fn pow(x, y) { return math::candela_pow(x, y); }
-fn floor(x) { return math::candela_floor(x); }
-fn ceil(x) { return math::candela_ceil(x); }
-fn round(x) { return math::candela_round(x); }
-fn trunc(x) { return math::candela_trunc(x); }
 fn fmod(x, y) { return math::candela_fmod(x, y); }
 fn copysign(x, y) { return math::candela_copysign(x, y); }
 

@@ -442,6 +442,8 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::SqrtFloat
         | LibFunc::Round
         | LibFunc::Floor
+        | LibFunc::Ceil
+        | LibFunc::Trunc
         | LibFunc::AsFloatVal => DataType::Float,
         LibFunc::Abs | LibFunc::Repeat => arg,
         LibFunc::Argv | LibFunc::Split | LibFunc::FsList => {

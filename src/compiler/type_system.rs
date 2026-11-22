@@ -5120,7 +5120,7 @@ impl Expr {
                         &[DataType::String, DataType::Array(None)]
                     ),
                     "push" | "sort" | "remove" => DataType::Null,
-                    "sqrt" | "round" | "floor" => DataType::Float,
+                    "sqrt" | "round" | "floor" | "ceil" | "trunc" => DataType::Float,
                     "abs" => receiver_type!(
                         |t| match t {
                             DataType::Float => Some(DataType::Float),

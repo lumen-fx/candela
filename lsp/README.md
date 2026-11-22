@@ -109,8 +109,8 @@ the current text, so `bird.` completes while the line around it is unfinished.
 - **Quick fixes.** A code action for the diagnostics whose help names one
   fix: a standard library function or module used without its import gets
   the `import` added after the file's other imports, and the call spelled
-  through the module when the help says so (`sqrt(x)` becomes
-  `math::sqrt(x)`, `assert_eq` becomes `assert::eq`); an item of an imported
+  through the module when the help says so (`cbrt(x)` becomes
+  `math::cbrt(x)`, `assert_eq` becomes `assert::eq`); an item of an imported
   module called by its bare name is called through the module
   (`json::parse`); and an `implicit_float_to_int` warning wraps the value in
   `int(...)`. The fix is read from the diagnostic's code and help text.

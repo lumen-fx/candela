@@ -220,7 +220,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     std::fs::create_dir_all(&work).expect("create work dir");
     std::fs::write(
         work.join("prog.cdl"),
-        "import \"std/math\";\nfn main() { print(math::sqrt(9.0)); }\n",
+        "import \"std/math\";\nfn main() { print(math::cbrt(27.0)); }\n",
     )
     .expect("write program");
 

@@ -110,12 +110,7 @@ const TABLE: &[(&str, &str, Intrinsic)] = &[
     (MATH, "candela_hypot", binary!(f64::hypot)),
     (MATH, "candela_erf", unary!(libm::erf)),
     (MATH, "candela_erfc", unary!(libm::erfc)),
-    (MATH, "candela_sqrt", unary!(f64::sqrt)),
     (MATH, "candela_pow", binary!(f64::powf)),
-    (MATH, "candela_floor", unary!(f64::floor)),
-    (MATH, "candela_ceil", unary!(f64::ceil)),
-    (MATH, "candela_round", unary!(f64::round)),
-    (MATH, "candela_trunc", unary!(f64::trunc)),
     (MATH, "candela_fmod", binary!(|x: f64, y: f64| x % y)),
     (MATH, "candela_copysign", binary!(f64::copysign)),
     (TIME, "now", |_| Ret::Int(clock::now())),
@@ -491,9 +486,8 @@ mod tests {
     #[test]
     fn math_matches_the_c_library() {
         let f = |x| [Arg::Float(x)];
-        assert_eq!(call(MATH, "candela_sqrt", &f(16.0)), Ret::Float(4.0));
+        assert_eq!(call(MATH, "candela_cbrt", &f(27.0)), Ret::Float(3.0));
         assert_eq!(call(MATH, "candela_sin", &f(0.0)), Ret::Float(0.0));
-        assert_eq!(call(MATH, "candela_round", &f(-2.5)), Ret::Float(-3.0));
         assert_eq!(call(MATH, "candela_logb", &f(8.0)), Ret::Float(3.0));
         assert_eq!(
             call(MATH, "candela_logb", &f(0.0)),
@@ -513,7 +507,7 @@ mod tests {
             Ret::Float(1.5)
         );
         assert_eq!(call(MATH, "candela_erf", &f(0.0)), Ret::Float(0.0));
-        let Ret::Float(nan) = call(MATH, "candela_sqrt", &f(-1.0)) else {
+        let Ret::Float(nan) = call(MATH, "candela_log", &f(-1.0)) else {
             unreachable!()
         };
         assert!(nan.is_nan());

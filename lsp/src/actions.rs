@@ -167,12 +167,12 @@ mod tests {
     #[test]
     fn a_std_function_gets_its_import_and_its_module() {
         let after = fixed(
-            "fn main() {\n    print(sqrt(2.0));\n}\n",
+            "fn main() {\n    print(cbrt(2.0));\n}\n",
             "unknown_function",
         );
         assert_eq!(
             after,
-            "import \"std/math\";\nfn main() {\n    print(math::sqrt(2.0));\n}\n"
+            "import \"std/math\";\nfn main() {\n    print(math::cbrt(2.0));\n}\n"
         );
     }
 

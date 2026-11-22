@@ -55,7 +55,7 @@ pub fn is_builtin_method(name: &str, type_name: &str) -> bool {
         ],
         "map" => &["len", "keys", "values", "contains", "remove"],
         "int" => &["abs"],
-        "float" => &["abs", "sqrt", "round", "floor"],
+        "float" => &["abs", "sqrt", "round", "floor", "ceil", "trunc"],
         _ => &[],
     };
     names.contains(&name)
@@ -474,10 +474,15 @@ pub fn builtin_methods(
             output.push(Instr::CallLibFunc(LibFunc::Round, id, output_id));
             Some(output_id)
         }
-        "floor" => {
+        "floor" | "ceil" | "trunc" => {
             check!(DataType::Float, &[DataType::Float], name, 0);
             let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::Floor, id, output_id));
+            let func = match name {
+                "floor" => LibFunc::Floor,
+                "ceil" => LibFunc::Ceil,
+                _ => LibFunc::Trunc,
+            };
+            output.push(Instr::CallLibFunc(func, id, output_id));
             Some(output_id)
         }
         "abs" => {

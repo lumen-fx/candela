@@ -342,6 +342,8 @@ is what `as {any: any}` hands back, keeps taking entries of any type.
 | `x.sqrt()` | float | float | The square root of `x` |
 | `x.round()` | float | float | `x` rounded to the nearest whole number, halves away from zero |
 | `x.floor()` | float | float | The largest whole number not greater than `x` |
+| `x.ceil()` | float | float | The smallest whole number not less than `x` |
+| `x.trunc()` | float | float | `x` with its fractional part dropped, toward zero |
 
-The [math module](math.md) covers the rest of the numeric surface, including
-`ceil`, `trunc`, the trigonometric functions, and the logarithms.
+The [math module](math.md) covers the rest of the numeric surface: the
+trigonometric functions, the logarithms, powers and the constants.

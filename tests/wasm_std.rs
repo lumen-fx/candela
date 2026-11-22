@@ -24,10 +24,10 @@ fn math_imports_and_computes() {
     let out = run(r#"
 import "std/math";
 fn main() {
-    print(math::sqrt(16.0));
+    print(math::cbrt(64.0));
     print(math::sin(0.0));
     print(math::pow(2.0, 10.0));
-    print(math::floor(math::pi()));
+    print(math::pi().floor());
 }
 "#);
     assert_eq!(
@@ -48,7 +48,7 @@ fn main() {
     print(math::erf(0.5));
     print(math::ldexp(1.0, 3));
     print(math::fmod(7.5, 2.0));
-    print(math::sqrt(-1.0));
+    print(math::log(-1.0));
 }
 "#);
     assert_eq!(
@@ -192,7 +192,7 @@ fn an_artifact_that_imports_math_loads_and_runs() {
         String::from(
             r#"
 import "std/math";
-fn root(x: float) -> float { return math::sqrt(x); }
+fn root(x: float) -> float { return math::cbrt(x); }
 fn main() {}
 "#,
         ),

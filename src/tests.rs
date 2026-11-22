@@ -1474,6 +1474,28 @@ pub fn float_floor() {
 }
 
 #[test]
+pub fn float_ceil_and_trunc() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = 3.2;
+            print(x.ceil());
+        }
+        ",
+        4.0f64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = -3.7;
+            print(x.trunc());
+        }
+        ",
+        (-3.0f64).into()
+    );
+}
+
+#[test]
 pub fn float_abs() {
     run_and_check_registers!(
         "
@@ -15666,12 +15688,12 @@ pub fn a_program_s_own_variant_wins_over_the_prelude_s() {
 
 #[test]
 pub fn a_name_in_an_unimported_module_names_the_import() {
-    let src = "fn main() { print(sqrt(2.0)); }";
+    let src = "fn main() { print(cbrt(2.0)); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unknown_function");
     assert!(
-        d.message.contains("import \"std/math\";") && d.message.contains("math::sqrt"),
+        d.message.contains("import \"std/math\";") && d.message.contains("math::cbrt"),
         "{d:?}"
     );
 

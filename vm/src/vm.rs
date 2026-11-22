@@ -3170,6 +3170,12 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             Instr::CallLibFunc(LibFunc::Floor, tgt, dest) => {
                 regs[dest] = regs[tgt].as_float().floor().into();
             }
+            Instr::CallLibFunc(LibFunc::Ceil, tgt, dest) => {
+                regs[dest] = regs[tgt].as_float().ceil().into();
+            }
+            Instr::CallLibFunc(LibFunc::Trunc, tgt, dest) => {
+                regs[dest] = regs[tgt].as_float().trunc().into();
+            }
             Instr::CallLibFunc(LibFunc::TheAnswer, _, dest) => {
                 outln!(
                     *handle,
