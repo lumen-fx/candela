@@ -128,3 +128,54 @@ fn write_bytes(path: string, bytes: int[]) -> bool!string {
     }
     return Ok(true);
 }
+
+/// Moves the file or directory at `from` to `to`, replacing a file at `to`.
+fn rename(from: string, to: string) -> bool!string {
+    try {
+        fs_rename(from, to);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(true);
+}
+
+/// The size of the file at `path`, in bytes.
+fn size(path: string) -> int!string {
+    try {
+        return Ok(fs_stat(path, 0));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// When the file at `path` last changed, in seconds since the unix epoch.
+fn modified(path: string) -> int!string {
+    try {
+        return Ok(fs_stat(path, 1));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// Deletes the file at `path`, or the directory there and everything in it.
+/// Unlike `delete` and `delete_dir`, it does not stop at a directory that
+/// still has entries.
+fn delete_all(path: string) -> bool!string {
+    try {
+        fs_delete_all(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(true);
+}
+
+/// `path` as an absolute path, joined onto the working directory or the base
+/// directory the host set when it is relative. `..` and links stay as they
+/// are written; nothing needs to exist there.
+fn absolute(path: string) -> string!string {
+    try {
+        return Ok(fs_absolute(path));
+    } catch e {
+        return Err(e);
+    }
+}

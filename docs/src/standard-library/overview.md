@@ -46,8 +46,11 @@ there as it does on a desktop, with the same functions. The prelude is there
 too.
 
 A `.cdlb` built on a desktop runs in the browser with every module that needs
-neither a file system nor a native library: `assert`, `event`, `hash`, `json`,
-`math`, `random`, `set`, `time` and the prelude. `browser`, `js` and
+neither a file system nor a native library: `assert`, `csv`, `encoding`,
+`event`, `hash`, `json`, `math`, `os` (its `platform` and `arch`), `path`,
+`random`, `set`, `time` (all but `sleep_ms` and the timers) and the prelude.
+The browser build compiles these from source too, so `import "std/csv";`
+works in the candela prompt. `browser`, `js` and
 `websocket` run there through their `host` blocks, which the host that runs
 the page binds to the JavaScript modules in `libs/std/web/` by name. `fs`,
 `process`, `http` and `archive` do not run in a browser.
@@ -107,9 +110,9 @@ like any import; its names stay reachable with no prefix. A method nothing calls
 a program that does not use it. A program that declares its own enum with a
 `Some` variant, or its own `Option`, gets its own when it names it.
 
-Everything else is imported: `archive`, `assert`, `browser`, `event`, `fs`,
-`hash`, `http`, `js`, `json`, `math`, `process`, `random`, `set`, `time` and
-`websocket`.
+Everything else is imported: `archive`, `assert`, `browser`, `csv`,
+`encoding`, `event`, `fs`, `hash`, `http`, `js`, `json`, `math`, `os`, `path`,
+`process`, `random`, `set`, `time` and `websocket`.
 
 ## The modules
 
@@ -119,8 +122,10 @@ Everything else is imported: `archive`, `assert`, `browser`, `event`, `fs`,
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [browser](browser.md) | A page's popups, messages, sharing, saving, media queries, file picker and fullscreen |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
+| [csv](csv.md) | Parse and write comma-separated rows |
+| [encoding](encoding.md) | UTF-8, hex, base64 and URL percent encoding |
 | [event](event.md) | Results from work running elsewhere, delivered to a function, and waiting for them |
-| [fs](fs.md) | Read, write, copy and delete files, and list and make directories |
+| [fs](fs.md) | Read, write, copy, move and delete files, and list and make directories |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string or a file, as hex |
 | [http](http.md) | Download a URL to a file, with progress and checksum verification |
 | [js](js.md) | The page's own JavaScript: global functions, modules, DOM events |
@@ -129,12 +134,14 @@ Everything else is imported: `archive`, `assert`, `browser`, `event`, `fs`,
 | [map](map.md) | Map methods: `get`, which answers an `Option`, and `is_empty` |
 | [math](math.md) | Trigonometry, logarithms, powers, roots, and the constants |
 | [option](option.md) | The `Option` enum: `Some(x)` or `None`, with methods |
+| [os](os.md) | Environment variables, the working directory, the platform |
+| [path](path.md) | Join paths and take them apart, as strings |
 | [process](process.md) | Run another program and receive its output and exit |
-| [random](random.md) | A seedable pseudo-random generator for ints and floats |
+| [random](random.md) | A seedable pseudo-random generator: ints, floats, choices, shuffles, uuids |
 | [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with methods |
 | [set](set.md) | `Set<T>`, a set of unique values, with union, intersection, difference, and symmetric difference |
 | [string](string.md) | Substrings, characters, padding, capitalisation, line splitting, counting |
-| [time](time.md) | The current unix time, and formatting a timestamp |
+| [time](time.md) | Clocks, sleeping, timers, formatting and parsing timestamps |
 | [websocket](websocket.md) | WebSocket connections with text frames, on the desktop and in a browser |
 
 ## Errors

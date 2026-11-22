@@ -1,0 +1,15 @@
+import "std/assert";
+import "std/csv";
+
+fn main() {
+    assert::eq(csv::parse("a,b\n1,\"x,\"\"y\"\"\"\r\n"), Ok([["a", "b"], ["1", "x,\"y\""]]));
+    assert::eq(csv::parse("a"), Ok([["a"]]));
+    assert::eq(csv::parse("a,"), Ok([["a", ""]]));
+    assert::eq(csv::parse("")?.len(), 0);
+    assert::eq(csv::parse("\"open"), Err("csv_unterminated_quote"));
+    let rows = [["a", "b,c", "q\"t"], ["1", "line\nbreak"]];
+    let text = csv::stringify(rows);
+    assert::eq(text, "a,\"b,c\",\"q\"\"t\"\n1,\"line\nbreak\"\n");
+    assert::eq(csv::parse(text), Ok(rows));
+    print("csv ok");
+}

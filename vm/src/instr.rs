@@ -392,6 +392,25 @@ pub enum LibFunc {
     /// [`Self::EventNext`] answers it with `wait`, or an empty list once the
     /// source in the register has no work left.
     EventWait = 62,
+    /// os::platform, arch, cwd, home_dir and temp_dir: the fact the int in
+    /// the source register names (0 to 4), as a string.
+    OsQuery = 63,
+    /// os::env. The variable the source string names, as a list holding its
+    /// value, or an empty list when it is not set.
+    OsEnv = 64,
+    /// os::env_vars. Every variable, as a flat list of names and values.
+    OsEnvVars = 65,
+    /// fs::size and fs::modified: the file's size in bytes, or its last
+    /// change in unix seconds, as the stored int (0 or 1) asks.
+    FsStat = 66,
+    /// fs::absolute. The source path made absolute, without touching links.
+    FsAbsolute = 67,
+    /// encoding::utf8. The source string's UTF-8 bytes.
+    Utf8Bytes = 68,
+    /// encoding::from_utf8. The string the source list of bytes spells.
+    FromUtf8 = 69,
+    /// time::now_ms and clock_ns, as the int in the source register asks.
+    TimeQuery = 70,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and
@@ -437,6 +456,14 @@ pub enum LibFuncVoid {
     EventOn = 9,
     /// eprint(text): one line to stderr, after what stdout holds so far.
     Eprint = 10,
+    /// os::set_env(name, value).
+    OsSetEnv = 11,
+    /// os::set_cwd(path).
+    OsSetCwd = 12,
+    /// fs::rename(from, to).
+    FsRename = 13,
+    /// fs::delete_all(path): a file, or a directory and all it holds.
+    FsDeleteAll = 14,
 }
 
 impl Instr {

@@ -1,0 +1,79 @@
+/// The process the program runs in: its environment variables, its working
+/// directory, and the platform under it.
+///
+///     import "std/os";
+///     fn main() {
+///         print(os::env("HOME") else "no home");
+///         print(os::platform() + " on " + os::arch());
+///     }
+///
+/// The command line, `exit`, `input` and `print` stay built-ins; see
+/// `argv()`. In a browser only `platform` and `arch` answer, as `web` and
+/// `wasm32`.
+
+/// The value of the environment variable `name`, or `None` when it is not
+/// set.
+fn env(name: string) -> string? {
+    let found = os_env(name);
+    if found.len() == 0 {
+        return None;
+    }
+    return Some(found[0]);
+}
+
+/// Sets the environment variable `name` to `value` for this program and the
+/// programs it starts from now on. A name that is empty or holds `=` is left
+/// alone.
+fn set_env(name: string, value: string) {
+    os_set_env(name, value);
+}
+
+/// Every environment variable, by name.
+fn env_vars() -> {string: string} {
+    let flat = os_env_vars();
+    let vars: {string: string} = {};
+    let i = 0;
+    while i < flat.len() {
+        vars[flat[i]] = flat[i + 1];
+        i += 2;
+    }
+    return vars;
+}
+
+/// The working directory, as an absolute path.
+fn cwd() -> string!string {
+    try {
+        return Ok(os_query(2));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// Makes `path` the working directory. A relative path resolves against the
+/// current one.
+fn set_cwd(path: string) -> bool!string {
+    try {
+        os_set_cwd(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(true);
+}
+
+/// `linux`, `macos`, `windows`, or `web` in a browser.
+fn platform() -> string => os_query(0);
+
+/// The processor architecture: `x86_64`, `aarch64`, or `wasm32` in a browser.
+fn arch() -> string => os_query(1);
+
+/// The user's home directory, or `None` when the environment names none.
+fn home_dir() -> string? {
+    let home = os_query(3);
+    if home == "" {
+        return None;
+    }
+    return Some(home);
+}
+
+/// The directory for temporary files.
+fn temp_dir() -> string => os_query(4);

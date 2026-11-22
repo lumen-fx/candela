@@ -1,0 +1,175 @@
+/// Paths as strings: joining them and taking them apart.
+///
+/// Nothing here touches the disk; `std/fs` does that. A separator is `/`,
+/// and on Windows `\` as well, where results are written with `\`.
+///
+///     import "std/path";
+///     fn main() {
+///         let p = path::join(["assets", "img", "logo.png"]);
+///         print(path::parent(p));
+///         print(path::stem(p) + " is a " + path::extension(p));
+///     }
+
+/// The separator results are written with: `\` on Windows, `/` elsewhere.
+fn separator() -> string {
+    if os_query(0) == "windows" {
+        return "\\";
+    }
+    return "/";
+}
+
+/// `p` with every separator written as `/`.
+fn forward(p: string) -> string {
+    if os_query(0) == "windows" {
+        return p.replace("\\", "/");
+    }
+    return p;
+}
+
+/// `p`, written with `/`, back in the platform's separator.
+fn native(p: string) -> string {
+    if os_query(0) == "windows" {
+        return p.replace("/", "\\");
+    }
+    return p;
+}
+
+/// True when `p` names a place from the root rather than from the working
+/// directory: it starts with a separator, or on Windows with a drive such as
+/// `C:`.
+fn is_absolute(p: string) -> bool {
+    let f = forward(p);
+    if f.starts_with("/") {
+        return true;
+    }
+    return os_query(0) == "windows" && f.len() >= 2 && f.char_at(1) == ":";
+}
+
+/// The parts joined with the separator. An empty part is skipped, and an
+/// absolute part starts the path over from it, so `join(["a", "/b"])` is
+/// `/b`.
+fn join(parts: string[]) -> string {
+    let out = "";
+    for part in parts {
+        if part == "" {
+            continue;
+        }
+        let f = forward(part);
+        if is_absolute(f) || out == "" {
+            out = f;
+        } else if out.ends_with("/") {
+            out = out + f;
+        } else {
+            out = out + "/" + f;
+        }
+    }
+    return native(out);
+}
+
+/// `p` without trailing separators, except a root, which stays.
+fn trimmed(p: string) -> string {
+    let f = forward(p);
+    while f.len() > 1 && f.ends_with("/") {
+        f = f[0..f.len() - 1];
+    }
+    return f;
+}
+
+/// Where the last segment of `f` starts, or -1 when it has no separator.
+fn last_separator(f: string) -> int {
+    let i = f.len() - 1;
+    while i >= 0 {
+        if f.char_at(i) == "/" {
+            return i;
+        }
+        i -= 1;
+    }
+    return -1;
+}
+
+/// Everything before the last segment: `a/b` for `a/b/c`, `/` for `/a`, and
+/// an empty string for a path of one segment.
+fn parent(p: string) -> string {
+    let f = trimmed(p);
+    let at = last_separator(f);
+    if at < 0 {
+        return "";
+    }
+    if at == 0 {
+        return native("/");
+    }
+    return native(f[0..at]);
+}
+
+/// The last segment: `c.txt` for `a/b/c.txt`.
+fn name(p: string) -> string {
+    let f = trimmed(p);
+    if f == "/" {
+        return "";
+    }
+    let at = last_separator(f);
+    return f[at + 1..f.len()];
+}
+
+/// Where the extension's dot sits in `n`, or -1. A leading dot, as in
+/// `.bashrc`, starts no extension.
+fn dot_at(n: string) -> int {
+    let i = n.len() - 1;
+    while i > 0 {
+        if n.char_at(i) == "." {
+            return i;
+        }
+        i -= 1;
+    }
+    return -1;
+}
+
+/// The last segment without its extension: `c` for `a/c.txt`.
+fn stem(p: string) -> string {
+    let n = name(p);
+    let at = dot_at(n);
+    if at < 0 {
+        return n;
+    }
+    return n[0..at];
+}
+
+/// The extension of the last segment, without the dot: `txt` for `a/c.txt`,
+/// and an empty string when there is none.
+fn extension(p: string) -> string {
+    let n = name(p);
+    let at = dot_at(n);
+    if at < 0 {
+        return "";
+    }
+    return n[at + 1..n.len()];
+}
+
+/// `p` with `.` segments, repeated separators and `x/..` pairs taken out:
+/// `a/./b/../c` is `a/c`. A relative path keeps the `..` it cannot resolve,
+/// and an empty result is `.`.
+fn normalize(p: string) -> string {
+    let f = forward(p);
+    let absolute = f.starts_with("/");
+    let kept: string[] = [];
+    for segment in f.split("/") {
+        if segment == "" || segment == "." {
+            continue;
+        }
+        if segment == ".." && kept.len() > 0 && kept[kept.len() - 1] != ".." {
+            kept.remove(kept.len() - 1);
+        } else if segment == ".." && absolute {
+            continue;
+        } else {
+            kept.push(segment);
+        }
+    }
+    let joined = kept.join("/");
+    if absolute {
+        return native("/" + joined);
+    }
+    if joined == "" {
+        return ".";
+    }
+    return native(joined);
+}

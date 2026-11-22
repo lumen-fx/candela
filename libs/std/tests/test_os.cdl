@@ -1,0 +1,18 @@
+import "std/assert";
+import "std/os";
+
+// Runs in a scratch directory the caller names as the first argument.
+fn main() {
+    let scratch = argv()[0];
+    assert::is_true(["linux", "macos", "windows"].contains(os::platform()));
+    assert::is_true(os::arch() != "");
+    assert::eq(os::env("CANDELA_OS_TEST_UNSET"), None);
+    os::set_env("CANDELA_OS_TEST", "set");
+    assert::eq(os::env("CANDELA_OS_TEST"), Some("set"));
+    assert::eq(os::env_vars()["CANDELA_OS_TEST"], "set");
+    os::set_cwd(scratch)?;
+    assert::is_true(os::cwd()?.ends_with(scratch.split("/").last().unwrap()));
+    assert::eq(os::set_cwd(scratch + "/missing"), Err("fs_not_found"));
+    assert::is_true(os::temp_dir() != "");
+    print("os ok");
+}

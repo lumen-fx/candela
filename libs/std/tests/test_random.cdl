@@ -1,0 +1,21 @@
+import "std/assert";
+import "std/random";
+
+fn main() {
+    random::seed(7);
+    let u = random::uuid();
+    assert::eq(u.len(), 36);
+    assert::eq(u.char_at(14), "4");
+    assert::is_true(["8", "9", "a", "b"].contains(u.char_at(19)));
+    assert::eq(u.split("-").map(fn(p) => p.len()), [8, 4, 4, 4, 12]);
+    random::seed(7);
+    assert::eq(random::uuid(), u);
+    let xs = [1, 2, 3, 4, 5];
+    random::shuffle(xs);
+    assert::eq(xs.len(), 5);
+    assert::eq(xs.sum(), 15);
+    assert::is_true(xs.contains(random::choice(xs).unwrap()));
+    let none: int[] = [];
+    assert::eq(random::choice(none), None);
+    print("random ok");
+}

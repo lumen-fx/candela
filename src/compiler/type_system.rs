@@ -2563,15 +2563,17 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
 #[must_use]
 pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
     Some(match name {
-        "json_stringify" | "fs_read" | "hash_file" | "hash_text" => DataType::String,
+        "json_stringify" | "fs_read" | "hash_file" | "hash_text" | "os_query" | "fs_absolute"
+        | "utf8_text" => DataType::String,
         // json::parse yields a fully dynamic value.
         "json_parse" => DataType::Unknown,
         "fs_exists" | "fs_is_dir" => DataType::Bool,
-        "fs_list" => DataType::Array(Some(Box::new(DataType::String))),
-        "fs_read_bytes" => DataType::Array(Some(Box::new(DataType::Int))),
+        "fs_list" | "os_env" | "os_env_vars" => DataType::Array(Some(Box::new(DataType::String))),
+        "fs_read_bytes" | "utf8_bytes" => DataType::Array(Some(Box::new(DataType::Int))),
         "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" | "fs_mkdir" | "fs_copy"
-        | "fs_write_bytes" | "event_on" => DataType::Null,
-        "event_source" => DataType::Int,
+        | "fs_write_bytes" | "event_on" | "os_set_env" | "os_set_cwd" | "fs_rename"
+        | "fs_delete_all" => DataType::Null,
+        "event_source" | "fs_stat" | "time_query" => DataType::Int,
         // `[source, handler, payload]`, or empty when nothing is queued.
         "event_next" | "event_wait" => DataType::Array(Some(Box::new(DataType::Unknown))),
         _ => return None,

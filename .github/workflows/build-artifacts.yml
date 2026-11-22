@@ -155,21 +155,21 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/math/math.dylib libs/std_src/math/math.c
-          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/time/time.dylib libs/std_src/time/time.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/time/time.dylib libs/std_src/time/time.c libs/std_src/time/utc.c libs/std_src/time/timer.c
           clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -dynamiclib -o libs/std_src/random/random.dylib libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
 
       - name: Build stdlib dylibs (Linux)
         if: runner.os == 'Linux'
         run: |
           clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/math/math.so libs/std_src/math/math.c
-          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/time/time.so libs/std_src/time/time.c
+          clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -pthread -o libs/std_src/time/time.so libs/std_src/time/time.c libs/std_src/time/utc.c libs/std_src/time/timer.c
           clang -O2 -flto -fomit-frame-pointer -fvisibility=hidden -shared -fPIC -o libs/std_src/random/random.so libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
 
       - name: Build stdlib dylibs (Windows)
         if: runner.os == 'Windows'
         run: |
           clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/math/math.dll libs/std_src/math/math.c
-          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/time/time.dll libs/std_src/time/time.c
+          clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/time/time.dll libs/std_src/time/time.c libs/std_src/time/utc.c libs/std_src/time/timer.c
           clang -O2 -flto -fuse-ld=lld -fomit-frame-pointer -fvisibility=hidden -shared -o libs/std_src/random/random.dll libs/std_src/random/random.c libs/std_src/random/pcg_basic.c
 
       - name: Build final binary

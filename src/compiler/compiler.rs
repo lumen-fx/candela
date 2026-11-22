@@ -7627,6 +7627,22 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/random.cdl" => Some(include_str!("../../libs/std/random.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/hash.cdl" => Some(include_str!("../../libs/std/hash.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/assert.cdl" => Some(include_str!("../../libs/std/assert.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/csv.cdl" => Some(include_str!("../../libs/std/csv.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/encoding.cdl" => Some(include_str!("../../libs/std/encoding.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/event.cdl" => Some(include_str!("../../libs/std/event.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/json.cdl" => Some(include_str!("../../libs/std/json.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/os.cdl" => Some(include_str!("../../libs/std/os.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/path.cdl" => Some(include_str!("../../libs/std/path.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/set.cdl" => Some(include_str!("../../libs/std/set.cdl")),
         _ => None,
     }
 }

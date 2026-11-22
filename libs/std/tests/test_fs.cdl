@@ -37,5 +37,17 @@ fn main() {
 
     assert::eq(fs::delete_dir(root + "/a"), Err("fs_directory_not_empty"));
 
+    assert::eq(fs::size(dir + "/z.txt")?, 5);
+    assert::is_true(fs::modified(dir + "/z.txt")? > 0);
+    assert::eq(fs::size(root + "/missing"), Err("fs_not_found"));
+    fs::rename(dir + "/z.txt", dir + "/moved.txt")?;
+    assert::is_false(fs::exists(dir + "/z.txt"));
+    assert::eq(fs::read(dir + "/moved.txt")?, "hello");
+    assert::is_true(fs::absolute("x")?.ends_with("x"));
+    assert::is_true(fs::absolute(root)?.len() >= root.len());
+    fs::delete_all(root + "/a")?;
+    assert::is_false(fs::exists(root + "/a"));
+    assert::eq(fs::delete_all(root + "/a"), Err("fs_not_found"));
+
     print("fs ok");
 }

@@ -2300,6 +2300,21 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
         };
     }
 
+    // A list of strings, built with each one rooted while the next is made.
+    macro_rules! string_list {
+        ($strings:expr) => {{
+            let base = recursion_stack.len();
+            for text in $strings {
+                let s = string!(text);
+                recursion_stack.0.push(s);
+            }
+            let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+            let list = obj_pool.get_mut(array_id as usize);
+            list.extend(recursion_stack.0.drain(base..));
+            Data::array(array_id)
+        }};
+    }
+
     macro_rules! error_with_catch {
         ($err:expr) => {
             i = caught!($err);
@@ -3592,6 +3607,101 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 let list = obj_pool.get_mut(array_id as usize);
                 list.extend(bytes.iter().map(|b| Data::int(i64::from(*b))));
                 regs[dest] = Data::array(array_id);
+            }
+            // -----
+            // OS, FILES, ENCODING, TIME (std/os, std/fs, std/encoding, std/time)
+            // -----
+            Instr::CallLibFunc(LibFunc::OsQuery, kind, dest) => {
+                match crate::sys::query(regs[kind].as_int()) {
+                    Ok(text) => regs[dest] = string!(text),
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                }
+            }
+            Instr::CallLibFunc(LibFunc::OsEnv, name, dest) => {
+                let value = std::env::var(regs[name].as_str(str_pool)).ok();
+                regs[dest] = string_list!(value);
+            }
+            Instr::CallLibFunc(LibFunc::OsEnvVars, _, dest) => {
+                regs[dest] = string_list!(crate::sys::env_vars());
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::OsSetEnv, name, value) => {
+                crate::sys::set_env(regs[name].as_str(str_pool), regs[value].as_str(str_pool));
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::OsSetCwd, path, _) => {
+                if let Err(e) = std::env::set_current_dir(resolve_path(regs[path].as_str(str_pool)))
+                {
+                    error_with_catch!(ErrType::from(e.kind()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::FsStat, path, dest) => {
+                let kind = regs[args.pop_unchecked()].as_int();
+                let meta = match fs::metadata(resolve_path(regs[path].as_str(str_pool))) {
+                    Ok(meta) => meta,
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                };
+                regs[dest] = Data::int(if kind == 0 {
+                    meta.len() as i64
+                } else {
+                    meta.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs() as i64)
+                });
+            }
+            Instr::CallLibFunc(LibFunc::FsAbsolute, path, dest) => {
+                match std::path::absolute(resolve_path(regs[path].as_str(str_pool))) {
+                    Ok(path) => regs[dest] = string!(path.display().to_string()),
+                    Err(e) => {
+                        error_with_catch!(ErrType::from(e.kind()));
+                    }
+                }
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::FsRename, from, to) => {
+                if let Err(e) = fs::rename(
+                    resolve_path(regs[from].as_str(str_pool)),
+                    resolve_path(regs[to].as_str(str_pool)),
+                ) {
+                    error_with_catch!(ErrType::from(e.kind()));
+                }
+            }
+            Instr::CallLibFuncVoid(LibFuncVoid::FsDeleteAll, path, _) => {
+                let path = resolve_path(regs[path].as_str(str_pool));
+                let done = if path.is_dir() {
+                    fs::remove_dir_all(path)
+                } else {
+                    fs::remove_file(path)
+                };
+                if let Err(e) = done {
+                    error_with_catch!(ErrType::from(e.kind()));
+                }
+            }
+            Instr::CallLibFunc(LibFunc::Utf8Bytes, text, dest) => {
+                let len = regs[text].as_str(str_pool).len();
+                gc.note_bytes(len * LIST_ENTRY_BYTES);
+                let array_id = alloc_array(obj_pool, map_pool, str_pool, r, recursion_stack, gc);
+                let bytes = regs[text].as_str(str_pool).as_bytes();
+                let list = obj_pool.get_mut(array_id as usize);
+                list.extend(bytes.iter().map(|b| Data::int(i64::from(*b))));
+                regs[dest] = Data::array(array_id);
+            }
+            Instr::CallLibFunc(LibFunc::FromUtf8, values, dest) => {
+                let bytes: Option<Vec<u8>> = obj_pool[regs[values].as_array()]
+                    .iter()
+                    .map(|v| u8::try_from(v.as_int()).ok())
+                    .collect();
+                match bytes.and_then(|b| String::from_utf8(b).ok()) {
+                    Some(text) => regs[dest] = string!(text),
+                    None => {
+                        error_with_catch!(ErrType::EncodingInvalidUtf8);
+                    }
+                }
+            }
+            Instr::CallLibFunc(LibFunc::TimeQuery, kind, dest) => {
+                regs[dest] = Data::int(crate::sys::clock(regs[kind].as_int()));
             }
             Instr::CallLibFunc(LibFunc::HashText, text, dest) => {
                 let algorithm = regs[args.pop_unchecked()];

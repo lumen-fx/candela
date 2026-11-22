@@ -146,3 +146,50 @@ fs::write_bytes(path, bytes)
 Writes `bytes` to `path`, replacing what was there. Every element has to be a
 byte, 0 to 255; an element that is not gives `Err("fs_not_a_byte")` and
 nothing is written. Returns `Ok(true)`.
+
+## rename
+
+```rust
+fs::rename(from, to)
+```
+
+Moves the file or directory at `from` to `to`, replacing a file at `to`.
+Returns `Ok(true)`.
+
+## size
+
+```rust
+fs::size(path)
+```
+
+- Returns: the size of the file at `path` in bytes, as an `int!string`.
+
+## modified
+
+```rust
+fs::modified(path)
+```
+
+- Returns: when the file at `path` last changed, in seconds since the unix
+  epoch, as an `int!string`. Compare it with [`time::now`](time.md).
+
+## delete_all
+
+```rust
+fs::delete_all(path)
+```
+
+Deletes the file at `path`, or the directory there with everything in it.
+Where `delete` and `delete_dir` refuse a directory that still has entries,
+this does not, so check the path before you call it. Returns `Ok(true)`.
+
+## absolute
+
+```rust
+fs::absolute(path)
+```
+
+- Returns: `path` as an absolute path, in a `string!string`, joined onto the
+  working directory or the base directory the host set when it is relative.
+  `..` segments and links stay as written, and nothing needs to exist there;
+  [`path::normalize`](path.md#normalize) tidies the segments.

@@ -414,6 +414,9 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::JsonStringify
         | LibFunc::HashFile
         | LibFunc::HashText
+        | LibFunc::OsQuery
+        | LibFunc::FsAbsolute
+        | LibFunc::FromUtf8
         | LibFunc::AsStrVal => DataType::String,
         LibFunc::Contains
         | LibFunc::IsFloat
@@ -437,7 +440,9 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::TheAnswer
         | LibFunc::Int
         | LibFunc::AsIntVal
-        | LibFunc::EventSource => DataType::Int,
+        | LibFunc::EventSource
+        | LibFunc::FsStat
+        | LibFunc::TimeQuery => DataType::Int,
         LibFunc::Float
         | LibFunc::SqrtFloat
         | LibFunc::Round
@@ -446,10 +451,12 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::Trunc
         | LibFunc::AsFloatVal => DataType::Float,
         LibFunc::Abs | LibFunc::Repeat => arg,
-        LibFunc::Argv | LibFunc::Split | LibFunc::FsList => {
+        LibFunc::Argv | LibFunc::Split | LibFunc::FsList | LibFunc::OsEnv | LibFunc::OsEnvVars => {
             DataType::Array(Some(Box::new(DataType::String)))
         }
-        LibFunc::Range | LibFunc::FsReadBytes => DataType::Array(Some(Box::new(DataType::Int))),
+        LibFunc::Range | LibFunc::FsReadBytes | LibFunc::Utf8Bytes => {
+            DataType::Array(Some(Box::new(DataType::Int)))
+        }
         LibFunc::EventNext | LibFunc::EventWait => {
             DataType::Array(Some(Box::new(DataType::Unknown)))
         }

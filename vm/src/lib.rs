@@ -27,6 +27,9 @@ pub mod json;
 // MD5, SHA-1 and SHA-256, for `std/hash`.
 pub mod digest;
 
+// The environment, clocks and timers behind `std/os` and `std/time`.
+pub mod sys;
+
 // The standard library's native functions, built in where no dynamic library
 // can be loaded.
 #[cfg(any(target_arch = "wasm32", test))]

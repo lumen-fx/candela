@@ -108,6 +108,21 @@ const TABLE: &[(&str, &str, Intrinsic)] = &[
     (MATH, "candela_copysign", binary!(f64::copysign)),
     (TIME, "now", |_| Ret::Int(clock::now())),
     (TIME, "format", |a| Ret::Str(time_format(a[0].int(), a[1]))),
+    // A page's program cannot pause, and nothing could run a timer's
+    // function while it waited.
+    (TIME, "candela_sleep_ms", |_| {
+        desktop_only("A browser cannot pause a program; time::sleep_ms runs only on a desktop")
+    }),
+    (TIME, "candela_timer_start", |_| {
+        desktop_only("time::after and time::every run only on a desktop")
+    }),
+    (TIME, "candela_timer_cancel", |_| Ret::Int(0)),
+    (TIME, "candela_format_utc", |a| {
+        Ret::Str(match a[1] {
+            Arg::Str(pattern) => strftime(&Tm::utc(a[0].int()), pattern),
+            _ => String::new(),
+        })
+    }),
     (RANDOM, "candela_seed", |a| {
         RNG.set(Some(Pcg32::new(a[0].int() as u64, 54)));
         Ret::Null
@@ -122,6 +137,14 @@ const TABLE: &[(&str, &str, Intrinsic)] = &[
         Ret::Float(min + random_unit() * (max - min))
     }),
 ];
+
+/// Ends the run with `message`, for a binding a browser cannot carry out.
+fn desktop_only(message: &str) -> ! {
+    #[cfg(target_arch = "wasm32")]
+    crate::errors::wasm_error(message);
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("{message}");
+}
 
 /// The intrinsic that stands for `symbol` in `library`, where `library` is the
 /// path relative to the `libs` directory a std module's binding records.
@@ -220,7 +243,6 @@ pub struct Tm {
 
 impl Tm {
     /// `timestamp` in UTC.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn utc(timestamp: i64) -> Self {
         let days = timestamp.div_euclid(86_400);
         let secs = timestamp.rem_euclid(86_400) as u32;

@@ -184,6 +184,26 @@ fn main() {
     );
 }
 
+/// The pure modules and the ones on runtime primitives import in a browser.
+#[wasm_bindgen_test]
+fn pure_modules_import_in_a_browser() {
+    let out = run(r#"
+import "std/encoding";
+import "std/csv";
+import "std/path";
+import "std/os";
+import "std/assert";
+fn main() {
+    print(encoding::base64(encoding::utf8("foo")));
+    print(csv::parse("a,b").unwrap()[0][1]);
+    print(path::extension("x/y.txt"));
+    print(os::platform());
+    assert::eq(1, 1);
+}
+"#);
+    assert_eq!(out.lines().collect::<Vec<_>>(), ["Zm9v", "b", "txt", "web"]);
+}
+
 /// An artifact records the std bindings by name; the browser's runtime binds
 /// them to its own functions at load.
 #[wasm_bindgen_test]
