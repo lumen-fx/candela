@@ -361,22 +361,10 @@ fn stream(
     // and one that stops for longer than the timeout fails. The same
     // transport is how a cancel reaches a quiet connection. Redirects (ten
     // deep) and TLS (rustls over the web-PKI roots) are ureq's defaults.
-    let timeout = limits.timeout_ms.map(Duration::from_millis);
-    let config = Agent::config_builder()
-        .http_status_as_error(false)
-        .timeout_resolve(timeout)
-        .timeout_connect(timeout)
-        .build();
-    let agent = Agent::with_parts(
-        config,
-        DefaultConnector::new().chain(WaitConnector {
-            limit: timeout,
-            control: control.clone(),
-        }),
-        DefaultResolver::default(),
-    );
-
-    let mut reply = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
+    let mut reply = agent(limits, control)
+        .get(url)
+        .call()
+        .map_err(|e| format!("{url}: {e}"))?;
     let status = reply.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(format!("{url}: the server answered HTTP {status}"));
@@ -443,4 +431,90 @@ fn stream(
         .map_err(|e| format!("{}: {e}", temp.display()))?;
 
     Ok((received, total))
+}
+
+/// The agent a transfer runs on: resolution and the connection bounded by the
+/// timeout, every later wait for the server capped by [`WaitConnector`],
+/// which is also how a cancel reaches a quiet connection.
+fn agent(limits: &Limits, control: &Control) -> Agent {
+    let timeout = limits.timeout_ms.map(Duration::from_millis);
+    let config = Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_resolve(timeout)
+        .timeout_connect(timeout)
+        .build();
+    Agent::with_parts(
+        config,
+        DefaultConnector::new().chain(WaitConnector {
+            limit: timeout,
+            control: control.clone(),
+        }),
+        DefaultResolver::default(),
+    )
+}
+
+/// What a request got back: the status, the headers by lowercase name (a
+/// repeated header's values joined with `, `), and the body as text.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+/// Sends one request and reads the whole reply into memory. Any status is a
+/// reply, not a failure; a body past `limits.max_bytes` (or 64 MiB when none
+/// is set), or one that is not UTF-8, fails it.
+///
+/// # Errors
+///
+/// The message names the URL and what went wrong.
+pub fn fetch(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: &str,
+    limits: &Limits,
+    control: &Control,
+) -> Result<Reply, Failure> {
+    let mut request = ureq::http::Request::builder()
+        .method(method.to_ascii_uppercase().as_str())
+        .uri(url);
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let request = request
+        .body(body.as_bytes().to_vec())
+        .map_err(|e| format!("{url}: {e}"))?;
+    let mut reply = agent(limits, control)
+        .run(request)
+        .map_err(|e| format!("{url}: {e}"))?;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (name, value) in reply.headers() {
+        let value = String::from_utf8_lossy(value.as_bytes()).into_owned();
+        match out.iter_mut().find(|(n, _)| n == name.as_str()) {
+            Some((_, held)) => {
+                held.push_str(", ");
+                held.push_str(&value);
+            }
+            None => out.push((name.as_str().to_owned(), value)),
+        }
+    }
+    let limit = limits.max_bytes.unwrap_or(64 * 1024 * 1024);
+    let bytes = reply
+        .body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(|e| format!("{url}: {e}"))?;
+    if control.is_cancelled() {
+        return Err(CANCELLED.to_string());
+    }
+    let body =
+        String::from_utf8(bytes).map_err(|_| format!("{url}: the body is not UTF-8 text"))?;
+    Ok(Reply {
+        status: reply.status().as_u16(),
+        headers: out,
+        body,
+    })
 }

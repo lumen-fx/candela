@@ -27,9 +27,10 @@
 //!   group the system has handed to someone else.
 
 use std::fmt;
+use std::io::Write;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -64,6 +65,9 @@ pub struct Options {
     /// Variables set for the child on top of the environment it inherits,
     /// replacing an inherited variable of the same name.
     pub env: Vec<(String, String)>,
+    /// Give the child a pipe for stdin that [`Running::write`] writes to,
+    /// instead of end-of-file.
+    pub stdin: bool,
 }
 
 /// Something one child produced.
@@ -88,7 +92,8 @@ pub type Refusal = String;
 ///
 /// The child runs in the base directory unless `options` names another,
 /// inherits the program's environment with `options.env` laid over it, reads
-/// end-of-file from stdin, and has both output pipes captured. A `cmd`
+/// end-of-file from stdin unless `options.stdin` asks for a pipe, and has
+/// both output pipes captured. A `cmd`
 /// carrying a path separator names a program relative to the base directory;
 /// a bare `cmd` is looked up on `PATH`. On Unix the child leads a new process group,
 /// which every program it starts joins unless it leaves on purpose; on Windows
@@ -113,7 +118,11 @@ pub fn start(
         .args(args)
         .current_dir(&cwd)
         .envs(options.env.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::null())
+        .stdin(if options.stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -153,6 +162,7 @@ fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal
     // first line already reaches the whole tree.
     #[cfg(windows)]
     let job = crate::job::Job::assign(&child).map(Arc::new);
+    let stdin = Arc::new(Mutex::new(child.stdin.take()));
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let name = format!("candela-process-{tag}");
@@ -162,6 +172,7 @@ fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal
     let running = Running {
         pid,
         slot: Arc::new(Mutex::new(Some(child))),
+        stdin,
         #[cfg(windows)]
         job,
     };
@@ -197,6 +208,8 @@ fn supervise(tag: &str, mut child: Child, emit: Emit) -> Result<Running, Refusal
 pub struct Running {
     pid: u32,
     slot: Arc<Mutex<Option<Child>>>,
+    /// The write end of the child's stdin, while it is open.
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
     /// The job the child and everything it starts run in. `None` when the
     /// system would not make one, and a stop then ends the child alone.
     #[cfg(windows)]
@@ -210,6 +223,33 @@ impl fmt::Debug for Running {
 }
 
 impl Running {
+    /// Writes `text` to the child's stdin. False when it has no pipe, the pipe
+    /// was closed, or the child stopped reading.
+    pub fn write(&self, text: &str) -> bool {
+        let Ok(mut pipe) = self.stdin.lock() else {
+            return false;
+        };
+        let written = pipe.as_mut().is_some_and(|p| {
+            p.write_all(text.as_bytes())
+                .and_then(|()| p.flush())
+                .is_ok()
+        });
+        if !written {
+            *pipe = None;
+        }
+        written
+    }
+
+    /// Closes the child's stdin, so it reads end-of-file. False when it was
+    /// not open.
+    pub fn close_input(&self) -> bool {
+        self.stdin
+            .lock()
+            .ok()
+            .and_then(|mut pipe| pipe.take())
+            .is_some()
+    }
+
     /// The child's process id, as the system reported it at start.
     #[must_use]
     pub fn pid(&self) -> u32 {

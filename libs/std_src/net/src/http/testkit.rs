@@ -34,7 +34,8 @@ pub struct TestServer {
 impl TestServer {
     /// Bind an ephemeral loopback port and start serving.
     ///
-    /// Routes: `/fixed` (a body with `Content-Length`), `/nolength` (a body
+    /// Routes: `/echo` (a 201 whose body is the method, the `X-Test` header
+    /// and the request body), `/fixed` (a body with `Content-Length`), `/nolength` (a body
     /// the closed connection delimits), `/drip` (the same body in pieces, with
     /// pauses), `/stall` (the first piece of the body, then [`STALL`] of
     /// silence), `/mismatch` (a different body), and `/missing` (404).
@@ -91,14 +92,45 @@ fn serve(mut stream: TcpStream) {
         return;
     }
     let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let method = request.split_whitespace().next().unwrap_or("").to_string();
+    let mut head = Vec::new();
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => break,
             Ok(_) if line.trim().is_empty() => break,
-            Ok(_) => {}
+            Ok(_) => head.push(line.trim_end().to_string()),
             Err(_) => return,
         }
+    }
+    let header = |name: &str| {
+        head.iter()
+            .find_map(|line| {
+                let (n, v) = line.split_once(':')?;
+                n.eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+            })
+            .unwrap_or_default()
+    };
+    if path == "/echo" {
+        let length: usize = header("content-length").parse().unwrap_or(0);
+        let mut body = vec![0u8; length];
+        if std::io::Read::read_exact(&mut reader, &mut body).is_err() {
+            return;
+        }
+        let reply = format!(
+            "{method} {} {}",
+            header("x-test"),
+            String::from_utf8_lossy(&body)
+        );
+        let _ = stream.write_all(
+            format!(
+                "HTTP/1.1 201 Created\r\nX-Echo: yes\r\nContent-Length: {}\r\n\r\n{reply}",
+                reply.len()
+            )
+            .as_bytes(),
+        );
+        let _ = stream.flush();
+        return;
     }
     let _ = match path.as_str() {
         "/fixed" => sized(&mut stream, BODY),

@@ -376,6 +376,7 @@ Two kinds come from what the call was given rather than from the system:
 | `encoding_invalid_utf8` | Answered by [`encoding::from_utf8`](../standard-library/encoding.md) for bytes that are not UTF-8 or an element that is not a byte |
 | `encoding_invalid_hex`, `encoding_invalid_base64`, `encoding_invalid_url` | Answered by `encoding::from_hex`, `from_base64` and `url_decode` for text that is not in their form |
 | `csv_unterminated_quote` | Answered by [`csv::parse`](../standard-library/csv.md) for a quoted field that never closes |
+| `http_desktop_only` | `http::download` called in a browser, which has no file to download to |
 | `websocket_bad_close` | Answered, as an `Err`, by [`socket.close`](../standard-library/websocket.md#close) given a code other than 1000 or 3000 to 4999, or a reason longer than 123 bytes |
 
 The background calls of [process](../standard-library/process.md),

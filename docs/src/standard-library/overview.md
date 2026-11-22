@@ -11,7 +11,7 @@ toolchain installs a `libs` directory beside the `candela` executable:
 
 - `libs/std/` holds one `.cdl` file per module, the candela source of the
   whole library.
-- `libs/std/web/` holds the browser halves of `browser`, `js` and
+- `libs/std/web/` holds the browser halves of `browser`, `http`, `js` and
   `websocket`, one JavaScript module each.
 - `libs/std_src/` holds the native libraries some modules call into, each in a
   directory of its own: `math`, `random` and `time`, with their C sources;
@@ -50,10 +50,10 @@ neither a file system nor a native library: `assert`, `csv`, `encoding`,
 `event`, `hash`, `json`, `math`, `os` (its `platform` and `arch`), `path`,
 `random`, `set`, `time` (all but `sleep_ms` and the timers) and the prelude.
 The browser build compiles these from source too, so `import "std/csv";`
-works in the candela prompt. `browser`, `js` and
-`websocket` run there through their `host` blocks, which the host that runs
+works in the candela prompt. `browser`, `js`,
+`websocket` and `http::request` run there through their `host` blocks, which the host that runs
 the page binds to the JavaScript modules in `libs/std/web/` by name. `fs`,
-`process`, `http` and `archive` do not run in a browser.
+`process`, `http::download` and `archive` do not run in a browser.
 
 ## Importing a module
 
@@ -118,7 +118,7 @@ Everything else is imported: `archive`, `assert`, `browser`, `csv`,
 
 | Module | What it gives you |
 | --- | --- |
-| [archive](archive.md) | Unpack zip, tar and tar.gz archives off the program's thread |
+| [archive](archive.md) | Unpack and write zip and tar.gz archives, and gzip files, off the program's thread |
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [browser](browser.md) | A page's popups, messages, sharing, saving, media queries, file picker and fullscreen |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
@@ -127,7 +127,7 @@ Everything else is imported: `archive`, `assert`, `browser`, `csv`,
 | [event](event.md) | Results from work running elsewhere, delivered to a function, and waiting for them |
 | [fs](fs.md) | Read, write, copy, move and delete files, and list and make directories |
 | [hash](hash.md) | md5, sha1 and sha256 digests of a string or a file, as hex |
-| [http](http.md) | Download a URL to a file, with progress and checksum verification |
+| [http](http.md) | HTTP requests, and downloads to a file with progress and checksum verification |
 | [js](js.md) | The page's own JavaScript: global functions, modules, DOM events |
 | [json](json.md) | Parse a json string into candela values, and serialise back |
 | [list](list.md) | Reductions, slicing, and higher-order methods on arrays |

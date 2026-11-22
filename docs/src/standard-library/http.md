@@ -1,7 +1,8 @@
 # http
 
-HTTP transfers: download a URL to a file, with progress, an optional checksum,
-and a destination that only ever holds a complete file.
+HTTP: requests answered in memory, and downloads of a URL to a file, with
+progress, an optional checksum, and a destination that only ever holds a
+complete file.
 
 ```rust
 import "std/http";
@@ -31,8 +32,45 @@ followed, and `https` is TLS with the Mozilla root set.
 
 The module binds the `net` native library, which ships in the toolchain's
 `libs/std_src/net/` and also carries [websocket](websocket.md), so the two
-share one TLS stack. A browser has no file to download to, so `download` does
-not run there.
+share one TLS stack. In a browser `request` runs on the page's `fetch`,
+through `libs/std/web/http.js`, which the host binds to the module's
+`host "http"` block, and the page's rules on other origins apply. A browser
+has no file to download to, so there `download` raises `http_desktop_only`.
+
+## request
+
+```rust
+http::request(url, method = "GET", headers = {}, body = "", timeout_ms = 0, max_bytes = 0, on_done)
+```
+
+- `method`: `GET`, `POST`, `PUT` and the rest, in either case.
+- `headers`: a `{string: string}` sent as given.
+- `body`: text sent as UTF-8.
+- `timeout_ms`: how long each wait for the server lasts; 0 waits
+  indefinitely.
+- `max_bytes`: the largest body read; 0 is 64 MiB.
+- `on_done`: a `fn(http::Response!string)`, called once: `Ok` with the
+  response, whatever its status, or `Err` when there was none, such as a
+  refused connection, a timeout, or `cancelled`.
+- Returns: an `http::Transfer`.
+
+A `Response` has `status`, an `int`; `headers`, a `{string: string}` by
+lowercase name, with the values of a repeated header joined by `, `; and
+`body`, the reply as text.
+
+```rust
+import "std/http";
+import "std/json";
+
+fn main() {
+    http::request("https://example.com/api", method: "POST", body: json::stringify({"q": 1})) fn(r) {
+        match r {
+            Ok(reply) => print(string(reply.status) + " " + reply.body),
+            Err(why) => eprint(why),
+        }
+    };
+}
+```
 
 ## download
 
@@ -61,8 +99,8 @@ http::download(url, path, checksum = "", timeout_ms = 0, max_bytes = 0, on_event
 
 ## Transfer
 
-The transfer `download` started. Its `id` is the event source its events
-arrive under: `event::wait(transfer.id)` runs handlers until it is over; see
+The transfer `request` or `download` started. Its `id` is the event source
+its events arrive under: `event::wait(transfer.id)` runs handlers until it is over; see
 [event](event.md#wait).
 
 ### cancel
@@ -71,7 +109,8 @@ arrive under: `event::wait(transfer.id)` runs handlers until it is over; see
 transfer.cancel()
 ```
 
-Stops the transfer. It then reports `Failed("cancelled")` as its last event.
+Stops the transfer. A download then reports `Failed("cancelled")` as its last
+event, and a request answers `Err("cancelled")`.
 
 - Returns: false when it had already finished, whose own outcome is on its
   way.
@@ -82,5 +121,6 @@ Stops the transfer. It then reports `Failed("cancelled")` as its last event.
 http::set_max_concurrent(n)
 ```
 
-Caps how many transfers run at once, from 1 to 64; 4 until it is called. A
-transfer started past the cap reports `Failed` at once.
+Caps how many transfers, requests and downloads together, run at once, from 1
+to 64; 4 until it is called. One started past the cap fails at once. A browser
+keeps its own limits, so there this does nothing.

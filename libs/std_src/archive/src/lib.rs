@@ -1,18 +1,23 @@
 //! The native library behind `std/archive`.
 //!
-//! The module's candela code calls two exports through its `dylib` block:
+//! The module's candela code calls four exports through its `dylib` block:
 //!
 //! - `candela_archive_extract(source, src, dest, include, count)` unpacks the
 //!   archive at `src` into `dest` on a thread of its own, keeping only the
 //!   files matching one of the `count` glob patterns at `include` (all of them
 //!   when there are none), and reports under `source`;
-//! - `candela_archive_set_max_concurrent(n)` caps how many extractions run at
-//!   once.
+//! - `candela_archive_create(source, dest, files, count, base)` writes a zip
+//!   or a gzip-compressed tar of the files, named relative to `base`;
+//! - `candela_archive_gzip(source, src, dest, decompress)` compresses one
+//!   file with gzip, or decompresses one;
+//! - `candela_archive_set_max_concurrent(n)` caps how many of these jobs run
+//!   at once.
 //!
-//! The one event is a JSON object, `{"kind": "done", "dest": ..., "files":
+//! Each job's one event is a JSON object, `{"kind": "done", "dest": ..., "files":
 //! ...}` or `{"kind": "failed", "message": ...}`, after which the source is
 //! released.
 
+pub mod pack;
 pub mod testkit;
 pub mod unpack;
 
@@ -72,9 +77,25 @@ pub unsafe extern "C" fn candela_archive_extract(
         .map(|i| unsafe { candela_std_sys::arg(*include.add(i)) })
         .collect();
     let filter = (!patterns.is_empty()).then(|| unpack::Filter::new(patterns));
+    let src = candela_std_sys::resolve(&src);
+    let dest = candela_std_sys::resolve(&dest);
+    launch(source, "extract", move || {
+        let unpacked = unpack::extract(&src, &dest, filter.as_ref())?;
+        Ok((dest, unpacked.files))
+    });
+}
+
+/// Runs `work` on a thread of its own under `source`, within the cap, and
+/// reports its outcome: `done` with the destination and how many files it
+/// wrote, or `failed`.
+fn launch(
+    source: i64,
+    verb: &str,
+    work: impl FnOnce() -> Result<(std::path::PathBuf, usize), String> + Send + 'static,
+) {
     {
         let Ok(mut live) = live().lock() else {
-            return failed(source, "the extraction table is unusable");
+            return failed(source, "the archive job table is unusable");
         };
         let cap = MAX_CONCURRENT.load(Ordering::Relaxed);
         if live.len() >= cap {
@@ -82,27 +103,25 @@ pub unsafe extern "C" fn candela_archive_extract(
             return failed(
                 source,
                 &format!(
-                    "{cap} extractions are already running, which is the limit; raise it with \
+                    "{cap} archive jobs are already running, which is the limit; raise it with \
                      archive::set_max_concurrent or wait for one to finish"
                 ),
             );
         }
         live.insert(source);
     }
-    let src = candela_std_sys::resolve(&src);
-    let dest = candela_std_sys::resolve(&dest);
-    let work = move || {
-        let outcome = unpack::extract(&src, &dest, filter.as_ref());
+    let run = move || {
+        let outcome = work();
         if let Ok(mut live) = live().lock() {
             live.remove(&source);
         }
         match outcome {
-            Ok(unpacked) => finish(
+            Ok((dest, files)) => finish(
                 source,
                 &serde_json::json!({
                     "kind": "done",
                     "dest": dest.to_string_lossy(),
-                    "files": unpacked.files,
+                    "files": files,
                 }),
             ),
             Err(message) => failed(source, &message),
@@ -110,13 +129,66 @@ pub unsafe extern "C" fn candela_archive_extract(
     };
     if let Err(e) = std::thread::Builder::new()
         .name(format!("candela-archive-{source}"))
-        .spawn(work)
+        .spawn(run)
     {
         if let Ok(mut live) = live().lock() {
             live.remove(&source);
         }
-        failed(source, &format!("no thread to extract on: {e}"));
+        failed(source, &format!("no thread to {verb} on: {e}"));
     }
+}
+
+/// Writes the `count` files or directories at `files` into a new archive at
+/// `dest`, named relative to `base`, reporting under `source`.
+///
+/// # Safety
+///
+/// The string pointers are NUL-terminated strings the candela runtime passes,
+/// and `files` points at `count` of them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn candela_archive_create(
+    source: i64,
+    dest: *const c_char,
+    files: *const *const c_char,
+    count: i64,
+    base: *const c_char,
+) {
+    candela_std_sys::hold(source);
+    let dest = candela_std_sys::resolve(&unsafe { candela_std_sys::arg(dest) });
+    let files: Vec<std::path::PathBuf> = (0..usize::try_from(count).unwrap_or(0))
+        .map(|i| candela_std_sys::resolve(&unsafe { candela_std_sys::arg(*files.add(i)) }))
+        .collect();
+    let base = candela_std_sys::resolve(&unsafe { candela_std_sys::arg(base) });
+    launch(source, "create", move || {
+        let written = pack::create(&dest, &files, &base)?;
+        Ok((dest, written))
+    });
+}
+
+/// Compresses `src` into `dest` with gzip (`decompress` 0) or decompresses
+/// it (`decompress` 1), reporting under `source`.
+///
+/// # Safety
+///
+/// The string pointers are NUL-terminated strings the candela runtime passes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn candela_archive_gzip(
+    source: i64,
+    src: *const c_char,
+    dest: *const c_char,
+    decompress: i64,
+) {
+    candela_std_sys::hold(source);
+    let src = candela_std_sys::resolve(&unsafe { candela_std_sys::arg(src) });
+    let dest = candela_std_sys::resolve(&unsafe { candela_std_sys::arg(dest) });
+    launch(source, "gzip", move || {
+        if decompress == 0 {
+            pack::gzip(&src, &dest)?;
+        } else {
+            pack::gunzip(&src, &dest)?;
+        }
+        Ok((dest, 1))
+    });
 }
 
 /// Caps how many extractions run at once, between 1 and

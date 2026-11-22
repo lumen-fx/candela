@@ -122,3 +122,32 @@ fn a_stop_ends_a_running_child_whose_exit_still_arrives() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A child started with `stdin: true` reads what `write` sends, and ends once
+/// `close_input` gives it end of file; one started without has nothing to
+/// write to.
+#[test]
+fn a_child_reads_what_is_written_to_its_stdin() {
+    let dir = scratch("process-stdin");
+    let libs = stage(&["process"], &dir);
+    let call = format!(
+        r#"let child = process::start("{}", ["0", "--echo-stdin"], stdin: true) fn(e) {{ report(e); }};
+    test::seen("wrote " + string(child.write("one\ntwo\n")));
+    test::seen("closed " + string(child.close_input()));
+    test::seen("again " + string(child.close_input()));
+    let plain = process::start("{}", ["0"]) fn(e) {{}};
+    test::seen("plain " + string(plain.write("x")));"#,
+        child(),
+        child()
+    );
+    let seen = run(&libs, &dir, &program(&call), |seen| {
+        seen.iter().any(|s| s == "exit 0")
+    });
+    assert_eq!(
+        &seen[..4],
+        ["wrote true", "closed true", "again false", "plain false"]
+    );
+    let out: Vec<&String> = seen.iter().filter(|s| s.starts_with("out in ")).collect();
+    assert_eq!(out, ["out in one", "out in two"], "{seen:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

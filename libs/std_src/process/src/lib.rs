@@ -1,12 +1,15 @@
 //! The native library behind `std/process`.
 //!
-//! The module's candela code calls two exports through its `dylib` block:
+//! The module's candela code calls four exports through its `dylib` block:
 //!
 //! - `candela_process_start(source, cmd, args, argc, cwd, env_json,
 //!   end_at_exit)` starts `cmd` and reports everything after that as events
 //!   under `source`;
 //! - `candela_process_stop(source)` ends the child started under `source`,
-//!   answering 1 when there was one still running and 0 when there was not.
+//!   answering 1 when there was one still running and 0 when there was not;
+//! - `candela_process_write(source, text)` and
+//!   `candela_process_close_input(source)` write to and close the stdin of a
+//!   child started with a pipe for it.
 //!
 //! Each event is one JSON object: `{"kind": "stdout", "line": ...}`,
 //! `{"kind": "stderr", "line": ...}`, `{"kind": "exit", "code": ...}`, or
@@ -115,6 +118,7 @@ pub unsafe extern "C" fn candela_process_start(
     cwd: *const c_char,
     env_json: *const c_char,
     end_at_exit: i64,
+    stdin: i64,
 ) {
     candela_std_sys::hold(source);
     let cmd = unsafe { candela_std_sys::arg(cmd) };
@@ -129,6 +133,7 @@ pub unsafe extern "C" fn candela_process_start(
     let options = Options {
         cwd: (!cwd.is_empty()).then_some(cwd),
         env,
+        stdin: stdin != 0,
     };
     let end_at_exit = end_at_exit != 0;
     if end_at_exit {
@@ -181,11 +186,33 @@ pub unsafe extern "C" fn candela_process_start(
 /// started. Its exit still arrives as the last event.
 #[unsafe(no_mangle)]
 pub extern "C" fn candela_process_stop(source: i64) -> i64 {
-    let running = children()
+    i64::from(running(source).is_some_and(|running| running.stop()))
+}
+
+/// The child running under `source`, while it has not exited.
+fn running(source: i64) -> Option<Running> {
+    children()
         .lock()
         .ok()
-        .and_then(|live| live.get(&source).map(|entry| entry.running.clone()));
-    i64::from(running.is_some_and(|running| running.stop()))
+        .and_then(|live| live.get(&source).map(|entry| entry.running.clone()))
+}
+
+/// Writes `text` to the stdin of the child under `source`: 1 when it went,
+/// 0 when the child has no open stdin.
+///
+/// # Safety
+///
+/// `text` is a NUL-terminated string the candela runtime passes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn candela_process_write(source: i64, text: *const c_char) -> i64 {
+    let text = unsafe { candela_std_sys::arg(text) };
+    i64::from(running(source).is_some_and(|r| r.write(&text)))
+}
+
+/// Closes the stdin of the child under `source`: 1 when it was open.
+#[unsafe(no_mangle)]
+pub extern "C" fn candela_process_close_input(source: i64) -> i64 {
+    i64::from(running(source).is_some_and(|r| r.close_input()))
 }
 
 #[cfg(test)]

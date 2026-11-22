@@ -49,10 +49,19 @@ import "std/websocket";
 
 fn main() {
     if argv().len() > 1000 {
-        let child = process::start("x", ["a"], cwd: "", env: {}, end_at_exit: true) fn(e) {
+        let child = process::start("x", ["a"], cwd: "", env: {}, end_at_exit: true, stdin: true) fn(e) {
             print(e);
         };
+        print(child.write("t"));
+        print(child.close_input());
         print(child.stop());
+        let request = http::request("u", method: "POST", headers: {"a": "b"}, body: "x", timeout_ms: 1, max_bytes: 1) fn(r) {
+            match r {
+                Ok(response) => print(response.status),
+                Err(why) => print(why),
+            }
+        };
+        print(request.cancel());
         let transfer = http::download("u", "p", checksum: "", timeout_ms: 1, max_bytes: 1) fn(e) {
             print(e);
         };
@@ -60,6 +69,9 @@ fn main() {
         http::set_max_concurrent(2);
         let job = archive::extract("a.zip", "out", include: ["*"]) fn(e) { print(e); };
         event::wait(job.id);
+        archive::create("o.zip", ["a"], base: "") fn(e) { print(e); };
+        archive::gzip("a", "a.gz") fn(e) { print(e); };
+        archive::gunzip("a.gz", "a") fn(e) { print(e); };
         archive::set_max_concurrent(2);
         let socket = websocket::open("ws://x") fn(s, e) {
             print(s.state());

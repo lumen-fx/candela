@@ -27,8 +27,10 @@ import "std/event";
 import "std/json";
 
 dylib "../std_src/process/process" {
-    fn candela_process_start(id: int, cmd: string, args: string[], arg_count: int, cwd: string, env_json: string, end_at_exit: int);
+    fn candela_process_start(id: int, cmd: string, args: string[], arg_count: int, cwd: string, env_json: string, end_at_exit: int, stdin: int);
     fn candela_process_stop(handle: int) -> int;
+    fn candela_process_write(handle: int, text: string) -> int;
+    fn candela_process_close_input(handle: int) -> int;
 }
 
 /// What a started program reports.
@@ -55,6 +57,16 @@ impl Child {
     /// Windows it ends at once. Its `Exit` still arrives last. False when it
     /// had already ended.
     fn stop(self) -> bool => process::candela_process_stop(self.id) == 1;
+
+    /// Writes `text` to the program's stdin, as it is: add the `\n` a
+    /// line-reading program waits for. Needs the program started with
+    /// `stdin: true`. False when its stdin is not open.
+    fn write(self, text: string) -> bool => process::candela_process_write(self.id, text) == 1;
+
+    /// Closes the program's stdin, so it reads end of file, which is how a
+    /// program that reads to the end knows the input is over. False when it
+    /// was not open.
+    fn close_input(self) -> bool => process::candela_process_close_input(self.id) == 1;
 }
 
 /// Starts `cmd` with `args` and answers the `Child`. A `cmd` with a path
@@ -62,25 +74,25 @@ impl Child {
 /// starts in `cwd`, or the base directory the host set, or the working
 /// directory when `cwd` is empty, with `env` set on top of the environment it
 /// inherits. With `end_at_exit` it ends when this program exits instead of
-/// running on. `on_event` receives every line the program writes and then its
-/// exit.
+/// running on. With `stdin` it gets a pipe for its input that `Child::write`
+/// writes to; without, it reads end of file. `on_event` receives every line
+/// the program writes and then its exit.
 fn start(
     cmd: string,
     args: string[] = [],
     cwd: string = "",
     env: {string: string} = {},
     end_at_exit: bool = false,
+    stdin: bool = false,
     on_event: fn(Event),
 ) -> Child {
     let id = event::source();
     event::on(id, fn(payload) {
         on_event(decode(payload));
     });
-    let end = 0;
-    if end_at_exit {
-        end = 1;
-    }
-    process::candela_process_start(id, cmd, args, args.len(), cwd, json::stringify(env), end);
+    let end = if end_at_exit { 1 } else { 0 };
+    let input = if stdin { 1 } else { 0 };
+    process::candela_process_start(id, cmd, args, args.len(), cwd, json::stringify(env), end, input);
     return Child { id };
 }
 

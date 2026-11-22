@@ -1,7 +1,7 @@
 # archive
 
-Unpack zip, tar, and gzip-compressed tar archives into a directory, off your
-program's thread.
+Unpack zip, tar, and gzip-compressed tar archives, write zip and
+gzip-compressed tar ones, and gzip a single file, off your program's thread.
 
 ```rust
 import "std/archive";
@@ -52,11 +52,51 @@ archive::extract(src, dest, include = [], on_event)
 | `Done(dest, files)` | The archive is out; `files` counts the files written, not directories or skipped links |
 | `Failed(message)` | It was not extracted, or not all of it; what earlier entries wrote stays on disk |
 
+## create
+
+```rust
+archive::create(dest, files, base = "", on_event)
+```
+
+Writes `files` into a new archive at `dest`: a zip when `dest` ends in `.zip`,
+a gzip-compressed tar when it ends in `.tar.gz` or `.tgz`; another name fails.
+A directory among `files` goes in with everything under it, in name order.
+Each entry is named by its path relative to `base`, the working directory when
+empty, and a file outside `base` fails the job. `Done(dest, files)` counts the
+files that went in. Returns an `archive::Job`.
+
+```rust
+import "std/archive";
+
+fn main() {
+    archive::create("site.zip", ["site"]) fn(e) { print(e); };
+}
+```
+
+## gzip
+
+```rust
+archive::gzip(src, dest, on_event)
+```
+
+Compresses the file `src` with gzip into `dest`; `Done(dest, 1)` once it is
+there. Returns an `archive::Job`.
+
+## gunzip
+
+```rust
+archive::gunzip(src, dest, on_event)
+```
+
+Decompresses the gzip file `src` into `dest`; `Done(dest, 1)` once it is
+there, and `Failed` naming `src` for input that is not gzip. Returns an
+`archive::Job`.
+
 ## set_max_concurrent
 
 ```rust
 archive::set_max_concurrent(n)
 ```
 
-Caps how many extractions run at once, from 1 to 64; 4 until it is called. An
-extraction started past the cap reports `Failed` at once.
+Caps how many jobs of any kind run at once, from 1 to 64; 4 until it is
+called. A job started past the cap reports `Failed` at once.

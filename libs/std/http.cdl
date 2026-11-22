@@ -1,6 +1,7 @@
-/// HTTP: downloading a URL to a file.
+/// HTTP: requests answered in memory, and downloads of a URL to a file.
 ///
-/// `download` starts a transfer and answers a `Transfer` at once. The
+/// `request` sends one request and passes its function the `Response`, or
+/// the reason there is none. `download` starts a transfer and answers a `Transfer` at once. The
 /// transfer runs on a thread of its own and reports to the function given to
 /// `download`: `Received` as bytes arrive, then `Saved` with the path once the
 /// whole file is in place, or `Failed` with the reason. `Saved` or `Failed` is
@@ -28,10 +29,30 @@
 import "std/event";
 import "std/json";
 
+@cfg(not(web))
 dylib "../std_src/net/net" {
+    fn candela_http_request(id: int, url: string, method: string, headers_json: string, body: string, timeout_ms: int, max_bytes: int);
     fn candela_http_download(id: int, url: string, path: string, checksum: string, timeout_ms: int, max_bytes: int);
     fn candela_http_cancel(handle: int) -> int;
     fn candela_http_set_max_concurrent(n: int);
+}
+
+@cfg(web)
+host "http" {
+    fn candela_http_request(id: int, url: string, method: string, headers_json: string, body: string, timeout_ms: int, max_bytes: int);
+    fn candela_http_cancel(handle: int) -> int;
+}
+
+/// What a request got back.
+struct Response {
+    /// The status code, such as 200 or 404. Any status is a response; only a
+    /// request that got none answers an error.
+    status: int,
+    /// The headers by lowercase name. A header sent more than once has its
+    /// values joined with `, `.
+    headers: {string: string},
+    /// The body, as text.
+    body: string,
 }
 
 /// What a download reports.
@@ -53,12 +74,61 @@ struct Transfer {
 }
 
 impl Transfer {
-    /// Cancels the transfer. It then reports `Failed` with the message
-    /// `cancelled`, as its last event. False when it had already finished.
-    fn cancel(self) -> bool => net::candela_http_cancel(self.id) == 1;
+    /// Cancels the transfer. A download then reports `Failed("cancelled")` as
+    /// its last event, and a request answers `Err("cancelled")`. False when it
+    /// had already finished.
+    fn cancel(self) -> bool => cancel_transfer(self.id);
 }
 
-/// Downloads `url` to `path` and answers the `Transfer`. A relative `path`
+@cfg(not(web))
+fn cancel_transfer(id: int) -> bool => net::candela_http_cancel(id) == 1;
+@cfg(web)
+fn cancel_transfer(id: int) -> bool => http::candela_http_cancel(id) == 1;
+
+/// Sends one request to `url` and answers the `Transfer`. `on_done` receives
+/// the `Response`, or the reason there was none. `method` is `GET`, `POST`,
+/// `PUT` and so on, either case; `headers` are sent as given; `body` is sent
+/// as UTF-8 text. `timeout_ms` bounds each wait for the server, 0 waits
+/// indefinitely; `max_bytes` caps the body read, 0 for the default of 64 MiB.
+/// In a browser the page's `fetch` sends it, so the page's rules on other
+/// origins apply.
+fn request(
+    url: string,
+    method: string = "GET",
+    headers: {string: string} = {},
+    body: string = "",
+    timeout_ms: int = 0,
+    max_bytes: int = 0,
+    on_done: fn(Response!string),
+) -> Transfer {
+    let read = fn(v) {
+        let fields = v as {string: any};
+        let heads: {string: string} = {};
+        for (name, value) in fields["headers"] as {string: any} {
+            heads[name] = value as string;
+        }
+        return Response {
+            status: fields["status"] as int,
+            headers: heads,
+            body: fields["body"] as string,
+        };
+    };
+    let id = event::answer(read, on_done);
+    send(id, url, method, json::stringify(headers), body, timeout_ms, max_bytes);
+    return Transfer { id };
+}
+
+@cfg(not(web))
+fn send(id: int, url: string, method: string, headers: string, body: string, timeout_ms: int, max_bytes: int) {
+    net::candela_http_request(id, url, method, headers, body, timeout_ms, max_bytes);
+}
+@cfg(web)
+fn send(id: int, url: string, method: string, headers: string, body: string, timeout_ms: int, max_bytes: int) {
+    http::candela_http_request(id, url, method, headers, body, timeout_ms, max_bytes);
+}
+
+/// Downloads `url` to `path` and answers the `Transfer`. A browser has no
+/// file to download to, so there it raises `http_desktop_only`. A relative `path`
 /// resolves against the base directory the host set, or the working
 /// directory; missing directories on the way are created.
 ///
@@ -81,15 +151,28 @@ fn download(
     event::on(id, fn(payload) {
         on_event(decode(payload));
     });
-    net::candela_http_download(id, url, path, checksum, timeout_ms, max_bytes);
+    start_download(id, url, path, checksum, timeout_ms, max_bytes);
     return Transfer { id };
 }
 
-/// Caps how many transfers run at once, from 1 to 64; 4 until this is called.
-/// A transfer started past the cap reports `Failed` at once.
+@cfg(not(web))
+fn start_download(id: int, url: string, path: string, checksum: string, timeout_ms: int, max_bytes: int) {
+    net::candela_http_download(id, url, path, checksum, timeout_ms, max_bytes);
+}
+@cfg(web)
+fn start_download(id: int, url: string, path: string, checksum: string, timeout_ms: int, max_bytes: int) {
+    throw "http_desktop_only";
+}
+
+/// Caps how many transfers, requests and downloads together, run at once,
+/// from 1 to 64; 4 until this is called. One started past the cap fails at
+/// once. A browser keeps its own limits, so there this does nothing.
+@cfg(not(web))
 fn set_max_concurrent(n: int) {
     net::candela_http_set_max_concurrent(n);
 }
+@cfg(web)
+fn set_max_concurrent(n: int) {}
 
 /// The event a payload from the native library describes.
 fn decode(payload: string) -> Progress {

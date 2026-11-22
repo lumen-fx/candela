@@ -46,6 +46,13 @@ fn main() {
         println!("env={}", std::env::var(name).unwrap_or_default());
     }
 
+    // Each line of stdin back as `in <line>`, until end of file.
+    if args.iter().any(|a| a == "--echo-stdin") {
+        for line in std::io::stdin().lines().map_while(Result::ok) {
+            println!("in {line}");
+        }
+    }
+
     eprintln!("child stderr");
 
     let grandchild = value_after(&args, "--grandchild").map(|ms| {

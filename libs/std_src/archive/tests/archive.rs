@@ -89,3 +89,78 @@ fn an_entry_that_escapes_fails_the_extraction() {
     assert!(seen[0].starts_with("failed "), "{seen:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `create` writes a zip and a tar.gz that `extract` reads back, and `gzip`
+/// and `gunzip` round-trip one file.
+#[test]
+fn created_archives_and_gzip_round_trip() {
+    let dir = scratch("archive-create");
+    let libs = stage(&["archive"], &dir);
+    let tree = dir.join("tree");
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    std::fs::write(tree.join("a.txt"), "alpha").unwrap();
+    std::fs::write(tree.join("sub").join("b.txt"), "beta").unwrap();
+    let program = format!(
+        r#"
+import "std/archive";
+
+host "test" {{
+    fn seen(text: string);
+}}
+
+fn report(what: string, e: archive::Event) {{
+    match e {{
+        Done(dest, files) => test::seen(what + " " + string(files)),
+        Failed(why) => test::seen(what + " failed " + why),
+    }}
+}}
+
+fn start() {{
+    archive::set_max_concurrent(16);
+    archive::create("{d}/out.zip", ["{t}/a.txt", "{t}/sub"], base: "{t}") fn(e) {{
+        report("zip", e);
+        archive::extract("{d}/out.zip", "{d}/unzipped") fn(e) {{ report("unzip", e); }};
+    }};
+    archive::create("{d}/out.tar.gz", ["{t}"], base: "{d}") fn(e) {{
+        report("tgz", e);
+        archive::extract("{d}/out.tar.gz", "{d}/untarred") fn(e) {{ report("untar", e); }};
+    }};
+    archive::create("{d}/out.rar", ["{t}"]) fn(e) {{ report("rar", e); }};
+    archive::create("{d}/outside.zip", ["{t}/a.txt"], base: "{t}/sub") fn(e) {{ report("outside", e); }};
+    archive::gzip("{t}/a.txt", "{d}/a.gz") fn(e) {{
+        report("gzip", e);
+        archive::gunzip("{d}/a.gz", "{d}/a.back") fn(e) {{ report("gunzip", e); }};
+    }};
+}}
+
+fn main() {{}}
+"#,
+        d = slashes(&dir),
+        t = slashes(&tree),
+    );
+    let seen = run(&libs, &dir, &program, |seen| seen.len() == 8);
+    for expected in ["zip 2", "unzip 2", "tgz 2", "untar 2", "gzip 1", "gunzip 1"] {
+        assert!(seen.iter().any(|s| s == expected), "{expected}: {seen:?}");
+    }
+    assert!(
+        seen.iter().any(|s| s.starts_with("rar failed ")),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|s| s.starts_with("outside failed ")),
+        "{seen:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("unzipped/sub/b.txt")).unwrap(),
+        "beta"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("untarred/tree/a.txt")).unwrap(),
+        "alpha"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("a.back")).unwrap(),
+        "alpha"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

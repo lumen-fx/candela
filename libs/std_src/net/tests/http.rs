@@ -115,3 +115,59 @@ fn a_cancel_is_the_last_event() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `http::request` answers the reply in memory, whatever its status: the
+/// method, a header and the body go out, and the status, headers and body
+/// come back; a cancel answers `cancelled`.
+#[test]
+fn a_request_answers_the_reply() {
+    let server = TestServer::start();
+    let dir = scratch("http-request");
+    let libs = stage(&["net"], &dir);
+    let program = format!(
+        r#"
+import "std/http";
+
+host "test" {{
+    fn seen(text: string);
+}}
+
+fn show(r: http::Response!string) {{
+    match r {{
+        Ok(reply) => test::seen(string(reply.status) + " " + (reply.headers.get("x-echo") else "-") + " " + reply.body),
+        Err(why) => test::seen("error " + why),
+    }}
+}}
+
+fn start() {{
+    http::request("{echo}", method: "post", headers: {{"X-Test": "t"}}, body: "hi") fn(r) {{
+        show(r);
+        http::request("{missing}") fn(r) {{
+            show(r);
+            let stalled = http::request("{stall}") fn(r) {{ show(r); }};
+            test::seen("cancel " + string(stalled.cancel()));
+        }};
+    }};
+}}
+
+fn main() {{}}
+"#,
+        echo = server.url("/echo"),
+        missing = server.url("/missing"),
+        stall = server.url("/stall"),
+    );
+    let seen = run(&libs, &dir, &program, |seen| {
+        seen.iter().any(|s| s.starts_with("error "))
+    });
+    assert_eq!(
+        seen,
+        [
+            "201 yes POST t hi",
+            "404 - not found",
+            "cancel true",
+            "error cancelled"
+        ],
+        "{seen:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

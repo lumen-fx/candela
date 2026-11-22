@@ -24,8 +24,9 @@ fn main() {
 The program runs with its own threads reading its output, so a chatty or
 long-running child never holds up yours. Output arrives a line at a time,
 without the newline; bytes that are not UTF-8 are replaced, and a line longer
-than 64 KiB arrives in pieces. The child reads end of file from stdin; there is
-no way to write to it.
+than 64 KiB arrives in pieces. The child reads end of file from stdin unless it
+is started with `stdin: true`, which gives it a pipe that `child.write` writes
+to.
 
 The module binds the `process` native library, which ships in the toolchain's
 `libs/std_src/process/`. A browser has no programs to start, so the module
@@ -34,7 +35,7 @@ does not run there.
 ## start
 
 ```rust
-process::start(cmd, args = [], cwd = "", env = {}, end_at_exit = false, on_event)
+process::start(cmd, args = [], cwd = "", env = {}, end_at_exit = false, stdin = false, on_event)
 ```
 
 - `cmd`: the program. A name with a path separator in it is a path, relative
@@ -47,6 +48,8 @@ process::start(cmd, args = [], cwd = "", env = {}, end_at_exit = false, on_event
   inherits.
 - `end_at_exit`: with `true`, the program ends when yours exits instead of
   running on.
+- `stdin`: with `true`, the program gets a pipe for its input; see
+  [write](#write).
 - `on_event`: a `fn(process::Event)`, called for each event. It is the last
   argument, so it can follow the call.
 - Returns: a `process::Child`.
@@ -87,3 +90,35 @@ to end with `SIGTERM` and killed two seconds later if it has not; on Windows it
 ends at once. Its `Exit` still arrives last.
 
 - Returns: false when it had already ended.
+
+### write
+
+```rust
+child.write(text)
+```
+
+Writes `text` to the program's stdin as it is, so add the `\n` a program that
+reads lines waits for. The program has to be started with `stdin: true`.
+
+- Returns: false when its stdin is not open.
+
+### close_input
+
+```rust
+child.close_input()
+```
+
+Closes the program's stdin, so it reads end of file: how a program that reads
+to the end of its input learns the input is over.
+
+- Returns: false when it was not open.
+
+```rust
+import "std/process";
+
+fn main() {
+    let sort = process::start("sort", stdin: true) fn(e) { print(e); };
+    sort.write("pear\napple\n");
+    sort.close_input();
+}
+```
