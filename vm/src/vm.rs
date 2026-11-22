@@ -3677,9 +3677,20 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
             // The next event a handler of this program takes, as
             // `[source, handler, payload]`. A source whose last hold ended
             // lets go of its handler.
-            Instr::CallLibFunc(LibFunc::EventNext, wait, dest) => {
-                let wait = regs[wait].is_true();
+            // `event::wait` takes the same entries, for as long as the one
+            // source it names is held.
+            Instr::CallLibFunc(func @ (LibFunc::EventNext | LibFunc::EventWait), arg, dest) => {
+                let (wait, only) = if func == LibFunc::EventNext {
+                    (regs[arg].is_true(), None)
+                } else {
+                    (true, Some(regs[arg].as_int()))
+                };
                 let (source, handler, payload) = loop {
+                    if let Some(id) = only
+                        && !crate::events::is_held(id)
+                    {
+                        break (0, NULL, None);
+                    }
                     let Some(inbox) = &gc.inbox else {
                         break (0, NULL, None);
                     };

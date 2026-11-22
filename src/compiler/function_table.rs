@@ -450,7 +450,9 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
             DataType::Array(Some(Box::new(DataType::String)))
         }
         LibFunc::Range | LibFunc::FsReadBytes => DataType::Array(Some(Box::new(DataType::Int))),
-        LibFunc::EventNext => DataType::Array(Some(Box::new(DataType::Unknown))),
+        LibFunc::EventNext | LibFunc::EventWait => {
+            DataType::Array(Some(Box::new(DataType::Unknown)))
+        }
         LibFunc::Keys => match arg {
             DataType::Map(entry) => DataType::Array(entry.0.clone().map(Box::new)),
             _ => DataType::Array(None),

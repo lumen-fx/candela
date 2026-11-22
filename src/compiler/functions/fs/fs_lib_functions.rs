@@ -47,6 +47,7 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "fs_write_bytes" => (Void(LibFuncVoid::FsWriteBytes), &[Str, Unknown]),
         "event_source" => (Value(LibFunc::EventSource), &[]),
         "event_next" => (Value(LibFunc::EventNext), &[Bool]),
+        "event_wait" => (Value(LibFunc::EventWait), &[Int]),
         "event_on" => (Void(LibFuncVoid::EventOn), &[Int, Unknown]),
         _ => return None,
     })

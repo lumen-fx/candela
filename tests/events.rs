@@ -81,6 +81,17 @@ pub extern "C" fn own_source() -> i64 {
     source
 }
 
+/// Holds `source`, posts `payload` to it from a thread, and releases it.
+#[no_mangle]
+pub unsafe extern "C" fn post_json(source: i64, payload: *const c_char) {
+    let text = std::ffi::CStr::from_ptr(payload).to_owned();
+    (table().hold)(source);
+    std::thread::spawn(move || {
+        (table().post)(source, text.as_ptr());
+        (table().release)(source);
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn abi() -> i64 {
     table().abi as i64
@@ -232,6 +243,69 @@ fn main() {
 "#,
     );
     assert_eq!(out, "tick 0\ntick 1\nran 2 in main\n0\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `event::wait` runs handlers until the one source it names is done, even
+/// while another source keeps running, and answers at once for a source with
+/// nothing held.
+#[test]
+fn wait_runs_handlers_until_one_source_is_done() {
+    let dir = fixture("wait");
+    let out = run(
+        &dir,
+        r#"
+import "std/event";
+
+dylib "ticker" {
+    fn tick(a: int, b: int, c: int) -> int;
+}
+
+fn main() {
+    let slow = event::source();
+    event::on(slow, fn(payload) { print("slow " + payload); });
+    ticker::tick(slow, 2, 400);
+    let quick = event::source();
+    event::on(quick, fn(payload) { print("quick " + payload); });
+    ticker::tick(quick, 2, 10);
+    event::wait(quick);
+    print("quick is done");
+    event::wait(quick);
+    event::wait(event::source());
+    print("waited for nothing");
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "quick tick 0\nquick tick 1\nquick is done\nwaited for nothing\nslow tick 0\nslow tick 1\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `event::answer` hands its closure a `Result` read from the one JSON answer
+/// the work posts.
+#[test]
+fn answer_reads_a_value_or_an_error() {
+    let dir = fixture("answer");
+    let out = run(
+        &dir,
+        r#"
+import "std/event";
+
+dylib "ticker" {
+    fn post_json(a: int, b: string);
+}
+
+fn main() {
+    let ok = event::answer(fn(v) => (v as int) * 2) fn(r) { print(r); };
+    ticker::post_json(ok, "{\"value\": 21}");
+    let bad = event::answer(fn(v) => v as int) fn(r) { print(r); };
+    ticker::post_json(bad, "{\"error\": \"nope\"}");
+}
+"#,
+    );
+    assert_eq!(out, "Ok(42)\nErr(\"nope\")\n");
     std::fs::remove_dir_all(&dir).ok();
 }
 

@@ -388,6 +388,10 @@ pub enum LibFunc {
     /// x.trunc(). The source float with its fractional part dropped, toward
     /// zero.
     Trunc = 61,
+    /// event::wait. The next event for a handler of this program, as
+    /// [`Self::EventNext`] answers it with `wait`, or an empty list once the
+    /// source in the register has no work left.
+    EventWait = 62,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and

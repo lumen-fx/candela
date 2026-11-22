@@ -2573,7 +2573,7 @@ pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
         | "fs_write_bytes" | "event_on" => DataType::Null,
         "event_source" => DataType::Int,
         // `[source, handler, payload]`, or empty when nothing is queued.
-        "event_next" => DataType::Array(Some(Box::new(DataType::Unknown))),
+        "event_next" | "event_wait" => DataType::Array(Some(Box::new(DataType::Unknown))),
         _ => return None,
     })
 }

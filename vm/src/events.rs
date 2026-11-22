@@ -175,6 +175,13 @@ pub fn hold(source: i64) {
     }
 }
 
+/// Whether `source` still has work running, or a release of its last hold
+/// not yet handled.
+#[must_use]
+pub fn is_held(source: i64) -> bool {
+    state().held.iter().any(|(s, _)| *s == source)
+}
+
 /// Ends one hold on `source`, behind every event already posted under it.
 pub fn release(source: i64) {
     {
