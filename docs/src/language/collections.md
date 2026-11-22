@@ -155,7 +155,7 @@ fn main() {
     print(xs.filter(fn(x) => x % 2 == 0));
     print(xs.reduce(0, fn(a, b) => a + b));
     print(xs.sum(), xs.min(), xs.max(), xs.first(), xs.last());
-    print(xs.max().unwrap_or(0));
+    print(xs.max() else 0);
     print(xs.take(2), xs.drop(2), xs.unique(), xs.chunk(2));
     print(xs.any(fn(x) => x > 3), xs.all(fn(x) => x > 0));
     print(xs.find(fn(x) => x > 2));
@@ -228,7 +228,7 @@ fn main() {
     scores["a"] = 10;
     scores["a"] += 5;
     print(scores["a"], scores.len());
-    print(scores.get("z"), scores.get("z").unwrap_or(0));
+    print(scores.get("z"), scores.get("z") else 0);
     print(scores.contains("b"), scores.keys(), scores.values());
     scores.remove("b");
     print(scores.len());
@@ -238,8 +238,8 @@ fn main() {
 Brackets read and write an entry. `m[k]` reads the value under a key and raises
 `unknown_map_key` when the key is absent; `m[k] = v` adds the entry or replaces
 the value of an existing one. `m.get(k)` is the lookup that may find nothing: it
-answers `Some` of the value or `None`, so `m.get(k).unwrap_or(fallback)` reads
-with a fallback. `remove` takes the entry under a key back out, and a key the
+answers `Some` of the value or `None`, so `m.get(k) else fallback` reads with
+a fallback. `remove` takes the entry under a key back out, and a key the
 map does not hold leaves it as it was.
 
 ### Iterating

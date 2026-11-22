@@ -44,12 +44,6 @@ impl<T> Option<T> {
         return value;
     }
 
-    /// Returns the contained value, or `default` when the option is `None`.
-    fn unwrap_or(self, default: T) -> T => match self {
-        Some(v) => v,
-        None => default,
-    };
-
     /// Applies `f` to the contained value, returning a new option.
     fn map(self, f) {
         match self {

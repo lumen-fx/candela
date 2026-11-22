@@ -225,7 +225,7 @@ fn a_prelude_module_imported_by_name_keeps_its_bare_names() {
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     std::fs::write(
         dir.join("prog.cdl"),
-        "import \"std/option\";\nfn main() { print(Some(7).unwrap()); print(None.is_some()); print(Some(1).unwrap_or(9)); }\n",
+        "import \"std/option\";\nfn main() { print(Some(7).unwrap()); print(None.is_some()); print(Some(1) else 9); }\n",
     )
     .expect("write test file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));

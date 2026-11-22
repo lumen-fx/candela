@@ -114,7 +114,7 @@ pub fn error_unknown_builtin_method(
         )),
         (Some("map"), "get_or") => Some(format!(
             "A lookup with a fallback is {}",
-            paint("m.get(key).unwrap_or(fallback)")
+            paint("m.get(key) else fallback")
         )),
         _ if let Some(replacement) = replaced_method(receiver, method) => {
             Some(format!("{method} is replaced by {}", paint(replacement)))
@@ -291,7 +291,7 @@ pub fn error_propagate_return(
             .with_help(format_args!(
                 "Read the value with {} or {} here instead",
                 blue("match"),
-                blue("unwrap_or"),
+                blue("else"),
             ))
             .finish()
         },
@@ -2024,6 +2024,16 @@ pub fn error_unknown_function(
     )
 }
 
+/// Whether `method` is one of the removed fallback readers, called on an
+/// option or a result.
+fn removed_fallback(method: &str, type_name: &str) -> bool {
+    matches!(method, "unwrap_or" | "unwrap_or_else" | "unwrap_or_default")
+        && (type_name.starts_with("Option")
+            || type_name.starts_with("Result")
+            || type_name.ends_with('?')
+            || type_name.contains('!'))
+}
+
 /// A `recv.method(...)` call where `recv`'s static type is the struct `type_name`
 /// but no `impl type_name { fn method ... }` exists (and `method` is not a field,
 /// which the parser already distinguished by the call parentheses).
@@ -2053,7 +2063,14 @@ pub fn error_no_such_method(
                     ))
                     .with_color(ariadne::Color::Red),
             )
-            .with_help(if type_name.starts_with('(') {
+            .with_help(if removed_fallback(method, type_name) {
+                // The one spelling of a fallback is `else`.
+                format!(
+                    "{method} was removed. A fallback is written with {}, as in {}",
+                    blue("else"),
+                    blue("x else fallback"),
+                )
+            } else if type_name.starts_with('(') {
                 // A tuple takes no methods; a value that needs one is a struct.
                 format!(
                     "A tuple has no methods. Pass it to a function, or make it a {} with an {} block",
@@ -2073,7 +2090,11 @@ pub fn error_no_such_method(
         sources,
         file_idx,
         span,
-        &format!("No method {method} on type {type_name}"),
+        &if removed_fallback(method, type_name) {
+            format!("No method {method} on type {type_name}: write x else fallback")
+        } else {
+            format!("No method {method} on type {type_name}")
+        },
         "no_such_method",
     )
 }
@@ -2853,7 +2874,7 @@ pub fn error_op(
                 blue(types.of(side)),
                 blue("?"),
                 blue(".unwrap()"),
-                blue(".unwrap_or(default)"),
+                blue("else default"),
                 blue("match"),
             ));
         }

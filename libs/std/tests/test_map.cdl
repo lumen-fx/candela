@@ -17,8 +17,8 @@ fn main() {
     assert::eq(m["b"], 2);
     assert::is_true(m.contains("a"));
     assert::is_false(m.contains("z"));
-    assert::eq(m.get("c").unwrap_or(99), 3);
-    assert::eq(m.get("z").unwrap_or(99), 99);
+    assert::eq(m.get("c") else 99, 3);
+    assert::eq(m.get("z") else 99, 99);
 
     // keys / values.
     assert::eq(m.keys().len(), 3);

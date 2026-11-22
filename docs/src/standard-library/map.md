@@ -46,14 +46,14 @@ m.get(k)
 - Raises: nothing.
 
 `get` is the lookup that may find nothing; `m[k]` is the one that expects the
-key to be there. `m.get(k).unwrap_or(fallback)` reads with a fallback, and
+key to be there. `m.get(k) else fallback` reads with a fallback, and
 `m.get(k)?` hands the `None` back to the caller; see [option](option.md).
 
 ```rust
 fn main() {
     let counts = {"a": 1};
     print(counts.get("a"));
-    print(counts.get("z").unwrap_or(0));
+    print(counts.get("z") else 0);
 }
 ```
 

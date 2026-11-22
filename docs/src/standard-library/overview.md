@@ -102,7 +102,7 @@ What a program reaches for on every other line needs no import:
 fn main() {
     let xs = [1, 2, 3, 4];
     print(xs.map(fn(x) => x * 2));
-    print(xs.max().unwrap_or(0));
+    print(xs.max() else 0);
     print({"a": 1}.get("b"));
 }
 ```

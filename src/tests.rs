@@ -3732,7 +3732,7 @@ pub fn array_index_of_missing() {
         fn main() {
             let arr = [10, 20, 30];
             print(arr.index_of(99));
-            print(arr.index_of(99).unwrap_or(-1));
+            print(arr.index_of(99) else -1);
         }
         "
         ),
@@ -6698,7 +6698,7 @@ pub fn method_on_builtin_map() {
         fn main() {
             let m = {};
             m[\"a\"] = 5;
-            print(m.get(\"a\").unwrap_or(0) + m.get(\"b\").unwrap_or(30));
+            print((m.get(\"a\") else 0) + (m.get(\"b\") else 30));
         }
         ",
         35.into()
@@ -15627,7 +15627,7 @@ pub fn a_branch_value_calls_the_function_it_chose() {
 pub fn the_prelude_needs_no_import() {
     let src = r#"
         fn main() {
-            print(Some(3).unwrap_or(1), Ok(2).is_ok(), "abc".capitalize());
+            print(Some(3) else 1, Ok(2).is_ok(), "abc".capitalize());
             print({"a": 1}.is_empty(), int("42") + 1, [1, 2, 3].sum());
         }
     "#;
@@ -15642,8 +15642,7 @@ pub fn the_prelude_needs_no_library_directory() {
     std::fs::create_dir_all(&empty).unwrap();
     let mut resolver = crate::compiler::imports::ImportResolver::new();
     resolver.set_lib_dir(empty.clone());
-    let src =
-        "fn main() { print([4, 2].min().unwrap_or(0) + {\"k\": 1}.get(\"k\").unwrap_or(0)); }";
+    let src = "fn main() { print(([4, 2].min() else 0) + ({\"k\": 1}.get(\"k\") else 0)); }";
     CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let was_capturing = set_capturing(true);
     let result = run_diag_profile_with(src, "p.cdl", false, &resolver);
@@ -15770,7 +15769,7 @@ pub fn map_get_returns_an_option() {
         fn main() {
             let m = {"a": 1};
             print(m.get("a"), m.get("z"));
-            print(m.get("z").unwrap_or(7));
+            print(m.get("z") else 7);
             let n = match m.get("a") { Some(v) => v + 1, None => 0 };
             print(n);
         }
@@ -15787,7 +15786,7 @@ pub fn removed_map_methods_name_their_replacement() {
         ),
         (
             "fn main() { let m = {\"a\": 1}; print(m.get_or(\"b\", 2)); }",
-            "m.get(key).unwrap_or(fallback)",
+            "m.get(key) else fallback",
         ),
     ] {
         let d = compile_diag(src, "diag.kl").unwrap_err();
@@ -15795,6 +15794,28 @@ pub fn removed_map_methods_name_their_replacement() {
         assert_eq!(d.code, "no_such_method", "{src}");
         assert!(d.message.contains(replacement), "{d:?}");
     }
+}
+
+/// `else` is the one spelling of a fallback; the removed `unwrap_or` names it.
+#[test]
+pub fn unwrap_or_is_removed_for_else() {
+    for src in [
+        "fn main() { let o = Some(3); print(o.unwrap_or(1)); }",
+        "fn main() { let r: int!string = Ok(2); print(r.unwrap_or(5)); }",
+        "fn main() { print([1].first().unwrap_or_else(fn() => 0)); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "no_such_method", "{src}");
+        assert!(d.message.contains("x else fallback"), "{d:?}");
+    }
+    let src = r#"
+        fn main() {
+            let r: int!string = Err("no");
+            print(Some(3) else 1, None else 1, r else 5, [7].first() else 0);
+        }
+    "#;
+    assert_eq!(run_output(src), "3\n1\n5\n7\n");
 }
 
 #[test]
@@ -15813,7 +15834,7 @@ pub fn list_lookups_return_options() {
             print(xs.first(), xs.last(), xs.min(), xs.max());
             let none = [0];
             none.remove(0);
-            print(none.first(), none.max().unwrap_or(-1));
+            print(none.first(), none.max() else -1);
         }
     ";
     assert_eq!(

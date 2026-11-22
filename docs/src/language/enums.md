@@ -282,7 +282,7 @@ fn main() {
         Some(v) => print(v),
         None => print("nothing"),
     }
-    print(None.unwrap_or(0));
+    print(None else 0);
 }
 ```
 

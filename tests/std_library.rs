@@ -223,7 +223,7 @@ fn option_result_inline_into_cdlb() {
 import "std/option";
 import "std/result";
 fn main() {
-    print(None.unwrap_or(3));
+    print(None else 3);
     print(Some(7).unwrap());
     print(Ok(1).is_ok());
     print(Err("x").unwrap_err());

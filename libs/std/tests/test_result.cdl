@@ -37,8 +37,8 @@ fn main() {
 
     assert::eq(ok.unwrap(), 5);
     assert::eq(err.unwrap_err(), "boom");
-    assert::eq(err.unwrap_or(42), 42);
-    assert::eq(ok.unwrap_or(42), 5);
+    assert::eq(err else 42, 42);
+    assert::eq(ok else 42, 5);
 
     // map works one side at a time and leaves the other alone.
     assert::eq(ok.map(twice).unwrap(), 10);

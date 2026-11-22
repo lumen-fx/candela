@@ -128,17 +128,6 @@ r.unwrap_err()
 - Returns: the error value.
 - Raises: `called unwrap_err on an Ok result` when the result is `Ok`.
 
-### unwrap_or
-
-```rust
-r.unwrap_or(default)
-```
-
-- `default`: the value to return when the result is `Err`. It has the result's
-  own success type.
-- Returns: the success value, or `default`.
-- Raises: nothing.
-
 ### map
 
 ```rust
@@ -189,7 +178,7 @@ fn parse_port(text) {
 
 fn main() {
     print(parse_port("8080").unwrap());
-    print(parse_port("http").unwrap_or(80));
+    print(parse_port("http") else 80);
     print(parse_port("http").unwrap_err());
 }
 ```

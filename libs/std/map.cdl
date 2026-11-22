@@ -22,6 +22,6 @@ impl map {
     }
 
     /// The value stored under `k` as `Some`, or `None` when the map holds no
-    /// such key. `m.get(k).unwrap_or(fallback)` reads with a fallback.
+    /// such key. `m.get(k) else fallback` reads with a fallback.
     fn get(self, k) => if self.contains(k) { Some(self[k]) } else { None };
 }

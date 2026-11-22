@@ -17,7 +17,7 @@ fn main() {
     assert::eq([1.5, 2.5].sum(), 4.0);
     assert::eq([1, 2, 3, 4].product(), 24);
     assert::eq([3, 1, 2].min(), Some(1));
-    assert::eq([3, 1, 2].max().unwrap_or(0), 3);
+    assert::eq([3, 1, 2].max() else 0, 3);
     assert::eq([5, 6, 7].index_of(6), Some(1));
     assert::eq([5, 6, 7].index_of(9), None);
     assert::eq([1, 1, 2, 1].count(1), 3);

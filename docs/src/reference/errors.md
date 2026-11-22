@@ -83,8 +83,9 @@ name from its own is reported with the new spelling: `assert_eq` points at
 server offers each of these as a quick fix that writes the import and the
 spelling.
 A method a map no longer has is `no_such_method` with the spelling that
-replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
-for `get_or`. A renamed string or list method is reported the same way:
+replaced it: `m[key] = value` for `insert`, `m.get(key) else fallback` for
+`get_or`. `unwrap_or` on an option or a result names `x else fallback`, the
+one spelling of a fallback. A renamed string or list method is reported the same way:
 `index_of` for a string's `find`, `split` for a list's `partition`, and
 `trim_start`, `trim_end`, `trim_chars`, `trim_start_chars` and `trim_end_chars`
 for `trim_left`, `trim_right`, `trim_sequence`, `trim_sequence_left` and

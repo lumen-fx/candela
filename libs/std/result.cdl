@@ -55,12 +55,6 @@ impl<T, E> Result<T, E> {
         return value;
     }
 
-    /// Returns the success value, or `default` when the result is `Err`.
-    fn unwrap_or(self, default: T) -> T => match self {
-        Ok(v) => v,
-        Err(_) => default,
-    };
-
     /// Applies `f` to the success value, returning a new result. An `Err`
     /// passes through without calling `f`.
     fn map(self, f) {

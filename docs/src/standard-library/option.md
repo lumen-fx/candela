@@ -27,6 +27,10 @@ fn main() {
 }
 ```
 
+`o else default` reads the contained value, or `default` when the option is
+`None`, and also takes a block: `o else { return; }`. See
+[error handling](../language/error-handling.md#a-fallback-with-else).
+
 `Some(x)` needs no type argument: the value it is given decides the option's
 type, so `Some(5)` is an `Option<int>` and the value bound in a `Some` arm comes
 back with the type that went in.
@@ -113,18 +117,6 @@ o.unwrap()
 - Returns: the contained value.
 - Raises: `called unwrap on a None option` when the option is `None`.
 
-### unwrap_or
-
-```rust
-o.unwrap_or(default)
-```
-
-- `default`: the value to return when the option is `None`. It has the option's
-  own payload type.
-- Returns: the contained value, or `default`. `o else default` reads the same
-  and also takes a block: `o else { return; }`.
-- Raises: nothing.
-
 ### map
 
 ```rust
@@ -172,7 +164,7 @@ fn main() {
     let s = Some(5);
     let n = None;
     print(s.map(describe).unwrap());
-    print(n.unwrap_or(0));
+    print(n else 0);
 }
 ```
 

@@ -188,8 +188,8 @@ impl Option {
             None => { return false; }
         }
     }
-    fn unwrap_or(self, default) {
-        return default;
+    fn map(self, f) {
+        return f;
     }
 }
 

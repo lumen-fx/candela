@@ -249,7 +249,7 @@ fn the_prelude_is_carried() {
     let out = run(r#"
 fn main() {
     let m = {"a": 1};
-    print(m.get("a").unwrap_or(0) + [3, 4].max().unwrap_or(0));
+    print((m.get("a") else 0) + ([3, 4].max() else 0));
     print("ab".capitalize());
 }
 "#);
