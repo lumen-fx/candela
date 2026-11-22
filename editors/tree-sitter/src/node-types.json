@@ -749,11 +749,79 @@
       "required": false,
       "types": [
         {
+          "type": "array_type",
+          "named": true
+        },
+        {
           "type": "attribute_argument",
           "named": true
         },
         {
+          "type": "attribute_list",
+          "named": true
+        },
+        {
+          "type": "boolean_literal",
+          "named": true
+        },
+        {
           "type": "cfg_predicate",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "map_type",
+          "named": true
+        },
+        {
+          "type": "negative_literal",
+          "named": true
+        },
+        {
+          "type": "optional_type",
+          "named": true
+        },
+        {
+          "type": "parenthesized_type",
+          "named": true
+        },
+        {
+          "type": "qualified_type",
+          "named": true
+        },
+        {
+          "type": "result_type",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
+          "named": true
+        },
+        {
+          "type": "union_type",
           "named": true
         }
       ]
@@ -774,11 +842,19 @@
         ]
       },
       "target": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {
+            "type": "const",
+            "named": false
+          },
+          {
             "type": "enum",
+            "named": false
+          },
+          {
+            "type": "field",
             "named": false
           },
           {
@@ -786,7 +862,23 @@
             "named": false
           },
           {
+            "type": "impl",
+            "named": false
+          },
+          {
+            "type": "method",
+            "named": false
+          },
+          {
+            "type": "param",
+            "named": false
+          },
+          {
             "type": "struct",
+            "named": false
+          },
+          {
+            "type": "variant",
             "named": false
           }
         ]
@@ -2741,6 +2833,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3199,6 +3301,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -6676,6 +6788,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -9833,6 +9955,10 @@
     "named": false
   },
   {
+    "type": "field",
+    "named": false
+  },
+  {
     "type": "float_literal",
     "named": true
   },
@@ -9901,11 +10027,19 @@
     "named": false
   },
   {
+    "type": "method",
+    "named": false
+  },
+  {
     "type": "null_literal",
     "named": true
   },
   {
     "type": "on",
+    "named": false
+  },
+  {
+    "type": "param",
     "named": false
   },
   {
@@ -9939,6 +10073,10 @@
   {
     "type": "variadic_parameter",
     "named": true
+  },
+  {
+    "type": "variant",
+    "named": false
   },
   {
     "type": "while",

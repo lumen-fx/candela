@@ -932,6 +932,96 @@ fn spawn(rate: int) {}
     (block)))
 
 ================================================================================
+Attributes on every declaration (docs/src/language/attributes.md)
+================================================================================
+
+host "ui" {
+    attribute slider(min: int = 0, max: int = 100) on field, param;
+    attribute button(label: string) on method;
+}
+
+struct Player {
+    @ui::slider(0, max: 100) health: int,
+}
+
+impl Player {
+    @ui::button("Heal")
+    fn heal(self, @ui::slider(1, 10) amount: int) {}
+}
+
+enum Team { @ui::label("Red team") Red, Blue }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (host_block
+    (string_literal)
+    (signature_list
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (type_identifier)
+          (integer_literal))
+        (attribute_parameter
+          (identifier)
+          (type_identifier)
+          (integer_literal)))
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (type_identifier)))))
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (attribute
+          (identifier)
+          (identifier)
+          (attribute_arguments
+            (integer_literal)
+            (attribute_argument
+              (identifier)
+              (integer_literal))))
+        (identifier)
+        (type_identifier))))
+  (impl_block
+    (type_identifier)
+    (attribute
+      (identifier)
+      (identifier)
+      (attribute_arguments
+        (string_literal)))
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (attribute
+            (identifier)
+            (identifier)
+            (attribute_arguments
+              (integer_literal)
+              (integer_literal)))
+          (identifier)
+          (type_identifier)))
+      (block)))
+  (enum_declaration
+    (identifier)
+    (enum_variant_list
+      (enum_variant
+        (attribute
+          (identifier)
+          (identifier)
+          (attribute_arguments
+            (string_literal)))
+        (identifier))
+      (enum_variant
+        (identifier)))))
+
+================================================================================
 Expression bodies with => (docs/src/language/functions.md)
 ================================================================================
 

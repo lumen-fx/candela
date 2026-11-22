@@ -194,6 +194,8 @@ been raised for:
 - the attribute table
 - the signature a function named in an attribute argument carries, and
   attributes on enums
+- attributes on methods, parameters, constants, fields, variants and `impl`
+  blocks
 
 There is no forward or backward compatibility across a change, and there is no
 conversion tool.

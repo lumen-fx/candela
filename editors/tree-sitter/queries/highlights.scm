@@ -75,6 +75,15 @@
 (attribute_declaration
   name: (identifier) @attribute)
 
+; The kinds of declaration an `on` clause lists that are no keyword elsewhere.
+(attribute_declaration
+  [
+    "method"
+    "param"
+    "field"
+    "variant"
+  ] @keyword.directive)
+
 (attribute_parameter
   name: (identifier) @variable.parameter)
 

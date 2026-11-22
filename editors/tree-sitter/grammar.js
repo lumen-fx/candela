@@ -179,9 +179,10 @@ module.exports = grammar({
     // Declarations
     // ------------------------------------------------------------------
 
-    // `@cfg(...)` in front of a declaration, a method or a statement, or an
-    // attribute a `host` block declares, named behind its module
-    // (`@ecs::system(writes: [Position])`). The parser reads it as a prefix of
+    // `@cfg(...)` in front of a declaration, a part of one (a method, a
+    // field, a variant, a parameter) or a statement, or an attribute a `host`
+    // block declares, named behind its module (`@ecs::system(writes:
+    // [Position])`). The parser reads it as a prefix of
     // what follows; here it is a sibling node, which is all highlighting needs.
     attribute: ($) =>
       prec.right(
@@ -194,7 +195,11 @@ module.exports = grammar({
       ),
 
     attribute_arguments: ($) =>
-      seq('(', sepByTrailing(',', choice($.attribute_argument, $.cfg_predicate)), ')'),
+      seq(
+        '(',
+        sepByTrailing(',', choice($.attribute_argument, $.cfg_predicate, $._attribute_value)),
+        ')',
+      ),
 
     // `writes: [Position]`: a parameter's name and its value.
     attribute_argument: ($) =>
@@ -218,7 +223,7 @@ module.exports = grammar({
     // A flag, `key = "value"`, or `not`/`any`/`all` around further conditions.
     cfg_predicate: ($) =>
       choice(
-        field('flag', $.identifier),
+        prec(1, field('flag', $.identifier)),
         seq(field('key', $.identifier), '=', field('value', $.string_literal)),
         seq(field('combinator', $.identifier), field('arguments', $.attribute_arguments)),
       ),
@@ -262,6 +267,7 @@ module.exports = grammar({
     // `size: int = 12`: a call that leaves the argument out passes the default.
     parameter: ($) =>
       seq(
+        repeat($.attribute),
         field('name', $._pattern),
         optional(seq(':', field('type', $._type))),
         optional(seq('=', field('default', $._expression))),
@@ -283,6 +289,7 @@ module.exports = grammar({
     // `cwd: string = "."`: the value the struct's default gives the field.
     field_declaration: ($) =>
       seq(
+        repeat($.attribute),
         field('name', $.identifier),
         ':',
         field('type', $._type),
@@ -302,6 +309,7 @@ module.exports = grammar({
     // A payload is positional, `Click(int, int)`, or named, `Click { x: int }`.
     enum_variant: ($) =>
       seq(
+        repeat($.attribute),
         field('name', $.identifier),
         optional(field('payload', choice($.payload_type_list, $.variant_field_list))),
       ),
@@ -378,7 +386,8 @@ module.exports = grammar({
         '}',
       ),
 
-    // `attribute system(writes: type[] = []) on fn;`
+    // `attribute system(writes: type[] = []) on fn;`, or on a list of kinds:
+    // `on fn, method;`.
     attribute_declaration: ($) =>
       seq(
         'attribute',
@@ -387,7 +396,13 @@ module.exports = grammar({
           seq('(', sepByTrailing(',', $.attribute_parameter), ')'),
         ),
         'on',
-        field('target', choice('fn', 'struct', 'enum')),
+        sepBy1(
+          ',',
+          field(
+            'target',
+            choice('fn', 'method', 'param', 'const', 'struct', 'field', 'enum', 'variant', 'impl'),
+          ),
+        ),
         ';',
       ),
 

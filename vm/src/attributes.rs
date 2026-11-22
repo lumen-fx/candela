@@ -2,7 +2,7 @@
 //! through.
 //!
 //! A `host` block may declare attributes (`attribute system(writes: type[] =
-//! []) on fn;`), and a script puts them on its functions and structs
+//! []) on fn;`), and a script puts them on the declarations each one names
 //! (`@ecs::system(writes: [Position])`). The compiler checks every use against
 //! its declaration and records what it found here. candela gives an attribute
 //! no meaning: the host that declared it reads the table and decides what it
@@ -47,10 +47,34 @@ pub enum AttributeTarget {
         name: String,
         params: Vec<(String, DataType)>,
     },
+    /// A function an `impl` block declares, by the type the block is for, the
+    /// name it is declared with and its parameters in declaration order, the
+    /// receiver first.
+    Method {
+        owner: DataType,
+        name: String,
+        params: Vec<(String, DataType)>,
+    },
+    /// A parameter of a function or a method, by the function's name, the type
+    /// that declares it when it is a method, and the parameter's name and type.
+    Param {
+        function: String,
+        owner: Option<DataType>,
+        name: String,
+        ty: DataType,
+    },
+    /// A constant, by its name and declared type.
+    Const { name: String, ty: DataType },
     /// A struct, by its id in the program's struct table.
     Struct(u16),
+    /// A field of a struct, by the struct's id and the field's name.
+    Field { struct_id: u16, name: String },
     /// An enum, by its id in the program's enum table.
     Enum(u16),
+    /// A variant of an enum, by the enum's id and the variant's name.
+    Variant { enum_id: u16, name: String },
+    /// An `impl` block, by the type it is for.
+    Impl(DataType),
 }
 
 /// The value one argument of an [`Attribute`] holds.

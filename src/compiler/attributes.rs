@@ -1,10 +1,10 @@
 //! Attributes a `host` block declares, and the uses a script writes on its
-//! functions and structs.
+//! declarations.
 //!
-//! A host block names an attribute, the item kind it goes on and the
-//! parameters it takes (`attribute system(writes: type[] = []) on fn;`). A
-//! script writes it in front of a top-level declaration, behind the module that
-//! declares it (`@ecs::system(writes: [Position])`). The compiler checks that
+//! A host block names an attribute, the kinds of declaration it goes on and
+//! the parameters it takes (`attribute system(writes: type[] = []) on fn;`). A
+//! script writes it in front of one of those declarations, behind the module
+//! that declares it (`@ecs::system(writes: [Position])`). The compiler checks that
 //! the attribute exists, that it targets that kind of item, and that every
 //! argument is a value of its parameter's type: a type name that resolves, a
 //! function that is declared, a variant of the enum. It records what it found
@@ -15,6 +15,7 @@ use super::FileNamespaces;
 use super::Function;
 use super::SymbolKind;
 use super::compiler_data::TypeNames;
+use super::expr::METHOD_SEP;
 use super::type_system::Generics;
 use super::type_system::TypeCtx;
 use super::type_system::TypeExpr;
@@ -92,27 +93,68 @@ pub struct AttributeParamDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributeTargetKind {
     Fn,
+    Method,
+    Param,
+    Const,
     Struct,
+    Field,
     Enum,
+    Variant,
+    Impl,
 }
 
 impl AttributeTargetKind {
-    const fn keyword(self) -> &'static str {
+    /// Every kind, in the order a declaration lists them.
+    pub const ALL: [Self; 9] = [
+        Self::Fn,
+        Self::Method,
+        Self::Param,
+        Self::Const,
+        Self::Struct,
+        Self::Field,
+        Self::Enum,
+        Self::Variant,
+        Self::Impl,
+    ];
+
+    /// The word an `on` clause names the kind by.
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
         match self {
             Self::Fn => "fn",
+            Self::Method => "method",
+            Self::Param => "param",
+            Self::Const => "const",
             Self::Struct => "struct",
+            Self::Field => "field",
             Self::Enum => "enum",
+            Self::Variant => "variant",
+            Self::Impl => "impl",
         }
     }
 }
 
-/// `attribute name(params) on fn;`, written in a `host` block.
+/// `attribute name(params) on fn, method;`, written in a `host` block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttributeDecl {
     pub name: SmolStr,
     pub params: Box<[AttributeParamDecl]>,
-    pub target: AttributeTargetKind,
+    /// The kinds of item it may be written on, in the order the `on` clause
+    /// lists them.
+    pub targets: Box<[AttributeTargetKind]>,
     pub span: Span,
+}
+
+impl AttributeDecl {
+    /// The `on` clause's kinds, as it spells them: `fn, method`.
+    #[must_use]
+    pub fn targets_text(&self) -> String {
+        self.targets
+            .iter()
+            .map(|t| t.keyword())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// `@path(name: value, ...)`, written in front of a declaration.
@@ -120,18 +162,65 @@ pub struct AttributeDecl {
 pub struct AttributeUse {
     /// The module path and the attribute's name, last.
     pub path: Box<[SmolStr]>,
+    /// The arguments in the order written. A positional argument has an empty
+    /// name.
     pub args: Box<[(SmolStr, AttrValueExpr, Span)]>,
     pub span: Span,
 }
 
+/// Which part of a top-level item a run of uses the parser read is written
+/// on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrOn {
+    /// The item itself: a function, a method, a constant, a struct or an enum.
+    Item,
+    /// The struct field at this index.
+    Field(u16),
+    /// The enum variant at this index.
+    Variant(u16),
+    /// The function parameter at this index.
+    Param(u16),
+    /// An `impl` block for this type.
+    Impl(TypeExpr),
+    /// A part of a generic `impl` block, which names no one function.
+    Generic(AttributeTargetKind),
+}
+
 /// What a use is written on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum UseTarget {
     Fn(u16),
+    Method(u16),
+    Const(u16),
+    /// A function and the index of one of its parameters.
+    Param(u16, u16),
     Struct(u16),
+    /// A struct and the index of one of its fields.
+    Field(u16, u16),
     Enum(u16),
+    /// An enum and the index of one of its variants.
+    Variant(u16, u16),
+    /// An `impl` block, by the type it names, in the file of the use.
+    Impl(TypeExpr),
     /// A generic declaration, which names no one function or struct.
     Generic(AttributeTargetKind),
+}
+
+impl UseTarget {
+    const fn kind(&self) -> AttributeTargetKind {
+        match self {
+            Self::Fn(_) => AttributeTargetKind::Fn,
+            Self::Method(_) => AttributeTargetKind::Method,
+            Self::Const(_) => AttributeTargetKind::Const,
+            Self::Param(..) => AttributeTargetKind::Param,
+            Self::Struct(_) => AttributeTargetKind::Struct,
+            Self::Field(..) => AttributeTargetKind::Field,
+            Self::Enum(_) => AttributeTargetKind::Enum,
+            Self::Variant(..) => AttributeTargetKind::Variant,
+            Self::Impl(_) => AttributeTargetKind::Impl,
+            Self::Generic(kind) => *kind,
+        }
+    }
 }
 
 /// The declarations and uses the parsed files hold, waiting for the types and
@@ -266,20 +355,15 @@ pub fn resolve_attributes(
                 );
             };
             let (namespace, decl, params) = &decls[decl_id];
-            let kind = match target {
-                UseTarget::Fn(_) => AttributeTargetKind::Fn,
-                UseTarget::Struct(_) => AttributeTargetKind::Struct,
-                UseTarget::Enum(_) => AttributeTargetKind::Enum,
-                UseTarget::Generic(kind) => *kind,
-            };
-            if kind != decl.target {
+            let kind = target.kind();
+            if !decl.targets.contains(&kind) {
                 error_attribute(
                     "attribute_wrong_target",
                     "Attribute on the wrong kind of item",
                     &format!(
-                        "{} goes on a {} declaration, and this is a {}",
+                        "{} goes on {}, and this is a {}",
                         blue(attr.path.join("::")),
-                        blue(decl.target.keyword()),
+                        blue(decl.targets_text()),
                         blue(kind.keyword())
                     ),
                     None,
@@ -288,56 +372,59 @@ pub fn resolve_attributes(
                     ctx.sources,
                 );
             }
-            let target = match *target {
-                UseTarget::Fn(fn_id) => {
-                    let function = &ctx.fns[fn_id as usize];
-                    AttributeTarget::Fn {
-                        name: function.name.to_string(),
-                        params: function
-                            .args
-                            .iter()
-                            .map(|(n, t)| (n.to_string(), t.clone().unwrap_or(DataType::Unknown)))
-                            .collect(),
-                    }
-                }
-                UseTarget::Struct(struct_id) => AttributeTarget::Struct(struct_id),
-                UseTarget::Enum(enum_id) => AttributeTarget::Enum(enum_id),
-                UseTarget::Generic(kind) => error_attribute(
-                    "attribute_wrong_target",
-                    "Attribute on a generic declaration",
-                    &format!(
-                        "{} goes on one {}, and a generic {} stands for one per set of type arguments",
-                        blue(attr.path.join("::")),
-                        kind.keyword(),
-                        kind.keyword()
-                    ),
-                    None,
-                    attr.span,
-                    *file_idx,
-                    ctx.sources,
-                ),
-            };
+            let target = use_target(target, attr, *file_idx, ctx);
 
             let mut given: Vec<Option<AttributeValue>> = params.iter().map(|_| None).collect();
-            for (arg_name, value, arg_span) in &attr.args {
+            let mut named = false;
+            for (position, (arg_name, value, arg_span)) in attr.args.iter().enumerate() {
+                // Arguments fill the parameters in order, then by name, the way
+                // a call's do.
                 if arg_name.is_empty() {
-                    error_attribute(
-                        "attribute_bad_argument",
-                        "Unnamed attribute argument",
-                        "An attribute argument names the parameter it is for",
-                        Some(&format!(
-                            "Write the parameter's name, a ':' and the value, as in {}",
-                            green(format_args!(
-                                "@{}({}: ...)",
-                                attr.path.join("::"),
-                                decl.params.first().map_or("name", |p| p.name.as_str())
-                            ))
-                        )),
-                        *arg_span,
+                    if named {
+                        error_attribute(
+                            "attribute_bad_argument",
+                            "Positional attribute argument after a named one",
+                            "This argument has no name, and an argument before it names its parameter",
+                            Some(&format!(
+                                "Write the arguments in order first, then the named ones, as in {}",
+                                green(format_args!(
+                                    "@{}(value, {}: ...)",
+                                    attr.path.join("::"),
+                                    decl.params.get(1).map_or("name", |p| p.name.as_str())
+                                ))
+                            )),
+                            *arg_span,
+                            *file_idx,
+                            ctx.sources,
+                        );
+                    }
+                    if position >= params.len() {
+                        error_attribute(
+                            "attribute_bad_argument",
+                            "Too many attribute arguments",
+                            &format!(
+                                "{} takes {} argument{}",
+                                blue(attr.path.join("::")),
+                                params.len(),
+                                if params.len() == 1 { "" } else { "s" }
+                            ),
+                            None,
+                            *arg_span,
+                            *file_idx,
+                            ctx.sources,
+                        );
+                    }
+                    let param = &decl.params[position];
+                    given[position] = Some(check_value(
+                        value,
+                        &params[position].0,
+                        &param.name,
                         *file_idx,
-                        ctx.sources,
-                    );
+                        ctx,
+                    ));
+                    continue;
                 }
+                named = true;
                 let Some(at) = decl.params.iter().position(|p| p.name == *arg_name) else {
                     let names: Vec<String> =
                         decl.params.iter().map(|p| p.name.to_string()).collect();
@@ -404,6 +491,108 @@ pub fn resolve_attributes(
         }
     }
     out
+}
+
+/// The table entry for what a use is written on.
+fn use_target(
+    target: &UseTarget,
+    attr: &AttributeUse,
+    file_idx: u16,
+    ctx: &mut AttributeCtx<'_>,
+) -> AttributeTarget {
+    let params_of = |function: &Function| -> Vec<(String, DataType)> {
+        function
+            .args
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.clone().unwrap_or(DataType::Unknown)))
+            .collect()
+    };
+    match target {
+        UseTarget::Fn(fn_id) => {
+            let function = &ctx.fns[*fn_id as usize];
+            AttributeTarget::Fn {
+                name: function.name.to_string(),
+                params: params_of(function),
+            }
+        }
+        UseTarget::Method(fn_id) => {
+            let (owner, name) = method_owner(*fn_id, file_idx, ctx);
+            AttributeTarget::Method {
+                owner,
+                name,
+                params: params_of(&ctx.fns[*fn_id as usize]),
+            }
+        }
+        UseTarget::Param(fn_id, index) => {
+            let is_method = ctx.fns[*fn_id as usize].name.contains(METHOD_SEP);
+            let (owner, function) = if is_method {
+                let (owner, name) = method_owner(*fn_id, file_idx, ctx);
+                (Some(owner), name)
+            } else {
+                (None, ctx.fns[*fn_id as usize].name.to_string())
+            };
+            let (name, ty) = &ctx.fns[*fn_id as usize].args[*index as usize];
+            AttributeTarget::Param {
+                function,
+                owner,
+                name: name.to_string(),
+                ty: ty.clone().unwrap_or(DataType::Unknown),
+            }
+        }
+        UseTarget::Const(fn_id) => {
+            let function = &ctx.fns[*fn_id as usize];
+            AttributeTarget::Const {
+                name: function.name.to_string(),
+                ty: function
+                    .return_type
+                    .as_ref()
+                    .map_or(DataType::Unknown, |(t, _)| t.clone()),
+            }
+        }
+        UseTarget::Struct(struct_id) => AttributeTarget::Struct(*struct_id),
+        UseTarget::Field(struct_id, index) => AttributeTarget::Field {
+            struct_id: *struct_id,
+            name: ctx.structs[*struct_id as usize].fields[*index as usize]
+                .0
+                .to_string(),
+        },
+        UseTarget::Enum(enum_id) => AttributeTarget::Enum(*enum_id),
+        UseTarget::Variant(enum_id, index) => AttributeTarget::Variant {
+            enum_id: *enum_id,
+            name: ctx.enums[*enum_id as usize].variants[*index as usize]
+                .name
+                .to_string(),
+        },
+        UseTarget::Impl(texpr) => {
+            AttributeTarget::Impl(texpr.to_datatype(&mut ctx.type_ctx(file_idx)))
+        }
+        UseTarget::Generic(kind) => error_attribute(
+            "attribute_wrong_target",
+            "Attribute on a generic declaration",
+            &format!(
+                "{} goes on one {}, and a generic declaration stands for one per set of type arguments",
+                blue(attr.path.join("::")),
+                kind.keyword(),
+            ),
+            None,
+            attr.span,
+            file_idx,
+            ctx.sources,
+        ),
+    }
+}
+
+/// The type a method's `impl` block is for, and the method's own name, read
+/// out of its mangled name (`Type#name`).
+fn method_owner(fn_id: u16, file_idx: u16, ctx: &mut AttributeCtx<'_>) -> (DataType, String) {
+    let function = &ctx.fns[fn_id as usize];
+    let span = function.name_span;
+    let (owner, name) = function
+        .name
+        .split_once(METHOD_SEP)
+        .map_or_else(Default::default, |(o, n)| (SmolStr::new(o), n.to_owned()));
+    let owner = TypeExpr::Identifier(owner, span).to_datatype(&mut ctx.type_ctx(file_idx));
+    (owner, name)
 }
 
 /// Resolves the type a declaration gives a parameter, refusing one no

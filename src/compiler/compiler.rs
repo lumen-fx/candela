@@ -38,6 +38,7 @@ use crate::vm::StringPool;
 use crate::vm::map_insert;
 use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
+use attributes::AttrOn;
 use attributes::AttributeCtx;
 use attributes::AttributeTargetKind;
 use attributes::AttributeUse;
@@ -8335,7 +8336,7 @@ fn exported_names(exports: &Namespace) -> Vec<SmolStr> {
 
 fn parse_toplevel(
     code: Vec<Expr>,
-    item_attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    item_attributes: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     consts: &[usize],
     declared_macros: &[SmolStr],
     attrs: &mut PendingAttributes,
@@ -8358,12 +8359,28 @@ fn parse_toplevel(
     resolver: &ImportResolver,
 ) {
     let mut imports = Vec::new();
+    // An `impl` block and the parts of a generic one name no item of their
+    // own and are recorded where they stand; the rest are on an item, by its
+    // index, or on one of its parts.
+    let push_unattached = |attrs: &mut PendingAttributes, on: AttrOn, run| match on {
+        AttrOn::Impl(ty) => attrs.uses.push((src_file_idx, UseTarget::Impl(ty), run)),
+        AttrOn::Generic(kind) => attrs
+            .uses
+            .push((src_file_idx, UseTarget::Generic(kind), run)),
+        _ => unreachable!("only an impl block's uses name no item"),
+    };
+    let item_count = code.len();
     let mut item_attributes = item_attributes.into_iter().peekable();
     for (index, expr) in code.into_iter().enumerate() {
-        // The attributes written in front of this item, if any.
-        let uses = item_attributes
-            .next_if(|(at, _)| *at == index)
-            .map(|(_, uses)| uses);
+        // The attributes written on this item and its parts, if any.
+        let mut uses = Vec::new();
+        while let Some((_, on, run)) = item_attributes.next_if(|(at, ..)| *at == index) {
+            if matches!(on, AttrOn::Impl(_) | AttrOn::Generic(_)) {
+                push_unattached(attrs, on, run);
+            } else {
+                uses.push((on, run));
+            }
+        }
         match expr {
             Expr::FunctionDecl(
                 fn_name,
@@ -8374,13 +8391,28 @@ fn parse_toplevel(
                 type_params,
                 defaults,
             ) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Fn(fns.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Fn)
+                let fn_id = fns.len() as u16;
+                let kind = if consts.contains(&index) {
+                    AttributeTargetKind::Const
+                } else if fn_name.contains(METHOD_SEP) {
+                    AttributeTargetKind::Method
+                } else {
+                    AttributeTargetKind::Fn
+                };
+                for (on, run) in uses {
+                    let target = match on {
+                        _ if !type_params.is_empty() => UseTarget::Generic(match on {
+                            AttrOn::Param(_) => AttributeTargetKind::Param,
+                            _ => kind,
+                        }),
+                        AttrOn::Param(i) => UseTarget::Param(fn_id, i),
+                        _ => match kind {
+                            AttributeTargetKind::Const => UseTarget::Const(fn_id),
+                            AttributeTargetKind::Method => UseTarget::Method(fn_id),
+                            _ => UseTarget::Fn(fn_id),
+                        },
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 if let Some((_, SymbolKind::Fn(func_id))) =
                     namespace.symbols.iter().rfind(|(f, _)| f == &fn_name)
@@ -8398,7 +8430,6 @@ fn parse_toplevel(
                 let mut callees = Vec::new();
                 collect_direct_fn_calls(&fn_code, self_type_of(&fn_name), &mut callees);
 
-                let fn_id = fns.len() as u16;
                 fns.push(Function {
                     is_const: consts.contains(&index),
                     name: fn_name.clone(),
@@ -8432,13 +8463,19 @@ fn parse_toplevel(
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
             Expr::StructDeclare(name, fields, span, type_params, defaults) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Struct(structs.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Struct)
+                for (on, run) in uses {
+                    let id = structs.len() as u16;
+                    let target = match on {
+                        AttrOn::Field(_) if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Field)
+                        }
+                        _ if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Struct)
+                        }
+                        AttrOn::Field(i) => UseTarget::Field(id, i),
+                        _ => UseTarget::Struct(id),
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 // A generic declaration registers no type of its own: each
                 // instantiation of it becomes an ordinary struct.
@@ -8527,13 +8564,19 @@ fn parse_toplevel(
                 ));
             }
             Expr::EnumDeclare(name, variants, span, type_params, fields) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Enum(enums.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Enum)
+                for (on, run) in uses {
+                    let id = enums.len() as u16;
+                    let target = match on {
+                        AttrOn::Variant(_) if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Variant)
+                        }
+                        _ if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Enum)
+                        }
+                        AttrOn::Variant(i) => UseTarget::Variant(id, i),
+                        _ => UseTarget::Enum(id),
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 if !type_params.is_empty() {
                     let template = generics.add_enum_template(
@@ -8580,6 +8623,12 @@ fn parse_toplevel(
             }
             _ => {}
         }
+    }
+
+    // An `impl` block after the file's last item.
+    for (at, on, run) in item_attributes {
+        debug_assert!(at >= item_count);
+        push_unattached(attrs, on, run);
     }
 
     namespace.macros.extend(declared_macros.iter().cloned());

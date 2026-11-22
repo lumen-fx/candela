@@ -101,9 +101,10 @@ Run `candela` with no arguments for a REPL.
   the standard library needs one.
 - **Attributes the host defines.** A `host` block declares attributes such as
   `attribute system(writes: type[] = []) on fn;`, and a script writes them on
-  its functions and structs. The compiler checks every use, and the host reads
-  them back from the program or the `.cdlb` without running it, so an engine
-  can schedule script functions as systems of its own.
+  the declarations each one names: functions, methods, fields, parameters and
+  the rest. The compiler checks every use, and the host reads them back from
+  the program or the `.cdlb` without running it, so an engine can schedule
+  script functions as systems of its own.
 
 ## Performance
 

@@ -264,8 +264,9 @@ pub struct AttributeSymbol {
     /// The host namespace that declares it.
     pub namespace: String,
     pub name: String,
-    /// `fn`, `struct` or `enum`: what it may be written on.
-    pub target: &'static str,
+    /// The kinds of declaration it may be written on, as its `on` clause
+    /// lists them: `fn`, `method`, `struct`, ...
+    pub targets: Vec<&'static str>,
     pub params: Vec<AttrParam>,
     pub span: Span,
     pub src_file: u16,
@@ -278,13 +279,13 @@ impl AttributeSymbol {
     pub fn header(&self) -> String {
         let params: Vec<String> = self.params.iter().map(AttrParam::render).collect();
         if params.is_empty() {
-            format!("attribute {} on {}", self.name, self.target)
+            format!("attribute {} on {}", self.name, self.targets.join(", "))
         } else {
             format!(
                 "attribute {}({}) on {}",
                 self.name,
                 params.join(", "),
-                self.target
+                self.targets.join(", ")
             )
         }
     }
@@ -296,6 +297,9 @@ pub enum UseOn {
     Fn(String),
     Struct(String),
     Enum(String),
+    /// A method, a parameter, a constant, a field, a variant or an `impl`
+    /// block.
+    Other,
 }
 
 /// An attribute the program's scripts wrote on an item.
@@ -537,11 +541,11 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
             AttributeSymbol {
                 namespace: namespace.to_string(),
                 name: decl.name.to_string(),
-                target: match decl.target {
-                    AttributeTargetKind::Fn => "fn",
-                    AttributeTargetKind::Struct => "struct",
-                    AttributeTargetKind::Enum => "enum",
-                },
+                targets: decl
+                    .targets
+                    .iter()
+                    .map(|t| AttributeTargetKind::keyword(*t))
+                    .collect(),
                 params: decl
                     .params
                     .iter()
@@ -584,6 +588,12 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                         .map(|e| e.name.to_string())
                         .unwrap_or_default(),
                 ),
+                AttributeTarget::Method { .. }
+                | AttributeTarget::Param { .. }
+                | AttributeTarget::Const { .. }
+                | AttributeTarget::Field { .. }
+                | AttributeTarget::Variant { .. }
+                | AttributeTarget::Impl(_) => UseOn::Other,
             },
             fn_args: a
                 .args

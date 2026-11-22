@@ -8,6 +8,9 @@ use super::parser_expr::parse_expr;
 use super::parser_expr::parse_expr_no_struct;
 use super::parser_expr::range_literal_ends;
 use crate::cold_path;
+use crate::compiler::attributes::AttrOn;
+use crate::compiler::attributes::AttributeTargetKind;
+use crate::compiler::attributes::AttributeUse;
 use crate::compiler::expr::Expr;
 use crate::compiler::expr::MatchArm;
 use crate::compiler::expr::Operand;
@@ -394,6 +397,37 @@ pub fn parse_function(parser: &mut Parser<'_>) -> Expr {
     )
 }
 
+/// Reads the attributes in front of a field, a variant or a parameter. Code a
+/// `@cfg` among them turns off is parsed as inactive until [`end_part`].
+fn parse_part_attributes(parser: &mut Parser<'_>) -> (bool, Vec<AttributeUse>) {
+    if parser.peek_token() != Token::At {
+        return (true, Vec::new());
+    }
+    let (active, uses) = parse_attributes(parser);
+    if !active {
+        parser.inactive += 1;
+    }
+    (active, uses)
+}
+
+/// Ends a part [`parse_part_attributes`] opened: a part a `@cfg` turned off is
+/// dropped with `drop_part`, and the attributes on one that stays are
+/// recorded on it.
+fn end_part(
+    parser: &mut Parser<'_>,
+    active: bool,
+    uses: Vec<AttributeUse>,
+    on: AttrOn,
+    drop_part: impl FnOnce(),
+) {
+    if !active {
+        parser.inactive -= 1;
+        drop_part();
+    } else if !uses.is_empty() {
+        parser.part_uses.push((on, uses.into_boxed_slice()));
+    }
+}
+
 /// Parses a declaration's parameter list, `(a, b: int)`, from its `(`.
 ///
 /// `self` names the receiver: it is a parameter only of an `impl` function
@@ -419,6 +453,8 @@ pub fn parse_params(
             parser.next_token();
             break;
         }
+        let (active, uses) = parse_part_attributes(parser);
+        let kept = (args.len(), defaults.len(), lets.len());
         // A parameter that is a pattern, `(a, b): (int, int)`, takes the
         // argument under a name no program can write, and the body opens
         // with the `let` that takes it apart.
@@ -447,6 +483,10 @@ pub fn parse_params(
                 None
             };
             args.push((name, ty));
+            end_part(parser, active, uses, AttrOn::Param(kept.0 as u16), || {
+                args.truncate(kept.0);
+                lets.truncate(kept.2);
+            });
             if parser.peek_token() == Token::Comma {
                 parser.next_token();
             } else if parser.peek_token() != Token::RParen {
@@ -478,6 +518,10 @@ pub fn parse_params(
                 defaults.resize(args.len() - 1, None);
                 defaults.push(Some((value, (start, parser.last_token_end as u32).into())));
             }
+            end_part(parser, active, uses, AttrOn::Param(kept.0 as u16), || {
+                args.truncate(kept.0);
+                defaults.truncate(kept.1.min(kept.0));
+            });
         } else {
             cold_path();
             parser.error(
@@ -674,6 +718,7 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
         if empty {
             break;
         }
+        let (active, uses) = parse_part_attributes(parser);
         let (next_token, _) = parser.next_token();
         let field_name = if let Token::Identifier(i) = next_token {
             SmolStr::new(i)
@@ -708,6 +753,16 @@ pub fn parse_struct_declare(parser: &mut Parser<'_>) -> Expr {
         } else {
             defaults.push(None);
         }
+        end_part(
+            parser,
+            active,
+            uses,
+            AttrOn::Field(fields.len() as u16 - 1),
+            || {
+                fields.pop();
+                defaults.pop();
+            },
+        );
         let (next_token, span) = parser.next_token();
         if next_token == Token::RBrace {
             break;
@@ -789,38 +844,55 @@ pub fn parse_impl_block(
     let header_span: Span = (start, parser.last_token_end as u32).into();
     parser.next_token_expect(Token::LBrace, "impl blocks must start with '{'.");
     let mut methods: Vec<Expr> = Vec::with_capacity(4);
+    // The attributes on each method and on its parameters, by the method's
+    // index in `methods`.
+    let mut uses: Vec<(usize, AttrOn, Box<[AttributeUse]>)> = Vec::new();
     loop {
         if parser.peek_token() == Token::RBrace {
             parser.next_token();
             break;
         }
-        if parser.peek_token() == Token::At {
-            let (active, uses) = parse_attributes(parser);
-            if let Some(first) = uses.first() {
-                cold_path();
-                parser.error(first.span, ParserErr::AttributeWrongTarget);
-            }
+        let (active, method_uses) = if parser.peek_token() == Token::At {
+            let run = parse_attributes(parser);
             if parser.peek_token() == Token::RBrace {
                 cold_path();
                 let span = parser.peek_token_span();
                 parser.error(span, ParserErr::AttributeWithoutItem);
             }
-            if active {
-                methods.push(parse_method(parser));
-            } else {
-                parser.inactive += 1;
-                let _ = parse_method(parser);
-                parser.inactive -= 1;
+            run
+        } else {
+            (true, Vec::new())
+        };
+        if active {
+            let index = methods.len();
+            methods.push(parse_method(parser));
+            if !method_uses.is_empty() {
+                uses.push((index, AttrOn::Item, method_uses.into_boxed_slice()));
             }
-            continue;
+            uses.extend(parser.part_uses.drain(..).map(|(on, u)| (index, on, u)));
+        } else {
+            parser.inactive += 1;
+            let _ = parse_method(parser);
+            parser.inactive -= 1;
+            parser.part_uses.clear();
         }
-        methods.push(parse_method(parser));
     }
-    if type_args.is_empty() {
-        for method in methods {
-            output.push(mangled_method(method, &type_name));
-        }
+    let generic = !type_args.is_empty();
+    parser.impl_on = Some(if generic {
+        AttrOn::Generic(AttributeTargetKind::Impl)
     } else {
+        AttrOn::Impl(TypeExpr::Identifier(type_name.clone(), type_span))
+    });
+    let first = output.len();
+    for (index, on, run) in uses {
+        let on = match on {
+            AttrOn::Item if generic => AttrOn::Generic(AttributeTargetKind::Method),
+            AttrOn::Param(_) if generic => AttrOn::Generic(AttributeTargetKind::Param),
+            on => on,
+        };
+        parser.impl_uses.push((first + index, on, run));
+    }
+    if generic {
         impls.push(ImplTemplate {
             type_name,
             params,
@@ -830,6 +902,10 @@ pub fn parse_impl_block(
             file_idx: 0,
             span: header_span,
         });
+    } else {
+        for method in methods {
+            output.push(mangled_method(method, &type_name));
+        }
     }
 }
 
@@ -1207,6 +1283,7 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
             parser.next_token();
             break;
         }
+        let (active, uses) = parse_part_attributes(parser);
         let (next_token, v_span) = parser.next_token();
         let variant_name = if let Token::Identifier(i) = next_token {
             SmolStr::new(i)
@@ -1279,6 +1356,16 @@ pub fn parse_enum_declare(parser: &mut Parser<'_>) -> Expr {
             field_names.push((variants.len() as u16, Box::from(names)));
         }
         variants.push((variant_name, Box::from(payload), v_span));
+        let index = variants.len() - 1;
+        end_part(parser, active, uses, AttrOn::Variant(index as u16), || {
+            variants.pop();
+            if field_names
+                .last()
+                .is_some_and(|(at, _)| *at as usize == index)
+            {
+                field_names.pop();
+            }
+        });
         let (sep, sep_span) = parser.next_token();
         if sep == Token::RBrace {
             break;

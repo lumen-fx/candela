@@ -494,6 +494,10 @@
                         {
                           "type": "SYMBOL",
                           "name": "cfg_predicate"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "_attribute_value"
                         }
                       ]
                     },
@@ -516,6 +520,10 @@
                               {
                                 "type": "SYMBOL",
                                 "name": "cfg_predicate"
+                              },
+                              {
+                                "type": "SYMBOL",
+                                "name": "_attribute_value"
                               }
                             ]
                           }
@@ -696,11 +704,15 @@
       "type": "CHOICE",
       "members": [
         {
-          "type": "FIELD",
-          "name": "flag",
+          "type": "PREC",
+          "value": 1,
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "FIELD",
+            "name": "flag",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
           }
         },
         {
@@ -1046,6 +1058,13 @@
       "type": "SEQ",
       "members": [
         {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "attribute"
+          }
+        },
+        {
           "type": "FIELD",
           "name": "name",
           "content": {
@@ -1213,6 +1232,13 @@
       "type": "SEQ",
       "members": [
         {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "attribute"
+          }
+        },
+        {
           "type": "FIELD",
           "name": "name",
           "content": {
@@ -1366,6 +1392,13 @@
     "enum_variant": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "attribute"
+          }
+        },
         {
           "type": "FIELD",
           "name": "name",
@@ -1926,25 +1959,111 @@
           "value": "on"
         },
         {
-          "type": "FIELD",
-          "name": "target",
-          "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "STRING",
-                "value": "fn"
-              },
-              {
-                "type": "STRING",
-                "value": "struct"
-              },
-              {
-                "type": "STRING",
-                "value": "enum"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "target",
+              "content": {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "fn"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "method"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "param"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "const"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "struct"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "field"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "enum"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "variant"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "impl"
+                  }
+                ]
               }
-            ]
-          }
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": ","
+                  },
+                  {
+                    "type": "FIELD",
+                    "name": "target",
+                    "content": {
+                      "type": "CHOICE",
+                      "members": [
+                        {
+                          "type": "STRING",
+                          "value": "fn"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "method"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "param"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "const"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "struct"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "field"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "enum"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "variant"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "impl"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         },
         {
           "type": "STRING",

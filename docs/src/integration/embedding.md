@@ -924,7 +924,7 @@ ordinary struct it compiles to.
 ## Reading attributes
 
 A `host` block can declare [attributes](../language/attributes.md) that the
-scripts compiled against it write on their functions and structs:
+scripts compiled against it write on their declarations:
 
 ```rust
 host "ecs" {
@@ -959,8 +959,14 @@ pub struct Attribute {
 
 pub enum AttributeTarget {
     Fn { name: String, params: Vec<(String, DataType)> },
+    Method { owner: DataType, name: String, params: Vec<(String, DataType)> },
+    Param { function: String, owner: Option<DataType>, name: String, ty: DataType },
+    Const { name: String, ty: DataType },
     Struct(u16),
+    Field { struct_id: u16, name: String },
     Enum(u16),
+    Variant { enum_id: u16, name: String },
+    Impl(DataType),
 }
 
 pub enum AttributeValue {
@@ -981,7 +987,12 @@ parameter the declaration lists, in its order, with the value the script wrote
 or the default; a parameter declared optional (`name: T?`) that the script left
 out has no entry, so `arg` answers `None` for it. A function target carries its
 parameters and their declared types, `any` for one left bare, which is what a
-host reads to decide what to pass. A function argument (`fn` or `fn[]`)
+host reads to decide what to pass. A method target carries the same, the
+receiver first, with `owner`, the type its `impl` block is for; a parameter
+target names its function, the `owner` when that function is a method, and the
+parameter's own name and type. A constant carries its declared type, a field
+or a variant its struct's or enum's id and its name, and an `impl` block the
+type it is for. A function argument (`fn` or `fn[]`)
 carries the same for the function it names, with its declared return type,
 `any` when it declares none, so a host can call a function that has no
 attribute of its own, such as a condition a system names. An enum target and a

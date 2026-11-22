@@ -6,6 +6,7 @@ use crate::RED;
 use crate::RESET;
 use crate::cfg;
 use crate::cfg::Cfg;
+use crate::compiler::attributes::AttrOn;
 use crate::compiler::attributes::AttrParamTypeExpr;
 use crate::compiler::attributes::AttrValueExpr;
 use crate::compiler::attributes::AttributeDecl;
@@ -113,6 +114,15 @@ struct Parser<'a> {
     /// The `let`s that take apart the parameters of the function being read
     /// that are written as patterns, which open its body.
     param_lets: Vec<Expr>,
+    /// The attributes written on the parts of the declaration being read (its
+    /// fields, variants or parameters), which the file's item list takes with
+    /// the declaration.
+    part_uses: Vec<(AttrOn, Box<[AttributeUse]>)>,
+    /// What the `impl` block just read is for, which the attributes in front
+    /// of it are written on, and the attributes on its methods and their
+    /// parameters, by each method's index in the file's items.
+    impl_on: Option<AttrOn>,
+    impl_uses: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     /// The indices in the file's items of its `const` declarations.
     consts: Vec<usize>,
     /// The macros the file has declared or imported so far, which a use
@@ -218,7 +228,8 @@ enum ParserErr<'a> {
     /// define. Carries the symbol that was written.
     OperatorMethodUnknown(&'static str),
     /// An attribute other than `@cfg` in front of something that is not a
-    /// top-level `fn` or `struct` declaration.
+    /// declaration: a statement, or a closure's or a host function's
+    /// parameter.
     AttributeWrongTarget,
     /// An attribute with nothing after it to apply to.
     AttributeWithoutItem,
@@ -467,7 +478,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             }
         ),
         ParserErr::AttributeWrongTarget => &format!(
-            "Only {BLUE}{BOLD}@cfg(...){RESET} applies here. The attributes a host block declares go in front of a top-level fn or struct declaration"
+            "Only {BLUE}{BOLD}@cfg(...){RESET} applies here. The attributes a host block declares go in front of a declaration: a fn, a method, a parameter, a const, a struct, a field, an enum, a variant or an impl block"
         ),
         ParserErr::AttributeWithoutItem => {
             "An attribute applies to the declaration or statement after it, and nothing follows this one"
@@ -1009,6 +1020,9 @@ fn parse_expansion(
         inactive: parser.inactive,
         loops: parser.loops,
         param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
         consts: Vec::new(),
         macros: Rc::clone(&parser.macros),
         declared_macros: Vec::new(),
@@ -1141,8 +1155,8 @@ fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEn
         }
         Token::Loop => Some(parse_loop_block(parser)),
         Token::Try => Some(parse_try_catch_block(parser)),
-        Token::Struct => Some(parse_struct_declare(parser)),
-        Token::Enum => Some(parse_enum_declare(parser)),
+        Token::Struct => Some(local_declaration(parser, parse_struct_declare)),
+        Token::Enum => Some(local_declaration(parser, parse_enum_declare)),
         Token::RBrace => None,
         t => {
             parser.macro_statement.set(macro_statement_ahead(parser));
@@ -1153,6 +1167,19 @@ fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEn
         let end = BlockEnd::of(&statement);
         (statement, end)
     })
+}
+
+/// A struct or an enum declared inside a function, whose fields and variants
+/// take no attribute but `@cfg`: a host reads the attributes of top-level
+/// declarations only.
+fn local_declaration(parser: &mut Parser<'_>, parse: fn(&mut Parser<'_>) -> Expr) -> Expr {
+    let before = parser.part_uses.len();
+    let declared = parse(parser);
+    if let Some((_, uses)) = parser.part_uses.get(before) {
+        cold_path();
+        parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
+    }
+    declared
 }
 
 /// Whether the statement ahead is one macro use and its `;`: `name!(...);`
@@ -2346,7 +2373,12 @@ fn parse_fn_signature_block(
                 ForeignParams::default(),
             )
         } else {
+            let before = parser.part_uses.len();
             let (args, defaults) = blocks::parse_params(parser, false);
+            if let Some((_, uses)) = parser.part_uses.get(before) {
+                cold_path();
+                parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
+            }
             if !parser.param_lets.is_empty() {
                 cold_path();
                 parser.error(
@@ -2482,12 +2514,12 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
 fn parse_file(
     parser: &mut Parser<'_>,
     impls: &mut Vec<ImplTemplate>,
-    attributes: &mut Vec<(usize, Box<[AttributeUse]>)>,
+    attributes: &mut Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
 ) -> (Vec<Expr>, Vec<usize>) {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while parser.peek_token_opt().is_some() {
-        if parser.peek_token() == Token::At {
+        let (active, uses) = if parser.peek_token() == Token::At {
             let (active, uses) = parse_attributes(parser);
             if parser.peek_token_opt().is_none() {
                 cold_path();
@@ -2497,25 +2529,43 @@ fn parse_file(
             if !uses.is_empty()
                 && !matches!(
                     parser.peek_token(),
-                    Token::Function | Token::Struct | Token::Enum
+                    Token::Function
+                        | Token::Struct
+                        | Token::Enum
+                        | Token::Impl
+                        | Token::Identifier("const")
                 )
             {
                 cold_path();
                 parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
             }
-            if active {
-                parse_item(parser, &mut output, impls);
-                if !uses.is_empty() {
-                    attributes.push((output.len() - 1, uses.into_boxed_slice()));
-                }
-            } else {
-                parser.inactive += 1;
-                parse_item(parser, &mut Vec::new(), &mut Vec::new());
-                parser.inactive -= 1;
-            }
+            (active, uses)
+        } else {
+            (true, Vec::new())
+        };
+        if !active {
+            parser.inactive += 1;
+            parse_item(parser, &mut Vec::new(), &mut Vec::new());
+            parser.inactive -= 1;
+            parser.part_uses.clear();
+            parser.impl_uses.clear();
+            parser.impl_on = None;
             continue;
         }
+        let first = output.len();
         parse_item(parser, &mut output, impls);
+        if let Some(on) = parser.impl_on.take() {
+            if !uses.is_empty() {
+                attributes.push((first, on, uses.into_boxed_slice()));
+            }
+            attributes.append(&mut parser.impl_uses);
+        } else if output.len() > first {
+            let index = output.len() - 1;
+            if !uses.is_empty() {
+                attributes.push((index, AttrOn::Item, uses.into_boxed_slice()));
+            }
+            attributes.extend(parser.part_uses.drain(..).map(|(on, u)| (index, on, u)));
+        }
     }
     (output, std::mem::take(&mut parser.consts))
 }
@@ -2846,23 +2896,41 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
             ),
         );
     }
-    let (t, target_span) = parser.next_token();
-    let target = match t {
-        Token::Function => AttributeTargetKind::Fn,
-        Token::Struct => AttributeTargetKind::Struct,
-        Token::Enum => AttributeTargetKind::Enum,
-        other => {
+    // `on fn, method;`: every kind of declaration it may be written on.
+    let mut targets: Vec<AttributeTargetKind> = Vec::with_capacity(1);
+    loop {
+        let (t, target_span) = parser.next_token();
+        let word = match t {
+            Token::Function => "fn",
+            Token::Struct => "struct",
+            Token::Enum => "enum",
+            Token::Impl => "impl",
+            Token::Identifier(word) => word,
+            _ => "",
+        };
+        let Some(target) = AttributeTargetKind::ALL
+            .into_iter()
+            .find(|k| k.keyword() == word)
+        else {
             cold_path();
             parser.error(
                 target_span,
                 ParserErr::UnexpectedTokenStr(
-                    "'fn', 'struct' or 'enum'",
-                    other,
-                    "An attribute goes on a function, a struct or an enum.",
+                    "'fn', 'method', 'param', 'const', 'struct', 'field', 'enum', 'variant' or 'impl'",
+                    t,
+                    "An attribute goes on the kinds of declaration its on clause lists, as in on fn, method;.",
                 ),
             );
+        };
+        if !targets.contains(&target) {
+            targets.push(target);
         }
-    };
+        if parser.peek_token() == Token::Comma {
+            parser.next_token();
+        } else {
+            break;
+        }
+    }
     parser.next_token_expect(
         Token::SemiColon,
         "An attribute declaration ends with a semicolon.",
@@ -2870,7 +2938,7 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
     AttributeDecl {
         name: SmolStr::new(name),
         params: params.into_boxed_slice(),
-        target,
+        targets: targets.into_boxed_slice(),
         span: (start, name_span.end).into(),
     }
 }
@@ -2999,9 +3067,9 @@ fn parse_cfg_predicate(parser: &mut Parser<'_>) -> bool {
 pub struct ParsedFile {
     pub code: Vec<Expr>,
     pub impls: Vec<ImplTemplate>,
-    /// The attributes other than `@cfg` written in front of an item, by the
-    /// item's index in `code`, in order.
-    pub attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    /// The attributes other than `@cfg` written on an item or on one of its
+    /// parts, by the item's index in `code`, in order.
+    pub attributes: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     /// The indices in `code` of the functions that are `const` declarations.
     pub consts: Vec<usize>,
     /// The names of the macros the file declares.
@@ -3023,6 +3091,9 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
         inactive: 0,
         loops: 0,
         param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
         consts: Vec::new(),
         macros: Rc::default(),
         declared_macros: Vec::new(),
@@ -3056,6 +3127,9 @@ pub fn module_macros(src: &Source) -> Vec<Rc<MacroDef>> {
         inactive: 0,
         loops: 0,
         param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
         consts: Vec::new(),
         macros: Rc::default(),
         declared_macros: Vec::new(),

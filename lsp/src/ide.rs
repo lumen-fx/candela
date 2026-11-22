@@ -221,7 +221,7 @@ impl<'a> Ide<'a> {
     }
 
     /// The declaration the attribute written before the cursor goes on:
-    /// `fn`, `struct` or `enum`, and the item's name.
+    /// `fn`, `struct`, `enum`, `impl` or `const`, and the item's name.
     fn decorated(&self) -> (Option<&'static str>, Option<&'a str>) {
         let t = &self.toks;
         let start = t.count_before(self.offset);
@@ -230,10 +230,12 @@ impl<'a> Ide<'a> {
             match t.s(i) {
                 "(" | "[" => depth += 1,
                 ")" | "]" => depth -= 1,
-                "fn" | "struct" | "enum" if depth <= 0 => {
+                "fn" | "struct" | "enum" | "impl" | "const" if depth <= 0 => {
                     let kind = match t.s(i) {
                         "fn" => "fn",
                         "struct" => "struct",
+                        "impl" => "impl",
+                        "const" => "const",
                         _ => "enum",
                     };
                     let name = t.is_ident(i + 1).then(|| t.s(i + 1));
@@ -407,7 +409,13 @@ impl<'a> Ide<'a> {
                 continue;
             }
             let a = &self.summary.attributes[id];
-            if target.is_some_and(|t| t != a.target) {
+            // A `fn` inside an `impl` block is a method, which the token scan
+            // does not tell apart, so either kind offers the attribute there.
+            if target.is_some_and(|t| {
+                !a.targets
+                    .iter()
+                    .any(|k| *k == t || (t == "fn" && *k == "method"))
+            }) {
                 continue;
             }
             let insert = if a.params.iter().any(AttrParam::required) {
@@ -742,13 +750,25 @@ impl<'a> Ide<'a> {
             } else {
                 format!("@{}({})", entry.label, args.join(", "))
             };
-            let body = match a.target {
-                "fn" => "fn ${1:name}($0) {\n}".to_owned(),
-                "struct" => "struct ${1:Name} {\n\t$0\n}".to_owned(),
-                _ => "enum ${1:Name} { $0 }".to_owned(),
+            // A skeleton for the first top-level kind it goes on; one only
+            // for parts (fields, parameters, ...) gets none here.
+            let Some((target, body)) = a.targets.iter().find_map(|t| {
+                Some((
+                    *t,
+                    match *t {
+                        "fn" => "fn ${1:name}($0) {\n}",
+                        "struct" => "struct ${1:Name} {\n\t$0\n}",
+                        "enum" => "enum ${1:Name} { $0 }",
+                        "const" => "const ${1:NAME}: int = $0;",
+                        "impl" => "impl ${1:Type} {\n\t$0\n}",
+                        _ => return None,
+                    },
+                ))
+            }) else {
+                continue;
             };
             out.push(CompletionItem {
-                label: format!("@{} {}", entry.label, a.target),
+                label: format!("@{} {}", entry.label, target),
                 kind: Some(CompletionItemKind::SNIPPET),
                 detail: Some(a.header()),
                 documentation: summary_doc(&a.doc),
