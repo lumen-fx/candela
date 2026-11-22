@@ -1,5 +1,6 @@
 import "std/assert";
 import "std/fs";
+import "std/hash";
 
 // Runs in a scratch directory the caller names as the first argument.
 fn main() {
@@ -24,15 +25,15 @@ fn main() {
     assert::eq(fs::write_bytes(root + "/bad.bin", [1, 256]), Err("fs_not_a_byte"));
     assert::is_false(fs::exists(root + "/bad.bin"));
 
-    assert::eq(fs::digest(dir + "/z.txt", "md5")?, "5d41402abc4b2a76b9719d911017c592");
-    assert::eq(fs::digest(dir + "/z.txt", "sha1")?, "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
+    assert::eq(hash::file(dir + "/z.txt", "md5")?, "5d41402abc4b2a76b9719d911017c592");
+    assert::eq(hash::file(dir + "/z.txt", "sha1")?, "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
     assert::eq(
-        fs::digest(dir + "/z.txt", "sha256")?,
+        hash::file(dir + "/z.txt", "sha256")?,
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
     );
-    assert::eq(fs::digest(dir + "/a.txt", "md5")?, "d41d8cd98f00b204e9800998ecf8427e");
-    assert::eq(fs::digest(dir + "/z.txt", "crc32"), Err("fs_unknown_digest"));
-    assert::eq(fs::digest(root + "/missing", "md5"), Err("fs_not_found"));
+    assert::eq(hash::file(dir + "/a.txt", "md5")?, "d41d8cd98f00b204e9800998ecf8427e");
+    assert::eq(hash::file(dir + "/z.txt", "crc32"), Err("hash_unknown_algorithm"));
+    assert::eq(hash::file(root + "/missing", "md5"), Err("fs_not_found"));
 
     assert::eq(fs::delete_dir(root + "/a"), Err("fs_directory_not_empty"));
 

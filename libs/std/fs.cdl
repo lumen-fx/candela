@@ -128,14 +128,3 @@ fn write_bytes(path: string, bytes: int[]) -> bool!string {
     }
     return Ok(true);
 }
-
-/// The digest of the file at `path` as lowercase hex, under `algorithm`:
-/// `"md5"`, `"sha1"` or `"sha256"`. The file streams through, so a large one
-/// never sits in memory whole. Another algorithm raises `fs_unknown_digest`.
-fn digest(path: string, algorithm: string) -> string!string {
-    try {
-        return Ok(fs_digest(path, algorithm));
-    } catch e {
-        return Err(e);
-    }
-}

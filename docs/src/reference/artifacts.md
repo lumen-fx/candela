@@ -71,7 +71,7 @@ before the loader's own paths. See [C
 libraries](../integration/c-libraries.md#finding-the-library).
 
 The same applies to the standard library. A program that imports only
-pure-candela modules is self-contained. The `hash`, `math`, `random` and `time`
+pure-candela modules is self-contained. The `math`, `random` and `time`
 modules bind a dynamic library, so an artifact using them needs that library at
 run time, and `candela-vm` looks for it where the toolchain keeps it: the directory
 `CANDELA_LIB_PATH` names, or `libs/` beside the binary, which is where an
@@ -80,7 +80,7 @@ install puts it. Such an artifact therefore runs from any working directory. See
 
 The WebAssembly runtime loads no library. It binds a recipe the standard
 library owns to its own built-in version of that function, so an artifact that
-uses `hash`, `math`, `random` or `time` runs in a browser too; a recipe for any
+uses `math`, `random` or `time` runs in a browser too; a recipe for any
 other library refuses the load there.
 
 ## The export table

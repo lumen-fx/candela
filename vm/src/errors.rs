@@ -387,8 +387,8 @@ pub enum ErrType<'a> {
     FsDirectoryNotEmpty,
     /// A file system failure none of the kinds above names.
     FsOther,
-    /// `fs::digest` was asked for an algorithm it does not compute.
-    FsUnknownDigest,
+    /// `hash::file` was asked for an algorithm it does not compute.
+    HashUnknownAlgorithm,
     /// `fs::write_bytes` reached a value that is not a byte. Carries it.
     FsNotAByte(i64),
     // NUMBER PARSING ERRORS
@@ -459,7 +459,7 @@ impl From<ErrType<'_>> for SmolStr {
             ErrType::FsTimedOut => "This operation timed out".into(),
             ErrType::FsDirectoryNotEmpty => "The directory is not empty".into(),
             ErrType::FsOther => "The file system operation failed".into(),
-            ErrType::FsUnknownDigest => "Unknown digest algorithm; use \"md5\", \"sha1\" or \"sha256\"".into(),
+            ErrType::HashUnknownAlgorithm => "Unknown digest algorithm; use \"md5\", \"sha1\" or \"sha256\"".into(),
             ErrType::FsNotAByte(value) => format_args!("{RED}{BOLD}{value}{RESET} is not a byte; a byte is 0 to 255, and nothing was written").to_smolstr(),
             ErrType::DivisionByZero => "Division by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
             ErrType::ModuloByZero => "Modulo by zero. I'm sorry Dave, I'm afraid I can't do that.".into(),
@@ -539,7 +539,7 @@ impl ErrType<'_> {
             ErrType::FsTimedOut => "fs_timed_out",
             ErrType::FsDirectoryNotEmpty => "fs_directory_not_empty",
             ErrType::FsOther => "fs_other",
-            ErrType::FsUnknownDigest => "fs_unknown_digest",
+            ErrType::HashUnknownAlgorithm => "hash_unknown_algorithm",
             ErrType::FsNotAByte(_) => "fs_not_a_byte",
             ErrType::InvalidInt => "invalid_int",
             ErrType::InvalidFloat => "invalid_float",

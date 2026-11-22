@@ -43,7 +43,7 @@ the crate for `wasm32-unknown-emscripten` as a static library and link it with
 `-fwasm-exceptions`. That build reads files and package roots from
 Emscripten's file system, so files packaged with the program import as they do
 on a desktop. The standard library modules that bind native libraries
-(`std/math`, `std/time`, `std/random`, `std/hash`) are carried inside it, as in
+(`std/math`, `std/time`, `std/random`) are carried inside it, as in
 the browser build, and other dynamic libraries do not load.
 
 ## A whole program

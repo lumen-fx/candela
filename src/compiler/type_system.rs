@@ -2563,7 +2563,7 @@ fn builtin_fn_return_type(name: &str, in_std: bool) -> Option<DataType> {
 #[must_use]
 pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
     Some(match name {
-        "json_stringify" | "fs_read" | "fs_digest" => DataType::String,
+        "json_stringify" | "fs_read" | "hash_file" | "hash_text" => DataType::String,
         // json::parse yields a fully dynamic value.
         "json_parse" => DataType::Unknown,
         "fs_exists" | "fs_is_dir" => DataType::Bool,

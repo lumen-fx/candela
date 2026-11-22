@@ -20,7 +20,7 @@ enum Lowering {
     Void(LibFuncVoid),
 }
 
-/// The native primitives `std/fs` and `std/event` are written on: what each
+/// The native primitives `std/fs`, `std/hash` and `std/event` are written on: what each
 /// compiles to, and the type each argument has to be (`Unknown` takes any).
 ///
 /// Keep in step with `std_primitive_return_type` in the type system, which
@@ -36,7 +36,8 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "fs_is_dir" => (Value(LibFunc::FsIsDir), PATH),
         "fs_list" => (Value(LibFunc::FsList), PATH),
         "fs_read_bytes" => (Value(LibFunc::FsReadBytes), PATH),
-        "fs_digest" => (Value(LibFunc::FsDigest), TWO_PATHS),
+        "hash_file" => (Value(LibFunc::HashFile), TWO_PATHS),
+        "hash_text" => (Value(LibFunc::HashText), &[Str, Str]),
         "fs_write" => (Void(LibFuncVoid::FsWrite), TWO_PATHS),
         "fs_append" => (Void(LibFuncVoid::FsAppend), TWO_PATHS),
         "fs_delete" => (Void(LibFuncVoid::FsDelete), PATH),

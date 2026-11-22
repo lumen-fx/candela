@@ -3,8 +3,8 @@
 The `fs` functions that can fail and `json::parse` now return a `Result` whose
 error is the code they used to raise (`fs_not_found`, `json_parse_error`, and
 the rest). `fs::read` answers a `string!string`, `fs::list` a
-`string[]!string`, `fs::read_bytes` an `int[]!string`, `fs::digest` a
-`string!string`, and `json::parse` an `any!string`. `fs::write`, `append`,
+`string[]!string`, `fs::read_bytes` an `int[]!string`, and `json::parse` an
+`any!string`. `fs::write`, `append`,
 `delete`, `delete_dir`, `mkdir`, `copy` and `write_bytes`, which returned
 nothing, answer `Ok(true)`, a `bool!string`. The `websocket` package's `close`
 answers a `bool!string` too, with `Err("websocket_bad_close")` where it raised.

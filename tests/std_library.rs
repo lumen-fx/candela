@@ -363,13 +363,6 @@ fn main() {
     );
 }
 
-/// Builds `libs/std_src/hash/hash.c` into a library directory of its own,
-/// beside a copy of `libs/std`, and answers that directory; `None` where no C
-/// compiler is on the path.
-fn lib_dir_with_hash(tag: &str) -> Option<PathBuf> {
-    lib_dir_with_native("hash", &["hash.cdl", "assert.cdl", "list.cdl"], tag)
-}
-
 /// Builds `libs/std_src/<name>/<name>.c` into a library directory of its own,
 /// beside copies of the std `modules`, and answers that directory; `None`
 /// where no C compiler is on the path. The native modules are compiled by the
@@ -417,51 +410,33 @@ fn lib_dir_with_native(name: &str, modules: &[&str], tag: &str) -> Option<PathBu
 
 #[test]
 fn hash_module() {
-    let Some(libs) = lib_dir_with_hash("vectors") else {
-        return;
-    };
-    let path = repo().join("libs/std/tests/test_hash.cdl");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
-    command.arg(&path).env("CANDELA_LIB_PATH", &libs);
-    let output = common::output_with_deadline(&mut command, "test_hash");
-    let _ = std::fs::remove_dir_all(&libs);
-    assert!(
-        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("hash ok"),
-        "test_hash exited with {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    assert!(run_std_test("test_hash").contains("hash ok"));
 }
 
-/// A NUL cannot cross into the C library, so hashing a string that holds one
-/// raises an error instead of hashing the part before it.
+/// The digest covers every byte of the string, a NUL among them: the runtime
+/// computes it, so nothing crosses a C boundary that would stop at the NUL.
 #[test]
-fn hashing_a_nul_raises() {
-    let Some(libs) = lib_dir_with_hash("nul") else {
-        return;
-    };
-    let work = libs.join("work");
-    std::fs::create_dir_all(&work).expect("create work dir");
+fn a_string_with_a_nul_hashes_every_byte() {
+    let dir = std::env::temp_dir().join(format!("candela_std_hash_nul_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create work dir");
     std::fs::write(
-        work.join("prog.cdl"),
+        dir.join("prog.cdl"),
         "import \"std/hash\";\nfn main() { print(hash::md5(\"a\\0b\")); }\n",
     )
     .expect("write program");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
     command
         .arg("prog.cdl")
-        .current_dir(&work)
-        .env("CANDELA_LIB_PATH", &libs);
+        .current_dir(&dir)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
     let output = common::output_with_deadline(&mut command, "hash a NUL");
-    let _ = std::fs::remove_dir_all(&libs);
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(
-        !output.status.success(),
-        "hashing a NUL ran: {}",
+        String::from_utf8_lossy(&output.stdout).contains("70350f6027bce3713f6b76473084309b"),
+        "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("null byte"), "{stderr}");
 }
 
 /// The directory functions, byte files and file digests, run in a scratch

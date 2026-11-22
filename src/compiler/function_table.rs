@@ -412,7 +412,8 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::FsRead
         | LibFunc::Input
         | LibFunc::JsonStringify
-        | LibFunc::FsDigest
+        | LibFunc::HashFile
+        | LibFunc::HashText
         | LibFunc::AsStrVal => DataType::String,
         LibFunc::Contains
         | LibFunc::IsFloat

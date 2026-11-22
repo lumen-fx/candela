@@ -366,7 +366,7 @@ Two kinds come from what the call was given rather than from the system:
 | Kind | Raised by |
 | --- | --- |
 | `fs_not_a_byte` | `fs::write_bytes` with an element outside 0 to 255 |
-| `fs_unknown_digest` | `fs::digest` with an algorithm other than md5, sha1 and sha256 |
+| `hash_unknown_algorithm` | `hash::file` with an algorithm other than md5, sha1 and sha256 |
 
 ### Sorting
 

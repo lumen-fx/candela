@@ -370,15 +370,19 @@ pub enum LibFunc {
     FsList = 54,
     /// fs::read_bytes. The bytes of the source file as a list of ints.
     FsReadBytes = 55,
-    /// fs::digest. The digest of the source file under the algorithm named
+    /// hash::file. The digest of the source file under the algorithm named
     /// by the stored argument, as lowercase hex.
-    FsDigest = 56,
+    HashFile = 56,
     /// A fresh event source. Reads no register.
     EventSource = 57,
     /// The next event for a handler of this program, as the list
     /// `[source, handler, payload]`, or an empty list when there is none. The
     /// source register holds whether to wait for one while a source is held.
     EventNext = 58,
+    /// hash::md5, sha1 and sha256. The digest of the source string's UTF-8
+    /// bytes under the algorithm named by the stored argument, as lowercase
+    /// hex.
+    HashText = 59,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and

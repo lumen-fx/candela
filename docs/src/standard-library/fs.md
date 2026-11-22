@@ -146,17 +146,3 @@ fs::write_bytes(path, bytes)
 Writes `bytes` to `path`, replacing what was there. Every element has to be a
 byte, 0 to 255; an element that is not gives `Err("fs_not_a_byte")` and
 nothing is written. Returns `Ok(true)`.
-
-## digest
-
-```rust
-fs::digest(path, algorithm)
-```
-
-- `algorithm`: `"md5"`, `"sha1"` or `"sha256"`.
-- Returns: the digest of the file at `path`, as lowercase hex, in a
-  `string!string`; `Err("fs_unknown_digest")` for another algorithm.
-
-The file streams through the digest, so a large one never sits in memory
-whole. md5 and sha1 are for ids and checksums, not for security. To digest a
-string, use [hash](hash.md).

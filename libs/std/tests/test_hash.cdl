@@ -1,6 +1,6 @@
-/// Checks for the `hash` module against the published test vectors. Needs the
-/// module's native library built under `libs/std_src/hash`. Prints "hash ok"
-/// on success; a failed check aborts the run with a message.
+/// Checks for the `hash` module against the published test vectors. The file
+/// digests are checked in test_fs.cdl, which has a scratch directory. Prints
+/// "hash ok" on success; a failed check aborts the run with a message.
 import "std/hash";
 import "std/assert";
 

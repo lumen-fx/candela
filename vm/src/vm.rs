@@ -3587,7 +3587,17 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                 list.extend(bytes.iter().map(|b| Data::int(i64::from(*b))));
                 regs[dest] = Data::array(array_id);
             }
-            Instr::CallLibFunc(LibFunc::FsDigest, path, dest) => {
+            Instr::CallLibFunc(LibFunc::HashText, text, dest) => {
+                let algorithm = regs[args.pop_unchecked()];
+                let text = regs[text].as_str(str_pool).as_bytes();
+                match crate::digest::hex_digest(algorithm.as_str(str_pool), text) {
+                    Some(Ok(hex)) => regs[dest] = string!(hex),
+                    _ => {
+                        error_with_catch!(ErrType::HashUnknownAlgorithm);
+                    }
+                }
+            }
+            Instr::CallLibFunc(LibFunc::HashFile, path, dest) => {
                 let algorithm = regs[args.pop_unchecked()];
                 let file = match fs::File::open(resolve_path(regs[path].as_str(str_pool))) {
                     Ok(file) => file,
@@ -3601,7 +3611,7 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                         error_with_catch!(ErrType::from(e.kind()));
                     }
                     None => {
-                        error_with_catch!(ErrType::FsUnknownDigest);
+                        error_with_catch!(ErrType::HashUnknownAlgorithm);
                     }
                 }
             }
