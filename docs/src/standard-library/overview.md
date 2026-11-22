@@ -158,7 +158,7 @@ A standard library function that can fail in the normal run of a program, such
 as reading a file or parsing json, answers a `Result` whose error is a short
 code naming the cause, `fs_not_found` or `json_parse_error`. Misuse that the
 program should rule out, such as an index past the end, raises an error that
-stops the run and prints a message naming the cause; only `main` can catch one.
+stops the run and prints a message naming the cause unless a `try` catches it.
 Each page below states what its functions answer and raise. See
 [error handling](../language/error-handling.md) for both and
 [the error catalogue](../reference/errors.md) for the codes.

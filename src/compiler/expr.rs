@@ -521,8 +521,8 @@ pub enum Expr {
     EvalBlock(Box<[Self]>),
     LoopBlock(Box<[Self]>),
 
-    /// TryCatchBlock(try_code, err_var, catch_code, try_span)
-    TryCatchBlock(Box<[Self]>, SmolStr, Box<[Self]>, Span),
+    /// TryCatchBlock(try_code, err_var, catch_code)
+    TryCatchBlock(Box<[Self]>, SmolStr, Box<[Self]>),
 
     Mul(Operand, Operand, Span, Span),
     Div(Operand, Operand, Span, Span),
@@ -1038,7 +1038,7 @@ fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
         | Expr::IntForLoop(_, _, _, body, _, _) => code_modifies_variable(var_name, body),
         // A catch binds its own name for the error; an assignment to a
         // variable of the same name there writes the error binding instead.
-        Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
+        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
             code_modifies_variable(var_name, try_code)
                 || (err_var != var_name && code_modifies_variable(var_name, catch_code))
         }
@@ -1253,7 +1253,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
             scan_block_free_names(body, depth, bound, out);
             bound.truncate(bound_len);
         }
-        Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
+        Expr::TryCatchBlock(try_code, err_var, catch_code) => {
             scan_block_free_names(try_code, depth, bound, out);
             let bound_len = bound.len();
             bound.push(err_var.clone());

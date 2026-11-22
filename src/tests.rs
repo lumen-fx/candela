@@ -380,20 +380,24 @@ pub fn a_catch_reads_what_the_code_after_the_call_would_have_overwritten() {
     assert_eq!(
         run_output(
             "
-            fn dig(n) {
+            fn dig(n, catching) {
                 if n <= 0 { throw \"bottom\"; }
-                dig(n - 1);
+                let mine = n * 10;
+                if catching {
+                    try {
+                        dig(n - 1, false);
+                        mine = 0;
+                        print(mine);
+                    } catch e {
+                        print(mine);
+                    }
+                } else {
+                    dig(n - 1, false);
+                }
             }
 
             fn main() {
-                let mine = 20;
-                try {
-                    dig(1);
-                    mine = 0;
-                    print(mine);
-                } catch e {
-                    print(mine);
-                }
+                dig(2, true);
             }
             "
         ),
@@ -465,22 +469,21 @@ pub fn a_written_literal_register_is_not_a_constant() {
             "
             fn sum(n) {
                 if n <= 0 { throw \"bottom\"; }
-                return n + sum(n - 1);
-            }
-
-            fn main() {
                 let got = 0;
                 try {
-                    got = sum(3);
+                    got = sum(n - 1);
                 } catch e {
                     got = 1;
                 }
-                let other = 0;
-                print(got + other);
+                return n + got;
+            }
+
+            fn main() {
+                print(sum(3));
             }
             "
         ),
-        "1\n"
+        "7\n"
     );
 }
 
@@ -493,16 +496,19 @@ pub fn an_assignment_inside_a_try_gets_its_own_register() {
     assert_eq!(
         run_output(
             "
-            fn main() {
-                for n in [1, 0] {
-                    let got = 0;
-                    try {
-                        got = n + 5;
-                    } catch e {
-                        got = 1;
-                    }
-                    print(got + 0);
+            fn g(n) {
+                let got = 0;
+                try {
+                    got = n + 5;
+                } catch e {
+                    got = 1;
                 }
+                return got;
+            }
+
+            fn main() {
+                print(g(1));
+                print(g(0) + 0);
             }
             "
         ),
@@ -886,10 +892,18 @@ impl V {
     fn +(self, other: V) -> V { return V { x: self.x + other.x, y: self.y + other.y }; }
 }
 
-fn boom(n: int) {
-    if n > 0 {
-        throw \"e\";
+fn caught(n: int) -> int {
+    let x = 1;
+    try {
+        x = 2;
+        if n > 0 {
+            throw \"e\";
+        }
+        x = 3;
+    } catch e {
+        return x * 10;
     }
+    return x;
 }
 
 fn deep(n: int) -> int {
@@ -917,18 +931,10 @@ fn main() {
         total += step;
         step = step * 2;
     }
-    let x = 1;
-    try {
-        x = 2;
-        boom(1);
-        x = 3;
-    } catch e {
-        x = x * 10;
-    }
-    print(x, deep(3), walk(3), total);
+    print(caught(0), caught(1), deep(3), walk(3), total);
 }
 ";
-    assert_eq!(run_output(src), "20\n94\n12.0\n15\n");
+    assert_eq!(run_output(src), "3\n20\n94\n12.0\n15\n");
 }
 
 /// A struct held in a field of another is kept in registers along with it,
@@ -1006,17 +1012,17 @@ pub fn a_catch_restores_the_registers_of_the_call_it_ended() {
             if n <= 0 {
                 throw \"bottom\";
             }
-            dig(n - 1);
-        }
-
-        fn main() {
-            let mine = 30;
+            let mine = n * 10;
             try {
-                dig(3);
+                dig(n - 1);
             } catch e {
                 print(mine);
             }
             print(mine);
+        }
+
+        fn main() {
+            dig(3);
         }
         ",
         30.into()
@@ -12748,13 +12754,22 @@ pub fn a_range_loop_leaves_the_variable_it_starts_from_alone() {
     assert_eq!(printed, "1\n2\n5\n");
 }
 
-/// A function returns on every path when every way through it ends in a
-/// return, a throw or a loop nothing breaks out of, so the declared type is met
-/// without a return at the end.
+/// A function returns on every path when its try block and its catch both
+/// return, so the declared type is met without a return after the block.
 #[test]
-pub fn every_way_out_meets_the_declared_type() {
+pub fn a_try_whose_catch_returns_meets_the_declared_type() {
     let printed = run_output(
         "
+        fn a(n: int) -> int { try { return n; } catch e { return -1; } }
+        fn c(n: int) -> int {
+            try { if n == 0 { throw \"z\"; } return n; }
+            catch \"z\" { return 0; }
+            catch e { return -1; }
+        }
+        fn d(n: int) -> int {
+            try { if n == 0 { throw \"z\"; } return n; }
+            catch \"z\" { return 0; }
+        }
         fn e(n: int) -> int {
             match n {
                 0 => { return 1; }
@@ -12779,10 +12794,10 @@ pub fn every_way_out_meets_the_declared_type() {
             }
             return n;
         }
-        fn main() { print(e(0), g(0), h(3), k(0)); }
+        fn main() { print(a(1), c(0), c(4), d(0), d(6), e(0), g(0), h(3), k(0)); }
         ",
     );
-    assert_eq!(printed, "1\n1\n3\n1\n");
+    assert_eq!(printed, "1\n0\n4\n0\n6\n1\n1\n3\n1\n");
 }
 
 /// A body that returns a value on one path and nothing on another, by reaching
@@ -18040,8 +18055,8 @@ fn main() {
 /// Errors are values: `T!E` is `Result<T, E>`, `value else fallback` and
 /// `value else |e| { ... }` give a fallback for an `Option` or a `Result`, `?`
 /// passes a failure on, and in `main`, which has no caller, ends the program
-/// with the error. A `catch` runs only in `main`; a `return`, `break` or
-/// `continue` out of a `try` takes its catch down.
+/// with the error. A `return`, `break` or `continue` out of a `try` takes its
+/// catch down.
 #[test]
 pub fn errors_are_values() {
     let src = "
@@ -18082,11 +18097,6 @@ fn main() {
         "42\n0\nOk(3)\nErr(\"not a number: z\")\n15\n1\nnot a number: q\n7\nmain caught boom\nlater\n"
     );
     let cases = [
-        (
-            "fn f() -> int { try { return 1; } catch e { return 0; } }\nfn main() { print(f()); }",
-            "try_outside_main",
-            "try",
-        ),
         (
             "fn main() { let o = Some(1); print(o else |e| { 0 }); }",
             "else_binder_on_option",

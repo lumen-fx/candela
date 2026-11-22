@@ -205,8 +205,7 @@ function that does not return the same enum, with the same error type for a
 `Result`, is `propagate_return_type`; in `main` a `?` ends the program with the
 error instead. `else` after a value that is neither an `Option` nor a `Result` is
 `else_operand`, and `else |e|` after an `Option`, whose `None` carries no
-error, is `else_binder_on_option`. A `try` outside `main` is
-`try_outside_main`; see
+error, is `else_binder_on_option`; see
 [error handling](../language/error-handling.md#passing-a-failure-on). A `|` alternative that binds
 other names, or the same names at other types, than the first alternative of
 its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
@@ -417,21 +416,21 @@ the `Failed(message)` event, whose message names the cause.
 | `host_fn_error` | A function a `host` block declares failed. The message names the function and repeats what the host reported |
 
 An embedding program decides when this happens: its closure returns an error
-instead of a value. It ends the run, and reaches the host, unless `main`
+instead of a value. It ends the run, and reaches the host, unless a `try`
 catches it. See [embedding](../integration/embedding.md).
 
 ### Your own
 
 `throw "message";` raises an error whose kind is the string you pass, so
-`catch "message"` in `main` matches it. Use it for what should not happen; a
+`catch "message"` matches it. Use it for what should not happen; a
 failure a caller is meant to handle goes back as a `Result`.
 
 ## Catching
 
 A runtime error ends the program: it unwinds every call between where it was
-raised and `main`. A `try` in `main` catches it, and only there; a function
+raised and `main`. A `try` in any function catches it on the way; a function
 that expects a failure hands it back as a [`Result`](../standard-library/result.md)
-instead, see [error handling](../language/error-handling.md). When no `catch`
+instead, see [error handling](../language/error-handling.md#which-one-to-use). When no `catch`
 matches, the error is re-raised to the next enclosing `try`, and one that
 reaches the top of the program is printed and ends it. A host that called the
 program receives it as the call's error.

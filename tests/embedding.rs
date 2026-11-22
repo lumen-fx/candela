@@ -1020,10 +1020,10 @@ fn main() {}
     assert!(err.message.contains("app::save"), "{}", err.message);
 }
 
-/// The error is an ordinary candela runtime error of kind `host_fn_error`: it
-/// ends the call and reaches the host, unless `main` catches it.
+/// The error is an ordinary candela runtime error, so a script handles it with
+/// `try`/`catch` under the kind `host_fn_error`.
 #[test]
-fn a_host_error_ends_the_call_and_reaches_the_host() {
+fn a_script_catches_a_host_error() {
     let mut engine = Engine::new();
     engine.register_host_fn("gpio", "read", |_pin: i64| {
         Err::<i64, HostError>(HostError::new("the bus is down"))
@@ -1034,19 +1034,19 @@ host "gpio" {
     fn read(a: int) -> int;
 }
 fn level(pin) {
-    return gpio::read(pin);
-}
-fn main() {
     try {
-        print(level(1));
+        return gpio::read(pin);
     } catch "host_fn_error" {
-        print("caught in main");
+        return -1;
     }
 }
+fn main() {}
 "#;
     let mut program = engine.compile(src, "gpio.cdl").unwrap();
-    let error = program.call("level", &[7i64.into()]).unwrap_err();
-    assert!(error.message.contains("the bus is down"), "{error:?}");
+    assert_eq!(
+        program.call("level", &[7i64.into()]).unwrap(),
+        Value::Int(-1)
+    );
 }
 
 /// A variadic closure raises the same way a typed one does.

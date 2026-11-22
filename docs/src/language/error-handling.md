@@ -5,7 +5,7 @@ failures a program expects from the ones it does not. Type errors, unknown
 names and malformed syntax stop the program before it starts. A failure the
 program expects, a missing file or a string that is not a number, is a value:
 an `Option` or a `Result` the caller handles. Anything else is a bug, which
-ends the program unless `main` catches it.
+ends the program unless a `try` around it catches it.
 
 ## Compile errors
 
@@ -138,18 +138,18 @@ wrong.
 - `division_by_zero`, `modulo_by_zero`.
 
 `throw "kind";` raises one of your own, for a case your program rules out. An
-error unwinds every call between where it was raised and `main`, then prints a
-report pointing at the expression that raised it. A host that called into the
-program receives it as the call's error.
+error unwinds every call between where it was raised and the nearest `try`
+around it, or `main` when there is none, and then prints a report pointing at
+the expression that raised it. A host that called into the program receives it
+as the call's error.
 
-### Catching in main
+### Catching an error
 
-`main` can catch what would end the program, to report it its own way or carry
-on. A `catch` with a quoted kind handles that kind only; a `catch` naming a
-variable handles anything and binds the kind to that name. A `try` needs at
-least one `catch`, and the catch-all comes last. A `try` written in any other
-function is a compile error: a failure a function expects goes back to its
-caller as a `Result`.
+A `try` catches what would end the program, in any function, to report it its
+own way or carry on. A `catch` with a quoted kind handles that kind only; a
+`catch` naming a variable handles anything and binds the kind to that name. A
+`try` needs at least one `catch`, and the catch-all comes last. A `return`,
+`break` or `continue` that leaves the `try` takes its catch down with it.
 
 ```rust
 fn withdraw(balance: int, amount: int) -> int {
@@ -175,6 +175,45 @@ A quoted kind that no built-in error carries and nothing in the program throws
 is reported as a warning, since a misspelt kind never matches; see
 [the error catalogue](../reference/errors.md#warnings).
 
+### Which one to use
+
+A failure the caller should decide about is a value: return a `Result` or an
+`Option`, and let the caller pass it on with `?`, give a fallback with `else`,
+or `match` it. The type says the call can fail, so the compiler makes every
+caller handle it, and nothing unwinds. The standard library answers this way
+wherever a call can fail: a missing file, text that does not parse.
+
+`throw` and `try` are for what should not happen. Throw where a value breaks a
+rule the program depends on and no caller could do better than stop. Catch at a
+boundary that can carry on without the work that failed: a loop that runs one
+job after another, a handler that reports a request it could not serve, a test
+harness that records a failed check and moves to the next. A `try` around one
+call to read its error as a value is a `Result` the function should have
+returned.
+
+```rust
+fn run(job: int) {
+    if job == 2 {
+        throw "job_crashed";
+    }
+    print("job " + string(job) + " done");
+}
+
+fn run_all(jobs: int[]) {
+    for job in jobs {
+        try {
+            run(job);
+        } catch e {
+            print("job " + string(job) + " failed: " + e);
+        }
+    }
+}
+
+fn main() {
+    run_all([1, 2, 3]);
+}
+```
+
 ## Assertions
 
 The `assert` module raises when a condition does not hold, which is how the
@@ -191,7 +230,7 @@ fn main() {
 ```
 
 A failed assertion raises the message it prints, so it stops the program on its
-own, and a `try` in `main` around the check catches it like any other error.
+own, and a `try` around the check catches it like any other error.
 That is how a test harness reports which check failed instead of ending the
 run.
 

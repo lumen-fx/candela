@@ -3066,7 +3066,7 @@ pub fn collect_direct_fn_calls(
                 expr_stack.push(expr);
                 expr_stack.push(value);
             }
-            Expr::TryCatchBlock(try_code, _, catch_code, _) => {
+            Expr::TryCatchBlock(try_code, _, catch_code) => {
                 expr_stack.extend(try_code.iter());
                 expr_stack.extend(catch_code.iter());
             }
@@ -3167,7 +3167,7 @@ fn collect_return_shapes(content: &[Expr], shapes: &mut ReturnShapes) {
             | Expr::EvalBlock(code)
             | Expr::LoopBlock(code)
             | Expr::IntForLoop(_, _, _, code, _, _) => collect_return_shapes(code, shapes),
-            Expr::TryCatchBlock(try_code, _, catch_code, _) => {
+            Expr::TryCatchBlock(try_code, _, catch_code) => {
                 collect_return_shapes(try_code, shapes);
                 collect_return_shapes(catch_code, shapes);
             }
@@ -3780,7 +3780,7 @@ fn track_return_flow(
             // A try block and its catch are two paths out of the statement,
             // and the function returns on every path when both do. The catch
             // sees the error kind under the name the block binds.
-            Expr::TryCatchBlock(try_code, err_var, catch_code, _) => {
+            Expr::TryCatchBlock(try_code, err_var, catch_code) => {
                 let try_flow = track_scoped_returns(try_code, v, ctx, state, fn_name);
                 extend_return_types!(&mut return_types, try_flow.types, ctx, state);
                 let v_len = v.len();
@@ -3852,7 +3852,7 @@ fn statement_breaks(expr: &Expr) -> bool {
         | Expr::ElseIfBlock(_, body, _)
         | Expr::ElseBlock(body)
         | Expr::EvalBlock(body) => block_breaks(body),
-        Expr::TryCatchBlock(try_code, _, catch_code, _) => {
+        Expr::TryCatchBlock(try_code, _, catch_code) => {
             block_breaks(try_code) || block_breaks(catch_code)
         }
         Expr::Match(_, arms, wildcard, _, _) => {

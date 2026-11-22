@@ -59,8 +59,8 @@ A `Result` is a value you pass around and inspect, and the way a function
 reports a failure its caller is meant to handle. `T!E` is the same type as
 `Result<T, E>`. `value else fallback` gives the value inside an `Ok`, or the
 fallback for an `Err`, and `value else |e| { ... }` binds the error for the
-block. A raised error is different: it ends the program unless `main` catches
-it; see [error handling](../language/error-handling.md).
+block. A raised error is different: it ends the program unless a `try` around
+it catches it; see [error handling](../language/error-handling.md).
 
 `x?` reads the value out of an `Ok` and hands an `Err` back to the caller of the
 function it is written in, which has to return a `Result` with the same error

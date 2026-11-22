@@ -4914,27 +4914,11 @@ fn compile_try_catch_block(
     e: &[Expr],
     err_var: &SmolStr,
     catch_code: &[Expr],
-    try_span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
     output: &mut Vec<Instr>,
 ) {
-    // A failure a function expects goes back to its caller as a `Result`;
-    // what is thrown ends the program, and only `main`, or the host, sees it.
-    // The standard library is the one exception: it turns what its native
-    // half raises into the `Result` it hands back.
-    if ctx.in_function && !state.namespaces.is_std(ctx.file_idx) {
-        compiler_errors::error_type_test(
-            "try outside main",
-            "A function hands a failure it expects back as a value, and a catch runs only in main, where it sees what ended the program",
-            Some("Return a Result, -> T!E, with Ok(v) and Err(e), and pass it on with ?"),
-            "try_outside_main",
-            try_span,
-            ctx.file_idx,
-            state.sources,
-        );
-    }
     output.push(Instr::StartErrorCatch(0, 0)); // patched later on
     let err_catch_instr = output.len() - 1;
     // A function body is compiled inline at its first call site and records its
@@ -6907,9 +6891,9 @@ impl Expr {
                 compile_loop_block(code, v, ctx, state, output);
                 None
             }
-            Self::TryCatchBlock(e, err_var, catch_code, try_span) => {
+            Self::TryCatchBlock(e, err_var, catch_code) => {
                 debug_assert!(!uses_id);
-                compile_try_catch_block(e, err_var, catch_code, *try_span, v, ctx, state, output);
+                compile_try_catch_block(e, err_var, catch_code, v, ctx, state, output);
                 None
             }
             Self::VarDeclare(name, value, annotation) => {

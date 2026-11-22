@@ -600,8 +600,7 @@ fn parse_return_annotation(parser: &mut Parser<'_>) -> ReturnAnnotation {
 }
 
 pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
-    let (t, try_span) = parser.next_token();
-    let start = try_span.start;
+    let (t, Span { start, end: _ }) = parser.next_token();
     debug_assert_eq!(t, Token::Try);
     let try_code = parse_block(parser);
     let mut has_catch = false;
@@ -647,7 +646,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
     };
 
     if catch_blocks.is_empty() {
-        return Expr::TryCatchBlock(Box::from(try_code), catch_all_var, else_code, try_span);
+        return Expr::TryCatchBlock(Box::from(try_code), catch_all_var, else_code);
     }
 
     let mut output_code: Vec<Expr> = Vec::with_capacity(2);
@@ -688,7 +687,6 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
             catch_span,
             catch_span,
         )]),
-        try_span,
     )
 }
 

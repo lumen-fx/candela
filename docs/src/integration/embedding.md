@@ -143,7 +143,7 @@ engine.register_host_fn("fs", "read", |path: &str| {
 closure was doing carries through with `map_err`. What the script sees is a
 runtime error at the call, naming the function and repeating the message; it
 ends the run, and reaches the host as a `Diagnostic` with that code, unless
-`main` catches it with `catch "host_fn_error"`. The type checked against the
+the script catches it with `catch "host_fn_error"`. The type checked against the
 declaration is the `T` inside the `Result`, so the two spellings bind to the
 same `host` signature.
 

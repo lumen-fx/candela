@@ -255,8 +255,9 @@ fn main() {
 
 /// A call made inside a `try` saves the caller's live registers, and a throw
 /// out of that call never reaches the return that would put them back. The
-/// catch does it instead: `main` reads what it held before the call once the
-/// catch has run.
+/// catch does it instead. It used to leave the save behind, so every level
+/// above the catch read one call too deep and `dig` printed 10, 10, 20 on its
+/// way out instead of counting up to 30.
 #[test]
 fn a_catch_hands_the_resuming_call_its_registers_back() {
     let out = run(
@@ -267,22 +268,20 @@ fn dig(n) {
         throw "bottom";
     }
     let mine = n * 10;
-    dig(n - 1);
+    try {
+        dig(n - 1);
+    } catch e {
+        print("caught at " + string(mine));
+    }
     print("after " + string(mine));
 }
 
 fn main() {
-    let mine = 7;
-    try {
-        dig(3);
-    } catch e {
-        print("caught " + e + " at " + string(mine));
-    }
-    print("after " + string(mine));
+    dig(3);
 }
 "#,
     );
-    assert_eq!(out, ["caught bottom at 7", "after 7"]);
+    assert_eq!(out, ["caught at 10", "after 10", "after 20", "after 30"]);
 }
 
 /// A recursion that returns a value leaves through a different instruction than
@@ -297,25 +296,36 @@ fn sum(n) {
     if n <= 0 {
         throw "bottom";
     }
-    return n * 10 + sum(n - 1);
-}
-
-fn main() {
+    let mine = n * 10;
     let got = 0;
     try {
-        got = sum(3);
+        got = sum(n - 1);
     } catch e {
         got = 1;
     }
-    print("total " + string(got));
+    print("level " + string(mine) + " got " + string(got));
+    return mine + got;
+}
+
+fn main() {
+    print("total " + string(sum(3)));
 }
 "#,
     );
-    assert_eq!(out, ["total 1"]);
+    assert_eq!(
+        out,
+        [
+            "level 10 got 1",
+            "level 20 got 11",
+            "level 30 got 31",
+            "total 61"
+        ]
+    );
 }
 
-/// One catch ends several calls at once; what the levels below it saved goes
-/// with them, and the frame that resumes is the one that wrote the `try`.
+/// One catch can end several calls at once. The frame that resumes takes back
+/// what its own call saved; the levels below it are gone and what they saved
+/// goes with them.
 #[test]
 fn a_throw_across_several_calls_leaves_one_level_to_restore() {
     let out = run(
@@ -326,26 +336,28 @@ fn dig(n) {
         throw "bottom";
     }
     let mine = n * 10;
-    dig(n - 1);
+    if n == 3 {
+        try {
+            dig(n - 1);
+        } catch e {
+            print("caught at " + string(mine));
+        }
+    } else {
+        dig(n - 1);
+    }
     print("after " + string(mine));
 }
 
 fn main() {
-    let mine = 99;
-    try {
-        dig(5);
-    } catch e {
-        print("caught at " + string(mine));
-    }
-    print("after " + string(mine));
+    dig(5);
 }
 "#,
     );
-    assert_eq!(out, ["caught at 99", "after 99"]);
+    assert_eq!(out, ["caught at 30", "after 30", "after 40", "after 50"]);
 }
 
-/// A catch that throws again is a throw from code that has already been
-/// unwound once, and the next catch out unwinds from there.
+/// A catch that throws again is a throw from a frame that has already been
+/// unwound once, and the next catch up unwinds from there.
 #[test]
 fn a_throw_from_inside_a_catch_unwinds_the_frames_above_it() {
     let out = run(
@@ -355,25 +367,24 @@ fn dig(n) {
     if n <= 0 {
         throw "bottom";
     }
-    dig(n - 1);
-}
-
-fn main() {
-    let mine = 30;
+    let mine = n * 10;
     try {
-        try {
-            dig(4);
-        } catch e {
-            throw "rethrown " + e;
-        }
+        dig(n - 1);
     } catch e {
+        if n < 3 {
+            throw "rethrown at " + string(mine);
+        }
         print("caught " + e + " at " + string(mine));
     }
     print("after " + string(mine));
 }
+
+fn main() {
+    dig(4);
+}
 "#,
     );
-    assert_eq!(out, ["caught rethrown bottom at 30", "after 30"]);
+    assert_eq!(out, ["caught rethrown at 20 at 30", "after 30", "after 40"]);
 }
 
 /// Two `try` blocks in one frame start at the same depth, so the second catch
@@ -388,14 +399,10 @@ fn dig(n) {
     if n <= 0 {
         throw "bottom";
     }
-    dig(n - 1);
-}
-
-fn main() {
-    let mine = 10;
+    let mine = n * 10;
     try {
         try {
-            dig(3);
+            dig(n - 1);
         } catch inner {
             print("inner at " + string(mine));
             throw "again";
@@ -405,9 +412,22 @@ fn main() {
     }
     print("after " + string(mine));
 }
+
+fn main() {
+    dig(3);
+}
 "#,
     );
-    assert_eq!(out, ["inner at 10", "outer at 10", "after 10"]);
+    assert_eq!(
+        out,
+        [
+            "inner at 10",
+            "outer at 10",
+            "after 10",
+            "after 20",
+            "after 30"
+        ]
+    );
 }
 
 /// An invalid operation answers with a quiet NaN whose sign bit is set, which is
