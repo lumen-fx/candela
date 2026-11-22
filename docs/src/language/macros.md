@@ -66,6 +66,13 @@ The template ends at the first `;` outside its brackets, and a macro is
 declared at the top level of a file, above its first use. A use above the
 declaration is a compile error that says so.
 
+A macro has one pattern and one template. A use that does not match the
+pattern is a compile error, and a second `macro` of the same name in one file
+is too, so there are no alternative rules to pick between. A pattern has no
+repetition either: each fragment matches once, and a macro takes a fixed
+number of them. Pass a list, `sum!([1, 2, 3])`, where a use needs any number
+of values.
+
 ## Names in a template
 
 A name the template binds, with `let`, `for`, a closure parameter, an
