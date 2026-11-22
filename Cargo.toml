@@ -35,8 +35,10 @@ exclude = [
     "libs/std_src/archive/",
     "libs/std_src/net/",
     "libs/std_src/process/",
+    "libs/std_src/regex/",
     "libs/std_src/sys/",
     "libs/std_src/testkit/",
+    "libs/std_src/toml/",
     "pgo/",
     "scripts/",
     "about.hbs",
@@ -73,6 +75,8 @@ members = [
     "libs/std_src/process",
     "libs/std_src/archive",
     "libs/std_src/net",
+    "libs/std_src/regex",
+    "libs/std_src/toml",
 ]
 default-members = ["."]
 

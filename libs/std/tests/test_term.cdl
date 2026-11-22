@@ -1,0 +1,13 @@
+import "std/assert";
+import "std/term";
+
+// Run with stdout piped, so nothing is styled.
+fn main() {
+    assert::is_false(term::is_tty());
+    assert::eq(term::color("x", "red"), "x");
+    assert::eq(term::bold("x"), "x");
+    assert::eq(term::strip("plain"), "plain");
+    let (width, height) = term::size();
+    assert::is_true(width > 0 && height > 0);
+    print("term ok");
+}

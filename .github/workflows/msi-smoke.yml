@@ -39,7 +39,7 @@ jobs:
           cargo build --bin candela
           cargo build -p candela-vm --bin candela-vm
           cargo build -p candela-lsp
-          cargo build -p candela-std-process -p candela-std-archive -p candela-std-net
+          cargo build -p candela-std-process -p candela-std-archive -p candela-std-net -p candela-std-regex -p candela-std-toml
 
       - name: Build stdlib dylibs
         run: |
@@ -93,6 +93,8 @@ jobs:
             "libs\std_src\process\process.dll",
             "libs\std_src\archive\archive.dll",
             "libs\std_src\net\net.dll",
+            "libs\std_src\regex\regex.dll",
+            "libs\std_src\toml\toml.dll",
             "libs\std\web\websocket.js",
             "LICENSE"
           )

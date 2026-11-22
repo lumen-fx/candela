@@ -411,6 +411,9 @@ pub enum LibFunc {
     FromUtf8 = 69,
     /// time::now_ms and clock_ns, as the int in the source register asks.
     TimeQuery = 70,
+    /// term::is_tty. Whether stdin (0), stdout (1) or stderr (2), as the int
+    /// in the source register names, is a terminal.
+    TermIsTty = 71,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and

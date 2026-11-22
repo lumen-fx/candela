@@ -1212,6 +1212,31 @@ pub fn read_artifact(bytes: &[u8]) -> Result<(ProgramImage, Option<FunctionTable
     Ok((image, Some(table)))
 }
 
+/// The standard library native libraries an artifact binds, as the paths its
+/// recipes record relative to the toolchain's `libs` directory, without the
+/// platform's suffix (`std_src/net/net`), sorted and each once. Nothing is
+/// opened. A tool that ships an app copies exactly these beside
+/// `candela-vm`; [`resolve_library_filename`](crate::rt::resolve_library_filename)
+/// gives each one's file name on a platform. A program's own `dylib` blocks
+/// are not listed: they name their libraries themselves.
+///
+/// # Errors
+///
+/// Returns a [`LoadError`] if the header is wrong or the image fails to
+/// decode.
+pub fn native_libraries(bytes: &[u8]) -> Result<Vec<String>, LoadError> {
+    let (image, _) = read_artifact(bytes)?;
+    let mut libraries: Vec<String> = image
+        .dyn_lib_fns
+        .into_iter()
+        .filter(|f| f.origin == LibraryOrigin::StandardLibrary)
+        .map(|f| f.library)
+        .collect();
+    libraries.sort();
+    libraries.dedup();
+    Ok(libraries)
+}
+
 /// Reads the attribute table out of a `.cdlb` without loading the program:
 /// no library is opened and no `host` function is bound, so a build tool or
 /// an editor lists what a program declares with nothing registered.

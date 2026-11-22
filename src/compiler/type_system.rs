@@ -2567,7 +2567,7 @@ pub fn std_primitive_return_type(name: &str) -> Option<DataType> {
         | "utf8_text" => DataType::String,
         // json::parse yields a fully dynamic value.
         "json_parse" => DataType::Unknown,
-        "fs_exists" | "fs_is_dir" => DataType::Bool,
+        "fs_exists" | "fs_is_dir" | "term_is_tty" => DataType::Bool,
         "fs_list" | "os_env" | "os_env_vars" => DataType::Array(Some(Box::new(DataType::String))),
         "fs_read_bytes" | "utf8_bytes" => DataType::Array(Some(Box::new(DataType::Int))),
         "fs_write" | "fs_append" | "fs_delete" | "fs_delete_dir" | "fs_mkdir" | "fs_copy"

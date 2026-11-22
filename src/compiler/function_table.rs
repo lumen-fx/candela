@@ -434,7 +434,8 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::IsNullVal
         | LibFunc::IsTypeVal
         | LibFunc::Bool
-        | LibFunc::AsBoolVal => DataType::Bool,
+        | LibFunc::AsBoolVal
+        | LibFunc::TermIsTty => DataType::Bool,
         LibFunc::Find
         | LibFunc::Len
         | LibFunc::TheAnswer

@@ -193,7 +193,11 @@ import "std/csv";
 import "std/path";
 import "std/os";
 import "std/assert";
+import "std/cli";
+import "std/term";
 fn main() {
+    print(cli::parse(["-v"]).unwrap().flag("v"));
+    print(term::is_tty());
     print(encoding::base64(encoding::utf8("foo")));
     print(csv::parse("a,b").unwrap()[0][1]);
     print(path::extension("x/y.txt"));
@@ -201,7 +205,10 @@ fn main() {
     assert::eq(1, 1);
 }
 "#);
-    assert_eq!(out.lines().collect::<Vec<_>>(), ["Zm9v", "b", "txt", "web"]);
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        ["true", "false", "Zm9v", "b", "txt", "web"]
+    );
 }
 
 /// An artifact records the std bindings by name; the browser's runtime binds

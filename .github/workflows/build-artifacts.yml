@@ -177,13 +177,13 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo pgo optimize -- --target ${{ matrix.target }} --features native
 
-      # The standard library's Rust native libraries: process, archive, and
-      # net for http and websocket. A plain release build in a target
+      # The standard library's Rust native libraries: process, archive, net
+      # for http and websocket, regex and toml. A plain release build in a target
       # directory of its own, like candela-lsp's.
       - name: Build std native libraries
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo build --release --locked --target ${{ matrix.target }} --target-dir target-std -p candela-std-process -p candela-std-archive -p candela-std-net
+        run: cargo build --release --locked --target ${{ matrix.target }} --target-dir target-std -p candela-std-process -p candela-std-archive -p candela-std-net -p candela-std-regex -p candela-std-toml
 
       # candela-vm is profiled the same way, on the same workloads compiled to
       # .cdlb by the candela just built, with a profile directory of its own so

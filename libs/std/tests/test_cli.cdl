@@ -1,0 +1,17 @@
+import "std/assert";
+import "std/cli";
+
+fn main() {
+    let args = cli::parse(["build", "-v", "--out=x.bin", "-abo", "y", "--level", "3", "--", "--raw"], takes_value: ["out", "o", "level"])?;
+    assert::eq(args.positional, ["build", "--raw"]);
+    assert::eq(args.flags, ["v", "a", "b"]);
+    assert::eq(args.option("out"), Some("x.bin"));
+    assert::eq(args.option("o"), Some("y"));
+    assert::eq(args.option("level"), Some("3"));
+    assert::eq(args.option("nope"), None);
+    assert::is_true(args.flag("v"));
+    assert::is_false(args.flag("z"));
+    assert::eq(cli::parse(["--out"], takes_value: ["out"]), Err("cli_missing_value"));
+    assert::eq(cli::parse(["-", "x"])?.positional, ["-", "x"]);
+    print("cli ok");
+}

@@ -16,8 +16,10 @@ toolchain installs a `libs` directory beside the `candela` executable:
 - `libs/std_src/` holds the native libraries some modules call into, each in a
   directory of its own: `math`, `random` and `time`, with their C sources;
   `process` for [process](process.md); `archive` for [archive](archive.md);
-  and `net` for [http](http.md) and [websocket](websocket.md), which share its
-  one TLS stack.
+  `net` for [http](http.md) and [websocket](websocket.md), which share its
+  one TLS stack; `regex` for [regex](regex.md); and `toml` for
+  [toml](toml.md). `candela build --stage` copies only the ones a program
+  binds; see [the CLI](../reference/cli.md).
 
 Set `CANDELA_LIB_PATH` to point at a different `libs` directory. The variable
 names the directory that contains `std/` and `std_src/`, and it overrides the
@@ -46,14 +48,16 @@ there as it does on a desktop, with the same functions. The prelude is there
 too.
 
 A `.cdlb` built on a desktop runs in the browser with every module that needs
-neither a file system nor a native library: `assert`, `csv`, `encoding`,
-`event`, `hash`, `json`, `math`, `os` (its `platform` and `arch`), `path`,
-`random`, `set`, `time` (all but `sleep_ms` and the timers) and the prelude.
+neither a file system nor a native library: `assert`, `cli`, `csv`,
+`encoding`, `event`, `hash`, `json`, `math`, `os` (its `platform` and `arch`),
+`path`, `random`, `set`, `term`, `time` (all but `sleep_ms` and the timers)
+and the prelude.
 The browser build compiles these from source too, so `import "std/csv";`
 works in the candela prompt. `browser`, `js`,
 `websocket` and `http::request` run there through their `host` blocks, which the host that runs
 the page binds to the JavaScript modules in `libs/std/web/` by name. `fs`,
-`process`, `http::download` and `archive` do not run in a browser.
+`process`, `http::download`, `archive`, `regex` and `toml` do not run in a
+browser.
 
 ## Importing a module
 
@@ -110,9 +114,9 @@ like any import; its names stay reachable with no prefix. A method nothing calls
 a program that does not use it. A program that declares its own enum with a
 `Some` variant, or its own `Option`, gets its own when it names it.
 
-Everything else is imported: `archive`, `assert`, `browser`, `csv`,
+Everything else is imported: `archive`, `assert`, `browser`, `cli`, `csv`,
 `encoding`, `event`, `fs`, `hash`, `http`, `js`, `json`, `math`, `os`, `path`,
-`process`, `random`, `set`, `time` and `websocket`.
+`process`, `random`, `regex`, `set`, `term`, `time`, `toml` and `websocket`.
 
 ## The modules
 
@@ -122,6 +126,7 @@ Everything else is imported: `archive`, `assert`, `browser`, `csv`,
 | [assert](assert.md) | Assertions that raise an error when a check fails |
 | [browser](browser.md) | A page's popups, messages, sharing, saving, media queries, file picker and fullscreen |
 | [builtins](builtins.md) | The always-available functions and methods (no import) |
+| [cli](cli.md) | Read a command line: flags, options and positional arguments |
 | [csv](csv.md) | Parse and write comma-separated rows |
 | [encoding](encoding.md) | UTF-8, hex, base64 and URL percent encoding |
 | [event](event.md) | Results from work running elsewhere, delivered to a function, and waiting for them |
@@ -138,10 +143,13 @@ Everything else is imported: `archive`, `assert`, `browser`, `csv`,
 | [path](path.md) | Join paths and take them apart, as strings |
 | [process](process.md) | Run another program and receive its output and exit |
 | [random](random.md) | A seedable pseudo-random generator: ints, floats, choices, shuffles, uuids |
+| [regex](regex.md) | Regular expressions: match, find, capture, replace, split |
 | [result](result.md) | The `Result` enum: `Ok(v)` or `Err(e)`, with methods |
 | [set](set.md) | `Set<T>`, a set of unique values, with union, intersection, difference, and symmetric difference |
 | [string](string.md) | Substrings, characters, padding, capitalisation, line splitting, counting |
+| [term](term.md) | Whether output is a terminal, its size, and ANSI colours |
 | [time](time.md) | Clocks, sleeping, timers, formatting and parsing timestamps |
+| [toml](toml.md) | Parse and write TOML |
 | [websocket](websocket.md) | WebSocket connections with text frames, on the desktop and in a browser |
 
 ## Errors

@@ -61,6 +61,7 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "utf8_bytes" => (Value(LibFunc::Utf8Bytes), PATH),
         "utf8_text" => (Value(LibFunc::FromUtf8), &[Unknown]),
         "time_query" => (Value(LibFunc::TimeQuery), &[Int]),
+        "term_is_tty" => (Value(LibFunc::TermIsTty), &[Int]),
         "event_on" => (Void(LibFuncVoid::EventOn), &[Int, Unknown]),
         _ => return None,
     })

@@ -110,6 +110,16 @@ fn encoding_module() {
 }
 
 #[test]
+fn cli_module() {
+    assert!(run_std_test("test_cli").contains("cli ok"));
+}
+
+#[test]
+fn term_module() {
+    assert!(run_std_test("test_term").contains("term ok"));
+}
+
+#[test]
 fn csv_module() {
     assert!(run_std_test("test_csv").contains("csv ok"));
 }

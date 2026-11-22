@@ -1,0 +1,95 @@
+/// The terminal a program writes to: whether there is one, its size, and
+/// ANSI colours and styles for text.
+///
+///     import "std/term";
+///     fn main() {
+///         print(term::color("ok", "green") + " " + term::bold("done"));
+///         if !term::is_tty() {
+///             eprint("output is piped");
+///         }
+///     }
+///
+/// The colour and style functions add their codes only when standard output
+/// is a terminal and `NO_COLOR` is not set, so piped output stays plain text.
+
+/// True when `stream`, `"stdin"`, `"stdout"` or `"stderr"`, is a terminal
+/// rather than a file or a pipe. Always false in a browser.
+fn is_tty(stream: string = "stdout") -> bool {
+    if stream == "stdin" {
+        return term_is_tty(0);
+    }
+    if stream == "stderr" {
+        return term_is_tty(2);
+    }
+    return term_is_tty(1);
+}
+
+/// The terminal's width and height in characters, from the `COLUMNS` and
+/// `LINES` variables the shell sets, or 80 by 24 when they are not set.
+fn size() -> (int, int) {
+    let columns = os_env("COLUMNS");
+    let lines = os_env("LINES");
+    let width = if columns.len() == 0 { 80 } else { columns[0].parse<int>() else 80 };
+    let height = if lines.len() == 0 { 24 } else { lines[0].parse<int>() else 24 };
+    return (width, height);
+}
+
+/// True when the functions below add their codes: standard output is a
+/// terminal and `NO_COLOR` is not set.
+fn styled() -> bool => term_is_tty(1) && os_env("NO_COLOR").len() == 0;
+
+/// The escape character an ANSI sequence starts with.
+fn esc() -> string => utf8_text([27]);
+
+/// `text` between the escape `code` and a reset, when `styled()`.
+fn wrap(text: string, code: string) -> string {
+    if !styled() {
+        return text;
+    }
+    return esc() + "[" + code + "m" + text + esc() + "[0m";
+}
+
+/// `text` in the colour `name`: `black`, `red`, `green`, `yellow`, `blue`,
+/// `magenta`, `cyan` or `white`, or one of those after `bright_`. Another name
+/// leaves the text as it is.
+fn color(text: string, name: string) -> string {
+    let names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+    let bright = name.starts_with("bright_");
+    let base = if bright { name[7..name.len()] } else { name };
+    let at = names.index_of(base) else -1;
+    if at < 0 {
+        return text;
+    }
+    return wrap(text, string((if bright { 90 } else { 30 }) + at));
+}
+
+/// `text` in bold.
+fn bold(text: string) -> string => wrap(text, "1");
+
+/// `text` dimmed.
+fn dim(text: string) -> string => wrap(text, "2");
+
+/// `text` underlined.
+fn underline(text: string) -> string => wrap(text, "4");
+
+/// `text` without the ANSI escape sequences in it, such as the codes the
+/// functions above add.
+fn strip(text: string) -> string {
+    let out: string[] = [];
+    let chars = text.chars();
+    let escape = esc();
+    let i = 0;
+    while i < chars.len() {
+        if chars[i] == escape && i + 1 < chars.len() && chars[i + 1] == "[" {
+            i += 2;
+            while i < chars.len() && !"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".contains(chars[i]) {
+                i += 1;
+            }
+            i += 1;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    return out.join("");
+}

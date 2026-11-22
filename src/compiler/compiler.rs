@@ -7630,7 +7630,11 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         #[cfg(target_arch = "wasm32")]
         "std/assert.cdl" => Some(include_str!("../../libs/std/assert.cdl")),
         #[cfg(target_arch = "wasm32")]
+        "std/cli.cdl" => Some(include_str!("../../libs/std/cli.cdl")),
+        #[cfg(target_arch = "wasm32")]
         "std/csv.cdl" => Some(include_str!("../../libs/std/csv.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/term.cdl" => Some(include_str!("../../libs/std/term.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/encoding.cdl" => Some(include_str!("../../libs/std/encoding.cdl")),
         #[cfg(target_arch = "wasm32")]

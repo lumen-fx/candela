@@ -41,10 +41,15 @@ fn scratch(tag: &str) -> PathBuf {
 const EVERY_FUNCTION: &str = r#"
 import "std/archive";
 import "std/browser";
+import "std/cli";
 import "std/event";
 import "std/http";
 import "std/js";
+import "std/json";
 import "std/process";
+import "std/regex";
+import "std/term";
+import "std/toml";
 import "std/websocket";
 
 fn main() {
@@ -73,6 +78,14 @@ fn main() {
         archive::gzip("a", "a.gz") fn(e) { print(e); };
         archive::gunzip("a.gz", "a") fn(e) { print(e); };
         archive::set_max_concurrent(2);
+        let re = regex::compile("a+").unwrap();
+        print(re.is_match("a"), re.find("a"), re.find_all("aa"), re.captures("a"));
+        print(re.replace_all("a", "b"), re.split("bab"), re.pattern);
+        print(toml::parse("a = 1"), toml::stringify(json::parse("{}").unwrap()));
+        print(term::is_tty("stderr"), term::size(), term::color("x", "red"), term::bold("x"));
+        print(term::dim("x"), term::underline("x"), term::strip("x"));
+        let args = cli::parse(["-v"], takes_value: ["o"]).unwrap();
+        print(args.flag("v"), args.option("o"), args.positional);
         let socket = websocket::open("ws://x") fn(s, e) {
             print(s.state());
             print(e);
@@ -272,6 +285,80 @@ fn a_process_artifact_finds_its_library_under_candela_vm() {
         .current_dir(&dir)
         .env("CANDELA_LIB_PATH", &libs);
     let out = common::output_with_deadline(&mut command, "candela-vm app.cdlb");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n"),
+        "main is done\nout one\nout two\nexit 3\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `candela build --stage` lays out an app that runs with nothing installed:
+/// the artifact, `candela-vm`, and only the native libraries the artifact
+/// binds, here the process library and not the net one.
+#[test]
+fn a_staged_app_carries_only_the_libraries_it_binds() {
+    let dir = scratch("stage");
+    let install = dir.join("toolchain");
+    std::fs::create_dir_all(&install).unwrap();
+    let libs = libs_with_process(&dir);
+    std::fs::rename(&libs, install.join("libs")).unwrap();
+    let exe = std::env::consts::EXE_SUFFIX;
+    let candela_bin = install.join(format!("candela{exe}"));
+    std::fs::copy(env!("CARGO_BIN_EXE_candela"), &candela_bin).unwrap();
+    let vm = built::build(
+        &["-p", "candela-vm", "--bin", "candela-vm"],
+        &format!("candela-vm{exe}"),
+    );
+    std::fs::copy(&vm, install.join(format!("candela-vm{exe}"))).unwrap();
+    write_child_program(&dir);
+
+    let run_fresh = |command: &mut Command, what: &str| {
+        // A copied binary can be briefly unexecutable while a sibling test's
+        // child still holds the write handle ("text file busy").
+        let mut attempt = 0;
+        loop {
+            match common::try_output_with_deadline(command, what) {
+                Ok(output) => break output,
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("{what}: {e}"),
+            }
+        }
+    };
+    let mut build = Command::new(&candela_bin);
+    build
+        .args(["build", "app.cdl", "--stage", "app"])
+        .current_dir(&dir)
+        .env_remove("CANDELA_LIB_PATH");
+    let built = run_fresh(&mut build, "candela build --stage");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let app = dir.join("app");
+    let ext = std::env::consts::DLL_EXTENSION;
+    assert!(app.join("app.cdlb").is_file());
+    assert!(app.join(format!("candela-vm{exe}")).is_file());
+    assert!(
+        app.join(format!("libs/std_src/process/process.{ext}"))
+            .is_file()
+    );
+    assert!(!app.join("libs/std_src/net").exists());
+
+    let mut command = Command::new(app.join(format!("candela-vm{exe}")));
+    command
+        .arg(app.join("app.cdlb"))
+        .current_dir(&dir)
+        .env_remove("CANDELA_LIB_PATH");
+    let out = run_fresh(&mut command, "staged candela-vm");
     assert!(
         out.status.success(),
         "{}",

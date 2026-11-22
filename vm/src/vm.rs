@@ -3700,6 +3700,14 @@ fn run_cold(m: &mut Machine<'_>, instructions: &[Instr], mut i: usize, mut regs:
                     }
                 }
             }
+            Instr::CallLibFunc(LibFunc::TermIsTty, stream, dest) => {
+                use std::io::IsTerminal;
+                regs[dest] = Data::from(match regs[stream].as_int() {
+                    0 => std::io::stdin().is_terminal(),
+                    1 => std::io::stdout().is_terminal(),
+                    _ => std::io::stderr().is_terminal(),
+                });
+            }
             Instr::CallLibFunc(LibFunc::TimeQuery, kind, dest) => {
                 regs[dest] = Data::int(crate::sys::clock(regs[kind].as_int()));
             }

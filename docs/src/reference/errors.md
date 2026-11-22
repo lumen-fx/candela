@@ -377,6 +377,10 @@ Two kinds come from what the call was given rather than from the system:
 | `encoding_invalid_hex`, `encoding_invalid_base64`, `encoding_invalid_url` | Answered by `encoding::from_hex`, `from_base64` and `url_decode` for text that is not in their form |
 | `csv_unterminated_quote` | Answered by [`csv::parse`](../standard-library/csv.md) for a quoted field that never closes |
 | `http_desktop_only` | `http::download` called in a browser, which has no file to download to |
+| `regex_invalid` | Answered by [`regex::compile`](../standard-library/regex.md) for a pattern the engine refuses |
+| `toml_invalid`, `toml_unrepresentable` | Answered by [`toml::parse`](../standard-library/toml.md) for text that is not TOML, and by `toml::stringify` for a value with no TOML form |
+| `regex_desktop_only`, `toml_desktop_only` | A call to `std/regex` or `std/toml` in a browser, which runs no native library |
+| `cli_missing_value` | Answered by [`cli::parse`](../standard-library/cli.md) for an option at the end with no value |
 | `websocket_bad_close` | Answered, as an `Err`, by [`socket.close`](../standard-library/websocket.md#close) given a code other than 1000 or 3000 to 4999, or a reason longer than 123 bytes |
 
 The background calls of [process](../standard-library/process.md),
