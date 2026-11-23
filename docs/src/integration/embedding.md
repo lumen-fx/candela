@@ -98,11 +98,14 @@ them or `()`:
 | `String`, or a single `&str` argument | `string` |
 | `Vec<T>` | `T[]` |
 | `BTreeMap<String, T>`, `HashMap<String, T>` | `{string: T}` |
-| `()` (return only) | `null` |
+| `()` (return only) | `()` |
 
 The closure's signature is derived from its Rust types and checked against the
 script's `host` declaration when you compile. A disagreement in arity, argument
-type or return type is returned as a `Diagnostic`, never a panic.
+type or return type is returned as a `Diagnostic`, never a panic. A function
+never crosses the boundary, so a `host` declaration that takes or returns one
+is a compile error (`host_fn_takes_function`); call the function in the script
+and pass the host its result.
 
 A `host` block declares each function the way a candela function is declared,
 with a `;` in place of the body: `fn width(text: string) -> int;`. A function

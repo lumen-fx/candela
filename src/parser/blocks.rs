@@ -615,7 +615,7 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
             break;
         }
         parser.next_token();
-        let (next_token, _) = parser.next_token();
+        let (next_token, next_span) = parser.next_token();
         if let Token::Identifier(i) = next_token {
             // catch-all
             catch_all_var = SmolStr::new(i);
@@ -626,6 +626,16 @@ pub fn parse_try_catch_block(parser: &mut Parser<'_>) -> Expr {
         } else if let Token::String(s) = next_token {
             catch_blocks.push((SmolStr::new(parse_string(s)), parse_block(parser)));
             has_catch = true;
+        } else {
+            cold_path();
+            parser.error(
+                next_span,
+                ParserErr::UnexpectedTokenStr(
+                    "a quoted error kind or a name",
+                    next_token,
+                    "A catch handles one kind, `catch \"kind\" { ... }`, or binds any kind to a name, `catch e { ... }`.",
+                ),
+            );
         }
     }
     if !has_catch {

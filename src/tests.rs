@@ -17115,6 +17115,41 @@ pub fn tuple_errors() {
     }
 }
 
+/// A `catch` takes a quoted kind or a name, and anything else after it is a
+/// parse error rather than a block that runs whether or not the `try` threw.
+/// A `try` with no `catch` says so in plain words.
+#[test]
+pub fn a_catch_takes_a_kind_or_a_name() {
+    for src in [
+        "fn main() { try { print(1); } catch 5 { print(2); } }",
+        "fn main() { try { print(1); } catch \"a\" { print(2); } catch { print(3); } }",
+    ] {
+        let d = compile_diag(src, "catch.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "unexpected_token", "{src}: {d:?}");
+        assert!(d.message.contains("a quoted error kind or a name"), "{d:?}");
+    }
+    let src = "fn main() { try { print(1); } }";
+    let d = compile_diag(src, "catch.cdl").unwrap_err();
+    assert_eq!(d.code, "try_block_no_catch", "{d:?}");
+    assert!(!d.message.contains("{BLUE}"), "{d:?}");
+}
+
+/// A function cannot cross into an embedding host, so a `host` signature that
+/// takes or returns one is refused where it is declared.
+#[test]
+pub fn a_host_signature_takes_no_function() {
+    for src in [
+        "host \"app\" { fn apply(f: fn(int) -> int) -> int; }\nfn main() {}",
+        "host \"app\" { fn all(fs: fn()[]); }\nfn main() {}",
+        "host \"app\" { fn make() -> fn(int) -> int; }\nfn main() {}",
+    ] {
+        let d = compile_diag(src, "host.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "host_fn_takes_function", "{src}: {d:?}");
+    }
+}
+
 /// A program past the bytecode's 16-bit limits is a compile error naming the
 /// limit it crossed, never a program whose constants share a register or
 /// whose calls land in the wrong place.

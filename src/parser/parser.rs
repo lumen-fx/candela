@@ -392,9 +392,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         )
         .to_string(),
         ParserErr::ArgumentsMissingCommaSeparator => "Arguments must be separated by a comma",
-        ParserErr::TryBlockNoCatch => {
+        ParserErr::TryBlockNoCatch => &format!(
             "A {BLUE}{BOLD}try{RESET} block must have at least one {BLUE}{BOLD}catch{RESET} block"
-        }
+        ),
         ParserErr::MatchBlockNoNonWildcardArm => &format!(
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one non-wildcard arm{RESET}"
         ),

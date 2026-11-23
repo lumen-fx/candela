@@ -7928,6 +7928,30 @@ fn has_c_representation(ty: &DataType, structs: &[Struct], depth: usize) -> bool
     }
 }
 
+/// Whether a type is, or holds, a function, which no host binding carries.
+fn holds_function_type(ty: &DataType, structs: &[Struct], depth: usize) -> bool {
+    match ty {
+        DataType::Fn(_) | DataType::FnValue(_) => true,
+        DataType::Array(Some(element)) => holds_function_type(element, structs, depth),
+        DataType::Map(entry) => [&entry.0, &entry.1]
+            .into_iter()
+            .flatten()
+            .any(|t| holds_function_type(t, structs, depth)),
+        DataType::Union(members) => members
+            .iter()
+            .any(|t| holds_function_type(t, structs, depth)),
+        DataType::Struct(id) => {
+            depth < structs.len()
+                && structs.get(*id as usize).is_some_and(|s| {
+                    s.fields
+                        .iter()
+                        .any(|(_, field, _)| holds_function_type(field, structs, depth + 1))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// The namespace a `dylib` block's functions live under: a logical name as
 /// written (`z`), and for a path the file's name without its directory or
 /// extension (`../native/mylib` is `mylib`).
@@ -9250,62 +9274,77 @@ fn resolve_types(
     for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
-            .map(
-                |(fn_name, fn_args, fn_return_type, _fn_name_span, params)| {
-                    // A lone `...` sentinel argument marks a variadic host fn: it
-                    // takes no fixed argument types, and the call site forwards
-                    // every supplied argument to the registered closure.
-                    let variadic = fn_args.len() == 1
-                        && matches!(&fn_args[0], TypeExpr::Identifier(s, _) if s.as_str() == "...");
-                    let fn_args = if variadic {
-                        Box::from([])
-                    } else {
-                        fn_args
-                            .iter()
-                            .map(|t| {
-                                t.to_datatype(&mut TypeCtx {
-                                    file_idx: src_file_idx,
-                                    namespaces: file_namespaces,
-                                    sources,
-                                    structs,
-                                    enums,
-                                    fns,
-                                    generics,
-                                })
+            .map(|(fn_name, fn_args, fn_return_type, fn_name_span, params)| {
+                // A lone `...` sentinel argument marks a variadic host fn: it
+                // takes no fixed argument types, and the call site forwards
+                // every supplied argument to the registered closure.
+                let variadic = fn_args.len() == 1
+                    && matches!(&fn_args[0], TypeExpr::Identifier(s, _) if s.as_str() == "...");
+                let fn_args = if variadic {
+                    Box::from([])
+                } else {
+                    fn_args
+                        .iter()
+                        .map(|t| {
+                            t.to_datatype(&mut TypeCtx {
+                                file_idx: src_file_idx,
+                                namespaces: file_namespaces,
+                                sources,
+                                structs,
+                                enums,
+                                fns,
+                                generics,
                             })
-                            .collect::<Vec<DataType>>()
-                            .into_boxed_slice()
-                    };
-                    let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
-                        file_idx: src_file_idx,
-                        namespaces: file_namespaces,
+                        })
+                        .collect::<Vec<DataType>>()
+                        .into_boxed_slice()
+                };
+                let fn_return_type = fn_return_type.to_datatype(&mut TypeCtx {
+                    file_idx: src_file_idx,
+                    namespaces: file_namespaces,
+                    sources,
+                    structs,
+                    enums,
+                    fns,
+                    generics,
+                });
+                // A host value is data: no function crosses into the
+                // embedding program or back, so a signature naming one is
+                // refused here rather than at every call.
+                if let Some(ty) = fn_args
+                    .iter()
+                    .chain(std::iter::once(&fn_return_type))
+                    .find(|ty| holds_function_type(ty, structs, 0))
+                {
+                    compiler_errors::error_host_fn_takes_function(
+                        fn_name,
+                        ty,
+                        *fn_name_span,
+                        src_file_idx,
                         sources,
-                        structs,
-                        enums,
-                        fns,
-                        generics,
-                    });
-                    let return_val = FnSignature {
-                        name: fn_name.clone(),
-                        args: fn_args.clone(),
-                        params: params.names.clone(),
-                        defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
-                        return_type: fn_return_type.clone(),
-                        id: host_fns.len() as u16,
-                        variadic,
-                    };
+                        TypeNames { structs, enums },
+                    );
+                }
+                let return_val = FnSignature {
+                    name: fn_name.clone(),
+                    args: fn_args.clone(),
+                    params: params.names.clone(),
+                    defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
+                    return_type: fn_return_type.clone(),
+                    id: host_fns.len() as u16,
+                    variadic,
+                };
 
-                    let mut types = vec![fn_return_type];
-                    types.extend(fn_args);
-                    host_fns.push(HostFnSig {
-                        types: types.into_boxed_slice(),
-                        namespace: host_namespace.clone(),
-                        name: fn_name.clone(),
-                        variadic,
-                    });
-                    return_val
-                },
-            )
+                let mut types = vec![fn_return_type];
+                types.extend(fn_args);
+                host_fns.push(HostFnSig {
+                    types: types.into_boxed_slice(),
+                    namespace: host_namespace.clone(),
+                    name: fn_name.clone(),
+                    variadic,
+                });
+                return_val
+            })
             .collect();
         dynamic_libs[dynlib_id as usize].fns = resolved.into_boxed_slice();
     }

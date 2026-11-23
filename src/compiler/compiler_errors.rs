@@ -802,6 +802,51 @@ pub fn error_type_has_no_c_representation(
     );
 }
 
+/// A `host` signature takes or returns a function, which no host binding
+/// carries: the values that cross into the embedding program are data.
+#[inline(never)]
+#[cold]
+pub fn error_host_fn_takes_function(
+    symbol: &str,
+    ty: &DataType,
+    symbol_span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let type_name = types.of(ty).to_string();
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), symbol_span.into()),
+            )
+            .with_message("A host function cannot take a function")
+            .with_label(
+                Label::new((src.filename.as_str(), symbol_span.into()))
+                    .with_message(format_args!(
+                        "{} takes or returns {}, and a function cannot cross into the host",
+                        blue(symbol),
+                        red(&type_name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "A host function takes and returns values, never a function. Call the function in the script and pass the host its result",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        symbol_span,
+        &format!(
+            "{symbol} takes or returns {type_name}, and a function cannot cross into the host"
+        ),
+        "host_fn_takes_function",
+    );
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_cannot_find_dynlib_symbol(

@@ -47,8 +47,9 @@ Raised while the file is read, before any type is known.
 | Missing separator | Array elements, arguments or parameters not separated by `,` |
 | Argument order | An argument passed in order after one passed by name (`positional_after_named`) |
 | `host` or `dylib` entry | An entry written the removed C way, `int f(int);`; the report shows it rewritten as `fn f(a: int) -> int;` (`old_host_signature`) |
+| `host` signature | A `host` function that takes or returns a function, or a list, map or struct holding one. No function crosses into the embedding program; call it in the script and pass the host its result (`host_fn_takes_function`) |
 | Inline `if` without `else` | An `if` used as an expression must produce a value on every path |
-| `try` without `catch` | A `try` block needs at least one `catch` clause |
+| `try` and `catch` | A `try` block with no `catch` clause (`try_block_no_catch`), or a `catch` followed by something other than a quoted kind or a name, such as `catch 5` or a bare `catch {` (`unexpected_token`) |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
 | Tuple | A tuple of one element, `(a,)`, in a value, a type or a pattern (`tuple_of_one`) |
