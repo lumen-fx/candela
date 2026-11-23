@@ -46,7 +46,8 @@ fn nested_target_dir() -> PathBuf {
 ///
 /// A workspace test run does not promise to have built another member's
 /// cdylib before the tests start, so the first test that loads a library
-/// builds it. Later tests in the process reuse that build: a second cargo
+/// builds it, except during `cargo llvm-cov` when the run has built it
+/// already (see `run_library`). Later tests in the process reuse that build: a second cargo
 /// run replaces the library file, and a test reading it meanwhile finds
 /// nothing there.
 ///
@@ -68,7 +69,48 @@ pub fn build_library(name: &str) -> PathBuf {
     path
 }
 
+/// During `cargo llvm-cov`, the library the test run itself built for `name`,
+/// when there is one.
+///
+/// Building a package's tests builds its library as a cdylib in the same
+/// compiler run as the rlib the tests link, so the two carry the same
+/// coverage records. A nested build compiles the crate again with the
+/// dependency features of one package rather than the whole workspace, and
+/// its records describe the same functions under a different hash; the
+/// report keeps one record per exported function, the first it reads, so the
+/// calls the library answered would go unseen. Loading the run's own build
+/// gives every copy one hash, and the counts add up.
+///
+/// The build directory keeps a unit per set of features it was ever built
+/// with, so of several the newest is the one this run made.
+fn run_library(name: &str) -> Option<PathBuf> {
+    std::env::var_os("CARGO_LLVM_COV")?;
+    let file = format!(
+        "{}candela_std_{name}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    // The test binary sits in <build>/<profile>/build/<package>/<hash>/out.
+    let exe = std::env::current_exe().ok()?;
+    let units = exe
+        .parent()?
+        .parent()?
+        .parent()?
+        .parent()?
+        .join(format!("candela-std-{name}"));
+    std::fs::read_dir(units)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|unit| unit.path().join("out").join(&file))
+        .filter_map(|path| Some((std::fs::metadata(&path).ok()?.modified().ok()?, path)))
+        .max()
+        .map(|(_, path)| path)
+}
+
 fn build_once(name: &str) -> PathBuf {
+    if let Some(path) = run_library(name) {
+        return path;
+    }
     let target = nested_target_dir();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)

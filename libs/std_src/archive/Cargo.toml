@@ -14,6 +14,10 @@ description = "The native library behind candela's std/archive."
 [lib]
 name = "candela_std_archive"
 crate-type = ["cdylib", "rlib"]
+# The library has no unit tests, so no harness of its own: a harness build
+# compiles the exports again under another hash, and a coverage report can
+# read that idle copy in place of the one the tests in tests/ load.
+test = false
 
 [dependencies]
 candela-std-sys = { path = "../sys" }
