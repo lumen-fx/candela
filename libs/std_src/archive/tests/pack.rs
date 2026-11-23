@@ -33,8 +33,11 @@ fn an_entry_must_name_a_file_under_the_base() {
     let climbing = base.join("..").join("outside.txt");
     let error = pack::create(&dir.join("out.zip"), &[climbing], &base)
         .expect_err("a climbing entry is refused");
+    // Windows resolves the `..` when it makes the path absolute, so there
+    // the file is plainly outside the base.
     assert!(
-        error.contains("climbs out of the base directory"),
+        error.contains("climbs out of the base directory")
+            || error.contains("is not under the base directory"),
         "{error}"
     );
 
@@ -109,8 +112,9 @@ fn an_unreadable_input_is_reported() {
 #[test]
 fn gzip_and_gunzip_report_input_they_cannot_read() {
     let dir = scratch("gzip");
+    // Reading the directory fails, or on Windows opening it does.
     let error = pack::gzip(&dir, &dir.join("dir.gz")).expect_err("a directory has no bytes");
-    assert!(error.contains("dir.gz"), "{error}");
+    assert!(error.contains(&dir.display().to_string()), "{error}");
 
     write(&dir.join("plain.txt"), "not gzip at all");
     let back = dir.join("plain.back");
