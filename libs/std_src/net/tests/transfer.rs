@@ -467,3 +467,39 @@ fn a_cancel_ends_a_transfer_waiting_on_a_quiet_server() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A request reads its reply into memory: a header the server sent twice
+/// comes back as one, its values joined; a method no request can carry, and a
+/// body past `max_bytes`, fail it with the URL named.
+#[test]
+fn a_request_joins_repeated_headers_and_refuses_what_it_cannot_send_or_hold() {
+    let server = TestServer::start();
+    let none = Limits {
+        timeout_ms: None,
+        max_bytes: None,
+    };
+    let url = server.url("/twice");
+    let reply = transfer::fetch(&url, "get", &[], "", &none, &Control::default())
+        .expect("the reply arrives");
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.body, "ok");
+    let twice: Vec<_> = reply
+        .headers
+        .iter()
+        .filter(|(n, _)| n == "x-twice")
+        .collect();
+    assert_eq!(twice, [&("x-twice".to_owned(), "a, b".to_owned())]);
+
+    let error = transfer::fetch(&url, "NO SPACES", &[], "", &none, &Control::default())
+        .expect_err("a method with a space is no method");
+    assert!(error.contains(&url), "{error}");
+
+    let small = Limits {
+        timeout_ms: None,
+        max_bytes: Some(4),
+    };
+    let fixed = server.url("/fixed");
+    let error = transfer::fetch(&fixed, "GET", &[], "", &small, &Control::default())
+        .expect_err("a body past the cap is refused");
+    assert!(error.contains(&fixed), "{error}");
+}

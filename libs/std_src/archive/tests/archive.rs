@@ -164,3 +164,65 @@ fn main() {{}}
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A job started while the cap's worth are running fails at once and names
+/// the limit; once a slot frees, the next one runs. A cap below one counts as
+/// one. The held job reads from a FIFO, so it runs until the test writes.
+#[cfg(unix)]
+#[test]
+fn a_job_past_the_cap_fails_until_a_slot_frees() {
+    let dir = scratch("archive-cap");
+    let libs = stage(&["archive"], &dir);
+    let fifo = dir.join("held");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    std::fs::write(dir.join("a.txt"), "alpha").unwrap();
+    let program = format!(
+        r#"
+import "std/archive";
+
+host "test" {{
+    fn seen(text: string);
+}}
+
+fn report(what: string, e: archive::Event) {{
+    match e {{
+        Done(dest, files) => test::seen(what + " " + string(files)),
+        Failed(why) => test::seen(what + " failed " + why),
+    }}
+}}
+
+fn start() {{
+    archive::set_max_concurrent(0);
+    archive::gzip("{d}/held", "{d}/held.gz") fn(e) {{
+        report("held", e);
+        archive::gzip("{d}/a.txt", "{d}/after.gz") fn(e) {{ report("after", e); }};
+    }};
+    archive::gzip("{d}/a.txt", "{d}/past.gz") fn(e) {{ report("past", e); }};
+}}
+
+fn main() {{}}
+"#,
+        d = slashes(&dir),
+    );
+    let released = std::cell::Cell::new(false);
+    let seen = run(&libs, &dir, &program, |seen| {
+        if !released.get() && seen.iter().any(|s| s.starts_with("past ")) {
+            // Opening the write end lets the held job's read go on; closing
+            // it ends the input.
+            std::fs::write(&fifo, "held input").unwrap();
+            released.set(true);
+        }
+        seen.len() == 3
+    });
+    assert_eq!(
+        seen[0],
+        "past failed 1 archive jobs are already running, which is the limit; raise it with \
+         archive::set_max_concurrent or wait for one to finish"
+    );
+    assert_eq!(&seen[1..], ["held 1", "after 1"]);
+    std::fs::remove_dir_all(&dir).ok();
+}

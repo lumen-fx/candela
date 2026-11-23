@@ -38,7 +38,8 @@ impl TestServer {
     /// and the request body), `/fixed` (a body with `Content-Length`), `/nolength` (a body
     /// the closed connection delimits), `/drip` (the same body in pieces, with
     /// pauses), `/stall` (the first piece of the body, then [`STALL`] of
-    /// silence), `/mismatch` (a different body), and `/missing` (404).
+    /// silence), `/mismatch` (a different body), `/twice` (a body with the
+    /// header `X-Twice` sent twice), and `/missing` (404).
     /// Anything else is a 404 too.
     #[must_use]
     pub fn start() -> Self {
@@ -135,6 +136,9 @@ fn serve(mut stream: TcpStream) {
     let _ = match path.as_str() {
         "/fixed" => sized(&mut stream, BODY),
         "/mismatch" => sized(&mut stream, OTHER_BODY),
+        "/twice" => stream.write_all(
+            b"HTTP/1.1 200 OK\r\nX-Twice: a\r\nX-Twice: b\r\nContent-Length: 2\r\n\r\nok",
+        ),
         "/nolength" => {
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
             stream.write_all(BODY)

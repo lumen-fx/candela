@@ -315,6 +315,8 @@ fn a_staged_app_carries_only_the_libraries_it_binds() {
         &format!("candela-vm{exe}"),
     );
     std::fs::copy(&vm, install.join(format!("candela-vm{exe}"))).unwrap();
+    std::fs::write(install.join("LICENSE"), "the license").unwrap();
+    std::fs::write(install.join("NOTICE"), "the notice").unwrap();
     write_child_program(&dir);
 
     let run_fresh = |command: &mut Command, what: &str| {
@@ -352,6 +354,14 @@ fn a_staged_app_carries_only_the_libraries_it_binds() {
             .is_file()
     );
     assert!(!app.join("libs/std_src/net").exists());
+    // The license files beside the toolchain go with it; one it lacks is not
+    // made up.
+    assert_eq!(
+        std::fs::read_to_string(app.join("LICENSE")).unwrap(),
+        "the license"
+    );
+    assert!(app.join("NOTICE").is_file());
+    assert!(!app.join("THIRD-PARTY-LICENSE").exists());
 
     let mut command = Command::new(app.join(format!("candela-vm{exe}")));
     command
@@ -367,6 +377,91 @@ fn a_staged_app_carries_only_the_libraries_it_binds() {
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n"),
         "main is done\nout one\nout two\nexit 3\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `candela build` says what stops it: a flag missing its value is a misuse,
+/// and an output or a stage directory it cannot write, or a toolchain with no
+/// `candela-vm` to stage, fails and names the path. `--debug` and
+/// `--offline` build as asked.
+#[test]
+fn a_build_names_what_it_cannot_write_or_stage() {
+    let dir = scratch("build_failures");
+    let libs = dir.join("libs");
+    std::fs::create_dir_all(&libs).unwrap();
+    std::fs::write(dir.join("app.cdl"), "fn main() {\n    print(\"hi\");\n}\n").unwrap();
+    let stderr = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).into_owned();
+
+    let out = candela(
+        &dir,
+        &libs,
+        &[
+            "build",
+            "app.cdl",
+            "--debug",
+            "--offline",
+            "-o",
+            "debug.cdlb",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(dir.join("debug.cdlb").is_file());
+
+    let out = candela(&dir, &libs, &["build", "app.cdl", "--stage"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--stage needs the directory"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = candela(&dir, &libs, &["build", "app.cdl", "-o", "missing/app.cdlb"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot write missing/app.cdlb"),
+        "{}",
+        stderr(&out)
+    );
+
+    std::fs::write(dir.join("blocker"), "").unwrap();
+    let out = candela(&dir, &libs, &["build", "app.cdl", "--stage", "blocker/app"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot create blocker"),
+        "{}",
+        stderr(&out)
+    );
+
+    // A candela on its own, with no candela-vm beside it.
+    let alone = dir.join("alone");
+    std::fs::create_dir_all(&alone).unwrap();
+    let exe = std::env::consts::EXE_SUFFIX;
+    let candela_bin = alone.join(format!("candela{exe}"));
+    std::fs::copy(env!("CARGO_BIN_EXE_candela"), &candela_bin).unwrap();
+    let mut attempt = 0;
+    let out = loop {
+        let mut build = Command::new(&candela_bin);
+        build
+            .args(["build", "app.cdl", "--stage", "staged"])
+            .current_dir(&dir)
+            .env("CANDELA_LIB_PATH", &libs);
+        // A copied binary can be briefly unexecutable while a sibling test's
+        // child still holds the write handle ("text file busy").
+        match common::try_output_with_deadline(&mut build, "candela build --stage") {
+            Ok(output) => break output,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => panic!("candela build --stage: {e}"),
+        }
+    };
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!("there is no candela-vm{exe} beside")),
+        "{}",
+        stderr(&out)
     );
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -1011,6 +1011,7 @@ mod tests {
         assert_eq!(Ty::parse("int | string"), Ty::Unknown);
         assert_eq!(Ty::parse("Vec2?"), named("Vec2"));
         assert_eq!(Ty::parse("(int)"), named("int"));
+        assert_eq!(Ty::parse("()"), named("()"));
         assert_eq!(Ty::parse("Cell<int, (A, B)>"), named("Cell<int, (A, B)>"));
         assert_eq!(Ty::parse("Cell<int"), named("Cell<int>"));
         assert_eq!(Ty::parse("!"), Ty::Unknown);

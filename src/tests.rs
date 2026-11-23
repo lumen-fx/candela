@@ -16483,6 +16483,16 @@ fn main() {
             "argument_missing",
         ),
         ("fn main() { print(x: 1); }", "named_argument_unexpected"),
+        // Short of a parameter with no default, and past the last one with a
+        // name besides: the count is what is wrong.
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f()); }",
+            "arity_mismatch",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, 2, 3, b: 4)); }",
+            "arity_mismatch",
+        ),
         (
             "host \"app\" { int rows(string); }\nfn main() {}",
             "old_host_signature",
@@ -16491,6 +16501,24 @@ fn main() {
         let d = compile_diag(src, "named.cdl").unwrap_err();
         assert_wellformed(&d, src);
         assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+    // A function of no parameters says so, to a name and to a closure.
+    for (src, code, says) in [
+        (
+            "fn g() -> int => 1;\nfn main() { print(g(x: 1)); }",
+            "named_argument_unknown",
+            "Its parameters are none",
+        ),
+        (
+            "fn g() -> int => 1;\nfn main() { print(g() fn(x) => x); }",
+            "trailing_closure_extra",
+            "g takes no arguments",
+        ),
+    ] {
+        let d = compile_diag(src, "none.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert!(format!("{d:?}").contains(says), "{src}: {d:?}");
     }
     let src = "dylib \"z\" { string version(int, float[]); }\nfn main() {}";
     let d = compile_diag(src, "old.cdl").unwrap_err();

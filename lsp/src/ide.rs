@@ -1802,6 +1802,58 @@ fn reset(birds: (Bird, Transform)[], game: Game, state: State<Phase>) {
         assert_eq!(got, vec!["system"]);
     }
 
+    /// The item an attribute goes on is the next declaration after the
+    /// cursor, past any other attribute's arguments: an `enum`, an `impl` or
+    /// a `const` offers only what goes on that kind.
+    #[test]
+    fn attribute_names_fit_the_next_declaration() {
+        let got = labels(
+            "@component(requires: [Transform]) struct Pipe",
+            "@$0 @component(requires: [Transform]) struct Pipe",
+        );
+        assert_eq!(got, vec!["component", "resource"]);
+        let got = labels("@state\nenum Phase", "@$0\nenum Phase");
+        assert_eq!(got, vec!["state"]);
+        let got = labels("impl Vec2 {", "@$0\nimpl Vec2 {");
+        assert!(got.is_empty(), "{got:?}");
+        let got = labels("enum Mood", "@$0\nconst LIMIT: int = 3;\nenum Mood");
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// A skeleton at the top level starts the first top-level kind an
+    /// attribute goes on; one that goes only on parts of a declaration gets
+    /// none.
+    #[test]
+    fn attribute_skeletons_for_constants_and_impl_blocks() {
+        let source = "host \"meta\" {\n    attribute limit on const;\n    attribute block on impl;\n    attribute part on field, param;\n}\n\n";
+        let outcome = analyze(source, "meta.cdl", &ImportResolver::new());
+        assert!(
+            outcome.errors.is_empty(),
+            "{:?}",
+            outcome.errors.first().map(|d| d.message.clone())
+        );
+        let s = outcome.summary.expect("the host block compiles");
+        let items = Ide::new(source, &s, source.len()).completions();
+        let skeleton = |label: &str| {
+            items
+                .iter()
+                .find(|i| i.label == label)
+                .and_then(|i| i.insert_text.clone())
+        };
+        assert_eq!(
+            skeleton("@limit const").as_deref(),
+            Some("@limit\nconst ${1:NAME}: int = $0;")
+        );
+        assert_eq!(
+            skeleton("@block impl").as_deref(),
+            Some("@block\nimpl ${1:Type} {\n\t$0\n}")
+        );
+        assert!(
+            !items.iter().any(|i| i.label.starts_with("@part")),
+            "a part's attribute has no skeleton"
+        );
+    }
+
     #[test]
     fn attribute_parameters_leave_out_the_written_ones() {
         let got = labels("@system(run_if: [ready])", "@system(run_if: [ready], $0)");

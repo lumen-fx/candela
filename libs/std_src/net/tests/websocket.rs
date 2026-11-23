@@ -111,6 +111,11 @@ fn a_connection_that_never_opens_reports_an_error_and_a_close() {
     );
     assert!(seen.iter().any(|s| s.starts_with("error ")), "{seen:?}");
     assert_eq!(seen.last().map(String::as_str), Some("close 1006"));
+
+    // A URL of no scheme a socket speaks never starts a connection at all.
+    let seen = run(&libs, &dir, &program("ftp://127.0.0.1/"), closed);
+    assert!(seen.iter().any(|s| s.starts_with("error ")), "{seen:?}");
+    assert_eq!(seen.last().map(String::as_str), Some("close 1006"));
     std::fs::remove_dir_all(&dir).ok();
 }
 

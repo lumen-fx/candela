@@ -1292,6 +1292,56 @@ mod tests {
     /// diagnostic: a user enum reads by the name it was declared under, at the
     /// top level and inside a list or a map. The server used to render every
     /// enum as the bare word `enum`, because it had a renderer of its own.
+    /// A parameter's default shows as written, its spacing collapsed; a
+    /// variant with named fields shows them by name; and an attribute on a
+    /// method, a field or a parameter is recorded as on neither a function,
+    /// a struct nor an enum.
+    #[test]
+    fn defaults_named_variant_fields_and_attributes_on_parts_are_summarized() {
+        let source = "host \"meta\" {\n    attribute note on method, field, param;\n}\n\
+                      enum Shape { Dot, Circle { r: float }, Pair(int, int) }\n\
+                      struct P { @note x: int }\n\
+                      impl P {\n    @note fn at(self, @note k: int) -> int => self.x * k;\n}\n\
+                      fn window(w: int, xs: int[] = [1,   2], title: string = \"t\") -> int => w;\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        assert!(
+            outcome.errors.is_empty(),
+            "{:?}",
+            outcome.errors.first().map(|d| d.message.clone())
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let window = summary
+            .own_functions()
+            .find(|f| f.name == "window")
+            .expect("the function is in the outline");
+        assert_eq!(
+            window.header(),
+            "fn window(w: int, xs: int[] = [1, 2], title: string = \"t\") -> int"
+        );
+        let shape = summary
+            .enums
+            .iter()
+            .find(|e| e.name == "Shape")
+            .expect("the enum is in the summary");
+        let shapes: Vec<String> = shape
+            .variants
+            .iter()
+            .map(super::VariantSymbol::shape)
+            .collect();
+        assert_eq!(shapes, ["", " { r: float }", "(int, int)"]);
+        let notes: Vec<&super::UseOn> = summary
+            .attribute_uses
+            .iter()
+            .filter(|u| u.name == "note")
+            .map(|u| &u.on)
+            .collect();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(
+            notes.iter().all(|on| matches!(on, super::UseOn::Other)),
+            "{notes:?}"
+        );
+    }
+
     #[test]
     fn hover_names_an_enum_typed_parameter() {
         let source = "enum Value { Num(int), Text(string) }\n\

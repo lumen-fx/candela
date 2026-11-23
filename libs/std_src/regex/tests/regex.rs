@@ -42,3 +42,38 @@ fn main() {}
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// More distinct patterns than the library keeps compiled still answer, and
+/// a `Regex` written out by hand with a pattern the engine refuses leaves the
+/// text whole rather than raising.
+#[test]
+fn many_patterns_and_a_refused_one_still_answer() {
+    let dir = scratch("regex-many");
+    let libs = stage(&["regex"], &dir);
+    let program = r#"
+import "std/regex";
+
+host "test" {
+    fn seen(text: string);
+}
+
+fn start() {
+    let matched = 0;
+    for i in 0..300 {
+        let re = regex::compile("x" + string(i) + "y").unwrap();
+        if re.is_match("ax" + string(i) + "yb") {
+            matched += 1;
+        }
+    }
+    test::seen(string(matched));
+    let broken = regex::Regex { pattern: "(" };
+    test::seen(broken.replace_all("a(b", "-"));
+    test::seen(string(broken.split("a(b")));
+}
+
+fn main() {}
+"#;
+    let seen = run(&libs, &dir, program, |seen| seen.len() == 3);
+    assert_eq!(seen, ["300", "a(b", "[\"a(b\"]"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
