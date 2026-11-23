@@ -47,23 +47,44 @@ variable hold either type (`let id: int | string = 7;`), and `any` lets it hold
 anything. A dynamic value, such as what `json::parse` returns, goes into a
 declared variable through a downcast: `let n: int = v as int;`.
 
-## Taking a tuple apart
+## Taking a value apart
 
-A `let` with a pattern in parentheses declares one variable for each element of
-a [tuple](types.md#tuples), in order. `_` skips an element, and a pattern in
-parentheses takes apart a tuple inside the tuple.
+A `let` with a [pattern](control-flow.md#patterns) declares one variable for
+each name the pattern binds. A tuple goes into a pattern in parentheses, a
+struct into one with braces; `_` skips a place.
 
 ```rust
+struct Point { x: int, y: int }
+
 fn main() {
     let (name, age) = ("Ada", 36);
     let ((x, y), _) = ((3, 4), "label");
-    print(name, age, x + y);
+    let Point { x: px, .. } = Point { x: 7, y: 8 };
+    print(name, age, x + y, px);
 }
 ```
 
-The pattern has to have one place for each element of the value: a pair goes
-into `(a, b)`, not into `(a, b, c)` or `(a, (b, c))`. Write `: Type` after the
-pattern to declare the tuple's type, as in `let (x, y): (int, int) = p;`.
+The pattern has to fit every value of the value's type: a pair goes into
+`(a, b)`, not into `(a, b, c)` or `(a, (b, c))`. Write `: Type` after the
+pattern to declare the value's type, as in `let (x, y): (int, int) = p;`.
+
+A pattern that can fail, such as a variant, takes an `else` block that runs
+when it does not fit. The block has to leave, through `return`, `throw`,
+`break` or `continue`, so the names the pattern binds are always in scope after
+it.
+
+```rust
+fn double(m: {string: int}, key: string) -> int {
+    let Some(n) = m.get(key) else {
+        return 0;
+    };
+    return n * 2;
+}
+
+fn main() {
+    print(double({"a": 4}, "a"), double({"a": 4}, "b"));
+}
+```
 
 ## Constants
 
@@ -81,7 +102,7 @@ fn main() {
 ```
 
 A constant is read by its bare name anywhere in the file, and in files that
-import it by name or with `{ * }`. The value is checked against the declared
+import it by name. The value is checked against the declared
 type. Each read computes the value from its expression again, so a constant
 holding a struct or a list hands each reader a value of its own: changing what
 one read gave changes nothing else. Keep a constant's expression to values that

@@ -9,7 +9,7 @@ struct Cell<T> {
     value: T,
 }
 
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T {
         return self.value;
     }
@@ -169,11 +169,13 @@ fn main() {
 An `impl` block on a generic type names type arguments in its header, and there
 are two kinds.
 
-A block that introduces a parameter applies to every instantiation and binds the
-parameter for its methods:
+A block that declares a parameter after `impl` applies to every instantiation
+and binds the parameter for its methods. Each parameter it declares is one of
+the type's arguments, and a name in the header that is neither declared nor a
+type is a compile error that suggests the declaration:
 
 ```rust
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T {
         return self.value;
     }
@@ -197,7 +199,7 @@ impl Signal<float> {
 }
 ```
 
-A function in the block that declares no parameters is called by the
+A function in the block whose first parameter is not `self` is called by the
 instantiation's path, which is how a generic type gets a constructor:
 
 ```rust
@@ -205,7 +207,7 @@ struct Stack<T> {
     items: T[],
 }
 
-impl Stack<T> {
+impl<T> Stack<T> {
     fn new() -> Stack<T> {
         return Stack<T>{ items: [] };
     }
@@ -241,7 +243,7 @@ struct Store<T> {
     seed: T,
 }
 
-impl Store<T> {
+impl<T> Store<T> {
     fn tagged<U>(self, extra: U) -> U {
         return extra;
     }
@@ -278,7 +280,7 @@ impl Kind<string> {
     }
 }
 
-impl Store<T> {
+impl<T> Store<T> {
     fn name_of<U>(self) -> string {
         return Kind<U>{ n: 0 }.name();
     }

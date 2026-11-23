@@ -19,6 +19,7 @@ use crate::compiler::compiler_errors::check_args_range;
 use crate::compiler::compiler_errors::error_unknown_or_uncallable;
 use crate::instr::Instr;
 use crate::instr::LibFunc;
+use crate::instr::LibFuncVoid;
 use smol_strc::SmolStr;
 
 /// Compiles an argument on its way to text. A function called only by its name
@@ -112,6 +113,17 @@ pub fn builtin_functions(
                 let id = compile_text_arg(arg, v, ctx, state, output);
                 output.push(Instr::Print(id));
                 state.free_reg(id, v);
+            }
+            None
+        }
+        "eprint" => {
+            for arg in args {
+                let id = compile_text_arg(arg, v, ctx, state, output);
+                state.free_reg(id, v);
+                let text = state.alloc_reg();
+                output.push(Instr::CallLibFunc(LibFunc::Str, id, text));
+                output.push(Instr::CallLibFuncVoid(LibFuncVoid::Eprint, text, 0));
+                state.free_reg(text, v);
             }
             None
         }
@@ -227,41 +239,6 @@ pub fn builtin_functions(
             state.free_reg(id, v);
             let output_id = state.alloc_reg_tgt(tgt_id);
             output.push(Instr::CallLibFunc(LibFunc::Input, id, output_id));
-            Some(output_id)
-        }
-        "range" => {
-            check_args_range(
-                args,
-                1,
-                2,
-                name,
-                args_indexes,
-                ctx.file_idx,
-                state.sources,
-                span,
-            );
-            check_arg_type(name, v, ctx, state, args, args_indexes, 0, &[DataType::Int]);
-            if args.len() != 1 {
-                check_arg_type(name, v, ctx, state, args, args_indexes, 1, &[DataType::Int]);
-            }
-
-            let id_first_arg = args[0]
-                .compile(v, ctx, state, output, None, false, true)
-                .unwrap_id();
-            let source_reg_id = if args.len() == 1 {
-                id_first_arg
-            } else {
-                let id_second_arg = args[1]
-                    .compile(v, ctx, state, output, None, false, true)
-                    .unwrap_id();
-                output.push(Instr::StoreFuncArg(id_first_arg));
-                *state.allocated_arg_count += 1;
-                id_second_arg
-            };
-            state.free_reg(id_first_arg, v);
-            state.free_reg(source_reg_id, v);
-            let output_id = state.alloc_reg_tgt(tgt_id);
-            output.push(Instr::CallLibFunc(LibFunc::Range, source_reg_id, output_id));
             Some(output_id)
         }
         // The text tests `s.parse<T>()` lowers to; see `methods::parse_call`.
@@ -400,6 +377,7 @@ pub fn builtin_functions(
                     args,
                     span,
                     args_indexes,
+                    false,
                     v,
                     ctx,
                     state,

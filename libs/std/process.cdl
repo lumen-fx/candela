@@ -1,0 +1,113 @@
+/// Running another program.
+///
+/// `start` starts a program and answers a `Child` at once. Everything after
+/// that arrives as an `Event` passed to the function given to `start`: each
+/// line the program writes, then how it ended. The exit is always the last
+/// event, and a program that could not start reports `Failed` instead.
+///
+///     import "std/process";
+///
+///     fn main() {
+///         process::start("git", ["status", "--short"]) fn(e) {
+///             match e {
+///                 Stdout(line) => print(line),
+///                 Stderr(line) => eprint(line),
+///                 Exit(code) => print("exit " + string(code)),
+///                 Failed(why) => eprint(why),
+///             }
+///         };
+///     }
+///
+/// The program keeps running after `main` returns until every program it
+/// started has ended and its events have been handled; `event::wait` with the
+/// child's `id` waits for one of them before `main` goes on. A browser has no
+/// programs to start, so this module does not run there.
+
+import "std/event";
+import "std/json";
+
+dylib "../std_src/process/process" {
+    fn candela_process_start(id: int, cmd: string, args: string[], arg_count: int, cwd: string, env_json: string, end_at_exit: int, stdin: int);
+    fn candela_process_stop(handle: int) -> int;
+    fn candela_process_write(handle: int, text: string) -> int;
+    fn candela_process_close_input(handle: int) -> int;
+}
+
+/// What a started program reports.
+enum Event {
+    /// One line it wrote to stdout, without the newline.
+    Stdout(string),
+    /// One line it wrote to stderr, without the newline.
+    Stderr(string),
+    /// It ended, with its exit code, or 128 plus the signal that ended it.
+    Exit(int),
+    /// It could not be started; the message says why.
+    Failed(string),
+}
+
+/// A program `start` started.
+struct Child {
+    /// The event source its events arrive under, for `event::wait`.
+    id: int,
+}
+
+impl Child {
+    /// Ends the program, and every program it started. On Linux and macOS it
+    /// is asked to end first and killed two seconds later if it has not; on
+    /// Windows it ends at once. Its `Exit` still arrives last. False when it
+    /// had already ended.
+    fn stop(self) -> bool => process::candela_process_stop(self.id) == 1;
+
+    /// Writes `text` to the program's stdin, as it is: add the `\n` a
+    /// line-reading program waits for. Needs the program started with
+    /// `stdin: true`. False when its stdin is not open.
+    fn write(self, text: string) -> bool => process::candela_process_write(self.id, text) == 1;
+
+    /// Closes the program's stdin, so it reads end of file, which is how a
+    /// program that reads to the end knows the input is over. False when it
+    /// was not open.
+    fn close_input(self) -> bool => process::candela_process_close_input(self.id) == 1;
+}
+
+/// Starts `cmd` with `args` and answers the `Child`. A `cmd` with a path
+/// separator in it is a path; a bare name is looked up on `PATH`. The program
+/// starts in `cwd`, or the base directory the host set, or the working
+/// directory when `cwd` is empty, with `env` set on top of the environment it
+/// inherits. With `end_at_exit` it ends when this program exits instead of
+/// running on. With `stdin` it gets a pipe for its input that `Child::write`
+/// writes to; without, it reads end of file. `on_event` receives every line
+/// the program writes and then its exit.
+fn start(
+    cmd: string,
+    args: string[] = [],
+    cwd: string = "",
+    env: {string: string} = {},
+    end_at_exit: bool = false,
+    stdin: bool = false,
+    on_event: fn(Event),
+) -> Child {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    let end = if end_at_exit { 1 } else { 0 };
+    let input = if stdin { 1 } else { 0 };
+    process::candela_process_start(id, cmd, args, args.len(), cwd, json::stringify(env), end, input);
+    return Child { id };
+}
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload).unwrap() as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "stdout" {
+        return Stdout(fields["line"] as string);
+    }
+    if kind == "stderr" {
+        return Stderr(fields["line"] as string);
+    }
+    if kind == "exit" {
+        return Exit(fields["code"] as int);
+    }
+    return Failed(fields["message"] as string);
+}

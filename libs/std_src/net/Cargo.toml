@@ -1,0 +1,38 @@
+# The native library behind `std/http` and `std/websocket`: HTTP transfers
+# streamed to a file, and WebSocket connections, each on a thread of its own,
+# reporting through the program's event queue. One TLS stack, rustls with the
+# Mozilla root set, serves both. The release job ships it as
+# libs/std_src/net/net.<ext>, the path both modules' `dylib` blocks name.
+[package]
+name = "candela-std-net"
+# Never published: it ships inside the toolchain archive.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native library behind candela's std/http and std/websocket."
+
+[lib]
+name = "candela_std_net"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candela-std-sys = { path = "../sys" }
+serde_json = "1"
+# HTTP with TLS through rustls and the Mozilla root set.
+ureq = "3"
+sha1 = "0.11"
+sha2 = "0.11"
+tungstenite = { version = "0.30", default-features = false, features = [
+    "handshake",
+    "__rustls-tls",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "ring",
+] }
+webpki-roots = "1"
+
+[dev-dependencies]
+candela-std-testkit = { path = "../testkit" }

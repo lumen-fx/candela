@@ -1,0 +1,172 @@
+/// Text as bytes and bytes as text: UTF-8, hex, base64, and the percent
+/// encoding URLs use.
+///
+/// Bytes are an `int[]`, each element 0 to 255, the way `fs::read_bytes`
+/// answers them.
+///
+///     import "std/encoding";
+///     fn main() {
+///         let bytes = encoding::utf8("hi");
+///         print(encoding::hex(bytes));
+///         print(encoding::base64(bytes));
+///         print(encoding::url_encode("a b&c"));
+///     }
+
+const HEX_DIGITS: string = "0123456789abcdef";
+const BASE64_DIGITS: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// The UTF-8 bytes of `s`.
+fn utf8(s: string) -> int[] => utf8_bytes(s);
+
+/// The text the UTF-8 `bytes` spell. Bytes that are not UTF-8, or an element
+/// that is not a byte, answer `encoding_invalid_utf8`.
+fn from_utf8(bytes: int[]) -> string!string {
+    try {
+        return Ok(utf8_text(bytes));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// `bytes` as lowercase hex, two digits a byte.
+fn hex(bytes: int[]) -> string {
+    let out: string[] = [];
+    for b in bytes {
+        out.push(HEX_DIGITS.char_at((b >> 4) & 15));
+        out.push(HEX_DIGITS.char_at(b & 15));
+    }
+    return out.join("");
+}
+
+/// The value of one hex digit, either case, or -1.
+fn hex_value(c: string) -> int => HEX_DIGITS.index_of(c.lowercase()) else -1;
+
+/// The bytes the hex `text` spells, two digits a byte, either case. An odd
+/// length or a character that is no hex digit answers `encoding_invalid_hex`.
+fn from_hex(text: string) -> int[]!string {
+    if text.len() % 2 != 0 {
+        return Err("encoding_invalid_hex");
+    }
+    let digits = text.chars();
+    let out: int[] = [];
+    let i = 0;
+    while i < digits.len() {
+        let high = hex_value(digits[i]);
+        let low = hex_value(digits[i + 1]);
+        if high < 0 || low < 0 {
+            return Err("encoding_invalid_hex");
+        }
+        out.push(high * 16 + low);
+        i += 2;
+    }
+    return Ok(out);
+}
+
+/// `bytes` in standard base64, padded with `=`.
+fn base64(bytes: int[]) -> string {
+    let out: string[] = [];
+    let i = 0;
+    while i < bytes.len() {
+        let left = bytes.len() - i;
+        let b0 = bytes[i];
+        let b1 = if left > 1 { bytes[i + 1] } else { 0 };
+        let b2 = if left > 2 { bytes[i + 2] } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(BASE64_DIGITS.char_at((n >> 18) & 63));
+        out.push(BASE64_DIGITS.char_at((n >> 12) & 63));
+        out.push(if left > 1 { BASE64_DIGITS.char_at((n >> 6) & 63) } else { "=" });
+        out.push(if left > 2 { BASE64_DIGITS.char_at(n & 63) } else { "=" });
+        i += 3;
+    }
+    return out.join("");
+}
+
+/// The bytes the base64 `text` spells, standard or URL alphabet, with or
+/// without `=` padding. Anything else answers `encoding_invalid_base64`.
+fn from_base64(text: string) -> int[]!string {
+    let values: int[] = [];
+    for c in text.chars() {
+        if c == "=" {
+            continue;
+        }
+        let d = if c == "-" { "+" } else if c == "_" { "/" } else { c };
+        match BASE64_DIGITS.index_of(d) {
+            Some(v) => values.push(v),
+            None => {
+                return Err("encoding_invalid_base64");
+            }
+        }
+    }
+    if values.len() % 4 == 1 {
+        return Err("encoding_invalid_base64");
+    }
+    let out: int[] = [];
+    let i = 0;
+    while i < values.len() {
+        let left = values.len() - i;
+        let n = values[i] << 18;
+        n = n | (values[i + 1] << 12);
+        if left > 2 {
+            n = n | (values[i + 2] << 6);
+        }
+        if left > 3 {
+            n = n | values[i + 3];
+        }
+        out.push((n >> 16) & 255);
+        if left > 2 {
+            out.push((n >> 8) & 255);
+        }
+        if left > 3 {
+            out.push(n & 255);
+        }
+        i += 4;
+    }
+    return Ok(out);
+}
+
+/// `s` with every byte outside the unreserved set (letters, digits, `-`, `.`,
+/// `_`, `~`) written as `%XX`, for a URL's path segment or query value.
+fn url_encode(s: string) -> string {
+    let out: string[] = [];
+    for b in utf8(s) {
+        let unreserved = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+            || b == 45 || b == 46 || b == 95 || b == 126;
+        if unreserved {
+            out.push(utf8_text([b]));
+        } else {
+            out.push("%" + hex([b]).uppercase());
+        }
+    }
+    return out.join("");
+}
+
+/// `s` with each `%XX` turned back into its byte, and `+` into a space, as a
+/// query string writes one. A `%` not followed by two hex digits, or bytes
+/// that are not UTF-8, answer `encoding_invalid_url`.
+fn url_decode(s: string) -> string!string {
+    let input = utf8(s);
+    let out: int[] = [];
+    let i = 0;
+    while i < input.len() {
+        let b = input[i];
+        if b == 37 {
+            if i + 2 >= input.len() {
+                return Err("encoding_invalid_url");
+            }
+            let high = hex_value(utf8_text([input[i + 1]]));
+            let low = hex_value(utf8_text([input[i + 2]]));
+            if high < 0 || low < 0 {
+                return Err("encoding_invalid_url");
+            }
+            out.push(high * 16 + low);
+            i += 3;
+        } else {
+            out.push(if b == 43 { 32 } else { b });
+            i += 1;
+        }
+    }
+    let text = from_utf8(out) else {
+        return Err("encoding_invalid_url");
+    };
+    return Ok(text);
+}

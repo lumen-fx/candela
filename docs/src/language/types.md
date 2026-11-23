@@ -12,7 +12,7 @@ up before it runs.
 | Floating point | `float` | `1.5`, `0.0`, `-2.75` |
 | String | `string` | `"hello"`, `""` |
 | Boolean | `bool` | `true`, `false` |
-| Absent value | `null` | `null` |
+| No value | `()` | `()` |
 | List | `T[]` | `[1, 2, 3]` |
 | Map | `{K: V}` | `{"a": 1}` |
 | Tuple | `(A, B)` | `(1, "a")` |
@@ -64,7 +64,8 @@ reads `any` however the program later fills it.
 
 `value is T` answers whether the value is a `T`, as a `bool`. `T` is any type
 an annotation can name: `int`, a struct, an enum, `int[]`, `{string: any}`, a
-union, or a generic type with its arguments, such as `Option<int>`. A list or a
+union, or a generic type with its arguments, such as `Option<int>` or its
+shorthand `int?`. A list or a
 map is checked down to what it holds, so a list of `any` passes `is int[]` only
 when every element is an `int`.
 
@@ -72,7 +73,7 @@ when every element is an `int`.
 import "std/json";
 
 fn main() {
-    let v = json::parse("[1, 2, 3]");
+    let v = json::parse("[1, 2, 3]")?;
     print(v is int[], v is string[], v is any[]);
 }
 ```
@@ -80,7 +81,7 @@ fn main() {
 Where the static type already answers the test, it costs nothing to run. A
 test for a type the value can never have answers `false`: a function compiles
 once for each type its callers pass, and the test is how one body serves them
-all. `null` is a value rather than a type, so test for it with `value == null`.
+all. `()` has one value, so test for it with `value == ()`.
 
 Inside the body of an `if` or a `while` whose condition is `v is T`, the
 variable `v` has the type `T`, and so does every use of it to the right of an
@@ -139,7 +140,7 @@ fn port(cfg: {string: any}) -> int {
 }
 
 fn main() {
-    let cfg = json::parse("{\"port\": 80}") as {string: any};
+    let cfg = json::parse("{\"port\": 80}")? as {string: any};
     print(port(cfg));
 }
 ```
@@ -254,19 +255,41 @@ fn main() {
 }
 ```
 
-## null
+## No value: ()
 
-`null` is the value of an expression that has nothing to return, such as a
-function that returns without a value. It is its own type: no other type accepts
-it, so a variable is never implicitly empty. Test for it with `value == null`.
+`()` is the type of no value, and `()` is its one value. A function that
+returns without a value returns `()`, and a call that succeeds with nothing to
+hand back answers `Ok(())`, a `()!string`: `fs::write` does, so a caller can
+pass its failure on with `?` and has no value to ignore when it works.
 
-`null` is a value you write in code, never a type you write in an annotation:
-`x: null`, `-> null` and `int|null` are all rejected. A function that returns
-nothing leaves its return annotation off.
+```rust
+fn save(name: string) -> ()!string {
+    if name == "" {
+        return Err("no name");
+    }
+    return Ok(());
+}
 
-`print(null)` prints `null`. `null` stands for "no value was returned" and
-nothing else: a value that may be absent is an `Option`, which the lookups that
-may find nothing (`m.get(k)`, `xs.first()`) answer, and which needs no import.
+fn main() {
+    match save("notes") {
+        Ok(()) => print("saved"),
+        Err(e) => print(e),
+    }
+    print(save("") else ());
+}
+```
+
+`()` is no tuple: a tuple holds two values or more, and `()` holds none. No
+other type accepts it, so a variable is never implicitly empty. A function that
+returns nothing may write `-> ()` or leave its return annotation off.
+
+At run time `()` is the value a host knows as `null`, which candela code may
+write too, and `print(())` prints `null`. It stands for "no value was
+returned", and for the empty value a host passes in an `any`, and nothing
+else: a value that may be absent is an
+[`Option`](../standard-library/option.md), written `T?`, which the lookups
+that may find nothing (`m.get(k)`, `xs.first()`) answer, and which needs no
+import.
 
 ## Where you write a type
 
@@ -275,9 +298,11 @@ blocks that declare foreign functions, and, where you want them, function
 parameters, return types and `let` declarations. The type grammar is the same in
 all of them.
 
-- `int`, `float`, `bool`, `string`: the built-in types. `null` is not among
-  them; see [null](#null).
+- `int`, `float`, `bool`, `string`: the built-in types.
+- `()`: the type of no value; see [No value](#no-value).
 - `T[]`: a list of `T`, for example `string[]` or `int[][]`.
+- `T?`: a `T` that may be absent, the same type as `Option<T>`. `int?[]` is a
+  list of options, `int[]?` an optional list.
 - `{K: V}`: a map from `K` to `V`, for example `{string: int}`.
 - A struct or enum name: that type.
 - `A|B`: a union, a value that is either an `A` or a `B`.
@@ -351,9 +376,9 @@ tuple instead, `t = (x, t.1);`. A list or a map inside a tuple is still the
 list or the map itself, and changing it through the tuple changes it everywhere
 it is held.
 
-`let (lo, hi) = range;` takes a tuple apart into one variable per element; see
-[Variables](variables.md#taking-a-tuple-apart). A `match` arm takes a tuple
-pattern too; see [Control flow](control-flow.md#tuple-patterns).
+`let (lo, hi) = pair;` takes a tuple apart into one variable per element; see
+[Variables](variables.md#taking-a-value-apart). A tuple pattern works wherever
+a pattern does; see [Control flow](control-flow.md#patterns).
 
 ## Structs
 
@@ -386,6 +411,26 @@ fn main() {
     let p = Point { x: 0, y: 0 };
     p.x = 10;
     print(p.x + p.y);
+}
+```
+
+A field written alone takes the variable of the same name, so
+`Point { x, y }` is `Point { x: x, y: y }`. The two forms mix in one literal:
+
+```rust
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn new(x: int, y: int) -> Point => Point { x, y };
+}
+
+fn main() {
+    let y = 7;
+    let p = Point { x: 1, y };
+    print(p.y, Point::new(2, 3).x);
 }
 ```
 

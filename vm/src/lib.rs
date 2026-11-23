@@ -24,8 +24,11 @@ pub mod embed;
 // json parse/stringify over the runtime value graph, backing `std/json`.
 pub mod json;
 
-// MD5, SHA-1 and SHA-256, for `fs::digest` and the browser's `std/hash`.
+// MD5, SHA-1 and SHA-256, for `std/hash`.
 pub mod digest;
+
+// The environment, clocks and timers behind `std/os` and `std/time`.
+pub mod sys;
 
 // The standard library's native functions, built in where no dynamic library
 // can be loaded.

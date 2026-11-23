@@ -1,16 +1,32 @@
-/// Digests of a string: md5, sha1 and sha256, each as lowercase hex.
+/// Digests of strings and files: md5, sha1 and sha256, each as lowercase hex.
 ///
-/// The digest covers the string's UTF-8 bytes. md5 and sha1 are for ids and
+/// A string's digest covers its UTF-8 bytes. md5 and sha1 are for ids and
 /// checksums, not for security.
-dylib "../std_src/hash/hash" {
-    string candela_md5(string);
-    string candela_sha1(string);
-    string candela_sha256(string);
-}
+///
+///     import "std/hash";
+///     fn main() {
+///         print(hash::sha256("abc"));
+///         print(hash::file("notes.txt", "md5") else "no such file");
+///     }
+///
+/// The digests run inside the runtime, so this module works the same in a
+/// `.cdlb` under `candela-vm` and in a browser, with no native library.
 
 /// The md5 digest of `s`, as 32 lowercase hex digits.
-fn md5(s) { return hash::candela_md5(s); }
+fn md5(s: string) -> string => hash_text(s, "md5");
 /// The sha1 digest of `s`, as 40 lowercase hex digits.
-fn sha1(s) { return hash::candela_sha1(s); }
+fn sha1(s: string) -> string => hash_text(s, "sha1");
 /// The sha256 digest of `s`, as 64 lowercase hex digits.
-fn sha256(s) { return hash::candela_sha256(s); }
+fn sha256(s: string) -> string => hash_text(s, "sha256");
+
+/// The digest of the file at `path` as lowercase hex, under `algorithm`:
+/// `"md5"`, `"sha1"` or `"sha256"`. The file streams through, so a large one
+/// never sits in memory whole. A file that cannot be read answers its `fs_*`
+/// error; another algorithm answers `hash_unknown_algorithm`.
+fn file(path: string, algorithm: string) -> string!string {
+    try {
+        return Ok(hash_file(path, algorithm));
+    } catch e {
+        return Err(e);
+    }
+}

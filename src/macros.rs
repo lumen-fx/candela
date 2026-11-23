@@ -22,6 +22,7 @@
 //! tool can find every invocation of one macro in a file without compiling it.
 
 use crate::cold_path;
+use crate::parser::declared_macros::MacroDef;
 use rustc_hash::FxHashMap;
 use smol_strc::SmolStr;
 use std::cell::Cell;
@@ -336,4 +337,71 @@ pub(crate) fn expand(name: &str, body: &str) -> Expansion {
         Some((None, true)) => Expansion::Null,
         _ => Expansion::Unknown,
     }
+}
+
+/// What reads the macros an imported module offers: given the import's path
+/// and whether it is a library import, the module's macros, or `None` when the
+/// module cannot be read (the import reports that itself).
+pub(crate) type ModuleMacroLoader = dyn Fn(&str, bool) -> Option<Rc<[Rc<MacroDef>]>>;
+
+thread_local! {
+    /// The loader the compile running on this thread installed.
+    static LOADER: RefCell<Option<Rc<ModuleMacroLoader>>> = const { RefCell::new(None) };
+    /// The expansions of program-declared macros recorded since the compile
+    /// on this thread began.
+    static RECORDED: RefCell<Vec<MacroExpansion>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Installs `loader` until the guard drops, and starts a fresh record of
+/// expansions.
+pub(crate) fn install_loader(loader: Rc<ModuleMacroLoader>) -> LoaderGuard {
+    let previous = LOADER.with(|slot| slot.borrow_mut().replace(loader));
+    RECORDED.with(|r| r.borrow_mut().clear());
+    LoaderGuard { previous }
+}
+
+/// Puts back the loader that was installed before.
+pub(crate) struct LoaderGuard {
+    previous: Option<Rc<ModuleMacroLoader>>,
+}
+
+impl Drop for LoaderGuard {
+    fn drop(&mut self) {
+        LOADER.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+/// The macros the module an import names offers, through the loader the
+/// running compile installed. `None` with no loader installed.
+pub(crate) fn module_macros(path: &str, is_logical: bool) -> Option<Rc<[Rc<MacroDef>]>> {
+    let loader = LOADER.with(|slot| slot.borrow().clone())?;
+    loader(path, is_logical)
+}
+
+/// One use of a macro the program declares, as it expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacroExpansion {
+    /// The file the use is written in, as the compile names it.
+    pub filename: SmolStr,
+    /// Byte range of the use, from the macro's name through its `)`.
+    pub span: Range<usize>,
+    /// The candela the use expanded to.
+    pub text: String,
+}
+
+pub(crate) fn record_expansion(filename: &str, span: crate::compiler::expr::Span, text: &str) {
+    RECORDED.with(|r| {
+        r.borrow_mut().push(MacroExpansion {
+            filename: SmolStr::new(filename),
+            span: span.start as usize..span.end as usize,
+            text: crate::parser::declared_macros::readable(text),
+        });
+    });
+}
+
+/// The expansions of program-declared macros the last compile on this thread
+/// made, in the order it made them. An editor shows one where its use is.
+#[must_use]
+pub fn take_expansions() -> Vec<MacroExpansion> {
+    RECORDED.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }

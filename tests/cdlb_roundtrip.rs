@@ -240,7 +240,7 @@ fn method_program_round_trips_and_runs() {
 const GENERIC_PROGRAM: &str = "
 struct Cell<T> { value: T }
 
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T { return self.value; }
     fn tagged<U>(self, extra: U) -> U { return extra; }
 }
@@ -317,16 +317,17 @@ fn unknown_version_is_rejected() {
 }
 
 #[test]
-fn current_format_version_is_eighteen_and_v2_is_rejected() {
-    // The version byte was bumped to 18 when attribute arguments naming a function
-    // began recording its signature. A freshly built artifact must carry version 18.
+fn current_format_version_is_nineteen_and_v2_is_rejected() {
+    // The version byte was bumped to 19 when attributes could go on methods,
+    // fields, variants, parameters, constants and impl blocks. A freshly built
+    // artifact must carry version 19.
     let bytes = candela::build_bytecode(
         "fn main() {}".to_owned(),
         "v.cdl",
         &candela::ImportResolver::new(),
     )
     .expect("compiles");
-    assert_eq!(bytes[4], 18, "current .cdlb format version must be 18");
+    assert_eq!(bytes[4], 19, "current .cdlb format version must be 19");
 
     // A well-formed magic but a previous version must fail cleanly, not
     // mis-decode. (Bytes after the header are irrelevant; the version gate
@@ -357,7 +358,7 @@ fn enum_values_roundtrip_through_cdlb() {
     let bytes =
         candela::build_bytecode(src.to_owned(), "enums.cdl", &candela::ImportResolver::new())
             .expect("compiles");
-    assert_eq!(bytes[4], 18);
+    assert_eq!(bytes[4], 19);
     let mut program = load_program(&bytes, &HostRegistry::new())
         .expect("enum artifact must load on the VM-only path");
     program.run();
@@ -421,8 +422,7 @@ fn dyn_lib_program_round_trips_and_rebinds() {
             return;
         }
 
-        let src =
-            "dylib \"z\" { string zlibVersion(); }\n\nfn main() { print(z::zlibVersion()); }\n";
+        let src = "dylib \"z\" { fn zlibVersion() -> string; }\n\nfn main() { print(z::zlibVersion()); }\n";
         let bytes =
             candela::build_bytecode(src.to_owned(), "zt.cdl", &candela::ImportResolver::new())
                 .expect("dyn-lib program must now build to a .cdlb artifact");
@@ -452,7 +452,7 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 /// fail with a clear error that names the missing function.
 #[test]
 fn host_block_program_builds_but_load_names_missing_host_fn() {
-    let src = "host \"app\" { int rows(string); }\n\nfn main() { print(\"start\"); }\n";
+    let src = "host \"app\" { fn rows(a: string) -> int; }\n\nfn main() { print(\"start\"); }\n";
     let bytes = candela::build_bytecode(src.to_owned(), "h.cdl", &candela::ImportResolver::new())
         .expect("host-block program must now build to a .cdlb artifact");
 
@@ -975,7 +975,7 @@ fn an_overloaded_operator_roundtrips_through_cdlb() {
     let bytes = candela::build_bytecode(src.to_owned(), "ops.cdl", &candela::ImportResolver::new())
         .expect("compiles");
     assert_eq!(
-        bytes[4], 18,
+        bytes[4], 19,
         "an operator method needs no instruction of its own, so the artifact carries the current format version"
     );
 

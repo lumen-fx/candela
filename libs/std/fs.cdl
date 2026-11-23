@@ -1,47 +1,76 @@
 /// Reading and writing files and directories.
 ///
-/// Every function takes the path as a string and raises a catchable error on
-/// failure. The code names the cause: `fs_not_found`, `fs_permission_denied`,
-/// `fs_is_a_directory`, `fs_storage_full`, and the rest. A relative path
+/// Every function takes the path as a string. One that can fail answers a
+/// `Result` whose error names the cause: `fs_not_found`,
+/// `fs_permission_denied`, `fs_is_a_directory`, `fs_storage_full`, and the
+/// rest. One that has nothing to give back answers `Ok(())`. A relative path
 /// resolves against the working directory, or against the directory the
 /// embedding host set as the base.
 ///
 ///     import "std/fs";
-///     fs::write("notes.txt", "hello");
-///     print(fs::read("notes.txt"));
+///     fn main() {
+///         fs::write("notes.txt", "hello")?;
+///         print(fs::read("notes.txt")?);
+///     }
 ///
 /// This module is pure Candela over the runtime's own file primitives, so it
 /// compiles into a `.cdlb` artifact that runs under `candela-vm` with no
 /// dynamic library. A browser has no file system, so it does not import there.
 
 /// The whole file at `path`, as a string.
-fn read(path: string) -> string => fs_read(path);
+fn read(path: string) -> string!string {
+    try {
+        return Ok(fs_read(path));
+    } catch e {
+        return Err(e);
+    }
+}
 
 /// True when something exists at `path`.
 fn exists(path: string) -> bool => fs_exists(path);
 
 /// Writes `contents` to `path`, replacing what was there. Creates the file
 /// when it does not exist.
-fn write(path: string, contents: string) {
-    fs_write(path, contents);
+fn write(path: string, contents: string) -> ()!string {
+    try {
+        fs_write(path, contents);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// Appends `contents` to the end of the file at `path`. Creates the file when
 /// it does not exist.
-fn append(path: string, contents: string) {
-    fs_append(path, contents);
+fn append(path: string, contents: string) -> ()!string {
+    try {
+        fs_append(path, contents);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// Deletes the file at `path`. Raises when the path does not exist or names a
 /// directory.
-fn delete(path: string) {
-    fs_delete(path);
+fn delete(path: string) -> ()!string {
+    try {
+        fs_delete(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// Deletes the empty directory at `path`. Raises when the directory is missing
 /// or still has entries.
-fn delete_dir(path: string) {
-    fs_delete_dir(path);
+fn delete_dir(path: string) -> ()!string {
+    try {
+        fs_delete_dir(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// True when `path` names a directory.
@@ -49,31 +78,104 @@ fn is_dir(path: string) -> bool => fs_is_dir(path);
 
 /// The names of the entries directly inside the directory at `path`, sorted.
 /// Names, not paths: join them onto `path` to reach the entries.
-fn list(path: string) -> string[] => fs_list(path);
+fn list(path: string) -> string[]!string {
+    try {
+        return Ok(fs_list(path));
+    } catch e {
+        return Err(e);
+    }
+}
 
 /// Creates the directory at `path` and every missing directory above it. A
 /// directory that is already there is no error.
-fn mkdir(path: string) {
-    fs_mkdir(path);
+fn mkdir(path: string) -> ()!string {
+    try {
+        fs_mkdir(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// Copies the file at `from` to `to`, replacing what was at `to`. Raises
 /// `fs_is_a_directory` when `from` is a directory: copy the files inside it.
-fn copy(from: string, to: string) {
-    fs_copy(from, to);
+fn copy(from: string, to: string) -> ()!string {
+    try {
+        fs_copy(from, to);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
 /// The bytes of the file at `path`, each an int from 0 to 255.
-fn read_bytes(path: string) -> int[] => fs_read_bytes(path);
+fn read_bytes(path: string) -> int[]!string {
+    try {
+        return Ok(fs_read_bytes(path));
+    } catch e {
+        return Err(e);
+    }
+}
 
 /// Writes `bytes` to `path`, replacing what was there. Every element has to be
 /// a byte, 0 to 255; one that is not raises `fs_not_a_byte` and nothing is
 /// written.
-fn write_bytes(path: string, bytes: int[]) {
-    fs_write_bytes(path, bytes);
+fn write_bytes(path: string, bytes: int[]) -> ()!string {
+    try {
+        fs_write_bytes(path, bytes);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
 }
 
-/// The digest of the file at `path` as lowercase hex, under `algorithm`:
-/// `"md5"`, `"sha1"` or `"sha256"`. The file streams through, so a large one
-/// never sits in memory whole. Another algorithm raises `fs_unknown_digest`.
-fn digest(path: string, algorithm: string) -> string => fs_digest(path, algorithm);
+/// Moves the file or directory at `from` to `to`, replacing a file at `to`.
+fn rename(from: string, to: string) -> ()!string {
+    try {
+        fs_rename(from, to);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
+}
+
+/// The size of the file at `path`, in bytes.
+fn size(path: string) -> int!string {
+    try {
+        return Ok(fs_stat(path, 0));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// When the file at `path` last changed, in seconds since the unix epoch.
+fn modified(path: string) -> int!string {
+    try {
+        return Ok(fs_stat(path, 1));
+    } catch e {
+        return Err(e);
+    }
+}
+
+/// Deletes the file at `path`, or the directory there and everything in it.
+/// Unlike `delete` and `delete_dir`, it does not stop at a directory that
+/// still has entries.
+fn delete_all(path: string) -> ()!string {
+    try {
+        fs_delete_all(path);
+    } catch e {
+        return Err(e);
+    }
+    return Ok(());
+}
+
+/// `path` as an absolute path, joined onto the working directory or the base
+/// directory the host set when it is relative. `..` and links stay as they
+/// are written; nothing needs to exist there.
+fn absolute(path: string) -> string!string {
+    try {
+        return Ok(fs_absolute(path));
+    } catch e {
+        return Err(e);
+    }
+}

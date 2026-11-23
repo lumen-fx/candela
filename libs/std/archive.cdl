@@ -1,0 +1,111 @@
+/// Archives: unpacking zip, tar and gzip-compressed tar, writing zip and
+/// gzip-compressed tar, and gzip of a single file.
+///
+/// `extract` starts an extraction and answers a `Job` at once. It runs on a
+/// thread of its own and reports once, to the function given to `extract`:
+/// `Done` with the destination and how many files it wrote, or `Failed` with
+/// the reason.
+///
+///     import "std/archive";
+///
+///     fn main() {
+///         archive::extract("natives.jar", "natives", include: ["*.so"]) fn(e) {
+///             match e {
+///                 Done(dest, files) => print(string(files) + " files in " + dest),
+///                 Failed(why) => eprint(why),
+///             }
+///         };
+///     }
+///
+/// The bytes decide the format, not the file name. What an archive may write
+/// is checked before anything is written: an entry naming an absolute path,
+/// climbing out with `..`, or resolving outside the destination fails the
+/// whole extraction. Symbolic and hard links are skipped, and are not counted.
+
+import "std/event";
+import "std/json";
+
+dylib "../std_src/archive/archive" {
+    fn candela_archive_extract(id: int, src: string, dest: string, include: string[], include_len: int);
+    fn candela_archive_create(id: int, dest: string, files: string[], files_len: int, base: string);
+    fn candela_archive_gzip(id: int, src: string, dest: string, decompress: int);
+    fn candela_archive_set_max_concurrent(n: int);
+}
+
+/// How a job ended.
+enum Event {
+    /// The work is done: the destination, and how many files were written.
+    Done(string, int),
+    /// Nothing was written, or not all of it; the message says why.
+    Failed(string),
+}
+
+/// Work `extract`, `create`, `gzip` or `gunzip` started.
+struct Job {
+    /// The event source its event arrives under, for `event::wait`.
+    id: int,
+}
+
+/// Unpacks the archive at `src` into the directory `dest`, creating it, and
+/// answers the `Job`. Relative paths resolve against the base directory the
+/// host set, or the working directory.
+///
+/// `include` holds glob patterns of the files to write; empty writes every
+/// file. `*` and `?` stay inside one path segment and `**` spans segments. A
+/// pattern without a `/` matches the file name at any depth.
+fn extract(src: string, dest: string, include: string[] = [], on_event: fn(Event)) -> Job {
+    let id = listen(on_event);
+    archive::candela_archive_extract(id, src, dest, include, include.len());
+    return Job { id };
+}
+
+/// Writes `files` into a new archive at `dest`: a zip when `dest` ends in
+/// `.zip`, a gzip-compressed tar when it ends in `.tar.gz` or `.tgz`. A
+/// directory among `files` goes in with everything under it. Each entry is
+/// named by its path relative to `base`, the working directory when empty,
+/// and a file outside `base` fails the job. `Done` carries `dest` and how many
+/// files went in.
+fn create(dest: string, files: string[], base: string = "", on_event: fn(Event)) -> Job {
+    let id = listen(on_event);
+    archive::candela_archive_create(id, dest, files, files.len(), base);
+    return Job { id };
+}
+
+/// Compresses the file `src` with gzip into `dest`. `Done` carries `dest`
+/// and 1.
+fn gzip(src: string, dest: string, on_event: fn(Event)) -> Job {
+    let id = listen(on_event);
+    archive::candela_archive_gzip(id, src, dest, 0);
+    return Job { id };
+}
+
+/// Decompresses the gzip file `src` into `dest`. `Done` carries `dest` and 1.
+fn gunzip(src: string, dest: string, on_event: fn(Event)) -> Job {
+    let id = listen(on_event);
+    archive::candela_archive_gzip(id, src, dest, 1);
+    return Job { id };
+}
+
+/// A new source whose one event `on_event` receives.
+fn listen(on_event: fn(Event)) -> int {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        on_event(decode(payload));
+    });
+    return id;
+}
+
+/// Caps how many jobs of any kind run at once, from 1 to 64; 4 until this is
+/// called. A job started past the cap reports `Failed` at once.
+fn set_max_concurrent(n: int) {
+    archive::candela_archive_set_max_concurrent(n);
+}
+
+/// The event a payload from the native library describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload).unwrap() as {string: any};
+    if fields["kind"] as string == "done" {
+        return Done(fields["dest"] as string, fields["files"] as int);
+    }
+    return Failed(fields["message"] as string);
+}

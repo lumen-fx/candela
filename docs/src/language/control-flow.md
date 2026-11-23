@@ -33,14 +33,36 @@ tested variable has the type it was tested for, and a variant test such as
 ### if as an expression
 
 An `if` written where a value is expected produces a value. Each branch is a
-single expression with no semicolon, and an `else` branch is required so that
-every path yields something. A [match](#match-as-an-expression) works the same
-way.
+block whose last expression, written without a semicolon, is its value; the
+statements before it run first. An `else` branch is required so that every
+path yields something. A [match](#match-as-an-expression) and a plain
+[block](#blocks-and-scope) work the same way.
 
 ```rust
 fn main() {
-    let size = if 3 > 2 { "big" } else { "small" };
+    let n = 7;
+    let size = if n > 5 {
+        let excess = n - 5;
+        excess * 2
+    } else {
+        0
+    };
     print(size);
+}
+```
+
+A branch can leave instead of giving a value: one that ends in `return`,
+`throw`, `break` or `continue` gives nothing, and the other branches decide
+the type.
+
+```rust
+fn half(n: int) -> int {
+    let even = if n % 2 == 0 { n } else { return -1; };
+    return even / 2;
+}
+
+fn main() {
+    print(half(8), half(3));
 }
 ```
 
@@ -64,8 +86,11 @@ fn main() {
 
 `for` walks a range or a collection.
 
-A range is written `start..end` and covers `start` up to but not including
-`end`. Leaving the start out begins at zero.
+A [range](../standard-library/range.md) is written `start..end` and covers
+`start` up to but not including `end`; `start..=end` covers `end` too. Leaving
+the start out, `..end`, begins at zero. A range written in place counts in a
+register, and a range held in a variable loops the same way, in either
+direction.
 
 ```rust
 fn main() {
@@ -75,11 +100,17 @@ fn main() {
     for i in ..2 {
         print(i);
     }
+    let countdown = (1..=3).rev();
+    for i in countdown {
+        print(i);
+    }
 }
 ```
 
-Iterating a list binds each element in turn; iterating a map binds each key.
-Iterating a string binds each character as a one-character string.
+Iterating a list binds each element in turn, and iterating a string each
+character as a one-character string. Iterating a map gives its entries, so it
+takes a pattern of a key and a value, `for (k, v) in m`; `m.keys()` and
+`m.values()` give one side.
 
 ```rust
 fn main() {
@@ -88,15 +119,19 @@ fn main() {
     }
 
     let counts = {"x": 1, "y": 2};
-    for key in counts {
-        print(key, counts[key]);
+    for (key, count) in counts {
+        print(key, count);
+    }
+    for key in counts.keys() {
+        print(key);
     }
 }
 ```
 
-A pattern in parentheses takes each element apart the way a
-[`let` pattern](variables.md#taking-a-tuple-apart) does: one name per place of a
-tuple, `_` to skip a place, and a nested pattern for a tuple inside it.
+A [pattern](#patterns) after `for` takes each element apart the way a
+[`let` pattern](variables.md#taking-a-value-apart) does: one name per place of
+a tuple, `_` to skip a place, a nested pattern for a tuple inside it, and a
+struct pattern for a struct. The pattern has to fit every element.
 
 ```rust
 fn main() {
@@ -111,8 +146,7 @@ fn main() {
 ```
 
 A name a pattern binds to a struct is that element, not a copy, so changing a
-field through it changes the list. A range binds a number, so it takes a name,
-not a pattern.
+field through it changes the list.
 
 The loop variable belongs to the loop and is not in scope after it.
 
@@ -156,11 +190,11 @@ fn main() {
 
 ## match
 
-`match` compares a value against a list of arms and runs the first that fits.
-An arm is `pattern => { ... }` with a block, or `pattern => expression,` with
-one expression and a comma before the next arm; the comma after the last arm is
-optional. `_` is the catch-all. A `match` needs at least one arm that is not the
-wildcard, and the wildcard comes last.
+`match` runs the first arm whose pattern fits the value. An arm is
+`pattern => { ... }` with a block, or `pattern => expression,` with one
+expression and a comma before the next arm; the comma after the last arm is
+optional. `_` is the catch-all. A `match` needs at least one arm that is not
+the wildcard, and the wildcard comes last.
 
 ```rust
 fn main() {
@@ -175,9 +209,6 @@ fn main() {
     }
 }
 ```
-
-Arms match by equality, so any type you can compare works, strings included.
-`|` between patterns makes one arm for several values.
 
 An expression arm can also be `break`, `continue`, `return` or `throw`, which
 leave the loop or the function the way they do inside a block.
@@ -194,25 +225,44 @@ fn main() {
 }
 ```
 
+### Patterns
+
+One pattern grammar serves every place that binds a name: `match` arms, `is`,
+`let`, `for` and the parameters of functions and closures.
+
+| Pattern | Fits |
+| --- | --- |
+| `_` | anything, and binds nothing |
+| `n`, `rest` | anything, and binds it to the name |
+| `3`, `-1.5`, `"go"`, `true`, `()` | a value equal to the literal |
+| `1..10`, `1..=9` | a number in the range; `..=` holds the high end too |
+| `(a, b)` | a [tuple](types.md#tuples), element by element |
+| `Point { x, y: py, .. }` | a struct, field by field; `x` alone binds the field `x`, `..` skips the fields it does not name |
+| `Some(v)`, `Shape::Circle(r)`, `Click { x, y }` | one [variant](enums.md), then its payload |
+| `MAX`, `limits::TOP` | a value equal to the constant |
+| `a \| b` | either one; both bind the same names at the same types |
+
+A name that starts with a lowercase letter or `_` always binds. A name that
+starts with a capital names a variant or a constant. To compare with a
+variable, bind a name and test it in a guard: `if` after the pattern adds a
+condition the arm also needs, and it reads what the pattern bound.
+
 ```rust
+fn grade(score: int, pass: int) -> string {
+    return match score {
+        90..=100 => "top",
+        s if s >= pass => "pass",
+        0 | 1 => "barely tried",
+        _ => "fail",
+    };
+}
+
 fn main() {
-    match "b" {
-        "a" | "b" => print("early"),
-        "c" => print("third"),
-        _ => print("other"),
-    }
+    print(grade(95, 50), grade(60, 50), grade(1, 50), grade(20, 50));
 }
 ```
 
-Matching an enum matches on the variant instead, and binds the payload; see
-[Enums](enums.md).
-
-### Tuple patterns
-
-An arm written as a [tuple](types.md#tuples) matches a tuple element by element.
-A name in the pattern binds that element for the arm's body, `_` accepts any
-element, and any other value has to be equal to the element. A pattern in
-parentheses matches a tuple inside the tuple.
+Patterns nest, so one arm can take a value apart as deep as it needs.
 
 ```rust
 fn describe(p: (int, int)) -> string {
@@ -225,22 +275,26 @@ fn describe(p: (int, int)) -> string {
 
 fn main() {
     print(describe((0, 0)), describe((0, 4)), describe((2, 3)));
+    match Some((1, "one")) {
+        Some((0, _)) => print("zero"),
+        Some((n, name)) => print(n, name),
+        None => print("nothing"),
+    }
 }
 ```
 
-Every `|` alternative of an arm binds the same names at the same types, since
-the body runs whichever of them matched. A pattern needs as many places as the
-matched tuple has elements. An arm whose pattern holds only names and `_` matches
-every tuple, so written last it stands in for the `_` arm.
+An arm whose pattern always fits, with no guard, stands in for the `_` arm.
+A lone name that a variable in scope already has, followed by more arms, is
+an error: it would bind and never let the arms after it run.
 
 ### match as an expression
 
 A `match` written where a value is expected produces a value: the value of the
 arm that fits. Like an `if` used as a value, it has to give one on every path,
-so it needs a `_` arm unless it matches an enum and lists every variant, or
-ends in a [tuple pattern](#tuple-patterns) of names alone. A
-braced arm holds one expression, as the branches of an `if` used as a value do,
-and no arm of it can leave through `break`, `continue`, `return` or `throw`.
+so it needs a `_` arm unless its arms with no guard cover every variant of an
+enum, or one of them has a pattern that always fits, such as a tuple of names. A braced arm is a
+block whose last expression is its value, and any arm can leave through
+`break`, `continue`, `return` or `throw` instead.
 
 ```rust
 fn main() {
@@ -248,7 +302,10 @@ fn main() {
     let size = match n {
         0 => "none",
         1 | 2 => "few",
-        _ => "many",
+        _ => {
+            let label = "many";
+            label
+        }
     };
     print(size);
 }
@@ -270,6 +327,25 @@ fn main() {
     print(total);
 }
 ```
+
+A block written where a value is expected is a value too: its last
+expression, written without a semicolon. Use it to compute a value with a few
+temporaries that do not outlive it.
+
+```rust
+fn main() {
+    let area = {
+        let w = 4;
+        let h = 3;
+        w * h
+    };
+    print(area);
+}
+```
+
+An `if` or a `match` that is the last thing in such a block gives the block
+its value the same way. `{}` on its own is an empty
+[map](collections.md), not an empty block.
 
 Loop bodies, `if` branches, and `match` arms are blocks and scope the same way.
 See [Variables](variables.md) for the scoping rules.

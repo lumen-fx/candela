@@ -129,11 +129,9 @@ which share `editors/tree-sitter/README.md`.
 **Standard library** is the lookup reference: an
 [overview](standard-library/overview.md) of how the library ships and how to
 import it, the [built-in functions](standard-library/builtins.md) that need no
-import, and a page for each module.
-
-**Packages** are the [first-party packages](packages/index.md) a program adds
-from the registry: running programs, downloads, archives, WebSocket
-connections, and a browser page's own APIs.
+import, and a page for each module, from collections and files to running
+programs, downloads, archives, WebSocket connections and a browser page's own
+APIs.
 
 **Reference** covers the [operators](reference/operators.md), the
 [error catalogue](reference/errors.md), the [CLI](reference/cli.md), the

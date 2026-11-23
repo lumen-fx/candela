@@ -55,9 +55,12 @@ A constructor names only its own side, so `Ok(2)` on its own is a
 [enums](../language/enums.md) for the enum and match syntax, and
 [generics](../language/generics.md) for type parameters.
 
-A `Result` is a value you pass around and inspect. It is separate from the
-language's raised errors, which unwind to a `try`/`catch`; see
-[error handling](../language/error-handling.md).
+A `Result` is a value you pass around and inspect, and the way a function
+reports a failure its caller is meant to handle. `T!E` is the same type as
+`Result<T, E>`. `value else fallback` gives the value inside an `Ok`, or the
+fallback for an `Err`, and `value else |e| { ... }` binds the error for the
+block. A raised error is different: it ends the program unless a `try` around
+it catches it; see [error handling](../language/error-handling.md).
 
 `x?` reads the value out of an `Ok` and hands an `Err` back to the caller of the
 function it is written in, which has to return a `Result` with the same error
@@ -87,7 +90,7 @@ The module is pure candela, so it compiles into a `.cdlb` artifact and runs unde
 
 ## Methods
 
-The helpers are methods on the result value, defined in an `impl Result<T, E>`
+The helpers are methods on the result value, defined in an `impl<T, E> Result<T, E>`
 block.
 
 ### is_ok
@@ -124,17 +127,6 @@ r.unwrap_err()
 
 - Returns: the error value.
 - Raises: `called unwrap_err on an Ok result` when the result is `Ok`.
-
-### unwrap_or
-
-```rust
-r.unwrap_or(default)
-```
-
-- `default`: the value to return when the result is `Err`. It has the result's
-  own success type.
-- Returns: the success value, or `default`.
-- Raises: nothing.
 
 ### map
 
@@ -186,7 +178,7 @@ fn parse_port(text) {
 
 fn main() {
     print(parse_port("8080").unwrap());
-    print(parse_port("http").unwrap_or(80));
+    print(parse_port("http") else 80);
     print(parse_port("http").unwrap_err());
 }
 ```

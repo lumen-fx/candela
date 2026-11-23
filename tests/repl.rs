@@ -394,8 +394,8 @@ fn a_line_declares_what_reaches_outside_the_file() {
     let (out, err) = session(concat!(
         "import \"std/math\";\n",
         "print(math::abs(0 - 3));\n",
-        "host \"app\" { int rows(string); }\n",
-        "dylib \"no_such_library_here\" { float sqrt(float); }\n",
+        "host \"app\" { fn rows(a: string) -> int; }\n",
+        "dylib \"no_such_library_here\" { fn sqrt(a: float) -> float; }\n",
         "print(\"still here\");\n",
     ));
 

@@ -162,8 +162,8 @@ half: a `dylib` block, or candela that raises.
 ```rust
 @cfg(web)
 host "websocket" {
-    candela_websocket_open(int, string);
-    int candela_websocket_send(int, string);
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
 }
 ```
 
@@ -184,8 +184,9 @@ payload)` queues a JSON string for the source's handler, `runtime.hold(source)`
 says work under the source is still running, and `runtime.release(source)` ends
 that, behind the events already posted. `config` is the configuration the host
 keeps for the package, or nothing. Values cross between the host block and the
-module the way the host's binding carries them, which for the
-[first-party packages](../packages/index.md) is the way JSON carries them.
+module the way the host's binding carries them, which for the standard
+library's own browser halves, such as
+[websocket](../standard-library/websocket.md), is the way JSON carries them.
 
 The module has to exist: `candela check` refuses a manifest whose `[web]`
 module is not there.

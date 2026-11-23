@@ -80,9 +80,9 @@ Run `candela` with no arguments for a REPL.
   pulls a package in from the registry, and `candela run` compiles and runs it
   against what the manifest lists. A package is another place an import
   resolves from, so nothing about importing changes.
-- **Work that finishes later.** The first-party packages run other programs,
-  download files, unpack archives and hold WebSocket connections on threads of
-  their own. What they report arrives in the function you passed, and the
+- **Work that finishes later.** The standard library runs other programs,
+  downloads files, unpacks archives and holds WebSocket connections on threads
+  of its own. What they report arrives in the function you passed, and the
   program keeps running until it has.
 - **Compiled artifacts.** `candela build` turns a source file into a `.cdlb`
   artifact, and `candela-vm` runs it. The artifact carries machine code for the
@@ -95,14 +95,16 @@ Run `candela` with no arguments for a REPL.
 - **Embedding.** A Rust host registers functions of its own, calls a script's
   functions by name, and exchanges values with it, either compiling the source
   in-process or loading a `.cdlb` with the compiler left out.
-- **Macros the host defines.** `name!( ... )` hands the raw region between the
-  parentheses to the embedding program, which returns candela source to parse in
-  its place. candela ships no macros of its own and never interprets a region.
+- **Macros, when you want them.** `macro name($x: expr) => template;` declares
+  a macro in candela, and `name!( ... )` uses it; a host can also register
+  macros in its own language behind the same `!`. Nothing in the language or
+  the standard library needs one.
 - **Attributes the host defines.** A `host` block declares attributes such as
   `attribute system(writes: type[] = []) on fn;`, and a script writes them on
-  its functions and structs. The compiler checks every use, and the host reads
-  them back from the program or the `.cdlb` without running it, so an engine
-  can schedule script functions as systems of its own.
+  the declarations each one names: functions, methods, fields, parameters and
+  the rest. The compiler checks every use, and the host reads them back from
+  the program or the `.cdlb` without running it, so an engine can schedule
+  script functions as systems of its own.
 
 ## Performance
 

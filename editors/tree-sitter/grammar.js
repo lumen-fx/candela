@@ -85,6 +85,9 @@ module.exports = grammar({
     // The same choice after a `.`, where the name is a field or the method of
     // a call that may name type arguments.
     [$.field_expression, $.method_call_expression, $.qualified_identifier],
+    // A call ending in a block-bodied closure is a whole statement or the
+    // start of a longer expression; what follows the closure tells.
+    [$._block_closure, $.closure_expression],
   ],
 
   rules: {
@@ -100,9 +103,64 @@ module.exports = grammar({
         $.struct_declaration,
         $.enum_declaration,
         $.const_declaration,
+        $.macro_declaration,
         $.impl_block,
         $.dylib_block,
         $.host_block,
+      ),
+
+    // `macro name($x: expr, $y: expr) => template;`: a pattern of fragments
+    // and literal tokens, and the candela the use expands to, with `$x` where
+    // a fragment goes. Both are read as tokens here; the compiler reads the
+    // template once a use fills it in.
+    macro_declaration: ($) =>
+      seq(
+        'macro',
+        field('name', $.identifier),
+        '(',
+        field('pattern', alias(repeat($._macro_pattern_token), $.macro_pattern)),
+        ')',
+        '=>',
+        field('template', alias(repeat1($._macro_token), $.macro_template)),
+        ';',
+      ),
+
+    // `$x: expr`: a fragment the use fills in, and the kind of syntax it takes.
+    macro_fragment: ($) =>
+      seq('$', field('name', $.identifier), ':', field('kind', $.identifier)),
+
+    // `$x` in a template: the text the use gave fragment `x`.
+    macro_variable: ($) => seq('$', field('name', $.identifier)),
+
+    _macro_pattern_token: ($) =>
+      choice(
+        $.macro_fragment,
+        seq('(', repeat($._macro_pattern_token), ')'),
+        seq('[', repeat($._macro_pattern_token), ']'),
+        seq('{', repeat($._macro_pattern_token), '}'),
+        $._macro_leaf,
+      ),
+
+    _macro_token: ($) =>
+      choice(
+        $.macro_variable,
+        seq('(', repeat($._macro_token_inner), ')'),
+        seq('[', repeat($._macro_token_inner), ']'),
+        seq('{', repeat($._macro_token_inner), '}'),
+        $._macro_leaf,
+      ),
+
+    // Inside brackets a `;` belongs to the template.
+    _macro_token_inner: ($) => choice($._macro_token, ';'),
+
+    _macro_leaf: ($) =>
+      choice(
+        $.identifier,
+        $.string_literal,
+        $.integer_literal,
+        $.float_literal,
+        $.macro_invocation,
+        alias(token(prec(-1, /[^\s\w()\[\]{};$"]+/)), $.macro_punctuation),
       ),
 
     // `const NAME: Type = value;`: a bare NAME reads the value.
@@ -121,9 +179,10 @@ module.exports = grammar({
     // Declarations
     // ------------------------------------------------------------------
 
-    // `@cfg(...)` in front of a declaration, a method or a statement, or an
-    // attribute a `host` block declares, named behind its module
-    // (`@ecs::system(writes: [Position])`). The parser reads it as a prefix of
+    // `@cfg(...)` in front of a declaration, a part of one (a method, a
+    // field, a variant, a parameter) or a statement, or an attribute a `host`
+    // block declares, named behind its module (`@ecs::system(writes:
+    // [Position])`). The parser reads it as a prefix of
     // what follows; here it is a sibling node, which is all highlighting needs.
     attribute: ($) =>
       prec.right(
@@ -136,7 +195,11 @@ module.exports = grammar({
       ),
 
     attribute_arguments: ($) =>
-      seq('(', sepByTrailing(',', choice($.attribute_argument, $.cfg_predicate)), ')'),
+      seq(
+        '(',
+        sepByTrailing(',', choice($.attribute_argument, $.cfg_predicate, $._attribute_value)),
+        ')',
+      ),
 
     // `writes: [Position]`: a parameter's name and its value.
     attribute_argument: ($) =>
@@ -160,7 +223,7 @@ module.exports = grammar({
     // A flag, `key = "value"`, or `not`/`any`/`all` around further conditions.
     cfg_predicate: ($) =>
       choice(
-        field('flag', $.identifier),
+        prec(1, field('flag', $.identifier)),
         seq(field('key', $.identifier), '=', field('value', $.string_literal)),
         seq(field('combinator', $.identifier), field('arguments', $.attribute_arguments)),
       ),
@@ -182,13 +245,8 @@ module.exports = grammar({
         ';',
       ),
 
-    // `{ eq, ne }` names items; `{ * }` brings in every item of the module.
-    import_items: ($) =>
-      seq(
-        '{',
-        choice(seq(sepBy1(',', field('item', $.identifier)), optional(',')), field('glob', '*')),
-        '}',
-      ),
+    // `{ eq, ne }` names the items an import brings in.
+    import_items: ($) => seq('{', sepBy1(',', field('item', $.identifier)), optional(','), '}'),
 
     function_declaration: ($) =>
       seq(
@@ -206,10 +264,13 @@ module.exports = grammar({
 
     parameter_list: ($) => seq('(', sepByTrailing(',', $.parameter), ')'),
 
+    // `size: int = 12`: a call that leaves the argument out passes the default.
     parameter: ($) =>
       seq(
-        field('name', $.identifier),
+        repeat($.attribute),
+        field('name', $._pattern),
         optional(seq(':', field('type', $._type))),
+        optional(seq('=', field('default', $._expression))),
       ),
 
     return_type: ($) => seq('->', $._type),
@@ -228,6 +289,7 @@ module.exports = grammar({
     // `cwd: string = "."`: the value the struct's default gives the field.
     field_declaration: ($) =>
       seq(
+        repeat($.attribute),
         field('name', $.identifier),
         ':',
         field('type', $._type),
@@ -244,21 +306,30 @@ module.exports = grammar({
 
     enum_variant_list: ($) => seq('{', sepByTrailing(',', $.enum_variant), '}'),
 
+    // A payload is positional, `Click(int, int)`, or named, `Click { x: int }`.
     enum_variant: ($) =>
-      seq(field('name', $.identifier), optional(field('payload', $.payload_type_list))),
+      seq(
+        repeat($.attribute),
+        field('name', $.identifier),
+        optional(field('payload', choice($.payload_type_list, $.variant_field_list))),
+      ),
+
+    variant_field_list: ($) => seq('{', sepByTrailing(',', $.variant_field), '}'),
+
+    variant_field: ($) => seq(field('name', $.identifier), ':', field('type', $._type)),
 
     payload_type_list: ($) => seq('(', sepByTrailing(',', $._type), ')'),
 
     // Methods lower to mangled free functions, so an impl block holds nothing
     // but `fn` declarations.
     //
-    // An `impl` on a generic type names type arguments in its header, either a
-    // parameter it binds for the methods (`impl Cell<T>`) or the concrete
-    // instantiation the block applies to (`impl Signal<int>`). Both are spelt
-    // as a type argument list.
+    // An `impl` on a generic type declares the parameters it binds for the
+    // methods after the keyword (`impl<T> Cell<T>`), or names the concrete
+    // instantiation the block applies to (`impl Signal<int>`).
     impl_block: ($) =>
       seq(
         'impl',
+        optional(field('type_parameters', $.type_parameters)),
         field('type', $._type_identifier),
         optional(field('type_arguments', $.type_arguments)),
         '{',
@@ -315,7 +386,8 @@ module.exports = grammar({
         '}',
       ),
 
-    // `attribute system(writes: type[] = []) on fn;`
+    // `attribute system(writes: type[] = []) on fn;`, or on a list of kinds:
+    // `on fn, method;`.
     attribute_declaration: ($) =>
       seq(
         'attribute',
@@ -324,7 +396,13 @@ module.exports = grammar({
           seq('(', sepByTrailing(',', $.attribute_parameter), ')'),
         ),
         'on',
-        field('target', choice('fn', 'struct', 'enum')),
+        sepBy1(
+          ',',
+          field(
+            'target',
+            choice('fn', 'method', 'param', 'const', 'struct', 'field', 'enum', 'variant', 'impl'),
+          ),
+        ),
         ';',
       ),
 
@@ -343,15 +421,17 @@ module.exports = grammar({
     // `enum` or `enum[]`: a parameter that takes a variant of any enum.
     enum_reference_type: (_) => seq('enum', repeat(seq('[', ']'))),
 
-    // `int add(int, int);`, or `log(string);` for a function returning null.
-    // Parameters are types only; `...` marks a variadic host function.
+    // `fn add(a: int, b: int) -> int;`: a function declared with a `;` for its
+    // body. `fn log(...);` takes any number of arguments, in a host block.
     function_signature: ($) =>
       seq(
-        optional(field('return_type', $._type)),
+        'fn',
         field('name', $.identifier),
-        '(',
-        optional(choice($.variadic_parameter, sepByTrailing(',', $._type))),
-        ')',
+        field(
+          'parameters',
+          choice($.parameter_list, seq('(', $.variadic_parameter, ')')),
+        ),
+        optional(field('return_type', $.return_type)),
         ';',
       ),
 
@@ -369,10 +449,13 @@ module.exports = grammar({
         $.qualified_type,
         $.generic_type,
         $.array_type,
+        $.optional_type,
+        $.result_type,
         $.map_type,
         $.function_type,
         $.parenthesized_type,
         $.tuple_type,
+        $.unit_type,
       ),
 
     // `fn(int, int) -> int`, the type of a position that holds a function. The
@@ -391,6 +474,9 @@ module.exports = grammar({
       ),
 
     parenthesized_type: ($) => seq('(', $._type, ')'),
+
+    // `()`: the type of no value, which is no tuple.
+    unit_type: (_) => seq('(', ')'),
 
     // `(int, string)`: a tuple type, two or more element types. With one type
     // and no comma the parentheses only group it.
@@ -442,6 +528,14 @@ module.exports = grammar({
     array_type: ($) =>
       prec.right(1, seq(field('element', $._atomic_type), '[', ']')),
 
+    // `T?`, the same type as `Option<T>`. Like `[]` it binds to the type on
+    // its left.
+    optional_type: ($) => prec.right(1, seq(field('inner', $._atomic_type), '?')),
+
+    // `T!E`, the same type as `Result<T, E>`.
+    result_type: ($) =>
+      prec.right(1, seq(field('ok', $._atomic_type), '!', field('error', $._atomic_type))),
+
     map_type: ($) => seq('{', field('key', $._type), ':', field('value', $._type), '}'),
 
     // `a::b::c` nests to the left, so the last segment is the name and
@@ -475,7 +569,7 @@ module.exports = grammar({
         $.for_statement,
         $.loop_statement,
         $.try_statement,
-        $.block,
+        prec(1, $.block),
         $.struct_declaration,
         $.enum_declaration,
       ),
@@ -483,29 +577,113 @@ module.exports = grammar({
     // A block-bodied expression stands alone as a statement; anything else
     // needs the semicolon.
     expression_statement: ($) =>
-      choice(seq($._expression, ';'), prec(1, $.if_expression), prec(1, $.match_expression)),
-
-    let_declaration: ($) =>
-      seq(
-        'let',
-        field('name', choice($.identifier, $.tuple_pattern)),
-        optional(seq(':', field('type', $._type))),
-        '=',
-        field('value', $._expression),
-        ';',
+      choice(
+        seq($._expression, ';'),
+        prec(1, $.if_expression),
+        prec(1, $.match_expression),
+        prec(1, alias($._block_closure_call, $.call_expression)),
+        prec(1, alias($._block_closure_method_call, $.method_call_expression)),
       ),
 
-    // `let (a, (b, _)) = t;`: each place is a name, `_`, or a nested pattern.
-    tuple_pattern: ($) =>
+    // A call ending in a closure with a block body stands alone as a
+    // statement, the way an `if` does.
+    _block_closure_call: ($) =>
+      seq(field('function', $._callee), field('arguments', alias($._block_closure_arguments, $.arguments))),
+
+    _block_closure_method_call: ($) =>
+      seq(
+        field('receiver', $._expression),
+        '.',
+        field('method', choice($.identifier, $.qualified_identifier)),
+        field('arguments', alias($._block_closure_arguments, $.arguments)),
+      ),
+
+    _block_closure_arguments: ($) =>
       seq(
         '(',
-        $._tuple_pattern_place,
-        repeat1(seq(',', $._tuple_pattern_place)),
-        optional(','),
+        sepByTrailing(',', choice($._expression, $.named_argument)),
         ')',
+        field('closure', alias($._block_closure, $.closure_expression)),
       ),
 
-    _tuple_pattern_place: ($) => choice($.identifier, $.tuple_pattern),
+    _block_closure: ($) => seq('fn', field('parameters', $.parameter_list), field('body', $.block)),
+
+    // `let pattern = value;`, and `let pattern = value else { ... };` where
+    // the pattern can fail and the block leaves.
+    let_declaration: ($) =>
+      prec(
+        1,
+        seq(
+          'let',
+          field('name', $._pattern),
+          optional(seq(':', field('type', $._type))),
+          '=',
+          field('value', $._expression),
+          optional(seq('else', field('else', $.block))),
+          ';',
+        ),
+      ),
+
+    // ------------------------------------------------------------------
+    // Patterns: one grammar for match arms, `is`, `let`, `for` and
+    // parameters. A name alone binds; one that starts with a capital names a
+    // variant or a constant.
+    // ------------------------------------------------------------------
+
+    _pattern: ($) => choice($._single_pattern, $.or_pattern),
+
+    or_pattern: ($) =>
+      prec.left(seq($._single_pattern, repeat1(seq('|', $._single_pattern)))),
+
+    _single_pattern: ($) =>
+      choice(
+        $.identifier,
+        $.qualified_type,
+        $._literal_pattern,
+        $.range_pattern,
+        $.tuple_pattern,
+        $.variant_pattern,
+        $.struct_pattern,
+        seq('(', $._pattern, ')'),
+      ),
+
+    _literal_pattern: ($) =>
+      choice(
+        $.integer_literal,
+        $.float_literal,
+        $.string_literal,
+        $.boolean_literal,
+        $.null_literal,
+        $.unit_literal,
+        $.negative_literal,
+      ),
+
+    negative_literal: ($) => seq('-', choice($.integer_literal, $.float_literal)),
+
+    // `1..5` holds 1 to 4, `1..=5` holds 5 too.
+    range_pattern: ($) =>
+      seq(
+        field('start', choice($._literal_pattern, $._type_identifier, $.qualified_type)),
+        choice('..', '..='),
+        field('end', choice($._literal_pattern, $._type_identifier, $.qualified_type)),
+      ),
+
+    tuple_pattern: ($) =>
+      seq('(', $._pattern, repeat1(seq(',', $._pattern)), optional(','), ')'),
+
+    // `Point { x, y: py, .. }`: a struct or a variant with named fields.
+    struct_pattern: ($) =>
+      seq(
+        field('name', choice($._type_identifier, $.qualified_type)),
+        '{',
+        sepByTrailing(',', choice($.field_pattern, $.rest_pattern)),
+        '}',
+      ),
+
+    field_pattern: ($) =>
+      seq(field('name', $.identifier), optional(seq(':', field('pattern', $._pattern)))),
+
+    rest_pattern: (_) => '..',
 
     assignment_statement: ($) =>
       seq(
@@ -535,14 +713,36 @@ module.exports = grammar({
     for_statement: ($) =>
       seq(
         'for',
-        field('binding', choice($.identifier, $.tuple_pattern)),
+        field('binding', $._pattern),
         'in',
-        field('iterable', choice($.range_expression, $._expression)),
+        field('iterable', choice(alias($._range_from_zero, $.range_expression), $._expression)),
         field('body', $.block),
       ),
 
+    _range_from_zero: ($) => seq('..', field('end', $._expression)),
+
+    // `value else fallback` and `value else |e| { ... }`: the value inside a
+    // `Some` or an `Ok`, or the fallback. It binds looser than every operator.
+    else_expression: ($) =>
+      prec.left(
+        -1,
+        seq(
+          field('value', $._expression),
+          'else',
+          choice(
+            seq('|', field('error', $.identifier), '|', field('handler', $.block)),
+            field('fallback', $._expression),
+          ),
+        ),
+      ),
+
+    // `a..b` and `a..=b`, a `Range` value. It binds looser than every
+    // operator, so `0..n + 1` runs to `n + 1`.
     range_expression: ($) =>
-      seq(optional(field('start', $._expression)), '..', field('end', $._expression)),
+      prec.left(
+        0,
+        seq(field('start', $._expression), choice('..', '..='), field('end', $._expression)),
+      ),
 
     loop_statement: ($) => seq('loop', field('body', $.block)),
 
@@ -562,13 +762,36 @@ module.exports = grammar({
         '}',
       ),
 
-    match_arm: ($) => seq(field('pattern', $.match_pattern), '=>', field('body', $.block)),
+    match_arm: ($) =>
+      prec(
+        1,
+        seq(
+          field('pattern', $.match_pattern),
+          optional(field('guard', $.match_guard)),
+          '=>',
+          field('body', $.block),
+        ),
+      ),
 
     _expression_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value), ','),
+      seq(
+        field('pattern', $.match_pattern),
+        optional(field('guard', $.match_guard)),
+        '=>',
+        field('value', $._match_arm_value),
+        ',',
+      ),
 
     _last_match_arm: ($) =>
-      seq(field('pattern', $.match_pattern), '=>', field('value', $._match_arm_value)),
+      seq(
+        field('pattern', $.match_pattern),
+        optional(field('guard', $.match_guard)),
+        '=>',
+        field('value', $._match_arm_value),
+      ),
+
+    // `n if n > limit =>`: the arm runs only where the guard holds too.
+    match_guard: ($) => seq('if', field('condition', $._expression)),
 
     _match_arm_value: ($) =>
       choice(
@@ -587,16 +810,7 @@ module.exports = grammar({
 
     _arm_continue: (_) => 'continue',
 
-    // A pattern is an expression: an enum variant with bindings, a qualified
-    // name, or a literal compared for equality. `|` separates alternatives and
-    // binds looser than any operator inside one, so `1 | 2` is two patterns
-    // rather than bitwise or; `(a | b)` is the or. `_` is the wildcard, and it
-    // comes last.
-    match_pattern: ($) =>
-      seq(
-        field('alternative', $._expression),
-        repeat(prec(PREC.bit_or + 1, seq('|', field('alternative', $._expression)))),
-      ),
+    match_pattern: ($) => $._pattern,
 
     try_statement: ($) => seq('try', field('body', $.block), repeat1($.catch_clause)),
 
@@ -628,11 +842,14 @@ module.exports = grammar({
         $.string_literal,
         $.boolean_literal,
         $.null_literal,
+        $.unit_literal,
         $.array_literal,
         $.map_literal,
         $.struct_literal,
         $.call_expression,
         $.method_call_expression,
+        alias($._trailing_closure_call, $.call_expression),
+        alias($._trailing_closure_method_call, $.method_call_expression),
         $.field_expression,
         $.index_expression,
         $.slice_expression,
@@ -646,6 +863,10 @@ module.exports = grammar({
         $.closure_expression,
         $.if_expression,
         $.match_expression,
+        // A block where a value goes is one: its last expression.
+        $.block,
+        $.range_expression,
+        $.else_expression,
         $.macro_invocation,
       ),
 
@@ -716,12 +937,13 @@ module.exports = grammar({
         ),
       ),
 
-    // The variant after `is`, with the names its payload binds: `Some(x)`,
-    // `Shape::Circle(r)`.
+    // A variant with its payload in order: `Some(x)`, `Shape::Circle(r)`.
     variant_pattern: ($) =>
       seq(
         field('variant', choice($._type_identifier, $.qualified_type)),
-        field('arguments', $.arguments),
+        '(',
+        sepByTrailing(',', $._pattern),
+        ')',
       ),
 
     cast_expression: ($) =>
@@ -822,12 +1044,40 @@ module.exports = grammar({
         ),
       ),
 
-    arguments: ($) => seq('(', sepByTrailing(',', $._expression), ')'),
+    arguments: ($) => seq('(', sepByTrailing(',', choice($._expression, $.named_argument)), ')'),
+
+    // A closure right after the parentheses is the argument of the callee's
+    // last parameter: `xs.each() fn(x) { ... }`. Such a call is never itself
+    // called or followed by a `.`: a closure's `=>` value runs to the end of
+    // the expression.
+    _trailing_closure_call: ($) =>
+      prec.right(
+        PREC.postfix,
+        seq(field('function', $._callee), field('arguments', alias($._trailing_closure_arguments, $.arguments))),
+      ),
+
+    _trailing_closure_method_call: ($) =>
+      prec.right(
+        PREC.postfix,
+        seq(
+          field('receiver', $._expression),
+          '.',
+          field('method', choice($.identifier, $.qualified_identifier)),
+          field('arguments', alias($._trailing_closure_arguments, $.arguments)),
+        ),
+      ),
+
+    _trailing_closure_arguments: ($) =>
+      seq('(', sepByTrailing(',', choice($._expression, $.named_argument)), ')', field('closure', $.closure_expression)),
+
+    // `title: "x"`: an argument passed by its parameter's name.
+    named_argument: ($) => seq(field('name', $.identifier), ':', field('value', $._expression)),
 
     array_literal: ($) => seq('[', sepByTrailing(',', $._expression), ']'),
 
     // Map literals take no trailing comma; struct literals do.
-    map_literal: ($) => seq('{', optional(sepBy1(',', $.map_entry)), '}'),
+    // `{}` is the empty map, not an empty block.
+    map_literal: ($) => prec.dynamic(1, seq('{', optional(sepBy1(',', $.map_entry)), '}')),
 
     map_entry: ($) => seq(field('key', $._expression), ':', field('value', $._expression)),
 
@@ -861,8 +1111,9 @@ module.exports = grammar({
 
     struct_base: ($) => seq('..', optional(field('value', $._expression))),
 
+    // A field written alone, `Point { x, y }`, takes the variable of its name.
     field_initializer: ($) =>
-      seq(field('name', $.identifier), ':', field('value', $._expression)),
+      seq(field('name', $.identifier), optional(seq(':', field('value', $._expression)))),
 
     // An anonymous function. It takes no return annotation. Its body is a
     // block, or `=> expr`, which runs as far as the expression does, so
@@ -901,6 +1152,7 @@ module.exports = grammar({
     // operator.
     macro_invocation: ($) =>
       seq(
+        optional(seq(field('module', $.identifier), '::')),
         field('name', $.identifier),
         token.immediate('!('),
         optional(field('body', $.macro_body)),
@@ -944,6 +1196,9 @@ module.exports = grammar({
     boolean_literal: (_) => choice('true', 'false'),
 
     null_literal: (_) => 'null',
+
+    // `()`: the value of no value.
+    unit_literal: (_) => seq('(', ')'),
 
     comment: (_) => token(seq('//', /[^\r\n]*/)),
   },

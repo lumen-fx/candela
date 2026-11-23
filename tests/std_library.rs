@@ -100,6 +100,103 @@ fn result_module() {
 }
 
 #[test]
+fn path_module() {
+    assert!(run_std_test("test_path").contains("path ok"));
+}
+
+#[test]
+fn encoding_module() {
+    assert!(run_std_test("test_encoding").contains("encoding ok"));
+}
+
+#[test]
+fn cli_module() {
+    assert!(run_std_test("test_cli").contains("cli ok"));
+}
+
+#[test]
+fn term_module() {
+    assert!(run_std_test("test_term").contains("term ok"));
+}
+
+#[test]
+fn csv_module() {
+    assert!(run_std_test("test_csv").contains("csv ok"));
+}
+
+/// Runs `libs/std/tests/<name>.cdl` against a library directory holding the
+/// C library `native` built from its sources, asserting `<module> ok`.
+fn run_native_std_test(name: &str, native: &str, modules: &[&str], ok: &str) {
+    let Some(libs) = lib_dir_with_native(native, modules, name) else {
+        return;
+    };
+    let path = repo().join("libs/std/tests").join(format!("{name}.cdl"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command.arg(&path).env("CANDELA_LIB_PATH", &libs);
+    let output = common::output_with_deadline(&mut command, name);
+    let _ = std::fs::remove_dir_all(&libs);
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains(ok),
+        "{name} exited with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+/// The clocks, sleeping, UTC formatting, ISO parsing and timers; the timers
+/// tick through the event queue after `main` returns.
+#[test]
+fn time_module() {
+    run_native_std_test(
+        "test_time",
+        "time",
+        &[
+            "time.cdl",
+            "event.cdl",
+            "json.cdl",
+            "assert.cdl",
+            "list.cdl",
+        ],
+        "time ok",
+    );
+}
+
+/// uuid, choice and shuffle over the seeded generator.
+#[test]
+fn random_module() {
+    run_native_std_test(
+        "test_random",
+        "random",
+        &["random.cdl", "assert.cdl", "list.cdl"],
+        "random ok",
+    );
+}
+
+/// The environment and the working directory, run from a scratch directory
+/// the script is handed as its first argument.
+#[test]
+fn os_module() {
+    let scratch = std::env::temp_dir().join(format!("candela_std_os_{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("create scratch dir");
+    let path = repo().join("libs/std/tests/test_os.cdl");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
+    command
+        .arg(&path)
+        .arg(&scratch)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
+    let output = common::output_with_deadline(&mut command, "test_os");
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("os ok"),
+        "test_os exited with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 fn json_module() {
     assert!(run_std_test("test_json").contains("json ok"));
 }
@@ -126,7 +223,7 @@ fn option_result_inline_into_cdlb() {
 import "std/option";
 import "std/result";
 fn main() {
-    print(None.unwrap_or(3));
+    print(None else 3);
     print(Some(7).unwrap());
     print(Ok(1).is_ok());
     print(Err("x").unwrap_err());
@@ -220,7 +317,7 @@ fn a_std_dylib_artifact_runs_from_any_directory() {
     std::fs::create_dir_all(&work).expect("create work dir");
     std::fs::write(
         work.join("prog.cdl"),
-        "import \"std/math\";\nfn main() { print(math::sqrt(9.0)); }\n",
+        "import \"std/math\";\nfn main() { print(math::cbrt(27.0)); }\n",
     )
     .expect("write program");
 
@@ -303,10 +400,10 @@ fn json_map_set_inline_into_cdlb() {
 import "std/json";
 import "std/set";
 fn main() {
-    let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}") as {any: any};
+    let obj = json::parse("{\"n\": 7, \"xs\": [1, 2, 3]}").unwrap() as {any: any};
     print(obj["n"] as int);
     print((obj["xs"] as any[]).len());
-    print(json::stringify(json::parse("[1,2,3]")));
+    print(json::stringify(json::parse("[1,2,3]").unwrap()));
     let s = set::Set<int>::new();
     s.add(1);
     s.add(1);
@@ -363,14 +460,7 @@ fn main() {
     );
 }
 
-/// Builds `libs/std_src/hash/hash.c` into a library directory of its own,
-/// beside a copy of `libs/std`, and answers that directory; `None` where no C
-/// compiler is on the path.
-fn lib_dir_with_hash(tag: &str) -> Option<PathBuf> {
-    lib_dir_with_native("hash", &["hash.cdl", "assert.cdl", "list.cdl"], tag)
-}
-
-/// Builds `libs/std_src/<name>/<name>.c` into a library directory of its own,
+/// Builds the C sources of `libs/std_src/<name>/` into a library directory of its own,
 /// beside copies of the std `modules`, and answers that directory; `None`
 /// where no C compiler is on the path. The native modules are compiled by the
 /// release workflow, not by cargo, so a test builds the one it needs.
@@ -395,17 +485,24 @@ fn lib_dir_with_native(name: &str, modules: &[&str], tag: &str) -> Option<PathBu
     if cfg!(target_os = "macos") {
         command.arg("-dynamiclib");
     }
-    command
-        .arg("-o")
-        .arg(&library)
-        .arg(repo().join(format!("libs/std_src/{name}/{name}.c")));
+    command.arg("-o").arg(&library);
+    // Every C file of the library's directory goes in: `random` carries the
+    // PCG sources beside its own, `time` its UTC formatting.
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(repo().join("libs/std_src").join(name))
+        .expect("read the library's sources")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "c"))
+        .collect();
+    sources.sort();
+    command.args(&sources);
     if cfg!(target_os = "linux") {
-        command.arg("-lm");
+        command.args(["-lm", "-pthread"]);
     }
     match command.output() {
         Ok(output) if output.status.success() => Some(libs),
         Ok(output) => panic!(
-            "building {name}.c failed: {}",
+            "building {name} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ),
         Err(e) => {
@@ -417,51 +514,33 @@ fn lib_dir_with_native(name: &str, modules: &[&str], tag: &str) -> Option<PathBu
 
 #[test]
 fn hash_module() {
-    let Some(libs) = lib_dir_with_hash("vectors") else {
-        return;
-    };
-    let path = repo().join("libs/std/tests/test_hash.cdl");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
-    command.arg(&path).env("CANDELA_LIB_PATH", &libs);
-    let output = common::output_with_deadline(&mut command, "test_hash");
-    let _ = std::fs::remove_dir_all(&libs);
-    assert!(
-        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("hash ok"),
-        "test_hash exited with {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    assert!(run_std_test("test_hash").contains("hash ok"));
 }
 
-/// A NUL cannot cross into the C library, so hashing a string that holds one
-/// raises an error instead of hashing the part before it.
+/// The digest covers every byte of the string, a NUL among them: the runtime
+/// computes it, so nothing crosses a C boundary that would stop at the NUL.
 #[test]
-fn hashing_a_nul_raises() {
-    let Some(libs) = lib_dir_with_hash("nul") else {
-        return;
-    };
-    let work = libs.join("work");
-    std::fs::create_dir_all(&work).expect("create work dir");
+fn a_string_with_a_nul_hashes_every_byte() {
+    let dir = std::env::temp_dir().join(format!("candela_std_hash_nul_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create work dir");
     std::fs::write(
-        work.join("prog.cdl"),
+        dir.join("prog.cdl"),
         "import \"std/hash\";\nfn main() { print(hash::md5(\"a\\0b\")); }\n",
     )
     .expect("write program");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
     command
         .arg("prog.cdl")
-        .current_dir(&work)
-        .env("CANDELA_LIB_PATH", &libs);
+        .current_dir(&dir)
+        .env("CANDELA_LIB_PATH", repo().join("libs"));
     let output = common::output_with_deadline(&mut command, "hash a NUL");
-    let _ = std::fs::remove_dir_all(&libs);
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(
-        !output.status.success(),
-        "hashing a NUL ran: {}",
+        String::from_utf8_lossy(&output.stdout).contains("70350f6027bce3713f6b76473084309b"),
+        "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("null byte"), "{stderr}");
 }
 
 /// The directory functions, byte files and file digests, run in a scratch

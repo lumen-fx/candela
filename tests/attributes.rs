@@ -210,8 +210,8 @@ fn a_function_returning_a_type_named_attribute_still_parses() {
     let src = r#"
 struct attribute { x: int }
 host "app" {
-    attribute make(int);
-    attribute none();
+    fn make(x: int) -> attribute;
+    fn none() -> attribute;
 }
 fn use_them() -> int { return app::make(1).x + app::none().x; }
 fn main() {}
@@ -229,7 +229,7 @@ fn the_table_reads_out_of_an_artifact() {
         r#"
 host "tags" {
     attribute task(priority: int = 0) on fn;
-    int now();
+    fn now() -> int;
 }
 
 @task(priority: 3)
@@ -307,7 +307,8 @@ fn a_bad_argument_is_an_error() {
         ("not_a_list", "@tags::task(writes: A)"),
         ("unknown_fn", "@tags::task(after: [stpe])"),
         ("repeated", "@tags::task(priority: 1, priority: 2)"),
-        ("unnamed", "@tags::task([A])"),
+        ("positional_after_named", "@tags::task(priority: 1, [A])"),
+        ("too_many_positional", "@tags::needs(1, 2)"),
         (
             "payload_variant",
             "@tags::task(phase: tags::Phase::Payload)",
@@ -319,6 +320,209 @@ fn a_bad_argument_is_an_error() {
             "import \"tags.cdl\";\nstruct A {{ x: int }}\n{attr}\nfn step() {{}}\nfn main() {{}}"
         );
         assert_eq!(error_code(label, &src), "attribute_bad_argument", "{label}");
+    }
+}
+
+/// Arguments fill the parameters in order and then by name, the way a call's
+/// do.
+#[test]
+fn positional_arguments_fill_the_parameters_in_order() {
+    let src = "import \"tags.cdl\";\nstruct A { x: int }\n@tags::task([A], priority: 3)\nfn step() {}\n@tags::needs(2)\nfn other() {}\nfn main() {}";
+    let program = compile("positional", src).unwrap_or_else(|d| panic!("{}", d.message));
+    let table = program.attributes();
+    let step = &table.attributes[0];
+    assert!(matches!(step.arg("priority"), Some(AttributeValue::Int(3))));
+    let writes = step
+        .arg("writes")
+        .and_then(AttributeValue::as_list)
+        .unwrap();
+    assert_eq!(writes.len(), 1);
+    assert!(matches!(
+        table.attributes[1].arg("level"),
+        Some(AttributeValue::Int(2))
+    ));
+}
+
+/// An attribute goes on every kind of declaration its `on` clause lists: a
+/// function, a method, a parameter, a constant, a struct, a field, an enum, a
+/// variant and an `impl` block. Each records what it is on, and `@cfg` drops a
+/// field, a variant or a parameter it turns off.
+#[test]
+fn an_attribute_goes_on_every_kind_of_declaration() {
+    let src = r#"
+host "meta" {
+    attribute doc(text: string) on fn, method, param, const, struct, field, enum, variant, impl;
+    attribute range(min: int = 0, max: int = 100) on field, param;
+}
+
+@doc("a point")
+struct Point {
+    @doc("across") @range(max: 10) x: int,
+    @cfg(never) gone: int,
+    y: int,
+}
+
+@doc("the point's methods")
+impl Point {
+    @doc("the sum")
+    fn sum(self, @range(1, 5) scale: int) -> int { return (self.x + self.y) * scale; }
+}
+
+@doc("a color")
+enum Color {
+    @doc("warm") Red,
+    @cfg(never) Gone,
+    Blue,
+}
+
+@doc("the limit")
+const LIMIT: int = 3;
+
+@doc("adds")
+fn add(@doc("left") a: int, @cfg(never) b: int, c: int) -> int { return a + c; }
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    print(p.sum(2) + add(1, 2) + LIMIT);
+    print(Color::Blue);
+}
+"#;
+    let program = Engine::new()
+        .compile(src, "meta.cdl")
+        .unwrap_or_else(|d| panic!("{}", d.message));
+    let table = program.attributes();
+    let seen: Vec<String> = table
+        .attributes
+        .iter()
+        .map(|a| {
+            let on = match &a.target {
+                AttributeTarget::Fn { name, params } => format!("fn {name}/{}", params.len()),
+                AttributeTarget::Method {
+                    owner,
+                    name,
+                    params,
+                } => format!("method {}::{name}/{}", table.type_name(owner), params.len()),
+                AttributeTarget::Param {
+                    function,
+                    owner,
+                    name,
+                    ty,
+                } => format!(
+                    "param {}{function}({name}: {})",
+                    owner
+                        .as_ref()
+                        .map_or_else(String::new, |o| format!("{}::", table.type_name(o))),
+                    table.type_name(ty)
+                ),
+                AttributeTarget::Const { name, ty } => {
+                    format!("const {name}: {}", table.type_name(ty))
+                }
+                AttributeTarget::Struct(id) => {
+                    format!("struct {}", table.structs[*id as usize].name)
+                }
+                AttributeTarget::Field { struct_id, name } => {
+                    format!("field {}.{name}", table.structs[*struct_id as usize].name)
+                }
+                AttributeTarget::Enum(id) => format!("enum {}", table.enums[*id as usize].name),
+                AttributeTarget::Variant { enum_id, name } => {
+                    format!("variant {}::{name}", table.enums[*enum_id as usize].name)
+                }
+                AttributeTarget::Impl(ty) => format!("impl {}", table.type_name(ty)),
+            };
+            format!("{} {on}", a.name)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            "doc struct Point",
+            "doc field Point.x",
+            "range field Point.x",
+            "doc impl Point",
+            "doc method Point::sum/2",
+            "range param Point::sum(scale: int)",
+            "doc enum Color",
+            "doc variant Color::Red",
+            "doc const LIMIT: int",
+            "doc fn add/2",
+            "doc param add(a: int)",
+        ],
+    );
+    let range = &table.attributes[2];
+    assert!(matches!(range.arg("min"), Some(AttributeValue::Int(0))));
+    assert!(matches!(range.arg("max"), Some(AttributeValue::Int(10))));
+    let scale = &table.attributes[5];
+    assert!(matches!(scale.arg("min"), Some(AttributeValue::Int(1))));
+    assert!(matches!(scale.arg("max"), Some(AttributeValue::Int(5))));
+    assert_eq!(
+        table.structs[0].fields.len(),
+        2,
+        "@cfg(never) dropped the field"
+    );
+    assert_eq!(table.enums[0].variants, ["Red", "Blue"]);
+
+    // The table survives a .cdlb round trip.
+    let bytes = build_bytecode(src.to_owned(), "meta.cdl", &candela::ImportResolver::new())
+        .expect("builds");
+    assert_eq!(read_attributes(&bytes).unwrap().attributes.len(), 11);
+}
+
+/// An attribute goes only where its declaration says, and never on the parts
+/// of a generic declaration or of a struct declared inside a function.
+#[test]
+fn an_attribute_on_a_part_it_does_not_list_is_an_error() {
+    let decl = "host \"meta\" {\n    attribute doc on fn;\n    attribute any on fn, method, param, const, struct, field, enum, variant, impl;\n}\n";
+    for (label, body, code) in [
+        (
+            "field",
+            "struct A { @doc x: int }",
+            "attribute_wrong_target",
+        ),
+        ("variant", "enum E { @doc A }", "attribute_wrong_target"),
+        ("param", "fn f(@doc a: int) {}", "attribute_wrong_target"),
+        ("const", "@doc const N: int = 1;", "attribute_wrong_target"),
+        (
+            "impl",
+            "struct A { x: int }\n@doc impl A {}",
+            "attribute_wrong_target",
+        ),
+        (
+            "method",
+            "struct A { x: int }\nimpl A { @doc fn f(self) {} }",
+            "attribute_wrong_target",
+        ),
+        (
+            "generic_impl",
+            "struct C<T> { v: T }\n@any impl<T> C<T> {}",
+            "attribute_wrong_target",
+        ),
+        (
+            "generic_method",
+            "struct C<T> { v: T }\nimpl<T> C<T> { @any fn get(self) -> T { return self.v; } }",
+            "attribute_wrong_target",
+        ),
+        (
+            "generic_field",
+            "struct C<T> { @any v: T }",
+            "attribute_wrong_target",
+        ),
+        (
+            "generic_param",
+            "fn f<T>(@any v: T) {}",
+            "attribute_wrong_target",
+        ),
+        (
+            "local_struct_field",
+            "fn g() { struct L { @any x: int } }",
+            "attribute_wrong_target",
+        ),
+    ] {
+        let src = format!("{decl}{body}\nfn main() {{}}");
+        let err = Engine::new()
+            .compile(&src, &format!("{label}.cdl"))
+            .err()
+            .unwrap_or_else(|| panic!("{label} compiles, and should not"));
+        assert_eq!(err.code, code, "{label}: {}", err.message);
     }
 }
 

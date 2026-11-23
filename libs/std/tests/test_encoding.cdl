@@ -1,0 +1,31 @@
+import "std/assert";
+import "std/encoding";
+
+fn main() {
+    // "h", an e with an acute accent (two bytes), "!".
+    let bytes = [104, 195, 169, 33];
+    let text = encoding::from_utf8(bytes)?;
+    assert::eq(text.len(), 3);
+    assert::eq(encoding::utf8(text), bytes);
+    assert::eq(encoding::from_utf8([255]), Err("encoding_invalid_utf8"));
+    assert::eq(encoding::from_utf8([256]), Err("encoding_invalid_utf8"));
+    assert::eq(encoding::hex(bytes), "68c3a921");
+    assert::eq(encoding::from_hex("68C3a921"), Ok(bytes));
+    assert::eq(encoding::from_hex("6"), Err("encoding_invalid_hex"));
+    assert::eq(encoding::from_hex("zz"), Err("encoding_invalid_hex"));
+    let vectors = [["", ""], ["f", "Zg=="], ["fo", "Zm8="], ["foo", "Zm9v"], ["foob", "Zm9vYg=="], ["fooba", "Zm9vYmE="], ["foobar", "Zm9vYmFy"]];
+    for v in vectors {
+        assert::eq(encoding::base64(encoding::utf8(v[0])), v[1]);
+        assert::eq(encoding::from_base64(v[1]), Ok(encoding::utf8(v[0])));
+    }
+    assert::eq(encoding::from_base64("Zm9v-_8"), Ok([102, 111, 111, 251, 255]));
+    assert::eq(encoding::from_base64("Zm9vYg"), Ok(encoding::utf8("foob")));
+    assert::eq(encoding::from_base64("a"), Err("encoding_invalid_base64"));
+    assert::eq(encoding::from_base64("Zm!v"), Err("encoding_invalid_base64"));
+    assert::eq(encoding::url_encode("a b&c=" + text + "~"), "a%20b%26c%3Dh%C3%A9%21~");
+    assert::eq(encoding::url_decode("a%20b+c%C3%A9"), Ok("a b c" + text[1..2]));
+    assert::eq(encoding::url_decode("%2"), Err("encoding_invalid_url"));
+    assert::eq(encoding::url_decode("%zz"), Err("encoding_invalid_url"));
+    assert::eq(encoding::url_decode("%FF"), Err("encoding_invalid_url"));
+    print("encoding ok");
+}

@@ -25,7 +25,9 @@ use crate::compiler::compiler_errors::error_unknown_namespace;
 use crate::compiler::imports::ImportResolver;
 use crate::data::NULL;
 use crate::instr::LibFunc;
+use crate::macros;
 use crate::parser;
+use crate::parser::declared_macros::MacroDef;
 use crate::rt::FnValue;
 use crate::rt::LibraryOrigin;
 use crate::rt::TargetOs;
@@ -36,6 +38,7 @@ use crate::vm::StringPool;
 use crate::vm::map_insert;
 use crate::vm::shift_count_in_range;
 use crate::{data::Data, instr::Instr};
+use attributes::AttrOn;
 use attributes::AttributeCtx;
 use attributes::AttributeTargetKind;
 use attributes::AttributeUse;
@@ -62,18 +65,24 @@ use compiler_data::StringSlots;
 use compiler_data::Struct;
 use compiler_data::Variable;
 use expr::Expr;
+use expr::ForeignFn;
 use expr::ImportBinding;
 use expr::LetAnnotation;
 use expr::METHOD_SEP;
+use expr::MatchArm;
 use expr::Operand;
+use expr::PatternLet;
 use expr::Span;
 use expr::StructRest;
+use expr::TRAILING_ARG;
 use expr::UNARY_MINUS_METHOD;
+use expr::VariantFields;
+use expr::VariantShape;
 use expr::code_captures_variable;
 use expr::code_modifies_variable;
 use expr::const_read;
+use expr::is_named_arg;
 use expr::mangle_method;
-use expr::tuple_let_pattern;
 use functions::handle_functions;
 use functions::handle_value_call;
 use functions::user_functions::body_being_compiled;
@@ -96,7 +105,6 @@ use std::hash::BuildHasherDefault;
 use std::hint::unreachable_unchecked;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tuples::check_tuple_places;
 use type_system::DataType;
 use type_system::FnTypeExpr;
 use type_system::Generics;
@@ -110,6 +118,7 @@ use type_system::check_if_returns_void;
 use type_system::check_operator_method;
 use type_system::check_struct_default_fn;
 use type_system::collect_direct_fn_calls;
+use type_system::find_template;
 use type_system::infer_user_fn_return_type;
 use type_system::let_type_fits;
 use type_system::literal_struct_id;
@@ -205,7 +214,7 @@ pub(crate) fn is_check_only() -> bool {
 type PendingDylib = (
     u16,
     u16,
-    Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+    Box<[ForeignFn]>,
     LibHandle,
     (SmolStr, LibraryOrigin),
     Span,
@@ -225,13 +234,14 @@ mod functions;
 #[path = "functions/methods.rs"]
 mod methods;
 
+pub(crate) mod call_args;
 mod copies;
 pub(crate) mod flow;
 mod fold;
 pub(crate) mod function_table;
+pub(crate) mod patterns;
 mod registers;
 mod scalar;
-mod tuples;
 pub(crate) mod type_test;
 
 pub trait UnwrapId {
@@ -525,6 +535,19 @@ fn compile_short_circuit_condition(
         // An `is` whose false jump leaves the code it guards: what it proves
         // holds past the jump, so a variant's payload is read there.
         Expr::Is(operand, target, operand_span, target_span) if !bool_or_mode => {
+            if let Some((fails, facts)) = type_test::compile_is_jumps(
+                operand,
+                target,
+                *operand_span,
+                *target_span,
+                v,
+                ctx,
+                state,
+                output,
+            ) {
+                facts.apply(v, state, output);
+                return (Vec::new(), fails);
+            }
             let (cond_id, facts) = type_test::compile_is(
                 operand,
                 target,
@@ -1361,12 +1384,27 @@ fn build_struct(
     dest_reg
 }
 
+/// Whether a bare variant name written in file `file_idx` reaches enum `id`:
+/// the file declares the enum or imports it by name, or the enum is an
+/// instantiation of a generic enum the file reaches that way or the prelude
+/// declares. An enum another module declares is reached through its path.
+pub(crate) fn enum_in_scope(id: u16, file_idx: u16, state: &State<'_>) -> bool {
+    let scope = state.scope(file_idx);
+    if let Some((template, _)) = state.generics.instantiation_of(&DataType::Enum(id)) {
+        return state.generics.template_in_scope(template, scope);
+    }
+    scope
+        .symbols
+        .iter()
+        .any(|(_, kind)| matches!(kind, SymbolKind::Enum(e) if *e == id))
+}
+
 /// Resolves a call/reference path to an enum variant `(enum_id, variant_idx)`,
 /// if it names one. A qualified path (`Color::Red`, `mod::Color::Red`) resolves
 /// the enum by its leading segments and the variant by the last segment; a bare
-/// name (`Some`, `None`) resolves by searching every registered enum for a
-/// variant with that name, first match winning. Never raises a compile error,
-/// so callers use it to intercept otherwise-unknown call/reference paths.
+/// name (`Some`, `None`) resolves among the enums the file reaches (see
+/// [`enum_in_scope`]), first match winning. Never raises a compile error, so
+/// callers use it to intercept otherwise-unknown call/reference paths.
 pub(crate) fn resolve_enum_variant(
     path: &[SmolStr],
     file_idx: u16,
@@ -1384,7 +1422,9 @@ pub(crate) fn resolve_enum_variant(
         Some((eid as u16, vidx as u16))
     } else if let Some(name) = path.first() {
         for e in state.enums.iter() {
-            if let Some(vidx) = e.variants.iter().position(|vt| &vt.name == name) {
+            if let Some(vidx) = e.variants.iter().position(|vt| &vt.name == name)
+                && enum_in_scope(e.id, file_idx, state)
+            {
                 return Some((e.id, vidx as u16));
             }
         }
@@ -1407,8 +1447,39 @@ pub(crate) fn variant_constructor(
     ctx: Ctx,
     state: &mut State<'_>,
 ) -> Option<(u16, u16)> {
+    // A variant takes its payload in order; a call passing an argument by name
+    // is a function's.
+    if args.iter().any(is_named_arg) {
+        return None;
+    }
     let arg_types: Vec<DataType> = args.iter().map(|a| a.infer_type(v, ctx, state)).collect();
     variant_constructor_at(path, &arg_types, span, ctx, state)
+}
+
+/// A struct-shaped literal that builds a variant declared with named fields,
+/// `Event::Click { x: 1, y: 2 }`: the enum and variant it builds and the
+/// payload in declared order with the span of each value. `None` for a struct
+/// literal.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn named_variant_literal(
+    path: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    type_args: &[TypeExpr],
+    rest: Option<&(StructRest, Span)>,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<(u16, u16, Vec<Expr>, Vec<Span>)> {
+    let names = named_variant_fields(path, span, ctx, state)?;
+    let variant = &path[path.len() - 1];
+    let (args, spans) = order_named_fields(&names, fields, rest, variant, span, false, ctx, state);
+    let (enum_id, variant_idx) = if type_args.is_empty() {
+        variant_constructor(path, &args, span, v, ctx, state)?
+    } else {
+        resolve_generic_variant(path, type_args, span, ctx, state)
+    };
+    Some((enum_id, variant_idx, args, spans))
 }
 
 /// Lowers an enum-variant construction (`Color::Red`, `Some(x)`) to a fresh
@@ -1423,6 +1494,7 @@ pub(crate) fn compile_enum_construction(
     args: &[Expr],
     span: Span,
     args_indexes: &[Span],
+    by_name: bool,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -1432,6 +1504,29 @@ pub(crate) fn compile_enum_construction(
     let variant_name = variant.name.clone();
     let payload_types = variant.payload.clone();
     let arity = payload_types.len();
+    // A variant declared with named fields is built by name, and one declared
+    // with a positional payload in order: one spelling per variant.
+    if !by_name
+        && let Some(names) = state.generics.variant_fields(enum_id, variant_idx)
+        && !names.is_empty()
+    {
+        compiler_errors::error_type_test(
+            "Variant built in order",
+            &format!("{variant_name} names its fields"),
+            Some(&format!(
+                "Build it with braces: {variant_name} {{ {} }}",
+                names
+                    .iter()
+                    .map(|n| format!("{n}: ..."))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            "variant_payload_shape",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
 
     compiler_errors::check_args(
         args,
@@ -1526,6 +1621,7 @@ fn compile_enum_definition(
     variants: &[(SmolStr, Box<[TypeExpr]>, Span)],
     span: Span,
     type_params: &TypeParams,
+    fields: &VariantFields,
     ctx: Ctx,
     state: &mut State<'_>,
 ) {
@@ -1535,6 +1631,7 @@ fn compile_enum_definition(
             type_params.clone(),
             ctx.file_idx,
             Box::from(variants),
+            fields.clone(),
         );
         state
             .scope_mut(ctx.file_idx)
@@ -1549,6 +1646,7 @@ fn compile_enum_definition(
         id: enum_id,
         name_span: span,
     });
+    state.generics.set_variant_fields(enum_id, fields.clone());
     state
         .scope_mut(ctx.file_idx)
         .symbols
@@ -1567,102 +1665,219 @@ fn compile_enum_definition(
     state.enums[enum_id as usize].variants = resolved;
 }
 
-/// Extracts a match arm's variant pattern: the variant index within `enum_id`
-/// and the payload binder identifiers (`_` ignores a slot). Raises a compile
-/// error for an unknown variant, a wrong-arity pattern, or a non-identifier
-/// binder.
+/// The field names of the variant a struct-shaped literal or pattern names,
+/// `Event::Click { x: 1, y: 2 }`, in declaration order.
 ///
-/// A qualified pattern resolves through its qualifier, the way a qualified
-/// construction does: `Shape::Circle(r)` finds `Shape` in the arm's scope,
-/// `sh::Shape::Circle(r)` walks the alias, and `Slot<int>::Empty` instantiates
-/// the generic enum. The enum that comes back has to be the scrutinee's, so a
-/// pattern qualified with another enum is reported instead of matching the
-/// variant of the same name. Only a bare `Circle(r)` is looked up by name in
-/// the scrutinee's enum.
-pub(crate) fn resolve_variant_pattern(
-    enum_id: u16,
-    pattern: &Expr,
-    fallback_span: Span,
+/// `None` when the path names a struct, which the literal builds, or nothing a
+/// variant could be. A variant whose payload is positional is reported here:
+/// it is written with parentheses.
+pub(crate) fn named_variant_fields(
+    path: &[SmolStr],
+    span: Span,
     ctx: Ctx,
-    state: &mut State<'_>,
-) -> (u16, Vec<SmolStr>) {
-    let (path, type_args, binders, span): (&[SmolStr], &[TypeExpr], Vec<SmolStr>, Span) =
-        match pattern {
-            Expr::Var(name, span) => (std::slice::from_ref(name), &[], Vec::new(), *span),
-            Expr::NamespacedRef(path, span, type_args) => (path, type_args, Vec::new(), *span),
-            Expr::FunctionCall(args, namespace, span, _, type_args) => {
-                let mut binders = Vec::with_capacity(args.len());
-                for arg in args {
-                    if let Expr::Var(binder, _) = arg {
-                        binders.push(binder.clone());
-                    } else {
-                        compiler_errors::error_enum(
-                            "Invalid match pattern",
-                            "Enum variant patterns may only bind identifiers, e.g. Circle(r)",
-                            *span,
-                            ctx.file_idx,
-                            state.sources,
-                        );
-                    }
-                }
-                (&**namespace, type_args, binders, *span)
-            }
-            _ => compiler_errors::error_enum(
-                "Invalid match pattern",
-                "A match on an enum expects variant patterns, e.g. Circle(r) or Unit",
-                fallback_span,
+    state: &State<'_>,
+) -> Option<Box<[SmolStr]>> {
+    match variant_shape(path, ctx, state)? {
+        VariantShape::Named(names) => Some(names),
+        VariantShape::Positional => compiler_errors::error_type_test(
+            "Variant written with braces",
+            &format!(
+                "{} takes its payload in order, not by field name",
+                path[path.len() - 1]
+            ),
+            Some(&format!(
+                "Write it with parentheses: {}(...)",
+                path[path.len() - 1]
+            )),
+            "variant_payload_shape",
+            span,
+            ctx.file_idx,
+            state.sources,
+        ),
+    }
+}
+
+/// How the variant `path` names takes its payload, `None` for a path that
+/// names a struct or no variant.
+pub(crate) fn variant_shape(path: &[SmolStr], ctx: Ctx, state: &State<'_>) -> Option<VariantShape> {
+    let (name, module) = path.split_last()?;
+    let scope = state.scope(ctx.file_idx);
+    let names_struct = scope.resolve(module).is_some_and(|ns| {
+        ns.symbols
+            .iter()
+            .any(|(n, kind)| n == name && matches!(kind, SymbolKind::Struct(_)))
+    }) || find_template(module, name, scope, state.generics)
+        .is_some_and(|t| state.generics.is_struct_template(t));
+    if names_struct {
+        return None;
+    }
+    if let Some((enum_id, variant_idx)) = resolve_enum_variant(path, ctx.file_idx, state) {
+        return Some(
+            state
+                .generics
+                .variant_fields(enum_id, variant_idx)
+                .map_or(VariantShape::Positional, |names| {
+                    VariantShape::Named(Box::from(names))
+                }),
+        );
+    }
+    let template = if let [enum_module @ .., enum_name, _] = path {
+        find_template(enum_module, enum_name, scope, state.generics)
+    } else {
+        state.generics.enum_template_with_variant_in(name, scope)
+    };
+    template.and_then(|t| state.generics.template_variant_shape(t, name))
+}
+
+/// The values a named-field variant literal or pattern gives, put in the
+/// variant's declared order, each with the span it was written at.
+///
+/// A literal writes every field once. A pattern may end in `..`, which leaves
+/// the fields it does not name unbound, and each value is the name the field
+/// binds (`x` alone binds `x`, `x: px` binds `px`).
+pub(crate) fn order_named_fields(
+    names: &[SmolStr],
+    fields: &[(SmolStr, Expr, Span, Span)],
+    rest: Option<&(StructRest, Span)>,
+    variant: &str,
+    span: Span,
+    pattern: bool,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> (Vec<Expr>, Vec<Span>) {
+    if let Some((written, rest_span)) = rest
+        && (!pattern || written.base().is_some())
+    {
+        compiler_errors::error_type_test(
+            "Variant literal with ..",
+            &format!("{variant} has no default to fill fields from"),
+            Some("Give every field a value"),
+            "variant_field_missing",
+            *rest_span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    for (i, (field, _, field_span, _)) in fields.iter().enumerate() {
+        if !names.contains(field) {
+            compiler_errors::error_type_test(
+                "Unknown variant field",
+                &format!("{variant} has no field {field}"),
+                Some(&format!("Its fields are {}", names.join(", "))),
+                "variant_field_unknown",
+                *field_span,
                 ctx.file_idx,
                 state.sources,
-            ),
-        };
-    let variant_name = path[path.len() - 1].clone();
-    let variant_idx = if path.len() >= 2 {
-        let (pattern_enum, variant_idx) = if type_args.is_empty() {
-            resolve_qualified_pattern_enum(path, enum_id, span, ctx, state)
+            );
+        }
+        if fields[..i].iter().any(|(earlier, ..)| earlier == field) {
+            compiler_errors::error_type_test(
+                "Variant field written twice",
+                &format!("{field} is already given"),
+                None,
+                "variant_field_twice",
+                *field_span,
+                ctx.file_idx,
+                state.sources,
+            );
+        }
+    }
+    let mut values = Vec::with_capacity(names.len());
+    let mut spans = Vec::with_capacity(names.len());
+    for name in names {
+        if let Some((_, value, _, value_span)) = fields.iter().find(|(f, ..)| f == name) {
+            values.push(value.clone());
+            spans.push(*value_span);
+        } else if pattern && rest.is_some() {
+            values.push(Expr::Var(SmolStr::new_static("_"), span));
+            spans.push(span);
         } else {
-            resolve_generic_variant(path, type_args, span, ctx, state)
-        };
-        if pattern_enum != enum_id {
-            compiler_errors::error_pattern_enum_mismatch(
-                &path.join("::"),
-                &state.enums[pattern_enum as usize].name,
-                &state.enums[enum_id as usize].name,
+            compiler_errors::error_type_test(
+                "Missing variant field",
+                &format!("{variant} needs a value for {name}"),
+                Some(if pattern {
+                    "Name every field, or end the pattern with .. to skip the rest"
+                } else {
+                    "Give every field a value"
+                }),
+                "variant_field_missing",
                 span,
                 ctx.file_idx,
                 state.sources,
             );
         }
-        variant_idx
-    } else {
-        let e = &state.enums[enum_id as usize];
-        let Some(variant_idx) = e.variants.iter().position(|vt| vt.name == variant_name) else {
-            compiler_errors::error_enum(
-                "Unknown enum variant",
-                &format!("{} is not a variant of enum {}", variant_name, e.name),
-                span,
-                ctx.file_idx,
-                state.sources,
-            );
-        };
-        variant_idx as u16
-    };
-    let e = &state.enums[enum_id as usize];
-    let expected_arity = e.variants[variant_idx as usize].payload.len();
-    if binders.len() != expected_arity {
-        compiler_errors::error_enum(
-            "Wrong variant payload arity",
-            &format!(
-                "Variant {} binds {} value(s) but the pattern has {}",
-                variant_name,
-                expected_arity,
-                binders.len()
-            ),
-            span,
-            ctx.file_idx,
-            state.sources,
-        );
     }
-    (variant_idx, binders)
+    (values, spans)
+}
+
+/// A function a path written as a value names.
+pub(crate) enum PathValue {
+    /// A function candela compiled, by id: `m::f`, `Point::new`, `Rect::area`.
+    Fn(usize),
+    /// A constant, read by calling it: `m::LIMIT`.
+    Const,
+    /// A host or library function, which is no candela function of its own:
+    /// the anonymous function that calls it.
+    Wrapped(Expr),
+}
+
+/// What `path`, written where a value goes, names when it names a function:
+/// a module's function, a function an `impl` block declares (a method takes
+/// its receiver as the first argument), or a function of a `host` or `dylib`
+/// block. `None` for anything else.
+pub(crate) fn path_fn_value(
+    path: &[SmolStr],
+    type_args: &[TypeExpr],
+    span: Span,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Option<PathValue> {
+    let (name, namespace) = path.split_last()?;
+    if type_args.is_empty()
+        && let Some(fn_id) = state.scope(ctx.file_idx).find_function(namespace, name)
+    {
+        return Some(if state.fns[fn_id].is_const {
+            PathValue::Const
+        } else {
+            PathValue::Fn(fn_id)
+        });
+    }
+    if let Some(fn_id) = type_system::type_path_fn(path, type_args, span, ctx, state) {
+        return Some(PathValue::Fn(fn_id));
+    }
+    let [block, fn_name] = path else {
+        return None;
+    };
+    let (arity, returns_null) = state
+        .dyn_libs
+        .iter()
+        .filter(|lib| lib.name == *block)
+        .find_map(|lib| {
+            lib.fns
+                .iter()
+                .find(|sig| sig.name == *fn_name && !sig.variadic)
+        })
+        .map(|sig| (sig.args.len(), sig.return_type == DataType::Null))?;
+    let params: Box<[SmolStr]> = (0..arity)
+        .map(|i| format_args!("[{i}]").to_smolstr())
+        .collect();
+    let call = Expr::FunctionCall(
+        params.iter().map(|p| Expr::Var(p.clone(), span)).collect(),
+        Box::from(path),
+        span,
+        vec![span; arity].into_boxed_slice(),
+        Box::from([]),
+    );
+    let body = if returns_null {
+        call
+    } else {
+        Expr::ReturnVal(Box::new(Some(call)))
+    };
+    Some(PathValue::Wrapped(Expr::AnonymousFunction(
+        params,
+        Box::from([body]),
+        span,
+    )))
 }
 
 /// The enum and variant a qualified pattern with no type arguments names.
@@ -1706,92 +1921,96 @@ fn resolve_qualified_pattern_enum(
     (pattern_enum as u16, variant_idx as u16)
 }
 
-/// The span a variant pattern was written at, or `fallback` for one that
-/// carries none of its own.
-const fn pattern_span(pattern: &Expr, fallback: Span) -> Span {
-    match pattern {
-        Expr::Var(_, span)
-        | Expr::NamespacedRef(_, span, _)
-        | Expr::FunctionCall(_, _, span, _, _) => *span,
-        _ => fallback,
-    }
-}
-
-/// The names one resolved alternative binds, each with the type of the payload
-/// it binds, in name order.
-pub(crate) fn alternative_bindings(
-    enum_id: u16,
-    (variant_idx, binders): &(u16, Vec<SmolStr>),
-    state: &State<'_>,
-) -> Vec<(SmolStr, DataType)> {
-    let payload = &state.enums[enum_id as usize].variants[*variant_idx as usize].payload;
-    let mut bound: Vec<(SmolStr, DataType)> = binders
-        .iter()
-        .zip(payload.iter())
-        .filter(|(binder, _)| binder.as_str() != "_")
-        .map(|(binder, ty)| (binder.clone(), ty.clone()))
-        .collect();
-    bound.sort_by(|a, b| a.0.cmp(&b.0));
-    bound
-}
-
-/// Resolves every `|` alternative of an enum arm to the variant it names and
-/// the names it binds, one per payload position.
-///
-/// The arm body reads its bindings whichever alternative matched, so every
-/// alternative has to bind the same names at the same types; one that does
-/// not is reported against itself.
-pub(crate) fn resolve_arm_patterns(
-    enum_id: u16,
-    patterns: &[Expr],
-    span: Span,
-    ctx: Ctx,
-    state: &mut State<'_>,
-) -> Vec<(u16, Vec<SmolStr>)> {
-    let alternatives: Vec<(u16, Vec<SmolStr>)> = patterns
-        .iter()
-        .map(|pattern| resolve_variant_pattern(enum_id, pattern, span, ctx, state))
-        .collect();
-    if let [first, rest @ ..] = alternatives.as_slice() {
-        let expected = alternative_bindings(enum_id, first, state);
-        for (k, alternative) in rest.iter().enumerate() {
-            let found = alternative_bindings(enum_id, alternative, state);
-            if found != expected {
-                compiler_errors::error_pattern_bindings_differ(
-                    &expected,
-                    &found,
-                    pattern_span(&patterns[k + 1], span),
-                    ctx.file_idx,
-                    state.sources,
-                    state.type_names(),
-                );
-            }
-        }
-    }
-    alternatives
-}
-
-/// Declares, for the type walks that read an arm body without compiling it,
-/// the names the arm's pattern binds. Every alternative binds the same ones,
-/// so the first says what they are.
-pub(crate) fn declare_arm_bindings(
-    enum_id: u16,
-    patterns: &[Expr],
+/// Compiles a `match`: the first arm whose pattern fits the scrutinee and
+/// whose guard holds runs, and the wildcard when none does. `result` is where
+/// a match used as a value leaves its value, with whether that value is a
+/// function value; `None` for a statement.
+#[allow(clippy::too_many_arguments)]
+fn compile_match(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    wildcard: Option<&[Expr]>,
     span: Span,
     v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+    result: Option<(u16, bool)>,
 ) {
-    let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
-    for (name, var_type) in alternative_bindings(enum_id, &alternatives[0], state) {
-        v.push(Variable {
-            declared: None,
-            name,
-            register_id: 0,
-            cell: false,
-            var_type,
-        });
+    let scrut_type = scrutinee.infer_type(v, ctx, state);
+    check_shadowing_arms(arms, wildcard.is_some(), v, ctx, state);
+    let resolved = patterns::resolve_arms(arms, &scrut_type, ctx, state);
+    if !patterns::arms_cover(&scrut_type, arms, &resolved, wildcard.is_some(), state)
+        && (result.is_some() || matches!(scrut_type, DataType::Enum(_)))
+    {
+        error_match_not_covered(&scrut_type, arms, &resolved, span, ctx, state);
     }
+    let scrut_reg = scrutinee
+        .compile(v, ctx, state, output, None, false, true)
+        .unwrap_id();
+    // The scrutinee stays rooted for the whole match, so its register is not
+    // reused across the arms.
+    let v_base = v.len();
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static("[MATCH SCRUT]"),
+        register_id: scrut_reg,
+        cell: false,
+        var_type: scrut_type.clone(),
+    });
+    let mut end_jumps: Vec<usize> = Vec::with_capacity(arms.len());
+    for (arm, resolved) in arms.iter().zip(&resolved) {
+        let guard_code: &[Expr] = arm.guard.as_slice();
+        let captured = patterns::captured_in(&arm.pattern, &[&arm.body, guard_code]);
+        let mut compiled = patterns::Compiled::default();
+        patterns::compile(
+            resolved,
+            scrut_reg,
+            &scrut_type,
+            false,
+            &captured,
+            &[],
+            &mut compiled,
+            v,
+            ctx,
+            state,
+            output,
+        );
+        let v_arm = v.len();
+        v.extend(compiled.binds.iter().cloned());
+        let mut fails = compiled.fails;
+        if let Some(guard) = &arm.guard {
+            fails.extend(compile_guard(
+                guard,
+                arm.pattern.span(),
+                &arm.body,
+                v,
+                ctx,
+                state,
+                output,
+            ));
+        }
+        compile_arm_body(&arm.body, result, v, ctx, state, output);
+        v.truncate(v_arm);
+        for bound in &compiled.binds {
+            state.free_reg(bound.register_id, v);
+        }
+        end_jumps.push(output.len());
+        output.push(Instr::Jmp(0));
+        let next = output.len();
+        for j in fails {
+            set_jmp_size(&mut output[j], (next - j) as u16);
+        }
+    }
+    if let Some(w) = wildcard {
+        compile_arm_body(w, result, v, ctx, state, output);
+    }
+    let end = output.len();
+    for j in end_jumps {
+        set_jmp_size(&mut output[j], (end - j) as u16);
+    }
+    v.truncate(v_base);
+    state.free_reg(scrut_reg, v);
 }
 
 /// Compiles a match arm's body. A statement match runs it; a match used as a
@@ -1812,161 +2031,61 @@ fn compile_arm_body(
     }
 }
 
-/// Lowers a `match` on an enum scrutinee to a variant-tag compare chain with
-/// per-arm payload binding, reusing the ordinary conditional-jump machinery.
-///
-/// Each `|` alternative of an arm tests its own variant and binds its own
-/// payload positions into registers the arm shares, then joins the arm body.
-/// `result` is the register a match used as a value leaves its value in, with
-/// whether that value is a function value, and `None` for a statement.
-#[allow(clippy::too_many_arguments)]
-fn compile_enum_match(
-    enum_id: u16,
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
+/// Rejects an arm whose pattern is a lone name that a variable in scope
+/// already has, when arms follow it. The name binds whatever is matched, so
+/// the arms after it never run; the program most likely meant to compare
+/// with the variable, which a guard does.
+fn check_shadowing_arms(
+    arms: &[MatchArm],
+    has_wildcard: bool,
+    v: &[Variable],
     ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-    result: Option<(u16, bool)>,
+    state: &State<'_>,
 ) {
-    let scrut_reg = scrutinee
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    // Root the scrutinee for the whole match so its object-pool payload is not
-    // reclaimed and its register is not reused across arm bodies.
-    let v_base = v.len();
-    v.push(Variable {
-        declared: None,
-        name: SmolStr::new_static("[MATCH SCRUT]"),
-        register_id: scrut_reg,
-        cell: false,
-        var_type: DataType::Enum(enum_id),
-    });
-
-    let tag_reg = state.alloc_reg();
-    output.push(Instr::GetFieldStruct(scrut_reg, 0, tag_reg));
-
-    let variant_count = state.enums[enum_id as usize].variants.len();
-    let mut covered = vec![false; variant_count];
-    // One entry per alternative: where its test starts and the jump it takes
-    // when the tag is another variant's.
-    let mut false_jmps: Vec<usize> = Vec::with_capacity(arms.len());
-    let mut alternative_starts: Vec<usize> = Vec::with_capacity(arms.len());
-    let mut end_jmps: Vec<usize> = Vec::with_capacity(arms.len());
-
-    for (patterns, body) in arms {
-        let alternatives = resolve_arm_patterns(enum_id, patterns, span, ctx, state);
-        // (name, register the body reads, register the payload is read into)
-        let mut slots: Vec<(SmolStr, u16, u16, DataType, bool)> = Vec::new();
-        let mut to_body: Vec<usize> = Vec::new();
-        for (k, (variant_idx, binders)) in alternatives.iter().enumerate() {
-            covered[*variant_idx as usize] = true;
-            alternative_starts.push(output.len());
-            let idx_reg = state.alloc_reg();
-            output.push(Instr::SetInt(idx_reg, i32::from(*variant_idx)));
-            false_jmps.push(output.len());
-            output.push(Instr::NotEqJmp(tag_reg, idx_reg, 0));
-            state.free_reg(idx_reg, v);
-
-            // Bind the variant payload into the arm's locals. The first
-            // alternative allocates them; the others write the same ones.
-            for (i, binder) in binders.iter().enumerate() {
-                if binder.as_str() == "_" {
-                    continue;
-                }
-                let field = (i + 1) as u16;
-                if let Some((_, read_reg, value_reg, _, captured)) =
-                    slots.iter().find(|slot| slot.0 == *binder)
-                {
-                    if *captured {
-                        output.push(Instr::GetFieldStruct(scrut_reg, field, *value_reg));
-                        output.push(Instr::NewCell(*value_reg, *read_reg));
-                    } else {
-                        output.push(Instr::GetFieldStruct(scrut_reg, field, *read_reg));
-                    }
-                    continue;
-                }
-                let value_reg = state.alloc_reg();
-                output.push(Instr::GetFieldStruct(scrut_reg, field, value_reg));
-                let payload_type = state.enums[enum_id as usize].variants[*variant_idx as usize]
-                    .payload[i]
-                    .clone();
-                let captured = code_captures_variable(binder, body);
-                let read_reg = if captured {
-                    let cell_id = state.alloc_reg();
-                    output.push(Instr::NewCell(value_reg, cell_id));
-                    cell_id
-                } else {
-                    value_reg
-                };
-                slots.push((binder.clone(), read_reg, value_reg, payload_type, captured));
-            }
-            if k + 1 < alternatives.len() {
-                to_body.push(output.len());
-                output.push(Instr::Jmp(0));
-            }
+    for (i, arm) in arms.iter().enumerate() {
+        let last = i + 1 == arms.len() && !has_wildcard;
+        if let (patterns::Pattern::Bind(name, span), None, false) = (&arm.pattern, &arm.guard, last)
+            && v.iter().any(|var| &var.name == name)
+        {
+            compiler_errors::error_type_test(
+                "Pattern binds a name in use",
+                &format!(
+                    "{name} here binds a new name and matches every value, so the arms after it never run"
+                ),
+                Some(&format!(
+                    "To compare with the variable {name}, write a guard: x if x == {name} => ..."
+                )),
+                "pattern_binds_name",
+                *span,
+                ctx.file_idx,
+                state.sources,
+            );
         }
-        let body_start = output.len();
-        for at in to_body {
-            set_jmp_size(&mut output[at], (body_start - at) as u16);
-        }
-
-        let v_arm = v.len();
-        for (name, read_reg, _, var_type, captured) in slots {
-            v.push(Variable {
-                declared: None,
-                name,
-                register_id: read_reg,
-                cell: captured,
-                var_type,
-            });
-        }
-        compile_arm_body(body, result, v, ctx, state, output);
-        v.truncate(v_arm);
-
-        end_jmps.push(output.len());
-        output.push(Instr::Jmp(0));
     }
+}
 
-    // Where a non-matching last alternative (and the wildcard, if any) begins.
-    let after_arms = output.len();
-    if let Some(w) = wildcard {
-        compile_arm_body(w, result, v, ctx, state, output);
-    }
-    let end = output.len();
-
-    for (k, &j) in false_jmps.iter().enumerate() {
-        let target = if k + 1 < alternative_starts.len() {
-            alternative_starts[k + 1]
-        } else {
-            after_arms
-        };
-        set_jmp_size(&mut output[j], (target - j) as u16);
-    }
-    for &j in &end_jmps {
-        set_jmp_size(&mut output[j], (end - j) as u16);
-    }
-
-    v.truncate(v_base);
-    state.free_reg(tag_reg, v);
-    state.free_reg(scrut_reg, v);
-
-    if wildcard.is_none() && !covered.iter().all(|&c| c) {
-        let missing: Vec<&str> = state.enums[enum_id as usize]
-            .variants
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !covered[*i])
-            .map(|(_, vt)| vt.name.as_str())
+/// Reports a `match` that has no arm for some value: one on an enum that
+/// leaves variants out, or one used as a value with no arm that always fits.
+#[cold]
+fn error_match_not_covered(
+    scrut_type: &DataType,
+    arms: &[MatchArm],
+    resolved: &[patterns::Resolved],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> ! {
+    if let DataType::Enum(enum_id) = scrut_type {
+        let e = &state.enums[*enum_id as usize];
+        let missing: Vec<&str> = patterns::missing_variants(*enum_id, arms, resolved, state)
+            .into_iter()
+            .map(|variant| e.variants[variant as usize].name.as_str())
             .collect();
         compiler_errors::error_enum(
             "Non-exhaustive match",
             &format!(
                 "match on enum {} does not cover: {}. Add the missing arm(s) or a `_` wildcard",
-                state.enums[enum_id as usize].name,
+                e.name,
                 missing.join(", ")
             ),
             span,
@@ -1974,293 +2093,7 @@ fn compile_enum_match(
             state.sources,
         );
     }
-}
-
-/// The enum an arm pattern names a variant of, or `None` for a pattern the
-/// equality lowering compares as an ordinary value. Resolution follows what
-/// the pattern would compile to: a variable in scope wins over a variant of
-/// the same name, and a user function wins over a bare variant name.
-fn pattern_variant_enum(
-    pattern: &Expr,
-    v: &[Variable],
-    ctx: Ctx,
-    state: &State<'_>,
-) -> Option<u16> {
-    let path: &[SmolStr] = match pattern {
-        Expr::Var(name, _) if v.iter().all(|var| &var.name != name) => std::slice::from_ref(name),
-        Expr::NamespacedRef(path, _, _) => path,
-        Expr::FunctionCall(_, namespace, _, _, _)
-            if namespace.len() >= 2
-                || namespace.first().is_some_and(|name| {
-                    state
-                        .scope(ctx.file_idx)
-                        .find_function(&[], name.as_str())
-                        .is_none()
-                }) =>
-        {
-            namespace
-        }
-        _ => return None,
-    };
-    resolve_enum_variant(path, ctx.file_idx, state).map(|(enum_id, _)| enum_id)
-}
-
-/// Rejects a `match` whose arms name variants of an enum the scrutinee is not.
-/// Only an enum scrutinee carries the variant tag the arms dispatch on; the
-/// equality lowering would compile each pattern as a variant construction and
-/// compare it, which leaves every payload binder unbound.
-///
-/// Both the return-flow pass and the lowering call this, because either can be
-/// the first to read an arm body.
-pub(crate) fn check_match_scrutinee_is_enum(
-    scrut_type: &DataType,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    span: Span,
-    v: &[Variable],
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    if let Some(enum_id) = arms
-        .iter()
-        .flat_map(|(patterns, _)| patterns.iter())
-        .find_map(|pattern| pattern_variant_enum(pattern, v, ctx, state))
-    {
-        compiler_errors::error_match_not_enum(
-            &state.enums[enum_id as usize].name,
-            scrut_type,
-            span,
-            ctx.file_idx,
-            state.sources,
-            state.type_names(),
-        );
-    }
-}
-
-/// The test an arm of an equality `match` runs: the scrutinee, held in the
-/// variable `scrutinee`, equal to any of the arm's `|` alternatives.
-fn equality_arm_test(scrutinee: &SmolStr, patterns: &[Expr], span: Span) -> Expr {
-    let equals = |pattern: &Expr| {
-        Expr::Eq(
-            Operand::new(Expr::Var(scrutinee.clone(), span)),
-            Operand::new(pattern.clone()),
-            span,
-            span,
-        )
-    };
-    let mut test = equals(&patterns[0]);
-    for pattern in &patterns[1..] {
-        test = Expr::BoolOr(
-            Operand::new(test),
-            Operand::new(equals(pattern)),
-            span,
-            span,
-        );
-    }
-    test
-}
-
-/// The test and the body one arm of an equality `match` runs. An arm with a
-/// tuple pattern among its alternatives tests the elements and declares what
-/// the pattern binds; see [`tuples::tuple_arm`].
-fn equality_arm(
-    scrutinee: &SmolStr,
-    patterns: &[Expr],
-    body: &[Expr],
-    span: Span,
-) -> (Expr, Box<[Expr]>) {
-    if tuples::arm_has_tuple_pattern(patterns) {
-        tuples::tuple_arm(scrutinee, patterns, body, span)
-    } else {
-        (
-            equality_arm_test(scrutinee, patterns, span),
-            Box::from(body),
-        )
-    }
-}
-
-/// The `if` chain an equality `match` runs: one branch per arm, testing the
-/// scrutinee held in `scrutinee`, then the wildcard as the `else`. The first
-/// arm's body comes first, the way a condition holds its own code ahead of
-/// its `else if` blocks.
-///
-/// A last arm whose tuple pattern always matches stands in for a missing
-/// wildcard.
-fn equality_match_chain(
-    scrutinee: &SmolStr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-) -> (Expr, Box<[Expr]>) {
-    let mut arms = arms;
-    let mut catch_all: Option<Box<[Expr]>> = wildcard.map(Box::from);
-    if catch_all.is_none()
-        && let Some((patterns, body)) = arms.last()
-        && tuples::arm_is_irrefutable(patterns)
-    {
-        catch_all = Some(equality_arm(scrutinee, patterns, body, span).1);
-        if arms.len() > 1 {
-            arms = &arms[..arms.len() - 1];
-        }
-    }
-    let (first_patterns, first_body) = &arms[0];
-    let (first_test, first_code) = equality_arm(scrutinee, first_patterns, first_body, span);
-    let mut code: Vec<Expr> = Vec::with_capacity(arms.len() + first_code.len());
-    code.extend(first_code);
-    for (patterns, body) in &arms[1..] {
-        let (test, body) = equality_arm(scrutinee, patterns, body, span);
-        code.push(Expr::ElseIfBlock(Box::new(test), body, span));
-    }
-    if let Some(w) = catch_all {
-        code.push(Expr::ElseBlock(w));
-    }
-    (first_test, Box::from(code))
-}
-
-/// Checks every tuple pattern of a non-enum `match` against the matched
-/// value's type, and that each arm's alternatives bind the same names.
-fn check_tuple_arms(
-    scrut_type: &DataType,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    span: Span,
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    for (patterns, _) in arms {
-        if tuples::arm_has_tuple_pattern(patterns) {
-            tuples::arm_bindings(patterns, scrut_type, span, ctx, state);
-        }
-    }
-}
-
-/// Whether a `match` without a wildcard still covers every case, because its
-/// last arm is a tuple pattern of names alone.
-pub(crate) fn match_ends_irrefutable(arms: &[(Box<[Expr]>, Box<[Expr]>)]) -> bool {
-    arms.last()
-        .is_some_and(|(patterns, _)| tuples::arm_is_irrefutable(patterns))
-}
-
-/// Declares, for the type walks that read an arm body without compiling it,
-/// the names a non-enum arm's tuple patterns bind.
-pub(crate) fn declare_tuple_arm_bindings(
-    scrut_type: &DataType,
-    patterns: &[Expr],
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &State<'_>,
-) {
-    if !tuples::arm_has_tuple_pattern(patterns) {
-        return;
-    }
-    for (name, var_type) in tuples::arm_bindings(patterns, scrut_type, span, ctx, state) {
-        v.push(Variable {
-            declared: None,
-            name,
-            register_id: 0,
-            cell: false,
-            var_type,
-        });
-    }
-}
-
-/// Compiles a `match`. An enum scrutinee dispatches to variant-pattern matching
-/// with payload binding; any other scrutinee reproduces the equality-chain
-/// lowering (`scrutinee == pattern` per arm) that `match` has always had.
-fn compile_match(
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-) {
-    let scrut_type = scrutinee.infer_type(v, ctx, state);
-    if let DataType::Enum(enum_id) = scrut_type {
-        compile_enum_match(
-            enum_id, scrutinee, arms, wildcard, span, v, ctx, state, output, None,
-        );
-    } else {
-        check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
-        check_tuple_arms(&scrut_type, arms, span, ctx, state);
-        let obj_var = SmolStr::new_static("[MATCH TEMP]");
-        let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
-        let desugared = Expr::EvalBlock(Box::from([
-            Expr::VarDeclare(obj_var, Box::new(scrutinee.clone()), None),
-            Expr::Condition(Box::new(test), code, span, span),
-        ]));
-        desugared.compile(v, ctx, state, output, None, false, false);
-    }
-}
-
-/// Compiles a `match` used as a value into `tgt_id`, or a fresh register, and
-/// returns where the value is.
-///
-/// It covers every case the way an `if` used as a value has an `else`: an
-/// enum match lists every variant or has a `_` arm, and any other match has a
-/// `_` arm.
-fn compile_match_value(
-    scrutinee: &Expr,
-    arms: &[(Box<[Expr]>, Box<[Expr]>)],
-    wildcard: Option<&[Expr]>,
-    span: Span,
-    v: &mut Vec<Variable>,
-    ctx: Ctx,
-    state: &mut State<'_>,
-    output: &mut Vec<Instr>,
-    tgt_id: Option<u16>,
-    as_fn_value: bool,
-) -> u16 {
-    let scrut_type = scrutinee.infer_type(v, ctx, state);
-    if let DataType::Enum(enum_id) = scrut_type {
-        let result = state.alloc_reg_tgt(tgt_id);
-        compile_enum_match(
-            enum_id,
-            scrutinee,
-            arms,
-            wildcard,
-            span,
-            v,
-            ctx,
-            state,
-            output,
-            Some((result, as_fn_value)),
-        );
-        return result;
-    }
-    check_match_scrutinee_is_enum(&scrut_type, arms, span, v, ctx, state);
-    check_tuple_arms(&scrut_type, arms, span, ctx, state);
-    if wildcard.is_none() && !match_ends_irrefutable(arms) {
-        compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
-    }
-    let scrut_reg = scrutinee
-        .compile(v, ctx, state, output, None, false, true)
-        .unwrap_id();
-    let obj_var = SmolStr::new_static("[MATCH TEMP]");
-    let v_base = v.len();
-    v.push(Variable {
-        declared: None,
-        name: obj_var.clone(),
-        register_id: scrut_reg,
-        cell: false,
-        var_type: scrut_type,
-    });
-    let (test, code) = equality_match_chain(&obj_var, arms, wildcard, span);
-    let result = compile_inline_condition(
-        &test,
-        &code,
-        span,
-        v,
-        ctx,
-        state,
-        output,
-        tgt_id,
-        as_fn_value,
-    );
-    v.truncate(v_base);
-    state.free_reg(scrut_reg, v);
-    result
+    compiler_errors::error_match_value_without_wildcard(span, ctx.file_idx, state.sources);
 }
 
 fn compile_map_literal(
@@ -2573,7 +2406,10 @@ fn compile_propagate(
         && function
             .as_ref()
             .is_some_and(|(_, returns)| propagation_fits(&operand_type, returns, state));
-    if !fits {
+    // In `main` there is no caller to hand the failure to, so a `None` or an
+    // `Err` ends the program, the error its message.
+    let aborts = !ctx.in_function;
+    if !fits && !aborts {
         compiler_errors::error_propagate_return(
             function
                 .as_ref()
@@ -2608,13 +2444,49 @@ fn compile_propagate(
     state.free_reg(failure_reg, v);
     state.free_reg(tag_reg, v);
 
-    compile_return(
-        Some(&Expr::Var(SmolStr::new_static("[PROPAGATE]"), span)),
-        v,
-        ctx,
-        state,
-        output,
-    );
+    if aborts {
+        let DataType::Enum(enum_id) = v[v_base].var_type else {
+            unreachable!()
+        };
+        let failure = &state.enums[enum_id as usize].variants[failure_idx as usize];
+        let message = if let Some(error_type) = failure.payload.first().cloned() {
+            let error_reg = state.alloc_reg();
+            output.push(Instr::GetFieldStruct(operand_reg, 1, error_reg));
+            v.push(Variable {
+                declared: None,
+                name: SmolStr::new_static("[PROPAGATED ERROR]"),
+                register_id: error_reg,
+                cell: false,
+                var_type: error_type,
+            });
+            Expr::FunctionCall(
+                Box::from([Expr::Var(SmolStr::new_static("[PROPAGATED ERROR]"), span)]),
+                Box::from([SmolStr::new_static("string")]),
+                span,
+                Box::from([span]),
+                Box::from([]),
+            )
+        } else {
+            Expr::String(SmolStr::new_static("none"))
+        };
+        Expr::FunctionCall(
+            Box::from([message]),
+            Box::from([SmolStr::new_static("throw")]),
+            span,
+            Box::from([span]),
+            Box::from([]),
+        )
+        .compile(v, ctx, state, output, None, false, false);
+        v.truncate(v_base + 1);
+    } else {
+        compile_return(
+            Some(&Expr::Var(SmolStr::new_static("[PROPAGATE]"), span)),
+            v,
+            ctx,
+            state,
+            output,
+        );
+    }
 
     let success = output.len();
     set_jmp_size(&mut output[to_success], (success - to_success) as u16);
@@ -2623,6 +2495,97 @@ fn compile_propagate(
     v.truncate(v_base);
     state.free_reg(operand_reg, v);
     dest
+}
+
+/// What `value else fallback` reads as once the value's type is known: a
+/// `match` used as a value on the `Option` or the `Result`, whose `Some` or
+/// `Ok` arm gives what the value holds and whose other arm gives the fallback,
+/// with the `Err`'s error bound under the binder of `else |e|`.
+pub(crate) fn else_match(
+    value: &Expr,
+    binder: Option<&(SmolStr, Span)>,
+    fallback: &Expr,
+    span: Span,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+) -> Expr {
+    let value_type = value.infer_type(v, ctx, state);
+    let Some((_, failure_idx)) = type_system::propagation_sides(&value_type, state) else {
+        compiler_errors::error_type_test(
+            "else after a value that cannot fail",
+            &format!(
+                "else gives a fallback for an Option or a Result, and this value is {}",
+                state.type_names().of(&value_type)
+            ),
+            None,
+            "else_operand",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let DataType::Enum(enum_id) = value_type else {
+        unreachable!()
+    };
+    let variants = &state.enums[enum_id as usize].variants;
+    let success = variants[1 - failure_idx as usize].name.clone();
+    let failure = variants[failure_idx as usize].name.clone();
+    let is_result = failure == "Err";
+    if let (Some((_, binder_span)), false) = (binder, is_result) {
+        compiler_errors::error_type_test(
+            "None binds nothing",
+            "A None carries no error for the else to bind",
+            Some("Drop the |e|: value else { ... }"),
+            "else_binder_on_option",
+            *binder_span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    let held = SmolStr::new_static("[else value]");
+    let named = |name: SmolStr, payload: patterns::Payload| patterns::Pattern::Named {
+        path: Box::from([name]),
+        type_args: Box::from([]),
+        payload,
+        span,
+    };
+    let failure_payload = if is_result {
+        patterns::Payload::Positional(Box::from([binder
+            .map_or(patterns::Pattern::Wildcard(span), |(name, at)| {
+                patterns::Pattern::Bind(name.clone(), *at)
+            })]))
+    } else {
+        patterns::Payload::None
+    };
+    let fallback_body: Box<[Expr]> = match fallback {
+        Expr::EvalBlock(code) => code.clone(),
+        other => Box::from([other.clone()]),
+    };
+    Expr::Match(
+        Box::new(value.clone()),
+        Box::from([
+            MatchArm {
+                pattern: named(
+                    success,
+                    patterns::Payload::Positional(Box::from([patterns::Pattern::Bind(
+                        held.clone(),
+                        span,
+                    )])),
+                ),
+                guard: None,
+                body: Box::from([Expr::Var(held, span)]),
+            },
+            MatchArm {
+                pattern: named(failure, failure_payload),
+                guard: None,
+                body: fallback_body,
+            },
+        ]),
+        None,
+        span,
+        true,
+    )
 }
 
 /// Whether a function returning `returns` can hand back the `None` or the
@@ -3695,6 +3658,9 @@ fn compile_inline_condition_branch(
     let v_len = v.len();
     let symbols_len = state.scope(ctx.file_idx).symbols.len();
     let (last, statements) = branch.split_last().unwrap();
+    // A branch that ends in `return`, `throw`, `break` or `continue` gives no
+    // value: control leaves before it would.
+    let statements = if last.diverges() { branch } else { statements };
     for (idx, statement) in statements.iter().enumerate() {
         if let Some(id) = statement.compile_with_code_context(
             v,
@@ -3709,7 +3675,9 @@ fn compile_inline_condition_branch(
             state.free_reg(id, v);
         }
     }
-    let val_id = if as_fn_value {
+    let val_id = if statements.len() == branch.len() {
+        tgt_id
+    } else if as_fn_value {
         compile_fn_value(last, v, ctx, state, output, Some(tgt_id))
     } else {
         last.compile(v, ctx, state, output, Some(tgt_id), false, true)
@@ -4253,12 +4221,7 @@ fn compile_while_loop(
     // parse the code block, clone the vars to avoid overriding anything
     let loop_id = ctx.block_id + 1;
 
-    let mut cond_code = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let mut cond_code = compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     v.truncate(v_len);
 
     let exit = output.len() + cond_code.len() + 1;
@@ -4300,12 +4263,21 @@ fn compile_for_loop(
 
     // parse the array, get its id (the target array is the first Expr in array_code)
     let array_type = array.infer_type(v, ctx, state);
+    if is_range(&array_type, state) {
+        range_loop(var_name, array, code, span).compile(v, ctx, state, output, None, false, false);
+        return;
+    }
+    if matches!(array_type, DataType::Map(_)) && var_name != "_" {
+        map_loop(var_name, array, code, span, ctx, state)
+            .compile(v, ctx, state, output, None, false, false);
+        return;
+    }
     let mut array = array
         .compile(v, ctx, state, output, None, false, true)
         .unwrap_id();
 
-    // Iterating a map walks its keys: materialize the key array and iterate that
-    // with the ordinary array machinery. The loop variable binds each key.
+    // `for _ in m` runs once per entry and binds nothing: walk the keys with
+    // the ordinary array machinery.
     if matches!(array_type, DataType::Map(_)) {
         let keys_reg = state.alloc_reg();
         output.push(Instr::CallLibFunc(LibFunc::Keys, array, keys_reg));
@@ -4338,6 +4310,148 @@ fn compile_for_loop(
         state,
         output,
     );
+}
+
+/// Whether `t` is the prelude's `Range`, the type of `a..b`.
+pub(crate) fn is_range(t: &DataType, state: &State<'_>) -> bool {
+    matches!(t, DataType::Struct(id) if state.generics.prelude_struct("Range") == Some(*id))
+}
+
+/// The loop `for var in range` runs over a `Range` value: the numbers it
+/// holds, read out of its fields once, counting by its step either way. A
+/// range written in place, `for i in 0..n`, never gets here: it is an
+/// [`Expr::IntForLoop`].
+pub(crate) fn range_loop(var_name: &SmolStr, range: &Expr, code: &[Expr], span: Span) -> Expr {
+    let tag = format!("{} {}]", span.start, span.end);
+    let name = |what: &str| SmolStr::from(format!("[range {what} {tag}"));
+    let (r, i, end, step) = (name("value"), name("at"), name("end"), name("step"));
+    let var = |n: &SmolStr| Expr::Var(n.clone(), span);
+    let field = |f: &'static str| {
+        Expr::GetStructField(Box::new(var(&r)), SmolStr::new_static(f), span, span)
+    };
+    let op = Operand::new;
+    let up = Expr::BoolAnd(
+        op(Expr::Sup(op(var(&step)), op(Expr::Int(0)), span, span)),
+        op(Expr::Inf(op(var(&i)), op(var(&end)), span, span)),
+        span,
+        span,
+    );
+    let down = Expr::BoolAnd(
+        op(Expr::Inf(op(var(&step)), op(Expr::Int(0)), span, span)),
+        op(Expr::Sup(op(var(&i)), op(var(&end)), span, span)),
+        span,
+        span,
+    );
+    let mut body = Vec::with_capacity(code.len() + 2);
+    if var_name != "_" {
+        body.push(Expr::VarDeclare(var_name.clone(), Box::new(var(&i)), None));
+    }
+    // The step comes before the body, so a `continue` takes it too.
+    body.push(Expr::VarAssign(
+        i.clone(),
+        Box::new(Expr::Add(op(var(&i)), op(var(&step)), span, span)),
+        span,
+        span,
+    ));
+    body.extend_from_slice(code);
+    Expr::EvalBlock(Box::from([
+        Expr::VarDeclare(r.clone(), Box::new(range.clone()), None),
+        Expr::VarDeclare(i, Box::new(field("start")), None),
+        Expr::VarDeclare(end, Box::new(field("end")), None),
+        Expr::VarDeclare(step, Box::new(field("step")), None),
+        Expr::WhileBlock(
+            Box::new(Expr::BoolOr(op(up), op(down), span, span)),
+            Box::from(body),
+            span,
+        ),
+    ]))
+}
+
+/// The loop a `for` runs over a map: its entries, the keys and the values
+/// walked side by side. The binding is a pattern, which the body opens by
+/// taking the element apart (the parser's `parse_for_pattern`); one of two places,
+/// `(k, v)`, binds the key and the value straight from the two lists, with no
+/// entry built, and any other pattern takes the entry as a tuple.
+///
+/// A lone name over a map is an error that names the pattern to write, or
+/// `m.keys()` for the keys alone.
+pub(crate) fn map_loop(
+    element: &SmolStr,
+    map: &Expr,
+    code: &[Expr],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Expr {
+    let Some((Expr::LetPattern(pattern_let), rest)) = code
+        .split_first()
+        .filter(|(first, _)| matches!(first, Expr::LetPattern(p) if matches!(&p.value, Expr::Var(n, _) if n == element)))
+    else {
+        compiler_errors::error_type_test(
+            "Map walked by a name",
+            &format!("A map gives its entries, a key and a value, so {element} cannot hold one"),
+            Some("Write for (k, v) in m, or for k in m.keys() for the keys alone"),
+            "map_iteration_takes_a_pattern",
+            span,
+            ctx.file_idx,
+            state.sources,
+        );
+    };
+    let tag = format!("{} {}]", span.start, span.end);
+    let name = |what: &str| SmolStr::from(format!("[map {what} {tag}"));
+    let (m, keys, values, i) = (name("value"), name("keys"), name("values"), name("at"));
+    let var = |n: &SmolStr| Expr::Var(n.clone(), span);
+    let method = |on: &SmolStr, method: &'static str| {
+        Expr::ObjFunctionCall(
+            Box::new(var(on)),
+            Box::from([]),
+            Box::from([SmolStr::new_static(method)]),
+            span,
+            span,
+            Box::from([]),
+            Box::from([]),
+        )
+    };
+    let at = |list: &SmolStr| Expr::ArrayGetIndex(Box::new(var(list)), Box::new(var(&i)), span);
+    let bind = |pattern: &patterns::Pattern, value: Expr, out: &mut Vec<Expr>| match pattern {
+        patterns::Pattern::Wildcard(_) => {}
+        patterns::Pattern::Bind(n, _) => {
+            out.push(Expr::VarDeclare(n.clone(), Box::new(value), None));
+        }
+        other => out.push(Expr::LetPattern(Box::new(PatternLet {
+            pattern: other.clone(),
+            value,
+            annotation: None,
+            otherwise: None,
+            span: other.span(),
+        }))),
+    };
+    let mut body = Vec::with_capacity(rest.len() + 2);
+    match &pattern_let.pattern {
+        patterns::Pattern::Tuple(items, _) if items.len() == 2 => {
+            bind(&items[0], at(&keys), &mut body);
+            bind(&items[1], at(&values), &mut body);
+        }
+        other => bind(
+            other,
+            expr::tuple_literal(vec![(at(&keys), span), (at(&values), span)], span),
+            &mut body,
+        ),
+    }
+    body.extend_from_slice(rest);
+    Expr::EvalBlock(Box::from([
+        Expr::VarDeclare(m.clone(), Box::new(map.clone()), None),
+        Expr::VarDeclare(keys.clone(), Box::new(method(&m, "keys")), None),
+        Expr::VarDeclare(values, Box::new(method(&m, "values")), None),
+        Expr::IntForLoop(
+            i,
+            Box::new(Expr::Int(0)),
+            Box::new(method(&keys, "len")),
+            Box::from(body),
+            span,
+            span,
+        ),
+    ]))
 }
 
 /// Compiles `for x in list[start..end]` to walk `list` itself from `start` to
@@ -4630,7 +4744,7 @@ fn compile_walk(
     let body = compile_expr(
         code,
         v,
-        ctx.no_single_run()
+        ctx.loop_body()
             .advance_offset(output.len() + usize::from(pending)),
         state,
     );
@@ -4750,12 +4864,8 @@ fn compile_int_for_loop(
     }
 
     let regs_before = state.registers.len() as u16;
-    let compiled_loop_code = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let compiled_loop_code =
+        compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     state.free_scope_registers(regs_before, &compiled_loop_code, v);
     let compiled_loop_code_len = compiled_loop_code.len() as u16;
 
@@ -4791,12 +4901,7 @@ fn compile_loop_block(
 ) {
     let loop_id = ctx.block_id + 1;
     let regs_before = state.registers.len() as u16;
-    let mut compiled = compile_expr(
-        code,
-        v,
-        ctx.no_single_run().advance_offset(output.len()),
-        state,
-    );
+    let mut compiled = compile_expr(code, v, ctx.loop_body().advance_offset(output.len()), state);
     state.free_scope_registers(regs_before, &compiled, v);
     let code_length = compiled.len() as u16;
     parse_loop_flow_control(&mut compiled, loop_id, code_length + 1, false, true);
@@ -4804,6 +4909,7 @@ fn compile_loop_block(
     output.push(Instr::JmpBack(code_length));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_try_catch_block(
     e: &[Expr],
     err_var: &SmolStr,
@@ -4820,7 +4926,7 @@ fn compile_try_catch_block(
     // compiled at the offset they occupy. Compiling them at the
     // enclosing offset makes every call inside a `try` jump short by the length
     // of the code already emitted before it.
-    let main_code = compile_expr(e, v, ctx.advance_offset(output.len()), state);
+    let main_code = compile_expr(e, v, ctx.in_try().advance_offset(output.len()), state);
     output.extend(main_code);
     output.push(Instr::StopErrorCatch);
     output.push(Instr::Jmp(0)); // jumps over the catch handler if no error arises
@@ -4993,6 +5099,126 @@ fn compile_var_declaration(
         state,
         output,
     );
+}
+
+/// Compiles `let pattern = value;` and `let pattern = value else { ... };`.
+/// What the pattern binds stays in scope for the rest of the block. Without an
+/// `else` the pattern fits every value of the value's type; with one, the
+/// `else` block runs where it does not, and leaves.
+fn compile_pattern_let(
+    pattern_let: &PatternLet,
+    remaining_code: &[Expr],
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    let PatternLet {
+        pattern,
+        value,
+        annotation,
+        otherwise,
+        span,
+    } = pattern_let;
+    let declared = annotation
+        .as_ref()
+        .map(|a| a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)));
+    let value_type = match &declared {
+        Some(declared) => declared.clone(),
+        None => value.infer_type(v, ctx, state),
+    };
+    let resolved = patterns::resolve(pattern, &value_type, ctx, state);
+    let always = patterns::always_fits(&resolved, &value_type, state);
+    if otherwise.is_none() && !always {
+        compiler_errors::error_type_test(
+            "Pattern that can fail",
+            &format!(
+                "This pattern does not fit every {}, and nothing says what happens when it does not",
+                state.type_names().of(&value_type)
+            ),
+            Some("Give the let an else block that leaves: let Some(v) = value else { return; };"),
+            "let_pattern_can_fail",
+            *span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    if otherwise.is_some() && always {
+        compiler_errors::error_type_test(
+            "else that never runs",
+            &format!(
+                "This pattern fits every {}, so the else block never runs",
+                state.type_names().of(&value_type)
+            ),
+            Some("Drop the else block"),
+            "let_else_never_runs",
+            *span,
+            ctx.file_idx,
+            state.sources,
+        );
+    }
+    let converted = match (&declared, annotation) {
+        (Some(declared), Some(a)) => {
+            check_declared_value(
+                "",
+                declared,
+                a.span,
+                value,
+                a.value_span,
+                v,
+                ctx,
+                state,
+                output,
+            );
+            coerce::compile_converted(value, declared, a.value_span, None, v, ctx, state, output)
+        }
+        _ => None,
+    };
+    let reg = converted.unwrap_or_else(|| {
+        value
+            .compile(v, ctx, state, output, None, false, true)
+            .unwrap_id()
+    });
+    let v_base = v.len();
+    v.push(Variable {
+        declared: None,
+        name: SmolStr::new_static("[LET VALUE]"),
+        register_id: reg,
+        cell: false,
+        var_type: value_type.clone(),
+    });
+    let captured = patterns::captured_in(pattern, &[remaining_code]);
+    let mut compiled = patterns::Compiled::default();
+    patterns::compile(
+        &resolved,
+        reg,
+        &value_type,
+        false,
+        &captured,
+        &[],
+        &mut compiled,
+        v,
+        ctx,
+        state,
+        output,
+    );
+    v.truncate(v_base);
+    if let Some(otherwise) = otherwise
+        && !compiled.fails.is_empty()
+    {
+        let past_else = output.len();
+        output.push(Instr::Jmp(0));
+        let else_start = output.len();
+        for j in compiled.fails {
+            set_jmp_size(&mut output[j], (else_start - j) as u16);
+        }
+        let code = compile_expr(otherwise, v, ctx.advance_offset(output.len()), state);
+        output.extend(code);
+        let end = output.len();
+        set_jmp_size(&mut output[past_else], (end - past_else) as u16);
+    }
+    v.extend(compiled.binds);
+    state.free_reg(reg, v);
 }
 
 /// Compiles the value a `let` starts its variable with and brings the variable
@@ -5382,6 +5608,7 @@ fn compile_function_definition(
     span: Span,
     declared_return_type: Option<&(TypeExpr, Span)>,
     type_params: &TypeParams,
+    defaults: &[Option<(Expr, Span)>],
     _v: &mut Vec<Variable>,
     ctx: Ctx,
     state: &mut State<'_>,
@@ -5439,9 +5666,38 @@ fn compile_function_definition(
         captures: Box::from([]),
         entry_register: None,
     });
+    let fn_id = (state.fns.len() - 1) as u16;
+    let ids = state.generics.add_param_defaults(ctx.file_idx, defaults);
+    state.generics.set_fn_defaults(fn_id, ids);
 }
 
 fn compile_return(
+    return_value: Option<&Expr>,
+    v: &mut Vec<Variable>,
+    ctx: Ctx,
+    state: &mut State<'_>,
+    output: &mut Vec<Instr>,
+) {
+    compile_return_value(return_value, v, ctx, state, output);
+    // A `return` inside `try` blocks takes their catches down on its way out,
+    // after its value is worked out under them.
+    if ctx.in_function && ctx.tries > 0 {
+        let at = output.len() - 1;
+        for _ in 0..ctx.tries {
+            output.insert(at, Instr::StopErrorCatch);
+        }
+    }
+}
+
+/// Takes down the catches of the `try` blocks a jump out of `tries` of them
+/// leaves.
+fn leave_tries(tries: u8, output: &mut Vec<Instr>) {
+    for _ in 0..tries {
+        output.push(Instr::StopErrorCatch);
+    }
+}
+
+fn compile_return_value(
     return_value: Option<&Expr>,
     v: &mut Vec<Variable>,
     ctx: Ctx,
@@ -5570,11 +5826,13 @@ fn compile_return(
 
 #[inline]
 fn compile_loop_break(ctx: Ctx, output: &mut Vec<Instr>) {
+    leave_tries(ctx.loop_tries, output);
     output.push(Instr::NotEqJmp(ctx.block_id + 1, 0, 0));
 }
 
 #[inline]
 fn compile_loop_continue(ctx: Ctx, output: &mut Vec<Instr>) {
+    leave_tries(ctx.loop_tries, output);
     output.push(Instr::EqJmp(ctx.block_id + 1, 0, 0));
 }
 
@@ -5650,6 +5908,19 @@ pub fn compile_expr(
             output.truncate(output_len);
             v.truncate(vars_len);
             state.scope_mut(ctx.file_idx).symbols.truncate(symbols);
+            // What a pattern `let` would have bound is in scope too, its type
+            // unknown.
+            if let Expr::LetPattern(pattern_let) = x {
+                for (name, _) in pattern_let.pattern.binders() {
+                    v.push(Variable {
+                        declared: None,
+                        name,
+                        register_id: state.alloc_reg(),
+                        cell: false,
+                        var_type: DataType::Unknown,
+                    });
+                }
+            }
             if let Expr::VarDeclare(name, value, _) = x {
                 // The type the value would have had, when that much can be
                 // worked out without the error, so what reads the name
@@ -6008,6 +6279,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -6053,6 +6325,29 @@ impl Expr {
             }
             Self::Struct(namespace, fields, span, type_args, base) => {
                 debug_assert!(uses_id);
+                if let Some((enum_id, variant_idx, args, spans)) = named_variant_literal(
+                    namespace,
+                    fields,
+                    type_args,
+                    base.as_deref(),
+                    *span,
+                    v,
+                    ctx,
+                    state,
+                ) {
+                    return Some(compile_enum_construction(
+                        enum_id,
+                        variant_idx,
+                        &args,
+                        *span,
+                        &spans,
+                        true,
+                        v,
+                        ctx,
+                        state,
+                        output,
+                    ));
+                }
                 Some(compile_struct_literal(
                     namespace,
                     fields,
@@ -6603,13 +6898,6 @@ impl Expr {
             }
             Self::VarDeclare(name, value, annotation) => {
                 debug_assert!(!uses_id);
-                if let Some((places, pattern_span)) = tuple_let_pattern(name) {
-                    let found = match annotation {
-                        Some(a) => a.ty.to_datatype(&mut state.type_ctx(ctx.file_idx)),
-                        None => value.infer_type(v, ctx, state),
-                    };
-                    check_tuple_places(places, &found, pattern_span, ctx, state);
-                }
                 compile_var_declaration(
                     name,
                     value,
@@ -6641,15 +6929,16 @@ impl Expr {
                 );
                 None
             }
-            Self::EnumDeclare(name, variants, span, type_params) => {
+            Self::EnumDeclare(name, variants, span, type_params, fields) => {
                 debug_assert!(!uses_id);
-                compile_enum_definition(name, variants, *span, type_params, ctx, state);
+                compile_enum_definition(name, variants, *span, type_params, fields, ctx, state);
                 None
             }
             Self::Match(scrutinee, arms, wildcard, span, true) => {
                 debug_assert!(uses_id);
                 let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
-                Some(compile_match_value(
+                let result = state.alloc_reg_tgt(tgt_id);
+                compile_match(
                     scrutinee,
                     arms,
                     wildcard.as_deref(),
@@ -6658,9 +6947,9 @@ impl Expr {
                     ctx,
                     state,
                     output,
-                    tgt_id,
-                    as_fn_value,
-                ))
+                    Some((result, as_fn_value)),
+                );
+                Some(result)
             }
             Self::Match(scrutinee, arms, wildcard, span, false) => {
                 debug_assert!(!uses_id);
@@ -6673,11 +6962,64 @@ impl Expr {
                     ctx,
                     state,
                     output,
+                    None,
                 );
                 None
             }
+            Self::LetPattern(pattern_let) => {
+                debug_assert!(!uses_id);
+                compile_pattern_let(pattern_let, remaining_code, v, ctx, state, output);
+                None
+            }
+            Self::Else(value, binder, fallback, span) => {
+                debug_assert!(uses_id);
+                else_match(value, binder.as_ref(), fallback, *span, v, ctx, state).compile_form(
+                    v,
+                    ctx,
+                    state,
+                    output,
+                    tgt_id,
+                    var_assignment,
+                    remaining_code,
+                    uses_id,
+                )
+            }
             Self::NamespacedRef(path, span, type_args) => {
                 debug_assert!(uses_id);
+                if let Some(value) = path_fn_value(path, type_args, *span, ctx, state) {
+                    return match value {
+                        PathValue::Fn(fn_id) => {
+                            Some(compile_fn_entry_value(fn_id, v, ctx, state, output, tgt_id))
+                        }
+                        PathValue::Const => Self::FunctionCall(
+                            Box::from([]),
+                            path.clone(),
+                            *span,
+                            Box::from([]),
+                            Box::from([]),
+                        )
+                        .compile_form(
+                            v,
+                            ctx,
+                            state,
+                            output,
+                            tgt_id,
+                            var_assignment,
+                            remaining_code,
+                            uses_id,
+                        ),
+                        PathValue::Wrapped(wrapper) => wrapper.compile_form(
+                            v,
+                            ctx,
+                            state,
+                            output,
+                            tgt_id,
+                            var_assignment,
+                            remaining_code,
+                            uses_id,
+                        ),
+                    };
+                }
                 if !type_args.is_empty() {
                     let (enum_id, variant_idx) =
                         resolve_generic_variant(path, type_args, *span, ctx, state);
@@ -6687,6 +7029,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -6702,6 +7045,7 @@ impl Expr {
                         &[],
                         *span,
                         &[],
+                        false,
                         v,
                         ctx,
                         state,
@@ -6810,7 +7154,15 @@ impl Expr {
                     }
                 }),
             ),
-            Self::FunctionDecl(fn_name, fn_args, fn_code, span, return_type, type_params) => {
+            Self::FunctionDecl(
+                fn_name,
+                fn_args,
+                fn_code,
+                span,
+                return_type,
+                type_params,
+                defaults,
+            ) => {
                 debug_assert!(!uses_id);
                 compile_function_definition(
                     fn_name,
@@ -6819,6 +7171,7 @@ impl Expr {
                     *span,
                     return_type.as_deref(),
                     type_params,
+                    defaults,
                     v,
                     ctx,
                     state,
@@ -6841,10 +7194,48 @@ impl Expr {
                 compile_loop_continue(ctx, output);
                 None
             }
+            // A block used as a value: its statements, then its last
+            // expression into the result.
+            Self::EvalBlock(code) if uses_id => {
+                let as_fn_value = matches!(self.infer_type(v, ctx, state), DataType::FnValue(_));
+                let result = state.alloc_reg_tgt(tgt_id);
+                compile_inline_condition_branch(code, v, ctx, state, output, result, as_fn_value);
+                Some(result)
+            }
             Self::EvalBlock(code) => {
-                debug_assert!(!uses_id);
                 compile_eval_block(code, v, ctx, state, output);
                 None
+            }
+            // The closure after a call whose callee takes its arguments in
+            // order is its last one.
+            Self::NamedArg(name, value, _) if name == TRAILING_ARG => value.compile_form(
+                v,
+                ctx,
+                state,
+                output,
+                tgt_id,
+                var_assignment,
+                remaining_code,
+                uses_id,
+            ),
+            Self::NamedArg(name, _, span) => {
+                call_args::error_named_argument_unexpected(name, *span, ctx.file_idx, state.sources)
+            }
+            Self::DefaultArg(id, _) => {
+                // A default compiles in the file that declared it, where no
+                // variable of the call's scope is visible.
+                let (file_idx, value, _) = state.generics.arg_default(*id).clone();
+                let mut scope: Vec<Variable> = Vec::new();
+                value.compile_form(
+                    &mut scope,
+                    Ctx { file_idx, ..ctx },
+                    state,
+                    output,
+                    tgt_id,
+                    var_assignment,
+                    &[],
+                    uses_id,
+                )
             }
             _ => unsafe { unreachable_unchecked() },
         }
@@ -6898,9 +7289,10 @@ pub struct Namespace {
     /// For a module bound by an import, its path as the import wrote it
     /// (`std/json`, `./geometry.cdl`), for a message to name it by.
     pub import_path: SmolStr,
-    /// Names two glob imports both bring in, with the modules they come from.
-    /// Using one is an error; declaring one of the file's own resolves it.
-    pub ambiguous: Vec<(SmolStr, SmolStr, SmolStr)>,
+    /// The macros the module offers: the ones it declares and the ones its
+    /// `export import`s name. The parser expands them; an import list may
+    /// name one.
+    pub macros: Vec<SmolStr>,
 }
 
 /// The scope of every file in the program, keyed by its index in `sources`.
@@ -7188,12 +7580,13 @@ fn real_path(path: &Path) -> std::io::Result<PathBuf> {
 /// `Option`, a variant called `Some` or a method of the same name finds its own
 /// first. A method nothing calls is never compiled, so a program pays for the
 /// ones it uses.
-pub const PRELUDE_MODULES: [&str; 5] = [
+pub const PRELUDE_MODULES: [&str; 6] = [
     "std/option.cdl",
     "std/result.cdl",
     "std/list.cdl",
     "std/string.cdl",
     "std/map.cdl",
+    "std/range.cdl",
 ];
 
 /// The source of a standard library module the compiler carries, by the path
@@ -7210,6 +7603,7 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/list.cdl" => Some(include_str!("../../libs/std/list.cdl")),
         "std/string.cdl" => Some(include_str!("../../libs/std/string.cdl")),
         "std/map.cdl" => Some(include_str!("../../libs/std/map.cdl")),
+        "std/range.cdl" => Some(include_str!("../../libs/std/range.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/math.cdl" => Some(include_str!("../../libs/std/math.cdl")),
         #[cfg(target_arch = "wasm32")]
@@ -7218,6 +7612,26 @@ fn embedded_std_module(path: &str) -> Option<&'static str> {
         "std/random.cdl" => Some(include_str!("../../libs/std/random.cdl")),
         #[cfg(target_arch = "wasm32")]
         "std/hash.cdl" => Some(include_str!("../../libs/std/hash.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/assert.cdl" => Some(include_str!("../../libs/std/assert.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/cli.cdl" => Some(include_str!("../../libs/std/cli.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/csv.cdl" => Some(include_str!("../../libs/std/csv.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/term.cdl" => Some(include_str!("../../libs/std/term.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/encoding.cdl" => Some(include_str!("../../libs/std/encoding.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/event.cdl" => Some(include_str!("../../libs/std/event.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/json.cdl" => Some(include_str!("../../libs/std/json.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/os.cdl" => Some(include_str!("../../libs/std/os.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/path.cdl" => Some(include_str!("../../libs/std/path.cdl")),
+        #[cfg(target_arch = "wasm32")]
+        "std/set.cdl" => Some(include_str!("../../libs/std/set.cdl")),
         _ => None,
     }
 }
@@ -7247,6 +7661,100 @@ fn library_module(
         let _ = resolver;
         None
     }
+}
+
+thread_local! {
+    /// The file being parsed, which a relative import's macros are looked up
+    /// beside.
+    static PARSING: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
+    /// The macros of each module read so far in this compile, by its path. A
+    /// module being read is in here with none, so an import cycle ends.
+    static MODULE_MACROS: RefCell<FxHashMap<PathBuf, Rc<[Rc<MacroDef>]>>> =
+        RefCell::new(FxHashMap::default());
+}
+
+/// Parses `src`, the file at `path`, with relative imports' macros looked up
+/// beside it.
+fn parse_at(path: &Path, src: &Source) -> parser::ParsedFile {
+    let previous = PARSING.with(|p| p.replace(path.to_path_buf()));
+    let parsed = parser::parse(&src.contents, src);
+    PARSING.with(|p| *p.borrow_mut() = previous);
+    parsed
+}
+
+/// The file an import names and its text, found the way the import itself
+/// resolves it, or `None` when it cannot be read; the import reports that.
+fn import_text(
+    path: &str,
+    is_logical: bool,
+    importer: &Path,
+    resolver: &ImportResolver,
+) -> Option<(PathBuf, SmolStr, String)> {
+    let library = library_module(path, resolver);
+    let carried_text = |file: &Path| {
+        library
+            .as_ref()
+            .filter(|(at, _)| at == file)
+            .and_then(|(_, text)| *text)
+    };
+    let file = if is_logical {
+        library.as_ref()?.0.clone()
+    } else {
+        let beside = importer
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path);
+        real_path(&beside)
+            .ok()
+            .or_else(|| library.as_ref().map(|(at, _)| at.clone()))?
+    };
+    if let Some(text) = carried_text(&file) {
+        return Some((
+            file,
+            carried_module_filename(path, resolver),
+            String::from(text),
+        ));
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    return None;
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        let text = match resolver.overlay(&file) {
+            Some(text) => String::from(text),
+            None => std::fs::read_to_string(&file).ok()?,
+        };
+        let name = SmolStr::from(file.to_string_lossy().as_ref());
+        Some((file, name, text))
+    }
+}
+
+/// Installs, for the compile about to run, how a file's imports reach the
+/// macros their modules declare.
+fn install_macro_loader(resolver: &ImportResolver) -> macros::LoaderGuard {
+    MODULE_MACROS.with(|m| m.borrow_mut().clear());
+    let resolver = resolver.clone();
+    macros::install_loader(Rc::new(move |path: &str, is_logical: bool| {
+        let importer = PARSING.with(|p| p.borrow().clone());
+        let (file, filename, text) = import_text(path, is_logical, &importer, &resolver)?;
+        if let Some(known) = MODULE_MACROS.with(|m| m.borrow().get(&file).cloned()) {
+            return Some(known);
+        }
+        // A module that writes neither `macro` nor `export` declares no macro
+        // and passes none on, so it is not read twice.
+        if !text.contains("macro") && !text.contains("export") {
+            return Some(Rc::from([]));
+        }
+        MODULE_MACROS.with(|m| m.borrow_mut().insert(file.clone(), Rc::from([])));
+        let src = Source {
+            filename,
+            contents: text,
+        };
+        let previous = PARSING.with(|p| p.replace(file.clone()));
+        let offered: Rc<[Rc<MacroDef>]> = parser::module_macros(&src).into();
+        PARSING.with(|p| *p.borrow_mut() = previous);
+        MODULE_MACROS.with(|m| m.borrow_mut().insert(file, Rc::clone(&offered)));
+        Some(offered)
+    }))
 }
 
 /// The name a module the compiler carries is reported under: the file of that
@@ -7300,13 +7808,7 @@ fn load_prelude(
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
     pending_dylibs: &mut Vec<PendingDylib>,
-    pending_host: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: &mut Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     generics: &mut Generics,
     resolver: &ImportResolver,
 ) {
@@ -7324,7 +7826,7 @@ fn load_prelude(
             filename: carried_module_filename(rel, resolver),
             contents: String::from(text),
         });
-        let parsed = parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+        let parsed = parse_at(&path, sources.last().unwrap());
         generics.add_impls(parsed.impls, child_src_idx);
 
         let mut child_namespace = Namespace::default();
@@ -7332,6 +7834,7 @@ fn load_prelude(
             parsed.code,
             parsed.attributes,
             &parsed.consts,
+            &parsed.macros,
             attrs,
             &path,
             child_src_idx,
@@ -7351,6 +7854,13 @@ fn load_prelude(
             generics,
             resolver,
         );
+        // A struct the prelude declares is reached by its bare name from
+        // every file that declares none of its own.
+        for (name, kind) in &child_namespace.symbols {
+            if let SymbolKind::Struct(id) = kind {
+                generics.add_prelude_struct(name.clone(), *id);
+            }
+        }
         file_namespaces.insert(child_src_idx, child_namespace);
         file_namespaces.mark_std(child_src_idx);
         generics.mark_prelude_file(child_src_idx);
@@ -7412,6 +7922,30 @@ fn has_c_representation(ty: &DataType, structs: &[Struct], depth: usize) -> bool
                     s.fields
                         .iter()
                         .all(|(_, field, _)| has_c_representation(field, structs, depth + 1))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether a type is, or holds, a function, which no host binding carries.
+fn holds_function_type(ty: &DataType, structs: &[Struct], depth: usize) -> bool {
+    match ty {
+        DataType::Fn(_) | DataType::FnValue(_) => true,
+        DataType::Array(Some(element)) => holds_function_type(element, structs, depth),
+        DataType::Map(entry) => [&entry.0, &entry.1]
+            .into_iter()
+            .flatten()
+            .any(|t| holds_function_type(t, structs, depth)),
+        DataType::Union(members) => members
+            .iter()
+            .any(|t| holds_function_type(t, structs, depth)),
+        DataType::Struct(id) => {
+            depth < structs.len()
+                && structs.get(*id as usize).is_some_and(|s| {
+                    s.fields
+                        .iter()
+                        .any(|(_, field, _)| holds_function_type(field, structs, depth + 1))
                 })
         }
         _ => false,
@@ -7649,37 +8183,6 @@ fn module_exports(namespace: &Namespace) -> Namespace {
     exports
 }
 
-/// A file's scope indexed by name, which a glob import binds against instead
-/// of searching the scope once per name it brings in. It stands for the
-/// scope and the glob list it was built from while only glob imports edit
-/// them; an import that edits them otherwise drops it.
-struct GlobIndex {
-    /// The kind of each name's first symbol in the scope.
-    in_scope: FxHashMap<SmolStr, SymbolKind>,
-    /// The names glob imports brought in.
-    globbed: FxHashSet<SmolStr>,
-    /// The names two glob imports made ambiguous.
-    ambiguous: FxHashSet<SmolStr>,
-}
-
-impl GlobIndex {
-    fn of(namespace: &Namespace, globbed: &[(SmolStr, SmolStr)]) -> Self {
-        let mut in_scope: FxHashMap<SmolStr, SymbolKind> = FxHashMap::default();
-        for (name, kind) in &namespace.symbols {
-            in_scope.entry(name.clone()).or_insert(*kind);
-        }
-        Self {
-            in_scope,
-            globbed: globbed.iter().map(|(name, _)| name.clone()).collect(),
-            ambiguous: namespace
-                .ambiguous
-                .iter()
-                .map(|(name, _, _)| name.clone())
-                .collect(),
-        }
-    }
-}
-
 /// Adds what one import brings in to the scope of the file that writes it.
 ///
 /// `exports` is what the module declares. A namespace binding puts it behind
@@ -7694,8 +8197,6 @@ fn bind_import(
     file_path: &Path,
     module_display: &SmolStr,
     merged_symbol_origins: &mut Vec<(SmolStr, SmolStr)>,
-    globbed: &mut Vec<(SmolStr, SmolStr)>,
-    index: &mut Option<GlobIndex>,
     span: Span,
     src_file_idx: u16,
     sources: &[Source],
@@ -7727,8 +8228,6 @@ fn bind_import(
             ));
         }
         ImportBinding::Items(items) => {
-            // This arm edits the scope without keeping the glob index.
-            *index = None;
             for (item, item_span) in items {
                 let found: Vec<(SmolStr, SymbolKind)> = exports
                     .symbols
@@ -7738,6 +8237,10 @@ fn bind_import(
                     })
                     .cloned()
                     .collect();
+                // A macro the import names was put in scope by the parser.
+                if found.is_empty() && exports.macros.contains(&item) {
+                    continue;
+                }
                 if found.is_empty() {
                     compiler_errors::error_import_item_not_exported(
                         &item,
@@ -7764,12 +8267,6 @@ fn bind_import(
                     Vec::new()
                 };
                 for (name, kind) in found.into_iter().chain(methods) {
-                    // A name a glob brought in gives way to one the file names.
-                    if let Some(at) = globbed.iter().position(|(n, _)| *n == name) {
-                        globbed.remove(at);
-                        namespace.symbols.retain(|(n, _)| *n != name);
-                        namespace.ambiguous.retain(|(n, _, _)| *n != name);
-                    }
                     if let Some((_, existing)) = namespace.symbols.iter().find(|(n, _)| *n == name)
                     {
                         // The same underlying symbol arriving through two
@@ -7798,80 +8295,17 @@ fn bind_import(
                 }
             }
         }
-        ImportBinding::Glob(_) => {
-            let GlobIndex {
-                in_scope,
-                globbed: globbed_names,
-                ambiguous: ambiguous_names,
-            } = index.get_or_insert_with(|| GlobIndex::of(namespace, globbed));
-            // Types the file declares itself: their own methods stay theirs,
-            // and the imported type's methods do not attach to them.
-            let shadowed_types: FxHashSet<SmolStr> = exports
-                .symbols
-                .iter()
-                .filter(|(name, kind)| {
-                    !matches!(kind, SymbolKind::Fn(_))
-                        && !globbed_names.contains(name)
-                        && in_scope.contains_key(name)
-                })
-                .map(|(name, _)| name.clone())
-                .collect();
-            for (name, kind) in exports.symbols {
-                if (name == "main" && matches!(kind, SymbolKind::Fn(_)))
-                    || name.starts_with(type_system::ANON_FN_PREFIX)
-                {
-                    continue;
-                }
-                if let Some((type_name, _)) = name.split_once(METHOD_SEP)
-                    && shadowed_types.contains(type_name)
-                {
-                    continue;
-                }
-                match in_scope.get(&name) {
-                    None if ambiguous_names.contains(&name) => {}
-                    None => {
-                        globbed.push((name.clone(), module_display.clone()));
-                        globbed_names.insert(name.clone());
-                        in_scope.insert(name.clone(), kind);
-                        namespace.symbols.push((name, kind));
-                    }
-                    Some(existing) if symbol_ids_equal(*existing, kind) => {}
-                    Some(_) => {
-                        // Another glob brought this name in: neither wins.
-                        if globbed_names.contains(&name)
-                            && let Some(at) = globbed.iter().position(|(n, _)| *n == name)
-                        {
-                            let (_, first) = globbed[at].clone();
-                            namespace.symbols.retain(|(n, _)| *n != name);
-                            in_scope.remove(&name);
-                            ambiguous_names.insert(name.clone());
-                            namespace
-                                .ambiguous
-                                .push((name, first, module_display.clone()));
-                        }
-                        // Otherwise the file declares or names it: it shadows.
-                    }
-                }
-            }
-        }
     }
 }
 
 /// The items an `export import` with `binding` brings in from a module that
-/// shows `exports`: every item for `{ * }`, and for a list the named items
-/// with the methods of each named type.
+/// shows `exports`: the named items with the methods of each named type.
 fn reexported(exports: &Namespace, binding: &ImportBinding) -> Vec<(SmolStr, SymbolKind)> {
     let shown = |name: &SmolStr, kind: &SymbolKind| {
         let own_main = name == "main" && matches!(kind, SymbolKind::Fn(_));
         !own_main && !name.starts_with(type_system::ANON_FN_PREFIX)
     };
     match binding {
-        ImportBinding::Glob(_) => exports
-            .symbols
-            .iter()
-            .filter(|(name, kind)| shown(name, kind))
-            .cloned()
-            .collect(),
         ImportBinding::Items(items) => exports
             .symbols
             .iter()
@@ -7910,8 +8344,9 @@ fn exported_names(exports: &Namespace) -> Vec<SmolStr> {
 
 fn parse_toplevel(
     code: Vec<Expr>,
-    item_attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    item_attributes: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     consts: &[usize],
+    declared_macros: &[SmolStr],
     attrs: &mut PendingAttributes,
     file_path: &Path,
     src_file_idx: u16,
@@ -7927,32 +8362,65 @@ fn parse_toplevel(
     pending_enums: &mut PendingEnums,
     pending_fns: &mut PendingFns,
     pending_dylibs: &mut Vec<PendingDylib>,
-    pending_host: &mut Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: &mut Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     generics: &mut Generics,
     resolver: &ImportResolver,
 ) {
     let mut imports = Vec::new();
+    // An `impl` block and the parts of a generic one name no item of their
+    // own and are recorded where they stand; the rest are on an item, by its
+    // index, or on one of its parts.
+    let push_unattached = |attrs: &mut PendingAttributes, on: AttrOn, run| match on {
+        AttrOn::Impl(ty) => attrs.uses.push((src_file_idx, UseTarget::Impl(ty), run)),
+        AttrOn::Generic(kind) => attrs
+            .uses
+            .push((src_file_idx, UseTarget::Generic(kind), run)),
+        _ => unreachable!("only an impl block's uses name no item"),
+    };
+    let item_count = code.len();
     let mut item_attributes = item_attributes.into_iter().peekable();
     for (index, expr) in code.into_iter().enumerate() {
-        // The attributes written in front of this item, if any.
-        let uses = item_attributes
-            .next_if(|(at, _)| *at == index)
-            .map(|(_, uses)| uses);
+        // The attributes written on this item and its parts, if any.
+        let mut uses = Vec::new();
+        while let Some((_, on, run)) = item_attributes.next_if(|(at, ..)| *at == index) {
+            if matches!(on, AttrOn::Impl(_) | AttrOn::Generic(_)) {
+                push_unattached(attrs, on, run);
+            } else {
+                uses.push((on, run));
+            }
+        }
         match expr {
-            Expr::FunctionDecl(fn_name, fn_args, fn_code, span, fn_return_type, type_params) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Fn(fns.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Fn)
+            Expr::FunctionDecl(
+                fn_name,
+                fn_args,
+                fn_code,
+                span,
+                fn_return_type,
+                type_params,
+                defaults,
+            ) => {
+                let fn_id = fns.len() as u16;
+                let kind = if consts.contains(&index) {
+                    AttributeTargetKind::Const
+                } else if fn_name.contains(METHOD_SEP) {
+                    AttributeTargetKind::Method
+                } else {
+                    AttributeTargetKind::Fn
+                };
+                for (on, run) in uses {
+                    let target = match on {
+                        _ if !type_params.is_empty() => UseTarget::Generic(match on {
+                            AttrOn::Param(_) => AttributeTargetKind::Param,
+                            _ => kind,
+                        }),
+                        AttrOn::Param(i) => UseTarget::Param(fn_id, i),
+                        _ => match kind {
+                            AttributeTargetKind::Const => UseTarget::Const(fn_id),
+                            AttributeTargetKind::Method => UseTarget::Method(fn_id),
+                            _ => UseTarget::Fn(fn_id),
+                        },
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 if let Some((_, SymbolKind::Fn(func_id))) =
                     namespace.symbols.iter().rfind(|(f, _)| f == &fn_name)
@@ -7970,7 +8438,6 @@ fn parse_toplevel(
                 let mut callees = Vec::new();
                 collect_direct_fn_calls(&fn_code, self_type_of(&fn_name), &mut callees);
 
-                let fn_id = fns.len() as u16;
                 fns.push(Function {
                     is_const: consts.contains(&index),
                     name: fn_name.clone(),
@@ -7998,17 +8465,25 @@ fn parse_toplevel(
                     }),
                     entry_register: None,
                 });
+                let default_ids = generics.add_param_defaults(src_file_idx, &defaults);
+                generics.set_fn_defaults(fn_id, default_ids);
                 pending_fns.push((fn_id, src_file_idx, fn_args, fn_return_type, type_params));
                 namespace.symbols.push((fn_name, SymbolKind::Fn(fn_id)));
             }
             Expr::StructDeclare(name, fields, span, type_params, defaults) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Struct(structs.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Struct)
+                for (on, run) in uses {
+                    let id = structs.len() as u16;
+                    let target = match on {
+                        AttrOn::Field(_) if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Field)
+                        }
+                        _ if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Struct)
+                        }
+                        AttrOn::Field(i) => UseTarget::Field(id, i),
+                        _ => UseTarget::Struct(id),
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 // A generic declaration registers no type of its own: each
                 // instantiation of it becomes an ordinary struct.
@@ -8075,7 +8550,7 @@ fn parse_toplevel(
                 } else {
                     fn_signatures
                         .iter()
-                        .map(|(fn_name, args, ret, fn_span)| {
+                        .map(|(fn_name, args, ret, fn_span, params)| {
                             (
                                 fn_name.clone(),
                                 args.iter()
@@ -8083,6 +8558,7 @@ fn parse_toplevel(
                                     .collect(),
                                 qualify_host_type(ret, &host_namespace, &local),
                                 *fn_span,
+                                params.clone(),
                             )
                         })
                         .collect()
@@ -8095,14 +8571,20 @@ fn parse_toplevel(
                     Box::from([]),
                 ));
             }
-            Expr::EnumDeclare(name, variants, span, type_params) => {
-                if let Some(uses) = uses {
-                    let target = if type_params.is_empty() {
-                        UseTarget::Enum(enums.len() as u16)
-                    } else {
-                        UseTarget::Generic(AttributeTargetKind::Enum)
+            Expr::EnumDeclare(name, variants, span, type_params, fields) => {
+                for (on, run) in uses {
+                    let id = enums.len() as u16;
+                    let target = match on {
+                        AttrOn::Variant(_) if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Variant)
+                        }
+                        _ if !type_params.is_empty() => {
+                            UseTarget::Generic(AttributeTargetKind::Enum)
+                        }
+                        AttrOn::Variant(i) => UseTarget::Variant(id, i),
+                        _ => UseTarget::Enum(id),
                     };
-                    attrs.uses.push((src_file_idx, target, uses));
+                    attrs.uses.push((src_file_idx, target, run));
                 }
                 if !type_params.is_empty() {
                     let template = generics.add_enum_template(
@@ -8110,6 +8592,7 @@ fn parse_toplevel(
                         type_params,
                         src_file_idx,
                         variants,
+                        fields,
                     );
                     namespace
                         .symbols
@@ -8124,6 +8607,7 @@ fn parse_toplevel(
                     name_span: span,
                 });
                 namespace.symbols.push((name, SymbolKind::Enum(enum_id)));
+                generics.set_variant_fields(enum_id, fields);
                 pending_enums.push((enum_id, src_file_idx, variants));
             }
             // A browser has no file system and no library loader. The std
@@ -8149,19 +8633,23 @@ fn parse_toplevel(
         }
     }
 
+    // An `impl` block after the file's last item.
+    for (at, on, run) in item_attributes {
+        debug_assert!(at >= item_count);
+        push_unattached(attrs, on, run);
+    }
+
+    namespace.macros.extend(declared_macros.iter().cloned());
     files.insert(file_path.to_path_buf(), module_exports(namespace));
 
     // Names merged into this file's scope by bare imports, with the module
     // each came from; consulted to report both sources on a collision.
     let mut merged_symbol_origins: Vec<(SmolStr, SmolStr)> = Vec::new();
-    // Names glob imports brought in, with the module each came from: a
-    // later explicit item replaces one, and a second glob makes it ambiguous.
-    let mut globbed: Vec<(SmolStr, SmolStr)> = Vec::new();
     // What each `export import` brought in, which joins what this file shows
     // its importers once every import is bound.
     let mut passed_on: Vec<(SmolStr, SymbolKind)> = Vec::new();
-    // The file's scope by name, for glob imports to bind against.
-    let mut glob_index: Option<GlobIndex> = None;
+    // The macros an `export import` names, which the file offers too.
+    let mut passed_on_macros: Vec<SmolStr> = Vec::new();
 
     for import in imports {
         match import {
@@ -8371,8 +8859,7 @@ fn parse_toplevel(
                     });
 
                     // Parse the imported file's contents
-                    let parsed =
-                        parser::parse(&sources.last().unwrap().contents, sources.last().unwrap());
+                    let parsed = parse_at(&file_path, sources.last().unwrap());
                     generics.add_impls(parsed.impls, child_src_idx);
 
                     let mut child_namespace = Namespace::default();
@@ -8381,6 +8868,7 @@ fn parse_toplevel(
                         parsed.code,
                         parsed.attributes,
                         &parsed.consts,
+                        &parsed.macros,
                         attrs,
                         &file_path,
                         child_src_idx,
@@ -8420,6 +8908,14 @@ fn parse_toplevel(
                 };
                 if exported {
                     passed_on.extend(reexported(&child_namespace, &binding));
+                    if let ImportBinding::Items(items) = &binding {
+                        passed_on_macros.extend(
+                            items
+                                .iter()
+                                .filter(|(item, _)| child_namespace.macros.contains(item))
+                                .map(|(item, _)| item.clone()),
+                        );
+                    }
                 }
                 bind_import(
                     namespace,
@@ -8428,8 +8924,6 @@ fn parse_toplevel(
                     &file_path,
                     &module_display,
                     &mut merged_symbol_origins,
-                    &mut globbed,
-                    &mut glob_index,
                     span,
                     src_file_idx,
                     sources,
@@ -8439,10 +8933,15 @@ fn parse_toplevel(
         }
     }
 
+    if !passed_on_macros.is_empty() {
+        let shown = files.entry(file_path.to_path_buf()).or_default();
+        shown.macros.extend(passed_on_macros.iter().cloned());
+        namespace.macros.extend(passed_on_macros);
+    }
+
     // An item an `export import` brought in joins what this file shows, when
     // the file's scope still holds it: a declaration of the file's own that
-    // shadows it is what importers see, and a name two globs made ambiguous
-    // is passed on by neither.
+    // shadows it is what importers see.
     if !passed_on.is_empty() {
         let shown = files.entry(file_path.to_path_buf()).or_default();
         // Indexed by name, since every name passed on is looked up in both.
@@ -8507,13 +9006,7 @@ fn resolve_types(
     pending_enums: PendingEnums,
     pending_fns: PendingFns,
     pending_dylibs: Vec<PendingDylib>,
-    pending_host: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )>,
+    pending_host: Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)>,
     file_namespaces: &FileNamespaces,
     dynamic_libs_fns: &mut Vec<DynamicLibFn>,
     host_fns: &mut Vec<HostFnSig>,
@@ -8654,7 +9147,7 @@ fn resolve_types(
         let () = lib;
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
-            .map(|(fn_name, fn_args, fn_return_type, fn_name_span)| {
+            .map(|(fn_name, fn_args, fn_return_type, fn_name_span, params)| {
                 let fn_args = fn_args
                     .iter()
                     .map(|t| {
@@ -8699,6 +9192,8 @@ fn resolve_types(
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
+                    params: params.names.clone(),
+                    defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
                     return_type: fn_return_type.clone(),
                     id: (dynamic_libs_fns.len() + unbound_dylib_fns) as u16,
                     variadic: false,
@@ -8779,7 +9274,7 @@ fn resolve_types(
     for (src_file_idx, dynlib_id, fn_signatures, host_namespace, _span) in pending_host {
         let resolved: Vec<FnSignature> = fn_signatures
             .iter()
-            .map(|(fn_name, fn_args, fn_return_type, _fn_name_span)| {
+            .map(|(fn_name, fn_args, fn_return_type, fn_name_span, params)| {
                 // A lone `...` sentinel argument marks a variadic host fn: it
                 // takes no fixed argument types, and the call site forwards
                 // every supplied argument to the registered closure.
@@ -8813,9 +9308,28 @@ fn resolve_types(
                     fns,
                     generics,
                 });
+                // A host value is data: no function crosses into the
+                // embedding program or back, so a signature naming one is
+                // refused here rather than at every call.
+                if let Some(ty) = fn_args
+                    .iter()
+                    .chain(std::iter::once(&fn_return_type))
+                    .find(|ty| holds_function_type(ty, structs, 0))
+                {
+                    compiler_errors::error_host_fn_takes_function(
+                        fn_name,
+                        ty,
+                        *fn_name_span,
+                        src_file_idx,
+                        sources,
+                        TypeNames { structs, enums },
+                    );
+                }
                 let return_val = FnSignature {
                     name: fn_name.clone(),
                     args: fn_args.clone(),
+                    params: params.names.clone(),
+                    defaults: generics.add_param_defaults(src_file_idx, &params.defaults),
                     return_type: fn_return_type.clone(),
                     id: host_fns.len() as u16,
                     variadic,
@@ -8985,7 +9499,8 @@ pub fn compile_profile(
         contents,
     };
 
-    let parsed = parser::parse(&main_src.contents, &main_src);
+    let _macro_loader = install_macro_loader(resolver);
+    let parsed = parse_at(&loaded_file_key(PathBuf::from(filename)), &main_src);
 
     #[cfg(not(target_arch = "wasm32"))]
     if debug {
@@ -9027,13 +9542,7 @@ pub fn compile_profile(
     let mut pending_fns: PendingFns = Vec::with_capacity(2);
     let mut generics = Generics::default();
     let mut pending_dylibs: Vec<PendingDylib> = Vec::new();
-    let mut pending_host: Vec<(
-        u16,
-        u16,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        SmolStr,
-        Span,
-    )> = Vec::new();
+    let mut pending_host: Vec<(u16, u16, Box<[ForeignFn]>, SmolStr, Span)> = Vec::new();
 
     generics.add_impls(parsed.impls, 0);
     let mut pending_attributes = PendingAttributes::default();
@@ -9041,6 +9550,7 @@ pub fn compile_profile(
         parsed.code,
         parsed.attributes,
         &parsed.consts,
+        &parsed.macros,
         &mut pending_attributes,
         &main_path,
         0,
@@ -9115,6 +9625,8 @@ pub fn compile_profile(
         in_function: false,
         offset: 0,
         return_downcast: None,
+        tries: 0,
+        loop_tries: 0,
     };
     let mut indirect_registers = IndirectRegisters::default();
     let mut state = State {

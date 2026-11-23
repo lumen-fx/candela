@@ -103,6 +103,8 @@ impl std::fmt::Display for NamedType<'_> {
             // The dynamic slot is spelled `any` in a program, and a
             // message about one names it the way the program does.
             DataType::Unknown => write!(f, "any"),
+            // The type of no value is written `()`.
+            DataType::Null => write!(f, "()"),
             other => write!(f, "{other}"),
         }
     }
@@ -179,7 +181,7 @@ pub struct FnGenerics {
     /// The `-> Type` annotation as written.
     pub return_type: ReturnAnnotation,
     /// Type parameters already bound because the enclosing type was
-    /// instantiated: `impl Cell<T>` lowered for `Cell<int>` binds `T` to `int`
+    /// instantiated: `impl<T> Cell<T>` lowered for `Cell<int>` binds `T` to `int`
     /// in every one of its methods.
     pub bindings: Box<[(SmolStr, DataType)]>,
     /// File the declaration was written in, whose scope its annotations resolve
@@ -217,6 +219,12 @@ pub struct FunctionImpl {
 pub struct FnSignature {
     pub name: SmolStr,
     pub args: Box<[DataType]>,
+    /// The parameters' names, which a call passes arguments by.
+    pub params: Box<[SmolStr]>,
+    /// The parameters' defaults, by the id
+    /// [`crate::compiler::type_system::Generics::arg_default`] reads; empty
+    /// when none declares one.
+    pub defaults: Box<[Option<u32>]>,
     pub return_type: DataType,
     pub id: u16,
     /// When true (host functions only) the call site accepts any number of
@@ -258,6 +266,12 @@ pub struct Ctx {
     /// out; a value of a known type was already checked at compile time and
     /// pays nothing.
     pub return_downcast: Option<ReturnCheck>,
+    /// The `try` blocks of the function being compiled that enclose the code,
+    /// which a `return` leaves: it takes their catches down on its way out.
+    pub tries: u8,
+    /// The `try` blocks inside the innermost loop that enclose the code, which
+    /// a `break` or a `continue` leaves the same way.
+    pub loop_tries: u8,
 }
 
 /// How a `return` checks an `any` value against the declared return type.
@@ -293,9 +307,20 @@ impl TypeCodes {
 impl Ctx {
     #[inline(always)]
     #[must_use]
-    pub const fn no_single_run(self) -> Self {
+    pub const fn loop_body(self) -> Self {
         Self {
             single_run: false,
+            loop_tries: 0,
+            ..self
+        }
+    }
+    /// The body of a `try` block, whose catch a jump out of it takes down.
+    #[inline(always)]
+    #[must_use]
+    pub const fn in_try(self) -> Self {
+        Self {
+            tries: self.tries.saturating_add(1),
+            loop_tries: self.loop_tries.saturating_add(1),
             ..self
         }
     }
@@ -836,7 +861,7 @@ impl State<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: SmolStr,
     pub register_id: u16,

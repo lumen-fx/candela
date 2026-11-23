@@ -24,8 +24,8 @@ pub extern "C" fn stored() -> i64 {
 
 const PROGRAM: &str = "
 dylib \"voidret\" {
-    store(int);
-    int stored();
+    fn store(a: int);
+    fn stored() -> int;
 }
 
 fn round_trip() {
@@ -46,7 +46,7 @@ fn a_void_c_call_leaves_the_programs_values_alone() {
     let script = root.join("app.cdl");
     let src = "
 dylib \"voidret\" {
-    store(int);
+    fn store(a: int);
 }
 
 fn main() {
@@ -97,9 +97,9 @@ fn a_type_with_no_c_shape_is_a_compile_error() {
     let filename = script.to_str().expect("scratch path is utf-8");
 
     for (signature, name, type_name) in [
-        ("bool stored();", "stored", "bool"),
-        ("store({string: int});", "store", "{string: int}"),
-        ("store(int | string);", "store", "int|string"),
+        ("fn stored() -> bool;", "stored", "bool"),
+        ("fn store(m: {string: int});", "store", "{string: int}"),
+        ("fn store(v: int | string);", "store", "int|string"),
     ] {
         let src = format!("dylib \"voidret\" {{\n    {signature}\n}}\n\nfn main() {{}}\n");
         let diagnostic = Engine::new()
@@ -153,12 +153,12 @@ fn a_refused_signature_is_reported_at_it() {
 
     for (signature, place, label) in [
         (
-            "bool stored();",
-            "app.cdl:3:10",
+            "fn stored() -> bool;",
+            "app.cdl:3:8",
             "stored takes or returns bool, which has no C representation",
         ),
         (
-            "int missing();",
+            "fn missing() -> int;",
             "app.cdl:2:1",
             "Cannot find symbol missing in this dynamic library",
         ),

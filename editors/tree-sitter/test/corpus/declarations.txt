@@ -7,7 +7,7 @@ import "pgo_import_test.cdl";
 import "std/json" as j;
 import "std/assert" { eq, is_true };
 import "std/set" { Set, };
-export import "./parts.cdl" { * };
+export import "./parts.cdl" { Part };
 
 --------------------------------------------------------------------------------
 
@@ -30,7 +30,8 @@ export import "./parts.cdl" { * };
       (identifier)))
   (import_declaration
     (string_literal)
-    (import_items)))
+    (import_items
+      (identifier))))
 
 ================================================================================
 Function declaration
@@ -187,8 +188,8 @@ impl Option {
             None => { return false; }
         }
     }
-    fn unwrap_or(self, default) {
-        return default;
+    fn map(self, f) {
+        return f;
     }
 }
 
@@ -209,10 +210,9 @@ impl Option {
             (match_arm_list
               (match_arm
                 (match_pattern
-                  (call_expression
-                    (identifier)
-                    (arguments
-                      (identifier))))
+                  (variant_pattern
+                    (type_identifier)
+                    (identifier)))
                 (block
                   (return_statement
                     (boolean_literal))))
@@ -325,9 +325,9 @@ Dynamic library block (pgo/pgo-dynlib.cdl)
 ================================================================================
 
 dylib "pgo_dynlib" {
-    int pgo_add_int(int,int);
-    float pgo_add_float(float,float);
-    int pgo_all_types(int,float,string,int[],float[],string[][],int[][],int);
+    fn pgo_add_int(a: int, b: int) -> int;
+    fn pgo_add_float(a: float, b: float) -> float;
+    fn pgo_all_types(a: int, b: float, c: string, d: int[], e: float[], f: string[][], g: int[][], h: int) -> int;
 }
 
 --------------------------------------------------------------------------------
@@ -337,40 +337,70 @@ dylib "pgo_dynlib" {
     (string_literal)
     (signature_list
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier)
-        (type_identifier))
-      (function_signature
-        (type_identifier)
-        (identifier)
-        (type_identifier)
-        (type_identifier))
-      (function_signature
-        (type_identifier)
-        (identifier)
-        (type_identifier)
-        (type_identifier)
-        (type_identifier)
-        (array_type
-          (type_identifier))
-        (array_type
-          (type_identifier))
-        (array_type
-          (array_type
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
             (type_identifier)))
-        (array_type
-          (array_type
+        (return_type
+          (type_identifier)))
+      (function_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
             (type_identifier)))
-        (type_identifier)))))
+        (return_type
+          (type_identifier)))
+      (function_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (array_type
+              (type_identifier)))
+          (parameter
+            (identifier)
+            (array_type
+              (type_identifier)))
+          (parameter
+            (identifier)
+            (array_type
+              (array_type
+                (type_identifier))))
+          (parameter
+            (identifier)
+            (array_type
+              (array_type
+                (type_identifier))))
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier))))))
 
 ================================================================================
 Host block with a variadic signature (docs/src/integration/embedding.md)
 ================================================================================
 
 host "app" {
-    int width(string);
-    log(...);
+    fn width(a: string) -> int;
+    fn log(...);
 }
 
 --------------------------------------------------------------------------------
@@ -380,9 +410,13 @@ host "app" {
     (string_literal)
     (signature_list
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier))
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier)))
       (function_signature
         (identifier)
         (variadic_parameter)))))
@@ -396,7 +430,7 @@ host "process" {
         cwd: string = ".",
         env: {string: string},
     }
-    bool start(string, StartOptions);
+    fn start(a: string, b: StartOptions) -> bool;
 }
 
 --------------------------------------------------------------------------------
@@ -418,10 +452,16 @@ host "process" {
               (type_identifier)
               (type_identifier)))))
       (function_signature
-        (type_identifier)
         (identifier)
-        (type_identifier)
-        (type_identifier)))))
+        (parameter_list
+          (parameter
+            (identifier)
+            (type_identifier))
+          (parameter
+            (identifier)
+            (type_identifier)))
+        (return_type
+          (type_identifier))))))
 
 ================================================================================
 Comments (libs/std/string.cdl, libs/std/tests/test_errors.cdl)
@@ -469,7 +509,7 @@ enum Slot<T> {
 fn first<T>(items: T[]) -> T {
     return items[0];
 }
-impl Cell<T> {
+impl<T> Cell<T> {
     fn tagged<U>(self, extra: U) -> U {
         return extra;
     }
@@ -523,6 +563,8 @@ impl Signal<int> {
           (identifier)
           (integer_literal)))))
   (impl_block
+    (type_parameters
+      (type_identifier))
     (type_identifier)
     (type_arguments
       (type_identifier))
@@ -890,6 +932,160 @@ fn spawn(rate: int) {}
     (block)))
 
 ================================================================================
+Attributes on every declaration (docs/src/language/attributes.md)
+================================================================================
+
+host "ui" {
+    attribute slider(min: int = 0, max: int = 100) on field, param;
+    attribute button(label: string) on method;
+}
+
+struct Player {
+    @ui::slider(0, max: 100) health: int,
+}
+
+impl Player {
+    @ui::button("Heal")
+    fn heal(self, @ui::slider(1, 10) amount: int) {}
+}
+
+enum Team { @ui::label("Red team") Red, Blue }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (host_block
+    (string_literal)
+    (signature_list
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (type_identifier)
+          (integer_literal))
+        (attribute_parameter
+          (identifier)
+          (type_identifier)
+          (integer_literal)))
+      (attribute_declaration
+        (identifier)
+        (attribute_parameter
+          (identifier)
+          (type_identifier)))))
+  (struct_declaration
+    (identifier)
+    (field_declaration_list
+      (field_declaration
+        (attribute
+          (identifier)
+          (identifier)
+          (attribute_arguments
+            (integer_literal)
+            (attribute_argument
+              (identifier)
+              (integer_literal))))
+        (identifier)
+        (type_identifier))))
+  (impl_block
+    (type_identifier)
+    (attribute
+      (identifier)
+      (identifier)
+      (attribute_arguments
+        (string_literal)))
+    (function_declaration
+      (identifier)
+      (parameter_list
+        (parameter
+          (identifier))
+        (parameter
+          (attribute
+            (identifier)
+            (identifier)
+            (attribute_arguments
+              (integer_literal)
+              (integer_literal)))
+          (identifier)
+          (type_identifier)))
+      (block)))
+  (enum_declaration
+    (identifier)
+    (enum_variant_list
+      (enum_variant
+        (attribute
+          (identifier)
+          (identifier)
+          (attribute_arguments
+            (string_literal)))
+        (identifier))
+      (enum_variant
+        (identifier)))))
+
+================================================================================
+The type of no value (docs/src/language/types.md)
+================================================================================
+
+fn save(name: string) -> ()!string {
+    return Ok(());
+}
+
+fn main() {
+    match save("notes") {
+        Ok(()) => print("saved"),
+        Err(e) => print(e),
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (result_type
+        (unit_type)
+        (type_identifier)))
+    (block
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (unit_literal))))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (match_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (string_literal)))
+          (match_arm_list
+            (match_arm
+              (match_pattern
+                (variant_pattern
+                  (type_identifier)
+                  (unit_literal)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (string_literal))))
+            (match_arm
+              (match_pattern
+                (variant_pattern
+                  (type_identifier)
+                  (identifier)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
 Expression bodies with => (docs/src/language/functions.md)
 ================================================================================
 
@@ -1025,10 +1221,10 @@ struct Edge {
                   (type_identifier))))))))))
 
 ================================================================================
-Glob imports, constants and enum attributes
+Imports, constants and enum attributes
 ================================================================================
 
-import "drift" { * };
+import "drift" { Ready };
 
 const GROUND: float = 400.0;
 
@@ -1048,7 +1244,8 @@ fn crash() {}
 (source_file
   (import_declaration
     (string_literal)
-    (import_items))
+    (import_items
+      (identifier)))
   (const_declaration
     (identifier)
     (type_identifier)
@@ -1088,3 +1285,200 @@ fn crash() {}
     (identifier)
     (parameter_list)
     (block)))
+
+================================================================================
+Named variant fields and field shorthand
+================================================================================
+
+enum Event {
+    Click { x: int, y: int },
+    Key(string),
+}
+fn main() {
+    let p = Point { x, y: 2 };
+    let e = Event::Click { y, x: 3 };
+    match e {
+        Click { x, .. } => print(x),
+        Key(k) => print(k),
+    }
+}
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (identifier)
+    (enum_variant_list
+      (enum_variant
+        (identifier)
+        (variant_field_list
+          (variant_field
+            (identifier)
+            (type_identifier))
+          (variant_field
+            (identifier)
+            (type_identifier))))
+      (enum_variant
+        (identifier)
+        (payload_type_list
+          (type_identifier)))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (identifier)
+          (field_initializer_list
+            (field_initializer
+              (identifier))
+            (field_initializer
+              (identifier)
+              (integer_literal)))))
+      (let_declaration
+        (identifier)
+        (struct_literal
+          (qualified_identifier
+            (identifier)
+            (identifier))
+          (field_initializer_list
+            (field_initializer
+              (identifier))
+            (field_initializer
+              (identifier)
+              (integer_literal)))))
+      (expression_statement
+        (match_expression
+          (identifier)
+          (match_arm_list
+            (match_arm
+              (match_pattern
+                (struct_pattern
+                  (type_identifier)
+                  (field_pattern
+                    (identifier))
+                  (rest_pattern)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))
+            (match_arm
+              (match_pattern
+                (variant_pattern
+                  (type_identifier)
+                  (identifier)))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
+Optional types (docs/src/language/types.md)
+================================================================================
+
+fn first(xs: int[]) -> int? {
+    let seen: int?[] = [];
+    let attr: string[]? = None;
+    return None;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (array_type
+          (type_identifier))))
+    (return_type
+      (optional_type
+        (type_identifier)))
+    (block
+      (let_declaration
+        (identifier)
+        (array_type
+          (optional_type
+            (type_identifier)))
+        (array_literal))
+      (let_declaration
+        (identifier)
+        (optional_type
+          (array_type
+            (type_identifier)))
+        (identifier))
+      (return_statement
+        (identifier)))))
+
+================================================================================
+Macro declarations and uses (docs/src/language/macros.md)
+================================================================================
+
+import "./util.cdl";
+macro swap($a: ident, $b: ident) => { let t = $a; $a = $b; $b = t; };
+macro cube($x: expr) => $x * square!($x);
+fn main() {
+    swap!(a, b);
+    print(util::twice!(3));
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (string_literal))
+  (macro_declaration
+    (identifier)
+    (macro_pattern
+      (macro_fragment
+        (identifier)
+        (identifier))
+      (macro_punctuation)
+      (macro_fragment
+        (identifier)
+        (identifier)))
+    (macro_template
+      (identifier)
+      (identifier)
+      (macro_punctuation)
+      (macro_variable
+        (identifier))
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (macro_variable
+        (identifier))
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (identifier)))
+  (macro_declaration
+    (identifier)
+    (macro_pattern
+      (macro_fragment
+        (identifier)
+        (identifier)))
+    (macro_template
+      (macro_variable
+        (identifier))
+      (macro_punctuation)
+      (macro_invocation
+        (identifier)
+        (macro_body))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (macro_invocation
+          (identifier)
+          (macro_body)))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (macro_invocation
+              (identifier)
+              (identifier)
+              (macro_body))))))))

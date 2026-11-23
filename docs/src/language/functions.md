@@ -58,6 +58,12 @@ fn main() {
 }
 ```
 
+A parameter can be a [pattern](control-flow.md#patterns) that takes the
+argument apart, with the type after it: `fn area((w, h): (int, int))`. The
+pattern has to fit every argument of its type, and the names it binds are the
+body's parameters. Anonymous functions take patterns the same way:
+`pairs.map(fn((k, v)) => k + v)`.
+
 An annotation is worth writing when a function is called from Rust rather than
 from the script, since there is no call site to take the types from; see
 [embedding](../integration/embedding.md). A parameter annotated `any` stays
@@ -99,6 +105,38 @@ resolves, as [methods](methods.md) describes.
 inside another function's body, is a compile error; move it out to the top
 level.
 
+## Default values and named arguments
+
+A parameter may declare a default after `=`. A call that leaves the argument out
+passes the default instead, and a call may pass any argument by its parameter's
+name, `name: value`, after the ones it passes in order:
+
+```rust
+fn window(width: int, height: int, title: string = "untitled", resizable: bool = true) {
+    print(title, width, height, resizable);
+}
+
+fn main() {
+    window(800, 600);
+    window(800, 600, resizable: false);
+    window(height: 400, width: 300, title: "tools");
+}
+```
+
+The compiler fills in each default at the call, so a call costs the same as one
+that writes every argument, and each call builds its own value: a default of
+`[]` is a fresh empty list every time. A default compiles in the file that
+declares it and sees what that file sees (its constants, functions and
+imports), not the caller's variables and not the other parameters.
+
+Every function takes defaults and named arguments this way: a function, a
+method or a constructor in an `impl` block, and a function of a `host` or
+`dylib` block. An argument passed by name to something with no parameter names,
+a built-in such as `print`, a function held in a variable of a `fn(...)` type,
+or an enum variant, is a compile error; pass those in order. A name that is not
+one of the parameters, a parameter given twice, or a parameter with no default
+that the call leaves out is reported at the call.
+
 ## main
 
 `main` is the entry point. Running a file calls it, and only the `main` of the
@@ -114,7 +152,7 @@ to choose the exit status.
 ## Returning
 
 `return expr;` hands a value back. A function that returns no value anywhere
-returns `null`, whether it leaves through a bare `return;` or by reaching the end
+returns `()`, whether it leaves through a bare `return;` or by reaching the end
 of its body. A function that returns a value on one path returns one on every
 path: a bare `return;` in such a body, or a path that reaches the end of it, is
 a compile error at the function. A path that ends in a `throw`, an `exit`, or a
@@ -132,6 +170,11 @@ fn main() {
     print(describe(3), describe(-1));
 }
 ```
+
+A function body hands its value back with `return`, or is declared with
+`=> expr;` when the body is one expression. Unlike a block used as a value, a
+function body does not end in an expression without a semicolon; the missing
+semicolon error there names the `return` to write.
 
 The return type is inferred from the body. `-> Type` after the parameter list
 declares it instead, and a body that hands back anything else is a compile
@@ -152,7 +195,7 @@ fn row() -> {any: any} {
 }
 
 fn main() {
-    let rows = [json::parse("{\"id\": 1}") as {any: any}];
+    let rows = [json::parse("{\"id\": 1}")? as {any: any}];
     rows.push(row());
     print(rows.len());
 }
@@ -184,8 +227,8 @@ fn main() {
 }
 ```
 
-`null` is never written in an annotation, alone or in a union, so a function
-that returns nothing leaves the annotation off. See [null](types.md#null).
+A function that returns nothing leaves the annotation off or writes `-> ()`.
+See [No value](types.md#no-value).
 
 A function whose body is one returned expression can write it after `=>`
 instead of in a block, ending with `;`. `=> expr;` is the same as
@@ -355,8 +398,7 @@ function written at the call site. A declared function's name is the function
 itself wherever a value goes, so a `let`, a return, a list or map element and a
 struct field each take it by name, and the call goes to what the name handed
 over. The value carries the signature the function was declared with, so the
-call is checked against it. A function reached through a module, such as
-`math::sqrt`, is not a value by its path; wrap it: `fn(x) => math::sqrt(x)`.
+call is checked against it.
 
 ```rust
 fn twice(x: int) -> int {
@@ -372,8 +414,65 @@ fn main() {
 }
 ```
 
+A function is a value by any path that names it: a module's function,
+`math::cbrt`, a function of a `host` or `dylib` block, and a function an `impl`
+block declares, `Point::new`. A method taken by its path, `Rect::area`, takes
+the receiver as its first argument:
+
+```rust
+struct Rect {
+    w: int,
+    h: int,
+}
+
+impl Rect {
+    fn new(w: int, h: int) -> Rect => Rect { w, h };
+    fn area(self) -> int => self.w * self.h;
+}
+
+fn main() {
+    let rects = [Rect::new(2, 3), Rect::new(4, 5)];
+    print(rects.map(Rect::area));
+    let make = Rect::new;
+    print(make(1, 1).area());
+}
+```
+
+A host function declared with `...` takes any number of arguments, so it has no
+one signature to be a value of; wrap it in an anonymous function that calls it.
+
 The standard library's list helpers take functions this way, so `map`, `filter`,
 and `reduce` are ordinary calls; see [Collections](collections.md).
+
+### A closure after the call
+
+When a function's last parameter is a function, write the closure after the
+closing parenthesis instead of inside it. The call reads like a block that
+belongs to it, which suits handlers and callbacks.
+
+```rust
+fn download(url: string, retries: int = 3, done: fn(string, int)) {
+    done(url, retries);
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    xs.each() fn(x) {
+        print(x * 10);
+    }
+    print(xs.map() fn(x) => x + 1);
+    print(xs.reduce(0) fn(acc, x) => acc + x);
+    download("a.txt") fn(url, tries) {
+        print(url, tries);
+    }
+}
+```
+
+The closure is the argument of the last parameter, so the parentheses hold the
+others, by position or by name, and leave that one out; passing it both ways is
+an error. A call ending in a `{ ... }` closure ends the statement the way an
+`if` does, with no `;` after it. A closure written with `=>` runs as far as an
+expression can, so a call after its value belongs to the value.
 
 ## Function types
 

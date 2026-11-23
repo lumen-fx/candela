@@ -79,7 +79,7 @@ whose C library a build step produces checks before that step has run. A `main` 
 a library whose entry only declares functions for other projects to import
 checks like any other file.
 
-### candela build [file.cdl] [-o out.cdlb] [--debug] [--no-native] [--target <triple>]
+### candela build [file.cdl] [-o out.cdlb] [--stage <dir>] [--debug] [--no-native] [--target <triple>]
 
 Compiles to a `.cdlb` artifact and writes it out, reporting the path and the
 size. `compile` is accepted as the same command.
@@ -91,6 +91,7 @@ candela build game.cdl -o dist/game.cdlb
 candela build game.cdl --debug
 candela build game.cdl --no-native
 candela build game.cdl --target aarch64-apple-darwin
+candela build game.cdl --stage dist
 ```
 
 A build compiles in the release profile, which runs passes that make the
@@ -131,6 +132,14 @@ Linux (`x86_64-unknown-linux-gnu`), macOS (`aarch64-apple-darwin`) or Windows
 With no file, the entry point comes from the manifest. Without `-o` (or its
 long form `--output`), the output name is the input with `.cdl` replaced by
 `.cdlb`; a path that does not end in `.cdl` gets `.cdlb` appended.
+
+`--stage <dir>` lays out an app that runs with nothing installed: the artifact
+goes in `<dir>` under its own name (unless `-o` names it), with `candela-vm`
+and the license files from beside `candela`, and `<dir>/libs/std_src/` holds
+only the standard library native libraries the artifact binds. A program that
+imports `std/process` carries the process library and not the TLS stack
+behind `std/http`. Run it as `<dir>/candela-vm <dir>/game.cdlb`. A library a
+program's own `dylib` block names is not copied; ship it beside the artifact.
 
 `-o` is the only way to name the output. Any other argument is an error, so
 `candela build game.cdl dist/game.cdlb` says what it wants instead of writing

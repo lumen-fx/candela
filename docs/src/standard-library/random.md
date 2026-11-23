@@ -82,3 +82,30 @@ random::float_range(min, max)
 
 - `min`, `max`: floats.
 - Returns: a float between `min` and `max`, including `min` and excluding `max`.
+
+## uuid
+
+```rust
+random::uuid()
+```
+
+- Returns: a random version 4 UUID, as 36 lowercase characters in the form
+  `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`. It comes from this module's
+  generator, so after `seed` it repeats; it is for ids, not for secrets.
+
+## choice
+
+```rust
+random::choice(xs)
+```
+
+- Returns: one element of the list `xs`, each equally likely, as a `T?`;
+  `None` when the list is empty.
+
+## shuffle
+
+```rust
+random::shuffle(xs)
+```
+
+Puts the elements of the list `xs` in a random order, in place.

@@ -61,10 +61,13 @@ and attributes a `host` block declares. An attribute in front of a declaration
 is `@cfg(...)` or a declared one named behind its module, with named
 arguments (`@ecs::system(writes: [Position])`). Statements: `let`, assignment and its
 compound forms, `if`/`else if`/`else`, `while`, `for` over a collection or a
-range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks. `match` stands alone or gives a
-value, its arms take a block, an expression, or `break`, `continue`, `return`
-or `throw`, and `|` separates a pattern's
-alternatives. Expressions carry
+range, `loop`, `try`/`catch`, `throw "kind";`, and bare blocks, which give a
+value where one goes. `match` stands alone or gives a value, its arms take a
+block, an expression, or `break`, `continue`, `return` or `throw`, and one
+pattern grammar (literals, ranges, tuples, structs, variants, `|` alternatives,
+`if` guards) serves match arms, `is`, `let` and `let ... else`, `for` and
+parameters. Types include `T?` and `T!E`, and `value else fallback` and
+`value else |e| { ... }` read as expressions. Expressions carry
 candela's precedence, so `2 ^ 3 ^ 2` groups to the right and `-a ^ 2` negates
 before it raises; calls, method calls, field access, indexing, slicing and the
 `?` that passes on a `None` or an `Err` bind tighter than every operator, and a call attaches to what a call or an index

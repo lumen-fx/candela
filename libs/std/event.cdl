@@ -8,11 +8,14 @@
 ///
 ///     import "std/event";
 ///     let id = event::source();
-///     event::on(id, fn(payload: string) { print(payload); });
+///     event::on(id, fn(payload) { print(payload); });
 ///
 /// After `main` returns, the program keeps running handlers for as long as
-/// some work it started is still running, then exits. A host that runs its own
-/// loop calls `dispatch_events` on the program instead.
+/// some work it started is still running, then exits. `wait` runs them before
+/// that, until one piece of work is done. A host that runs its own loop calls
+/// `dispatch_events` on the program instead.
+
+import "std/json";
 
 /// A new source: an int no other source in the process shares.
 fn source() -> int => event_source();
@@ -44,4 +47,41 @@ fn dispatch(budget: int, wait: bool) -> int {
         done += 1;
     }
     return done;
+}
+
+/// Runs the handlers of events as they arrive, from every source, until the
+/// work under `id` has finished and its last event has been handled. Answers
+/// at once when nothing runs under `id`. In a browser nothing can arrive while
+/// a program waits, so it runs only what has already arrived.
+///
+///     let child = process::start("make") fn(e) { print(e); };
+///     event::wait(child.id);
+fn wait(id: int) {
+    while true {
+        let next = event_wait(id);
+        if next.len() == 0 {
+            return;
+        }
+        let handler = next[1] as fn(string);
+        handler(next[2] as string);
+    }
+}
+
+/// A new source whose one answer `on_done` receives, read by `read`.
+///
+/// The work under the source posts one JSON object: `{"value": v}`, which
+/// `on_done` receives as `Ok(read(v))`, or `{"error": "why"}`, which it
+/// receives as `Err("why")`. Modules built on native or browser work answer
+/// their callers through this.
+fn answer<T>(read: fn(any) -> T, on_done: fn(T!string)) -> int {
+    let id = source();
+    on(id, fn(payload) {
+        let fields = json::parse(payload).unwrap() as {string: any};
+        if fields.contains("error") {
+            on_done(Err(fields["error"] as string));
+        } else {
+            on_done(Ok(read(fields["value"])));
+        }
+    });
+    return id;
 }

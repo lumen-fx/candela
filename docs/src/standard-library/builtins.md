@@ -33,13 +33,32 @@ variant name with any payload in brackets. A string prints bare on its own and
 in quotes inside a list, map, struct or payload, so `print(["a"])` writes
 `["a"]`. A float keeps its decimal point wherever it
 appears, so `print(3.0)` writes `3.0` and `print([3.0])` writes `[3.0]`, the
-same text `string` gives. `null`, the value of a call that returns nothing, prints as
-`null`. An infinity prints as `inf` and a not-a-number as `NaN`.
+same text `string` gives. `()`, the value of a call that returns nothing, prints as
+`null`, the name a host knows it by. An infinity prints as `inf` and a not-a-number as `NaN`.
 A function prints as `<fn>`, wherever it is held.
 
 A stream that refuses the write costs the line, not the run. `program | head -1`
 leaves standard output with no reader, and the prints that follow go nowhere
 while the program runs to the end as it otherwise would.
+
+### eprint
+
+```rust
+eprint(value, ...)
+```
+
+Writes each argument to standard error, one per line, with the same text
+`print` gives. Use it for errors and progress that should stay out of a
+program's output when that output is piped somewhere. What the program printed
+to standard output before the call goes out first, so a terminal showing both
+streams keeps them in order.
+
+```rust
+fn main() {
+    print("result");
+    eprint("done in 3 steps");
+}
+```
 
 ### input
 
@@ -111,7 +130,7 @@ type(value)
 
 Returns the static type of the expression as a string, resolved at compile time.
 Every answer is spelled the way the same type is written in a program: `int`,
-`float`, `bool`, `string`, `null`, `any` for a dynamic value, `int[]` for a list
+`float`, `bool`, `string`, `()` for no value, `any` for a dynamic value, `int[]` for a list
 of ints, `{string: int}` for a map, `a|b` for a union, the declared name for a
 struct or an enum, and `fn(int) -> int` for a function. A struct or an enum that
 takes type arguments carries them, as in `Cell<int>`. A list or a map names what
@@ -150,14 +169,9 @@ turns out to hold. `value is T` answers at run time; see
 
 ### range
 
-```rust
-range(end)
-range(start, end)
-```
-
-Returns a list of ints from `start` (0 when omitted) up to but not including
-`end`. Both arguments are ints. The result is empty when `start` is not less
-than `end`.
+`range(n)` and `range(start, end)` are removed. A range is written in place:
+`0..n` and `start..end`, and `(start..end).list()` gives the list `range`
+returned. See [range](range.md).
 
 ## Dynamic values
 
@@ -178,7 +192,7 @@ declaring string keys accepts.
 import "std/json";
 
 fn main() {
-    let m = json::parse("{\"n\": 7}") as {string: any};
+    let m = json::parse("{\"n\": 7}")? as {string: any};
     print(m["n"] as int + 1);
     m["name"] = "ada";
     if m["name"] is string {
@@ -321,7 +335,7 @@ in the [map module](map.md).
 | `m.values()` | list | The values |
 
 A map keeps its entries in the order they went in, so `keys`, `values`,
-`for k in m`, printing, and json all walk it first-inserted first. Three rules
+`for (k, v) in m`, printing, and json all walk it first-inserted first. Three rules
 settle every case:
 
 - Writing a key the map does not hold puts it at the end.
@@ -347,6 +361,8 @@ is what `as {any: any}` hands back, keeps taking entries of any type.
 | `x.sqrt()` | float | float | The square root of `x` |
 | `x.round()` | float | float | `x` rounded to the nearest whole number, halves away from zero |
 | `x.floor()` | float | float | The largest whole number not greater than `x` |
+| `x.ceil()` | float | float | The smallest whole number not less than `x` |
+| `x.trunc()` | float | float | `x` with its fractional part dropped, toward zero |
 
-The [math module](math.md) covers the rest of the numeric surface, including
-`ceil`, `trunc`, the trigonometric functions, and the logarithms.
+The [math module](math.md) covers the rest of the numeric surface: the
+trigonometric functions, the logarithms, powers and the constants.

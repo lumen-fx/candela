@@ -75,6 +75,15 @@
 (attribute_declaration
   name: (identifier) @attribute)
 
+; The kinds of declaration an `on` clause lists that are no keyword elsewhere.
+(attribute_declaration
+  [
+    "method"
+    "param"
+    "field"
+    "variant"
+  ] @keyword.directive)
+
 (attribute_parameter
   name: (identifier) @variable.parameter)
 
@@ -103,6 +112,8 @@
 ((type_identifier) @type.builtin
   (#any-of? @type.builtin "int" "float" "string" "bool" "null" "any"))
 
+(unit_type) @type.builtin
+
 (qualified_type
   module: (type_identifier) @module)
 
@@ -117,6 +128,26 @@
 
 (enum_variant
   name: (identifier) @constructor)
+
+; Patterns: a variant with its payload, a struct or variant taken apart by
+; field, and a capitalised name alone, which names a variant or a constant
+; where a lowercase one binds.
+(variant_pattern
+  variant: (type_identifier) @constructor)
+
+(variant_pattern
+  variant: (qualified_type
+    name: (type_identifier) @constructor))
+
+(struct_pattern
+  name: (type_identifier) @type)
+
+(field_pattern
+  name: (identifier) @variable.member)
+
+((match_pattern
+  (identifier) @constructor)
+  (#match? @constructor "^[A-Z]"))
 
 ; Functions
 
@@ -150,10 +181,27 @@
 ((call_expression
   function: (identifier) @function.builtin)
   (#any-of? @function.builtin
-    "print" "type" "float" "int" "string" "bool" "input" "range" "the_answer"
+    "print" "eprint" "type" "float" "int" "string" "bool" "input" "the_answer"
     "argv" "exit"))
 
 ; Macros
+
+"macro" @keyword
+
+(macro_declaration
+  name: (identifier) @function.macro)
+
+(macro_fragment
+  "$" @punctuation.special
+  name: (identifier) @variable.parameter
+  kind: (identifier) @type.builtin)
+
+(macro_variable
+  "$" @punctuation.special
+  name: (identifier) @variable.parameter)
+
+(macro_invocation
+  module: (identifier) @module)
 
 (macro_invocation
   name: (identifier) @function.macro)
@@ -174,6 +222,9 @@
   name: (identifier) @variable.member)
 
 (field_initializer
+  name: (identifier) @variable.member)
+
+(variant_field
   name: (identifier) @variable.member)
 
 (field_expression
@@ -203,6 +254,7 @@
 (boolean_literal) @boolean
 
 (null_literal) @constant.builtin
+(unit_literal) @constant.builtin
 
 ; Operators and punctuation
 
@@ -299,3 +351,6 @@
 
 ((comment) @comment
   (#match? @comment "^////"))
+
+(named_argument
+  name: (identifier) @variable.parameter)

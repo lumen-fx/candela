@@ -1,0 +1,28 @@
+# The native library behind `std/regex`: regular expressions through
+# regex-lite, a small engine with the regex crate's syntax and no Unicode
+# classes. The release job ships it as libs/std_src/regex/regex.<ext>, the
+# path the module's `dylib` block names.
+[package]
+name = "candela-std-regex"
+# Never published: it ships inside the toolchain archive.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native library behind candela's std/regex."
+
+[lib]
+name = "candela_std_regex"
+crate-type = ["cdylib", "rlib"]
+# The library has no unit tests, so no harness of its own: a harness build
+# compiles the exports again under another hash, and a coverage report can
+# read that idle copy in place of the one the tests in tests/ load.
+test = false
+
+[dependencies]
+candela-std-sys = { path = "../sys" }
+regex-lite = "0.1"
+serde_json = "1"
+
+[dev-dependencies]
+candela-std-testkit = { path = "../testkit" }

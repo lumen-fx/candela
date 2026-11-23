@@ -6,27 +6,27 @@ import "std/assert";
 
 fn main() {
     // Scalars.
-    assert::eq(json::parse("42") as int, 42);
-    assert::eq(json::parse("3.5") as float, 3.5);
-    assert::is_true(json::parse("true") as bool);
-    assert::is_false(json::parse("false") as bool);
-    assert::is_true(json::parse("null") == null);
-    assert::eq(json::parse("\"hi\"") as string, "hi");
-    assert::eq(json::parse("-17") as int, -17);
+    assert::eq(json::parse("42").unwrap() as int, 42);
+    assert::eq(json::parse("3.5").unwrap() as float, 3.5);
+    assert::is_true(json::parse("true").unwrap() as bool);
+    assert::is_false(json::parse("false").unwrap() as bool);
+    assert::is_true(json::parse("null").unwrap() == null);
+    assert::eq(json::parse("\"hi\"").unwrap() as string, "hi");
+    assert::eq(json::parse("-17").unwrap() as int, -17);
 
     // Array.
-    let arr = json::parse("[10, 20, 30]") as any[];
+    let arr = json::parse("[10, 20, 30]").unwrap() as any[];
     assert::eq(arr.len(), 3);
     assert::eq(arr[1] as int, 20);
 
     // Object.
-    let obj = json::parse("{\"x\": 1, \"y\": 2}") as {any: any};
+    let obj = json::parse("{\"x\": 1, \"y\": 2}").unwrap() as {any: any};
     assert::eq(obj.len(), 2);
     assert::eq(obj["x"] as int, 1);
     assert::eq(obj["y"] as int, 2);
 
     // Nested object/array.
-    let nested = json::parse("{\"name\": \"a\", \"nums\": [1, 2, 3], \"meta\": {\"ok\": true}}") as {any: any};
+    let nested = json::parse("{\"name\": \"a\", \"nums\": [1, 2, 3], \"meta\": {\"ok\": true}}").unwrap() as {any: any};
     assert::eq(nested["name"] as string, "a");
     let nums = nested["nums"] as any[];
     assert::eq(nums.len(), 3);
@@ -35,13 +35,13 @@ fn main() {
     assert::is_true(meta["ok"] as bool);
 
     // Escapes.
-    assert::eq(json::parse("\"a\\nb\"") as string, "a\nb");
-    assert::eq(json::parse("\"q\\\"q\"") as string, "q\"q");
+    assert::eq(json::parse("\"a\\nb\"").unwrap() as string, "a\nb");
+    assert::eq(json::parse("\"q\\\"q\"").unwrap() as string, "q\"q");
 
     // Round-trip: parse . stringify . parse preserves structure.
     let text = "{\"a\": [1, 2.5, true, null, \"z\"], \"b\": {\"c\": 9}}";
-    let once = json::parse(text);
-    let again = json::parse(json::stringify(once)) as {any: any};
+    let once = json::parse(text).unwrap();
+    let again = json::parse(json::stringify(once)).unwrap() as {any: any};
     let a = again["a"] as any[];
     assert::eq(a.len(), 5);
     assert::eq(a[0] as int, 1);
@@ -53,17 +53,11 @@ fn main() {
     assert::eq(b["c"] as int, 9);
 
     // Empty collections round-trip.
-    assert::eq((json::parse("[]") as any[]).len(), 0);
-    assert::eq((json::parse("{}") as {any: any}).len(), 0);
+    assert::eq((json::parse("[]").unwrap() as any[]).len(), 0);
+    assert::eq((json::parse("{}").unwrap() as {any: any}).len(), 0);
 
-    // A malformed document raises a catchable error.
-    let caught = false;
-    try {
-        json::parse("{bad}");
-    } catch e {
-        caught = true;
-    }
-    assert::is_true(caught);
+    // A malformed document is an Err.
+    assert::is_true(json::parse("{bad}") is Err(_));
 
     print("json ok");
 }

@@ -125,7 +125,7 @@ fn a_library_whose_thread_outlives_the_program_stays_loaded() {
 import "std/event";
 
 dylib "lingers" {
-    start(int);
+    fn start(a: int);
 }
 
 fn go() {

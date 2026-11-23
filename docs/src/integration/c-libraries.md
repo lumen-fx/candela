@@ -9,7 +9,7 @@ arguments.
 
 ```rust
 dylib "z" {
-    string zlibVersion();
+    fn zlibVersion() -> string;
 }
 
 fn main() {
@@ -17,19 +17,22 @@ fn main() {
 }
 ```
 
-A `dylib` block names the library, then lists one signature per line. Each
-signature is a return type, a name, and a parenthesised list of parameter
-types, ending in a semicolon. Parameter names are not part of the grammar; give
-the types only.
-
-Omit the return type for a function that returns nothing:
+A `dylib` block names the library, then declares each C function the way a
+candela function is declared, with a `;` in place of the body: a name, the
+parameters with their types, and `-> Type` for what it returns. Every parameter
+names its type. Leave out the `->` for a function that returns nothing:
 
 ```rust
 dylib "mylib" {
-    reset(int);
-    int count();
+    fn reset(level: int);
+    fn count() -> int;
 }
 ```
+
+The parameter names are what a call passes arguments by, `mylib::reset(level:
+2)`, and a parameter may declare a default that a call leaving it out passes
+instead, as for any function; see [functions](../language/functions.md). The C
+function always receives every argument.
 
 The functions live in a namespace named after the library, so you call them as
 `z::zlibVersion()`. The block's name is a namespace, not a value, so
@@ -124,7 +127,7 @@ first, and the function writes up to that many elements:
 
 ```rust
 dylib "mylib" {
-    int read_block(int[], int);
+    fn read_block(buf: int[], len: int) -> int;
 }
 
 fn main() {
@@ -207,8 +210,8 @@ The candela side declares the two symbols and wraps them:
 
 ```rust
 dylib "../std_src/time/time" {
-    int now();
-    string format(int, string);
+    fn now() -> int;
+    fn format(ms: int, pattern: string) -> string;
 }
 
 fn now() { return time::now(); }
@@ -280,8 +283,9 @@ EXPORT void start(int64_t source) {
 
 A library loaded by something other than a candela runtime is never handed a
 table, so a library that may be loaded elsewhere checks for one before posting.
-The first-party packages are written this way; see
-[packages](../packages/index.md).
+The standard library's own native libraries, behind
+[process](../standard-library/process.md) and
+[http](../standard-library/http.md), are written this way.
 
 ## Host functions instead
 

@@ -50,6 +50,15 @@
 (attribute_declaration
   name: (identifier) @attribute)
 
+; The kinds of declaration an `on` clause lists that are no keyword elsewhere.
+(attribute_declaration
+  [
+    "method"
+    "param"
+    "field"
+    "variant"
+  ] @keyword)
+
 (attribute_argument
   name: (identifier) @property)
 
@@ -74,6 +83,19 @@
 
 (enum_variant
   name: (identifier) @variant)
+
+(variant_pattern
+  variant: (type_identifier) @variant)
+
+(variant_pattern
+  variant: (qualified_type
+    name: (type_identifier) @variant))
+
+(struct_pattern
+  name: (type_identifier) @type)
+
+(field_pattern
+  name: (identifier) @property)
 
 ; Functions
 
@@ -104,7 +126,7 @@
 ((call_expression
   function: (identifier) @function.builtin)
   (#any-of? @function.builtin
-    "print" "type" "float" "int" "string" "bool" "input" "range" "the_answer"
+    "print" "eprint" "type" "float" "int" "string" "bool" "input" "the_answer"
     "argv" "exit"))
 
 ; Macros
@@ -130,6 +152,9 @@
 (field_initializer
   name: (identifier) @property)
 
+(variant_field
+  name: (identifier) @property)
+
 (field_expression
   field: (identifier) @property)
 
@@ -151,6 +176,8 @@
 (boolean_literal) @boolean
 
 (null_literal) @constant
+(unit_literal) @constant
+(unit_type) @type
 
 ; Operators and punctuation
 
@@ -247,3 +274,6 @@
 
 ((comment) @comment
   (#match? @comment "^////"))
+
+(named_argument
+  name: (identifier) @variable.parameter)

@@ -1,0 +1,138 @@
+/// WebSocket connections, text frames only.
+///
+/// `open` connects and answers a `Socket` at once. Everything that happens on
+/// the connection arrives as an `Event` passed to the function given to
+/// `open`, with the socket it happened on: `Open` once it is up, a `Message`
+/// per text frame, an `Error` when something fails, and `Close` last, always.
+///
+///     import "std/websocket";
+///
+///     fn main() {
+///         websocket::open("wss://echo.example.com") fn(socket, e) {
+///             match e {
+///                 Open => { socket.send("hello"); }
+///                 Message(text) => {
+///                     print(text);
+///                     socket.close(reason: "done");
+///                 }
+///                 Error(why) => eprint(why),
+///                 Close(code, reason, clean) => print("closed " + string(code)),
+///             }
+///         };
+///     }
+///
+/// On the desktop each connection runs on a thread of its own, and `wss://`
+/// is TLS with the Mozilla root set. In a browser the page's own WebSocket
+/// carries it, through `web/websocket.js`. An `http://` or `https://` URL is
+/// taken as `ws://` or `wss://`, as a page takes it.
+
+import "std/event";
+import "std/json";
+
+@cfg(not(web))
+dylib "../std_src/net/net" {
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
+    fn candela_websocket_close(handle: int, code: int, reason: string) -> int;
+    fn candela_websocket_state(handle: int) -> string;
+}
+
+@cfg(web)
+host "websocket" {
+    fn candela_websocket_open(id: int, url: string);
+    fn candela_websocket_send(handle: int, text: string) -> int;
+    fn candela_websocket_close(handle: int, code: int, reason: string) -> int;
+    fn candela_websocket_state(handle: int) -> string;
+}
+
+// The desktop binds the `net` library and a browser the page's `websocket`
+// host functions; these name one of the two, so the code below reads the
+// same on both.
+@cfg(not(web))
+fn start(id: int, url: string) {
+    net::candela_websocket_open(id, url);
+}
+@cfg(web)
+fn start(id: int, url: string) {
+    websocket::candela_websocket_open(id, url);
+}
+@cfg(not(web))
+fn send_text(id: int, text: string) -> int => net::candela_websocket_send(id, text);
+@cfg(web)
+fn send_text(id: int, text: string) -> int => websocket::candela_websocket_send(id, text);
+@cfg(not(web))
+fn start_close(id: int, code: int, reason: string) -> int => net::candela_websocket_close(id, code, reason);
+@cfg(web)
+fn start_close(id: int, code: int, reason: string) -> int => websocket::candela_websocket_close(id, code, reason);
+@cfg(not(web))
+fn state_of(id: int) -> string => net::candela_websocket_state(id);
+@cfg(web)
+fn state_of(id: int) -> string => websocket::candela_websocket_state(id);
+
+/// What a connection reports.
+enum Event {
+    /// The connection is up.
+    Open,
+    /// A text frame arrived.
+    Message(string),
+    /// Something failed; a `Close` follows when the connection is over.
+    Error(string),
+    /// The connection is over: the close code, the reason, and whether the
+    /// closing handshake finished cleanly. Always the last event.
+    Close(int, string, bool),
+}
+
+/// A connection `open` started.
+struct Socket {
+    /// The event source its events arrive under, for `event::wait`.
+    id: int,
+}
+
+impl Socket {
+    /// Sends a text frame. False when the connection is not open.
+    fn send(self, text: string) -> bool => send_text(self.id, text) == 1;
+
+    /// Starts closing the connection with `code`, 1000 for a normal close or
+    /// 3000 to 4999 for one of the program's own, and a reason of at most 123
+    /// bytes. `Ok(false)` when there is no connection to close. Another code
+    /// or a longer reason is `Err("websocket_bad_close")`.
+    fn close(self, code: int = 1000, reason: string = "") -> bool!string {
+        let answer = start_close(self.id, code, reason);
+        if answer < 0 {
+            return Err("websocket_bad_close");
+        }
+        return Ok(answer == 1);
+    }
+
+    /// `connecting`, `open`, `closing` or `closed`, which is also the answer
+    /// once the connection is over.
+    fn state(self) -> string => state_of(self.id);
+}
+
+/// Connects to `url` and answers the `Socket`. `on_event` receives the socket
+/// and each event on it.
+fn open(url: string, on_event: fn(Socket, Event)) -> Socket {
+    let id = event::source();
+    let socket = Socket { id };
+    event::on(id, fn(payload) {
+        on_event(socket, decode(payload));
+    });
+    start(id, url);
+    return socket;
+}
+
+/// The event a payload describes.
+fn decode(payload: string) -> Event {
+    let fields = json::parse(payload).unwrap() as {string: any};
+    let kind = fields["kind"] as string;
+    if kind == "open" {
+        return Open;
+    }
+    if kind == "message" {
+        return Message(fields["text"] as string);
+    }
+    if kind == "error" {
+        return Error(fields["message"] as string);
+    }
+    return Close(fields["code"] as int, fields["reason"] as string, fields["clean"] as bool);
+}

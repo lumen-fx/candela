@@ -6,8 +6,9 @@ own types and to the built-in ones.
 
 ## impl blocks
 
-An `impl` block names a type and holds functions whose first parameter is the
-receiver. The type is a struct or enum you declare, or one of the built-in type
+An `impl` block names a type and holds the functions that belong to it. A
+function whose first parameter is `self` is a method, called on a value. The
+type is a struct or enum you declare, or one of the built-in type
 names: `string`, `list`, `map`, `int`, `float`, `bool`.
 
 ```rust
@@ -42,14 +43,14 @@ against, and a method can take type parameters of its own
 
 ## What self is
 
-`self` is an ordinary first parameter, not a keyword. It receives the value the
-method was called on, and its type is the type the `impl` block names. Any name
-works, but `self` is the convention and reads best.
+`self` names the receiver. It is the first parameter of a method, it receives
+the value the method was called on, and its type is the type the `impl` block
+names. Only an `impl` function takes a `self`, and only as its first parameter.
 
-A function in an `impl` block that declares no parameters has no receiver. It
-belongs to the type rather than to a value, so it is called by the type's path,
-and calling it with a dot is a compile error. This is how a type gets a
-constructor:
+A function in an `impl` block whose first parameter is not `self` has no
+receiver. It belongs to the type rather than to a value, so it is called by the
+type's path, and calling it with a dot is a compile error. This is how a type
+gets its constructors:
 
 ```rust
 struct Point {
@@ -58,24 +59,25 @@ struct Point {
 }
 
 impl Point {
-    fn origin() -> Point => Point { x: 0, y: 0 };
+    fn new(x: int, y: int) -> Point => Point { x: x, y: y };
+    fn origin() -> Point => Point::new(0, 0);
 }
 
 fn main() {
-    let p = Point::origin();
-    print(p.x, p.y);
+    let p = Point::new(3, 4);
+    print(p.x, Point::origin().y);
 }
 ```
 
 A generic type names its instantiation in front of the function,
 `Set<int>::new()`, and a type reached through a module's name keeps that name
-in front, `shapes::Point::origin()`. A function that does declare a receiver is a
-method, so calling it by its path is a compile error that points at the dot
+in front, `shapes::Point::origin()`. A method, one that takes `self`, is called
+with a dot, so calling it by its path is a compile error that points at the dot
 call. One receiverless function has a special role: a struct's `default`
 replaces the struct's built-in default and is what `Options::default()` calls;
 see [Default values](types.md#default-values).
 
-Parameters after the first behave exactly like function parameters: name them,
+Parameters after `self` behave exactly like function parameters: name them,
 pass them positionally, and either leave the type to be inferred from the call
 or pin it with `name: type`. A method takes a `-> Type` return annotation on the
 same terms as a free function, and it is checked against what the body returns.

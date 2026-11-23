@@ -267,10 +267,9 @@ fn unwrap(o) {
           (match_arm_list
             (match_arm
               (match_pattern
-                (call_expression
-                  (identifier)
-                  (arguments
-                    (identifier))))
+                (variant_pattern
+                  (type_identifier)
+                  (identifier)))
               (block
                 (assignment_statement
                   (identifier)
@@ -545,3 +544,115 @@ fn main() {
               (identifier)
               (arguments
                 (identifier)))))))))
+
+================================================================================
+Patterns wherever a name is bound (docs/src/language/control-flow.md)
+================================================================================
+
+fn area((w, h): (int, int)) => w * h;
+
+fn main() {
+    let Some(v) = lookup(k) else { return; };
+    let Point { x, y: py, .. } = p;
+    for (k, n) in pairs {
+        print(k);
+    }
+    let size = match n {
+        0 => "none",
+        1..=9 => "few",
+        x if x > limit => "over",
+        _ => "many",
+    };
+    let f = fn((a, b)) => a + b;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (tuple_type
+          (type_identifier)
+          (type_identifier))))
+    (expression_body
+      (binary_expression
+        (identifier)
+        (identifier))))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (let_declaration
+        (variant_pattern
+          (type_identifier)
+          (identifier))
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))
+        (block
+          (return_statement)))
+      (let_declaration
+        (struct_pattern
+          (type_identifier)
+          (field_pattern
+            (identifier))
+          (field_pattern
+            (identifier)
+            (identifier))
+          (rest_pattern))
+        (identifier))
+      (for_statement
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier))))))
+      (let_declaration
+        (identifier)
+        (match_expression
+          (identifier)
+          (match_arm_list
+            (match_arm
+              (match_pattern
+                (integer_literal))
+              (string_literal))
+            (match_arm
+              (match_pattern
+                (range_pattern
+                  (integer_literal)
+                  (integer_literal)))
+              (string_literal))
+            (match_arm
+              (match_pattern
+                (identifier))
+              (match_guard
+                (binary_expression
+                  (identifier)
+                  (identifier)))
+              (string_literal))
+            (match_arm
+              (match_pattern
+                (identifier))
+              (string_literal)))))
+      (let_declaration
+        (identifier)
+        (closure_expression
+          (parameter_list
+            (parameter
+              (tuple_pattern
+                (identifier)
+                (identifier))))
+          (binary_expression
+            (identifier)
+            (identifier)))))))

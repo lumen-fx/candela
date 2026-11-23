@@ -20,7 +20,8 @@ enum Lowering {
     Void(LibFuncVoid),
 }
 
-/// The native primitives `std/fs` and `std/event` are written on: what each
+/// The native primitives `std/fs`, `std/hash`, `std/event`, `std/os`,
+/// `std/encoding` and `std/time` are written on: what each
 /// compiles to, and the type each argument has to be (`Unknown` takes any).
 ///
 /// Keep in step with `std_primitive_return_type` in the type system, which
@@ -36,7 +37,8 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "fs_is_dir" => (Value(LibFunc::FsIsDir), PATH),
         "fs_list" => (Value(LibFunc::FsList), PATH),
         "fs_read_bytes" => (Value(LibFunc::FsReadBytes), PATH),
-        "fs_digest" => (Value(LibFunc::FsDigest), TWO_PATHS),
+        "hash_file" => (Value(LibFunc::HashFile), TWO_PATHS),
+        "hash_text" => (Value(LibFunc::HashText), &[Str, Str]),
         "fs_write" => (Void(LibFuncVoid::FsWrite), TWO_PATHS),
         "fs_append" => (Void(LibFuncVoid::FsAppend), TWO_PATHS),
         "fs_delete" => (Void(LibFuncVoid::FsDelete), PATH),
@@ -46,6 +48,20 @@ fn primitive(name: &str) -> Option<(Lowering, &'static [DataType])> {
         "fs_write_bytes" => (Void(LibFuncVoid::FsWriteBytes), &[Str, Unknown]),
         "event_source" => (Value(LibFunc::EventSource), &[]),
         "event_next" => (Value(LibFunc::EventNext), &[Bool]),
+        "event_wait" => (Value(LibFunc::EventWait), &[Int]),
+        "os_query" => (Value(LibFunc::OsQuery), &[Int]),
+        "os_env" => (Value(LibFunc::OsEnv), PATH),
+        "os_env_vars" => (Value(LibFunc::OsEnvVars), &[]),
+        "os_set_env" => (Void(LibFuncVoid::OsSetEnv), TWO_PATHS),
+        "os_set_cwd" => (Void(LibFuncVoid::OsSetCwd), PATH),
+        "fs_stat" => (Value(LibFunc::FsStat), &[Str, Int]),
+        "fs_absolute" => (Value(LibFunc::FsAbsolute), PATH),
+        "fs_rename" => (Void(LibFuncVoid::FsRename), TWO_PATHS),
+        "fs_delete_all" => (Void(LibFuncVoid::FsDeleteAll), PATH),
+        "utf8_bytes" => (Value(LibFunc::Utf8Bytes), PATH),
+        "utf8_text" => (Value(LibFunc::FromUtf8), &[Unknown]),
+        "time_query" => (Value(LibFunc::TimeQuery), &[Int]),
+        "term_is_tty" => (Value(LibFunc::TermIsTty), &[Int]),
         "event_on" => (Void(LibFuncVoid::EventOn), &[Int, Unknown]),
         _ => return None,
     })

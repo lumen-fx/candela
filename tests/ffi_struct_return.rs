@@ -42,7 +42,7 @@ fn program() -> String {
     for i in 0..FIELDS {
         writeln!(src, "    f{i}: string,").unwrap();
     }
-    src.push_str("}\n\ndylib \"fixture\" {\n    Wide wide();\n}\n\nfn check() {\n    let w = fixture::wide();\n    let bad = 0;\n");
+    src.push_str("}\n\ndylib \"fixture\" {\n    fn wide() -> Wide;\n}\n\nfn check() {\n    let w = fixture::wide();\n    let bad = 0;\n");
     for i in 0..FIELDS {
         writeln!(
             src,

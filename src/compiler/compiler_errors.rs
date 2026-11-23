@@ -70,6 +70,7 @@ fn replaced_builtin(name: &str) -> Option<&'static str> {
         "as_list" => "v as any[]",
         "as_map" => "v as {any: any}",
         "str" => "string(x)",
+        "range" => "the range a..b: range(n) is 0..n, range(a, b) is a..b",
         _ => return None,
     })
 }
@@ -113,7 +114,7 @@ pub fn error_unknown_builtin_method(
         )),
         (Some("map"), "get_or") => Some(format!(
             "A lookup with a fallback is {}",
-            paint("m.get(key).unwrap_or(fallback)")
+            paint("m.get(key) else fallback")
         )),
         _ if let Some(replacement) = replaced_method(receiver, method) => {
             Some(format!("{method} is replaced by {}", paint(replacement)))
@@ -290,7 +291,7 @@ pub fn error_propagate_return(
             .with_help(format_args!(
                 "Read the value with {} or {} here instead",
                 blue("match"),
-                blue("unwrap_or"),
+                blue("else"),
             ))
             .finish()
         },
@@ -558,6 +559,35 @@ pub fn error_unknown_or_uncallable(
     if let Some(var) = v.iter().rev().find(|var| var.name == fn_name) {
         error_type_not_callable(&var.var_type, span, file_idx, sources, types);
     }
+    // A variant of an enum another module declares is reached through the
+    // module and the enum, not by its bare name.
+    if let Some((alias, enum_name)) = scope.children.iter().find_map(|(alias, ns)| {
+        ns.symbols.iter().find_map(|(name, kind)| match kind {
+            SymbolKind::Enum(id)
+                if types.enums[*id as usize]
+                    .variants
+                    .iter()
+                    .any(|variant| variant.name == fn_name) =>
+            {
+                Some((alias.clone(), name.clone()))
+            }
+            _ => None,
+        })
+    }) {
+        error_type_test(
+            "Unknown function",
+            &format!(
+                "{fn_name} is a variant of {enum_name}, which the module bound as {alias} declares"
+            ),
+            Some(&format!(
+                "A bare variant name reaches the enums this file declares or imports by name. Write {alias}::{enum_name}::{fn_name}, or import {enum_name} by name"
+            )),
+            "unknown_function",
+            span,
+            file_idx,
+            sources,
+        );
+    }
     error_unknown_function(fn_name, span, scope, file_idx, sources);
 }
 
@@ -772,6 +802,51 @@ pub fn error_type_has_no_c_representation(
     );
 }
 
+/// A `host` signature takes or returns a function, which no host binding
+/// carries: the values that cross into the embedding program are data.
+#[inline(never)]
+#[cold]
+pub fn error_host_fn_takes_function(
+    symbol: &str,
+    ty: &DataType,
+    symbol_span: Span,
+    file_idx: u16,
+    sources: &[Source],
+    types: TypeNames<'_>,
+) -> ! {
+    let type_name = types.of(ty).to_string();
+    throw_compiler_error(
+        &|| {
+            let src = &sources[file_idx as usize];
+            build_report(
+                ariadne::ReportKind::Error,
+                (src.filename.as_str(), symbol_span.into()),
+            )
+            .with_message("A host function cannot take a function")
+            .with_label(
+                Label::new((src.filename.as_str(), symbol_span.into()))
+                    .with_message(format_args!(
+                        "{} takes or returns {}, and a function cannot cross into the host",
+                        blue(symbol),
+                        red(&type_name)
+                    ))
+                    .with_color(ariadne::Color::Red),
+            )
+            .with_note(
+                "A host function takes and returns values, never a function. Call the function in the script and pass the host its result",
+            )
+            .finish()
+        },
+        sources,
+        file_idx,
+        symbol_span,
+        &format!(
+            "{symbol} takes or returns {type_name}, and a function cannot cross into the host"
+        ),
+        "host_fn_takes_function",
+    );
+}
+
 #[inline(never)]
 #[cold]
 pub fn error_cannot_find_dynlib_symbol(
@@ -942,7 +1017,6 @@ pub fn error_unknown_struct(
     sources: &[Source],
     file_idx: u16,
 ) -> ! {
-    check_ambiguous_import(struct_name, struct_span, scope, file_idx, sources);
     let help = bound_type_help(scope, struct_name, |t| blue(t));
     throw_compiler_error(
         &|| {
@@ -1902,7 +1976,6 @@ pub fn error_unknown_function(
     file_idx: u16,
     sources: &[Source],
 ) -> ! {
-    check_ambiguous_import(fn_name, span, namespace, file_idx, sources);
     let similar_fn = find_closest_str(fn_name, namespace.fns().map(|f| f.0.as_str()));
     // A name a module declares, or a removed built-in that module now holds,
     // is a missing import rather than a typo.
@@ -1996,6 +2069,16 @@ pub fn error_unknown_function(
     )
 }
 
+/// Whether `method` is one of the removed fallback readers, called on an
+/// option or a result.
+fn removed_fallback(method: &str, type_name: &str) -> bool {
+    matches!(method, "unwrap_or" | "unwrap_or_else" | "unwrap_or_default")
+        && (type_name.starts_with("Option")
+            || type_name.starts_with("Result")
+            || type_name.ends_with('?')
+            || type_name.contains('!'))
+}
+
 /// A `recv.method(...)` call where `recv`'s static type is the struct `type_name`
 /// but no `impl type_name { fn method ... }` exists (and `method` is not a field,
 /// which the parser already distinguished by the call parentheses).
@@ -2025,7 +2108,14 @@ pub fn error_no_such_method(
                     ))
                     .with_color(ariadne::Color::Red),
             )
-            .with_help(if type_name.starts_with('(') {
+            .with_help(if removed_fallback(method, type_name) {
+                // The one spelling of a fallback is `else`.
+                format!(
+                    "{method} was removed. A fallback is written with {}, as in {}",
+                    blue("else"),
+                    blue("x else fallback"),
+                )
+            } else if type_name.starts_with('(') {
                 // A tuple takes no methods; a value that needs one is a struct.
                 format!(
                     "A tuple has no methods. Pass it to a function, or make it a {} with an {} block",
@@ -2045,7 +2135,11 @@ pub fn error_no_such_method(
         sources,
         file_idx,
         span,
-        &format!("No method {method} on type {type_name}"),
+        &if removed_fallback(method, type_name) {
+            format!("No method {method} on type {type_name}: write x else fallback")
+        } else {
+            format!("No method {method} on type {type_name}")
+        },
         "no_such_method",
     )
 }
@@ -2074,8 +2168,9 @@ pub fn error_method_without_receiver(
             .with_label(
                 Label::new((decl_src.filename.as_str(), decl.0.into()))
                     .with_message(format_args!(
-                        "{} is declared with no parameters",
-                        blue(method)
+                        "{} has no {} parameter first",
+                        blue(method),
+                        blue("self")
                     ))
                     .with_color(ariadne::Color::Blue),
             )
@@ -2090,8 +2185,10 @@ pub fn error_method_without_receiver(
             );
             report
                 .with_help(format_args!(
-                    "Call it by its path: {}",
-                    blue(format_args!("{type_name}::{method}()"))
+                    "Call it by its path, {}, or make it a method by naming its first parameter {}: {}",
+                    blue(format_args!("{type_name}::{method}(...)")),
+                    blue("self"),
+                    blue(format_args!("fn {method}(self, ...)"))
                 ))
                 .finish()
         },
@@ -2367,8 +2464,9 @@ pub fn error_operator_method(
     )
 }
 
-/// A mistake in an `is` or an `as`, reported at the whole expression with an
-/// optional help line. `code` is what a `catch` and an editor read.
+/// A mistake reported at one span with an optional help line: an `is` or an
+/// `as`, a variant written with the wrong shape, a header naming no type.
+/// `code` is what a `catch` and an editor read.
 #[cold]
 #[inline(never)]
 pub fn error_type_test(
@@ -2650,8 +2748,18 @@ pub fn error_unknown_function_in_namespace(
                     state
                         .fns
                         .iter()
-                        .any(|f| f.name == mangled && f.args.is_empty())
-                        .then(|| format!("{name}::{fn_name}()"))
+                        .find(|f| {
+                            f.name == mangled
+                                && !crate::compiler::expr::takes_receiver(
+                                    f.args.iter().map(|a| a.0.as_str()),
+                                )
+                        })
+                        .map(|f| {
+                            format!(
+                                "{name}::{fn_name}({})",
+                                if f.args.is_empty() { "" } else { "..." }
+                            )
+                        })
                 }
                 SymbolKind::Template(template) => state
                     .generics
@@ -2811,7 +2919,7 @@ pub fn error_op(
                 blue(types.of(side)),
                 blue("?"),
                 blue(".unwrap()"),
-                blue(".unwrap_or(default)"),
+                blue("else default"),
                 blue("match"),
             ));
         }
@@ -2988,7 +3096,6 @@ pub fn error_unknown_type(
     sources: &[Source],
     namespace: &Namespace,
 ) -> ! {
-    check_ambiguous_import(t, span, namespace, file_idx, sources);
     let closest_struct = find_closest_str(t, namespace.structs().map(|s| s.0.as_str()));
     throw_compiler_error(
         &|| {
@@ -3467,53 +3574,6 @@ pub fn error_attribute_already_declared(
             "Attribute already declared: this file already declares an attribute named {name}"
         ),
         "attribute_already_declared",
-    );
-}
-
-#[inline(never)]
-#[cold]
-/// A name two glob imports both bring in is an error where it is used, not
-/// where it is imported; this raises it when an unknown name is one of those.
-pub fn check_ambiguous_import(
-    name: &str,
-    span: Span,
-    namespace: &Namespace,
-    file_idx: u16,
-    sources: &[Source],
-) {
-    let Some((_, first, second)) = namespace.ambiguous.iter().find(|(n, _, _)| *n == name) else {
-        return;
-    };
-    throw_compiler_error(
-        &|| {
-            let src = &sources[file_idx as usize];
-            build_report(
-                ariadne::ReportKind::Error,
-                (src.filename.as_str(), span.into()),
-            )
-            .with_message("Ambiguous import")
-            .with_label(
-                Label::new((src.filename.as_str(), span.into()))
-                    .with_message(format_args!(
-                        "{} is imported from both \"{}\" and \"{}\" by {{ * }}",
-                        blue(name),
-                        blue(first),
-                        blue(second),
-                    ))
-                    .with_color(ariadne::Color::Red),
-            )
-            .with_note(format_args!(
-                "Name the one you mean in an import list, such as {}, or declare {} in this file.",
-                green(format_args!("import \"{first}\" {{ {name} }};")),
-                blue(name),
-            ))
-            .finish()
-        },
-        sources,
-        file_idx,
-        span,
-        &format!("Ambiguous import: {name} is imported from both \"{first}\" and \"{second}\""),
-        "ambiguous_import",
     );
 }
 

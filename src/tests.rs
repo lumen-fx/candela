@@ -1480,6 +1480,28 @@ pub fn float_floor() {
 }
 
 #[test]
+pub fn float_ceil_and_trunc() {
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = 3.2;
+            print(x.ceil());
+        }
+        ",
+        4.0f64.into()
+    );
+    run_and_check_registers!(
+        "
+        fn main() {
+            let x = -3.7;
+            print(x.trunc());
+        }
+        ",
+        (-3.0f64).into()
+    );
+}
+
+#[test]
 pub fn float_abs() {
     run_and_check_registers!(
         "
@@ -1974,7 +1996,7 @@ pub fn sieve_of_eratosthenes() {
         "
         fn main() {
             let limit = 100000;
-            let sieve = range(limit);
+            let sieve = (0..limit).list();
             sieve[0] = 0;
             sieve[1] = 0;
             let i = 2;
@@ -2040,7 +2062,7 @@ pub fn range_sum() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(101);
+            let arr = (0..101).list();
             let sum = 0;
             for x in arr {
                 sum += x;
@@ -2805,7 +2827,7 @@ pub fn array_push_type_inference_propagation() {
     run_and_check_registers!(
         "
         fn build_sieve(limit) {
-            let sieve = range(limit);
+            let sieve = (0..limit).list();
             sieve[0] = 0;
             sieve[1] = 0;
             let i = 2;
@@ -3526,7 +3548,7 @@ pub fn range_two_arg() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(5, 10);
+            let arr = (5..10).list();
             let sum = 0;
             for x in arr { sum += x; }
             print(sum);
@@ -3541,7 +3563,7 @@ pub fn range_two_arg_index() {
     run_and_check_registers!(
         "
         fn main() {
-            let arr = range(3, 7);
+            let arr = (3..7).list();
             print(arr[0]);
         }
         ",
@@ -3716,7 +3738,7 @@ pub fn array_index_of_missing() {
         fn main() {
             let arr = [10, 20, 30];
             print(arr.index_of(99));
-            print(arr.index_of(99).unwrap_or(-1));
+            print(arr.index_of(99) else -1);
         }
         "
         ),
@@ -5549,7 +5571,7 @@ pub fn json_round_trips_a_large_integer() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"9007199254740993\") as int;
+            let v = json::parse(\"9007199254740993\").unwrap() as int;
             print(v);
         }
         ",
@@ -5750,18 +5772,15 @@ pub fn diagnostics_calling_a_variable_that_is_not_a_function() {
     assert_eq!(&src[d.span], "f");
 }
 
-/// A module's function written without its call says it is a function to call,
-/// rather than that it names no enum variant.
+/// A path written as a value that names neither a variant nor a function says
+/// so.
 #[test]
-pub fn diagnostics_a_module_function_without_its_call() {
-    let src = "import \"std/json\";\nfn main() { print(json::parse); }";
-    let d = compile_diag(src, "diag.kl").unwrap_err();
-    assert_wellformed(&d, src);
-    assert!(d.message.contains("json::parse(...)"), "{}", d.message);
+pub fn diagnostics_a_path_naming_nothing() {
     let src = "import \"std/json\";\nfn main() { print(json::nope); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
+    assert_wellformed(&d, src);
     assert!(
-        d.message.contains("does not name an enum variant"),
+        d.message.contains("names no enum variant and no function"),
         "{}",
         d.message
     );
@@ -6153,7 +6172,7 @@ pub fn every_compile_error_kind_renders_at_its_place() {
             "struct_missing_fields",
         ),
         (
-            "host \"app\" { int rows(string); }\nfn main() { print(app::rows(\"a\", \"b\")); }",
+            "host \"app\" { fn rows(a: string) -> int; }\nfn main() { print(app::rows(\"a\", \"b\")); }",
             "arity_mismatch",
         ),
         (
@@ -6161,7 +6180,7 @@ pub fn every_compile_error_kind_renders_at_its_place() {
             "arity_mismatch_range",
         ),
         (
-            "host \"app\" { int rows(string); }\nfn main() { print(app.rows(\"a\")); }",
+            "host \"app\" { fn rows(a: string) -> int; }\nfn main() { print(app.rows(\"a\")); }",
             "block_dot_call",
         ),
         (
@@ -6462,7 +6481,7 @@ pub fn a_generic_types_method_calls_itself() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> {
+        impl<T> Cell<T> {
             fn sum(self, n) {
                 if n <= 0 { return 0; }
                 return n + self.sum(n - 1);
@@ -6685,7 +6704,7 @@ pub fn method_on_builtin_map() {
         fn main() {
             let m = {};
             m[\"a\"] = 5;
-            print(m.get(\"a\").unwrap_or(0) + m.get(\"b\").unwrap_or(30));
+            print((m.get(\"a\") else 0) + (m.get(\"b\") else 30));
         }
         ",
         35.into()
@@ -6833,7 +6852,7 @@ pub fn fs_return_types_stay_on_the_fs_path() {
         fn read(n: int) -> int { return n; }
 
         fn main() {
-            print(type(read(1)) + type(fs::read("p")) == "intstring");
+            print(type(read(1)) + type(fs::read("p")) == "intResult<string, string>");
         }
         "#,
         true.into()
@@ -7265,7 +7284,7 @@ fn main() { let xs = []; print(pick(xs[0])); }";
     assert_wellformed(&d, src);
     assert_eq!(d.code, "match_not_enum");
     assert!(d.message.contains("variants of enum Value"));
-    assert!(d.message.contains("the matched value is null"));
+    assert!(d.message.contains("the matched value is ()"));
 }
 
 /// A qualified arm pattern used to be reduced to its last segment and looked
@@ -7513,7 +7532,7 @@ pub fn a_declared_map_parameter_pins_an_empty_literal() {
         enum Value { Num(int), Text(string) }
         fn total(m: {string: Value}) -> int {
             let sum = 0;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7539,7 +7558,7 @@ pub fn a_declared_map_parameter_pins_an_empty_literal_key() {
         enum Key { Num(int), Text(string) }
         fn total(m: {Key: int}) -> int {
             let sum = 7;
-            for k in m {
+            for k in m.keys() {
                 match k {
                     Key::Num(n) => { sum = sum + n; }
                     Key::Text(t) => { sum = sum + t.len(); }
@@ -7564,7 +7583,7 @@ pub fn a_declared_map_parameter_pins_a_nested_empty_literal() {
         enum Value { Num(int), Text(string) }
         fn total(m: {string: Value}) -> int {
             let sum = 0;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7603,7 +7622,7 @@ pub fn a_declared_map_return_pins_an_empty_literal() {
         }
         fn total(m) {
             let sum = 5;
-            for k in m {
+            for k in m.keys() {
                 match m[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -7937,7 +7956,7 @@ pub fn a_struct_field_declares_what_an_empty_literal_holds() {
         struct Holder { rows: {string: Value}, names: Value[] }
         fn total(h: Holder) -> int {
             let sum = 3;
-            for k in h.rows {
+            for k in h.rows.keys() {
                 match h.rows[k] {
                     Value::Num(n) => { sum = sum + n; }
                     Value::Text(t) => { sum = sum + t.len(); }
@@ -8062,7 +8081,7 @@ pub fn enum_built_in_a_loop_survives_a_second_call() {
         enum Value { Int(int), Text(string) }
         fn build(n) {
             let cells = [];
-            for i in range(n) { cells.push(Value::Int(i)); }
+            for i in 0..n { cells.push(Value::Int(i)); }
             return cells;
         }
         fn main() {
@@ -8129,7 +8148,7 @@ pub fn any_type_tests() {
         "import \"std/json\";
 
         fn main() {
-            let j = json::parse(\"{\\\"n\\\": 5}\");
+            let j = json::parse(\"{\\\"n\\\": 5}\").unwrap();
             print(j is {any: any});
         }
         ",
@@ -8143,7 +8162,7 @@ pub fn any_is_int_true() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"7\");
+            let v = json::parse(\"7\").unwrap();
             print(v is int);
         }
         ",
@@ -8157,7 +8176,7 @@ pub fn any_is_int_false_on_string() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(\"\\\"x\\\"\");
+            let v = json::parse(\"\\\"x\\\"\").unwrap();
             print(v is int);
         }
         ",
@@ -8175,7 +8194,7 @@ pub fn any_bad_downcast_is_catchable() {
         fn main() {
             let r = 0;
             try {
-                let x = json::parse(\"\\\"str\\\"\") as int;
+                let x = json::parse(\"\\\"str\\\"\").unwrap() as int;
                 r = 1;
             } catch e {
                 r = 2;
@@ -8193,7 +8212,7 @@ pub fn any_as_str() {
         "import \"std/json\";
 
         fn main() {
-            print(json::parse(\"\\\"hi\\\"\") as string);
+            print(json::parse(\"\\\"hi\\\"\").unwrap() as string);
         }
         ",
         crate::data::Data::small_str("hi")
@@ -8206,7 +8225,7 @@ pub fn any_as_bool() {
         "import \"std/json\";
 
         fn main() {
-            print(json::parse(\"true\") as bool);
+            print(json::parse(\"true\").unwrap() as bool);
         }
         ",
         true.into()
@@ -8219,7 +8238,7 @@ pub fn json_parse_scalar_int() {
         "import \"std/json\";
 
         fn main() {
-            print((json::parse(\"42\") as int) + 1);
+            print((json::parse(\"42\").unwrap() as int) + 1);
         }
         ",
         43.into()
@@ -8232,7 +8251,7 @@ pub fn json_parse_object_field() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\") as {any: any};
+            let obj = json::parse(\"{\\\"x\\\": 10, \\\"y\\\": 20}\").unwrap() as {any: any};
             print((obj[\"x\"] as int) + (obj[\"y\"] as int));
         }
         ",
@@ -8246,7 +8265,7 @@ pub fn json_parse_nested_array() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\") as {any: any};
+            let obj = json::parse(\"{\\\"nums\\\": [1, 2, 3, 4]}\").unwrap() as {any: any};
             let arr = obj[\"nums\"] as any[];
             print(arr.len());
         }
@@ -8301,7 +8320,7 @@ pub fn json_parse_in_a_loop_keeps_the_pools_bounded() {
         fn main() {
             let total = 0;
             for i in 0..3000 {
-                let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+                let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\").unwrap() as any[];
                 total = total + ((v[0] as any[])[1] as int);
             }
             print(total);
@@ -8338,7 +8357,7 @@ pub fn json_parse_survives_a_collection_mid_parse() {
             doc = doc + \"]\";
             let bad = 0;
             for round in 0..3 {
-                let parsed = json::parse(doc) as any[];
+                let parsed = json::parse(doc).unwrap() as any[];
                 if json::stringify(parsed) != doc { bad += 1; }
                 if parsed.len() != ids.len() { bad += 1; }
                 for i in 0..ids.len() {
@@ -8572,7 +8591,7 @@ pub fn an_interned_key_never_names_a_freed_string() {
                 let t = "garbage_string_" + string(i);
                 i += 1;
             }
-            let doc = json::parse("{\"garbage_string_5\": 1}") as {any: any};
+            let doc = json::parse("{\"garbage_string_5\": 1}").unwrap() as {any: any};
             let j = 0;
             while j < 300 {
                 let t = "reuse_every_slot_" + string(j);
@@ -8744,7 +8763,7 @@ pub fn a_json_key_interned_during_marking_keeps_its_text() {
             let bad = 0;
             for round in 0..300 {
                 let dead = "interned key " + string(round);
-                let doc = json::parse("{\"interned key " + string(round) + "\": [1, 2]}") as {any: any};
+                let doc = json::parse("{\"interned key " + string(round) + "\": [1, 2]}").unwrap() as {any: any};
                 let junk = "unrelated filler " + string(round);
                 let k = doc.keys()[0] as string;
                 if k != "interned key " + string(round) { bad += 1; }
@@ -8771,7 +8790,7 @@ pub fn parsed_array_survives_array_gc() {
             r#"import "std/json";
 
             fn libs_len(body) {{
-                let root = json::parse(body) as {{any: any}};
+                let root = json::parse(body).unwrap() as {{any: any}};
                 let s = "a,b,c";
                 let i = 0;
                 while i < 50 {{
@@ -8796,7 +8815,7 @@ pub fn json_roundtrip_preserves_int() {
         "import \"std/json\";
 
         fn main() {
-            let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\"))) as {any: any};
+            let obj = json::parse(json::stringify(json::parse(\"{\\\"a\\\": 7}\").unwrap())).unwrap() as {any: any};
             print(obj[\"a\"] as int);
         }
         ",
@@ -8810,7 +8829,7 @@ pub fn json_roundtrip_preserves_float() {
         "import \"std/json\";
 
         fn main() {
-            let v = json::parse(json::stringify(json::parse(\"2.5\")));
+            let v = json::parse(json::stringify(json::parse(\"2.5\").unwrap())).unwrap();
             print(v as float);
         }
         ",
@@ -8956,7 +8975,7 @@ pub fn map_iteration_over_keys() {
             m[1] = 10;
             m[2] = 20;
             let s = 0;
-            for k in m {
+            for k in m.keys() {
                 s += m[k];
             }
             print(s);
@@ -8972,7 +8991,7 @@ pub fn map_downcast_takes_mixed_value_types() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1}\").unwrap() as {any: any};
             m[\"b\"] = 2;
             m[\"c\"] = \"three\";
             print(m.len());
@@ -8988,7 +9007,7 @@ pub fn map_downcast_entries_stay_dynamic() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"two\\\"}\").unwrap() as {any: any};
             print((m[\"a\"] as int) + (m[\"b\"] as string).len());
         }
         ",
@@ -9002,7 +9021,7 @@ pub fn map_downcast_takes_mixed_key_types() {
         "import \"std/json\";
 
         fn main() {
-            let m = json::parse(\"{\\\"a\\\": 1}\") as {any: any};
+            let m = json::parse(\"{\\\"a\\\": 1}\").unwrap() as {any: any};
             m[\"b\"] = 2;
             m[7] = 3;
             print(m.len());
@@ -9018,7 +9037,7 @@ pub fn list_downcast_takes_mixed_element_types() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1]\") as any[];
+            let l = json::parse(\"[1]\").unwrap() as any[];
             l.push(2);
             l.push(\"three\");
             print(l.len());
@@ -9034,7 +9053,7 @@ pub fn list_downcast_elements_stay_dynamic() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1, \\\"two\\\"]\") as any[];
+            let l = json::parse(\"[1, \\\"two\\\"]\").unwrap() as any[];
             print((l[0] as int) + (l[1] as string).len());
         }
         ",
@@ -9050,7 +9069,7 @@ pub fn list_downcast_index_assignment_takes_any_type() {
         "import \"std/json\";
 
         fn main() {
-            let l = json::parse(\"[1, 2, 3]\") as any[];
+            let l = json::parse(\"[1, 2, 3]\").unwrap() as any[];
             l.push({\"a\": \"2\"});
             l[0] = 5;
             l[1] = \"two\";
@@ -9596,7 +9615,7 @@ pub fn any_condition_raises_on_a_non_bool() {
         fn main() {
             let r = 0;
             try {
-                if json::parse(\"1\") {
+                if json::parse(\"1\").unwrap() {
                     r = 1;
                 }
             } catch e {
@@ -9616,7 +9635,7 @@ pub fn any_condition_takes_a_bool() {
 
         fn main() {
             let r = 0;
-            if json::parse(\"true\") {
+            if json::parse(\"true\").unwrap() {
                 r = 1;
             }
             print(r);
@@ -10755,7 +10774,7 @@ pub fn generic_struct_and_impl() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> {
+        impl<T> Cell<T> {
             fn get(self) -> T { return self.value; }
         }
         fn main() {
@@ -10813,7 +10832,7 @@ pub fn generic_struct_literal_without_type_arguments() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let c = Cell{ value: 12 };
             print(c.get());
@@ -10829,7 +10848,7 @@ pub fn generic_struct_literal_without_type_arguments() {
 pub fn generic_struct_literal_takes_a_parameter_through_a_list_or_map_field() {
     let src = "
         struct Stack<T> { items: T[] }
-        impl Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
+        impl<T> Stack<T> { fn top(self) -> T { return self.items[self.items.len() - 1]; } }
         struct Names<T> { by: {string: T}, count: int }
         fn main() {
             let s = Stack { items: [1, 2] };
@@ -10851,7 +10870,7 @@ pub fn generic_instantiations_are_distinct_types() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let i = Cell<int>{ value: 2 };
             let s = Cell<string>{ value: \"ab\" };
@@ -10974,7 +10993,7 @@ pub fn a_block_leaves_the_function_table_alone() {
         String::from(
             "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn apply(f, n) { return f(n); }
         fn main() {
             let i = 0;
@@ -11076,7 +11095,7 @@ pub fn nested_generic_instantiation() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let inner = Cell<int>{ value: 4 };
             let outer = Cell<Cell<int>>{ value: inner };
@@ -11130,7 +11149,7 @@ pub fn generic_and_concrete_impl_on_one_type() {
     run_and_check_registers!(
         "
         struct Cell<T> { value: T }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         impl Cell<int> { fn double(self) -> int { return self.value * 2; } }
         fn main() {
             let c = Cell<int>{ value: 5 };
@@ -11147,7 +11166,7 @@ pub fn a_method_takes_explicit_type_arguments() {
     run_and_check_registers!(
         "
         struct Box<T> { value: T }
-        impl Box<T> {
+        impl<T> Box<T> {
             fn get(self) -> T { return self.value; }
             fn tagged<U>(self, extra: U) -> U { return extra; }
         }
@@ -11165,7 +11184,7 @@ pub fn a_method_type_argument_left_off_is_inferred() {
     run_and_check_registers!(
         "
         struct Box<T> { value: T }
-        impl Box<T> {
+        impl<T> Box<T> {
             fn tagged<U>(self, extra: U) -> U { return extra; }
         }
         fn main() {
@@ -11187,7 +11206,7 @@ pub fn a_method_type_argument_picks_the_specialisation() {
         impl Kind<int> { fn code(self) -> int { return 1; } }
         impl Kind<string> { fn code(self) -> int { return 2; } }
         struct Maker<T> { seed: T }
-        impl Maker<T> {
+        impl<T> Maker<T> {
             fn code_of<U>(self) -> int { return Kind<U>{ n: 0 }.code(); }
         }
         fn main() {
@@ -11409,7 +11428,7 @@ pub fn a_method_wins_over_a_field_of_the_same_name() {
     run_and_check_registers!(
         "
         struct S<T> { cb: T }
-        impl S<T> { fn cb(self, n) { return 7; } }
+        impl<T> S<T> { fn cb(self, n) { return 7; } }
         fn main() {
             let s = S { cb: fn(x) { return x * 2; } };
             print(s.cb(21));
@@ -11441,7 +11460,7 @@ pub fn generic_type_in_a_struct_field() {
         "
         struct Cell<T> { value: T }
         struct Pair { left: Cell<int>, right: Cell<string> }
-        impl Cell<T> { fn get(self) -> T { return self.value; } }
+        impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
         fn main() {
             let p = Pair{ left: Cell<int>{ value: 6 }, right: Cell<string>{ value: \"hi\" } };
             print(p.left.get() + p.right.get().len());
@@ -11459,7 +11478,7 @@ pub fn generic_declared_in_an_imported_module() {
     std::fs::write(
         &lib,
         "struct Boxed<T> { item: T }\n\
-         impl Boxed<T> { fn item(self) -> T { return self.item; } }\n\
+         impl<T> Boxed<T> { fn item(self) -> T { return self.item; } }\n\
          fn wrap<T>(x) { return Boxed<T>{ item: x }; }\n",
     )
     .unwrap();
@@ -11548,7 +11567,7 @@ pub fn type_arguments_on_a_plain_function() {
 pub fn type_arguments_on_a_method_that_takes_none() {
     let err = compile_diag(
         "struct Box<T> { value: T }
-         impl Box<T> { fn get(self) -> T { return self.value; } }
+         impl<T> Box<T> { fn get(self) -> T { return self.value; } }
          fn main() { let b = Box<int>{ value: 1 }; print(b.get<int>()); }",
         "generics.cdl",
     )
@@ -11607,7 +11626,7 @@ pub fn impl_on_a_generic_type_needs_its_arguments() {
 pub fn one_method_defined_by_two_impl_blocks() {
     let err = compile_diag(
         "struct Cell<T> { value: T }
-         impl Cell<T> { fn get(self) -> T { return self.value; } }
+         impl<T> Cell<T> { fn get(self) -> T { return self.value; } }
          impl Cell<int> { fn get(self) -> int { return 0; } }
          fn main() { let c = Cell<int>{ value: 1 }; print(c.get()); }",
         "generics.cdl",
@@ -11959,8 +11978,8 @@ pub fn a_report_colours_the_types_a_call_accepts() {
 #[test]
 pub fn a_call_into_a_host_namespace_names_the_function_it_cannot_find() {
     for src in [
-        "host \"lumen\" { int set_title(); }\nfn main() { lumen::set_titel(); }",
-        "host \"lumen\" { int set_title(); }\nfn main() { let t = lumen::set_titel(); print(t); }",
+        "host \"lumen\" { fn set_title() -> int; }\nfn main() { lumen::set_titel(); }",
+        "host \"lumen\" { fn set_title() -> int; }\nfn main() { let t = lumen::set_titel(); print(t); }",
     ] {
         let d = compile_diag(src, "diag.cdl").unwrap_err();
         assert_wellformed(&d, src);
@@ -13444,7 +13463,7 @@ pub fn iterating_a_map_walks_the_keys_in_insertion_order() {
             m[\"c\"] = 3;
             m[\"b\"] = 2;
             m[\"a\"] = 1;
-            for k in m { print(k); }
+            for k in m.keys() { print(k); }
         }
         ",
     );
@@ -13530,7 +13549,7 @@ pub fn a_json_object_round_trips_with_its_key_order() {
         "import \"std/json\";
 
         fn main() {
-            print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\")));
+            print(json::stringify(json::parse(\"{\\\"z\\\": 1, \\\"m\\\": 2, \\\"a\\\": 3}\").unwrap()));
         }
         ",
     );
@@ -13781,7 +13800,7 @@ pub fn a_generic_type_defines_an_operator_once() {
         "
         struct Pair<T> { a: T, b: T }
 
-        impl Pair<T> {
+        impl<T> Pair<T> {
             fn +(self, other: Pair<T>) -> Pair<T> {
                 return Pair<T> { a: self.a + other.a, b: self.b + other.b };
             }
@@ -14210,8 +14229,8 @@ pub fn returning_any_from_a_declared_type_is_checked() {
         run_output(
             "import \"std/json\";
 
-            fn g(s: string) -> int { return json::parse(s); }
-            fn m(s: string) -> {string: string} { return json::parse(s); }
+            fn g(s: string) -> int { return json::parse(s).unwrap(); }
+            fn m(s: string) -> {string: string} { return json::parse(s).unwrap(); }
 
             fn main() {
                 print(g(\"4\") + 1);
@@ -15164,7 +15183,7 @@ fn main() {
 pub fn a_generic_struct_default_function() {
     let src = "
 struct Cell<T> { value: T, n: int }
-impl Cell<T> { fn default() { return Cell<T> { n: 3, .. }; } }
+impl<T> Cell<T> { fn default() { return Cell<T> { n: 3, .. }; } }
 struct Holder { c: Cell<int> }
 fn main() {
     let a = Cell<string>::default();
@@ -15216,7 +15235,7 @@ fn main() { print(S::default().x); }
         (
             "
 struct Cell<T> { value: T }
-impl Cell<T> { fn default(self) -> Cell<T> { return self; } }
+impl<T> Cell<T> { fn default(self) -> Cell<T> { return self; } }
 fn main() { print(Cell<int>::default().value); }
 ",
             "default",
@@ -15400,7 +15419,7 @@ pub fn a_list_reverse_returns_nothing() {
             print("abc".reverse());
         }
     "#;
-    assert_eq!(run_output(src), "null\n[3,2,1]\ncba\n");
+    assert_eq!(run_output(src), "()\n[3,2,1]\ncba\n");
 }
 
 /// A slice's bounds are separated by `..`; anything else after the first
@@ -15552,12 +15571,12 @@ pub fn match_mistakes_are_reported() {
         (
             "enum E { A(int), B(string) }\nfn main() { match E::A(1) { A(x) | B(x) => print(x) } }",
             "pattern_bindings_differ",
-            "B",
+            "B(x)",
         ),
         (
             "enum E { A(int), B(int), C }\nfn main() { print(match E::C { A(x) | B(y) => 1, C => 2 }); }",
             "pattern_bindings_differ",
-            "B",
+            "B(y)",
         ),
         (
             "fn main() { match 1 { 1 | _ => print(1) } }",
@@ -15623,7 +15642,7 @@ pub fn a_branch_value_calls_the_function_it_chose() {
 pub fn the_prelude_needs_no_import() {
     let src = r#"
         fn main() {
-            print(Some(3).unwrap_or(1), Ok(2).is_ok(), "abc".capitalize());
+            print(Some(3) else 1, Ok(2).is_ok(), "abc".capitalize());
             print({"a": 1}.is_empty(), int("42") + 1, [1, 2, 3].sum());
         }
     "#;
@@ -15638,8 +15657,7 @@ pub fn the_prelude_needs_no_library_directory() {
     std::fs::create_dir_all(&empty).unwrap();
     let mut resolver = crate::compiler::imports::ImportResolver::new();
     resolver.set_lib_dir(empty.clone());
-    let src =
-        "fn main() { print([4, 2].min().unwrap_or(0) + {\"k\": 1}.get(\"k\").unwrap_or(0)); }";
+    let src = "fn main() { print(([4, 2].min() else 0) + ({\"k\": 1}.get(\"k\") else 0)); }";
     CAPTURED_OUTPUT.with(|o| o.borrow_mut().clear());
     let was_capturing = set_capturing(true);
     let result = run_diag_profile_with(src, "p.cdl", false, &resolver);
@@ -15684,12 +15702,12 @@ pub fn a_program_s_own_variant_wins_over_the_prelude_s() {
 
 #[test]
 pub fn a_name_in_an_unimported_module_names_the_import() {
-    let src = "fn main() { print(sqrt(2.0)); }";
+    let src = "fn main() { print(cbrt(2.0)); }";
     let d = compile_diag(src, "diag.kl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "unknown_function");
     assert!(
-        d.message.contains("import \"std/math\";") && d.message.contains("math::sqrt"),
+        d.message.contains("import \"std/math\";") && d.message.contains("math::cbrt"),
         "{d:?}"
     );
 
@@ -15713,7 +15731,7 @@ pub fn the_json_builtins_are_gone() {
     }
     let src = r#"
         import "std/json";
-        fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]"))); }
+        fn main() { print(json::stringify(json::parse("[1, {\"a\": true}]").unwrap())); }
     "#;
     assert_eq!(run_output(src), "[1,{\"a\":true}]\n");
 }
@@ -15726,10 +15744,10 @@ pub fn the_file_system_is_a_module() {
         r#"
         import "std/fs";
         fn main() {{
-            fs::write("{path_text}", "a");
-            fs::append("{path_text}", "b");
-            print(fs::read("{path_text}"), fs::exists("{path_text}"));
-            fs::delete("{path_text}");
+            fs::write("{path_text}", "a")?;
+            fs::append("{path_text}", "b")?;
+            print(fs::read("{path_text}")?, fs::exists("{path_text}"));
+            fs::delete("{path_text}")?;
             print(fs::exists("{path_text}"));
         }}
     "#
@@ -15766,7 +15784,7 @@ pub fn map_get_returns_an_option() {
         fn main() {
             let m = {"a": 1};
             print(m.get("a"), m.get("z"));
-            print(m.get("z").unwrap_or(7));
+            print(m.get("z") else 7);
             let n = match m.get("a") { Some(v) => v + 1, None => 0 };
             print(n);
         }
@@ -15783,7 +15801,7 @@ pub fn removed_map_methods_name_their_replacement() {
         ),
         (
             "fn main() { let m = {\"a\": 1}; print(m.get_or(\"b\", 2)); }",
-            "m.get(key).unwrap_or(fallback)",
+            "m.get(key) else fallback",
         ),
     ] {
         let d = compile_diag(src, "diag.kl").unwrap_err();
@@ -15791,6 +15809,61 @@ pub fn removed_map_methods_name_their_replacement() {
         assert_eq!(d.code, "no_such_method", "{src}");
         assert!(d.message.contains(replacement), "{d:?}");
     }
+}
+
+/// `()` is the type and the value of no value: a no-value result answers
+/// `Ok(())`, a pattern matches it, and it is no tuple.
+#[test]
+pub fn unit_is_the_type_of_no_value() {
+    let src = r#"
+        fn save(ok: bool) -> ()!string {
+            if !ok { return Err("nope"); }
+            return Ok(());
+        }
+        fn nothing() -> () {}
+        fn main() {
+            let u: () = ();
+            print(type(u), type(nothing()), type(save(true)), u == ());
+            match save(true) {
+                Ok(()) => print("saved"),
+                Err(e) => print(e),
+            }
+            print(save(false) else |e| { print(e); () });
+        }
+    "#;
+    assert_eq!(
+        run_output(src),
+        "()\n()\nResult<(), string>\ntrue\nsaved\nnope\nnull\n"
+    );
+    for (src, code) in [
+        ("fn main() { let (a, b) = (); }", "tuple_pattern_mismatch"),
+        ("fn main() { let x: int = (); }", "variable_type_mismatch"),
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {}", d.message);
+    }
+}
+
+/// `else` is the one spelling of a fallback; the removed `unwrap_or` names it.
+#[test]
+pub fn unwrap_or_is_removed_for_else() {
+    for src in [
+        "fn main() { let o = Some(3); print(o.unwrap_or(1)); }",
+        "fn main() { let r: int!string = Ok(2); print(r.unwrap_or(5)); }",
+        "fn main() { print([1].first().unwrap_or_else(fn() => 0)); }",
+    ] {
+        let d = compile_diag(src, "diag.kl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "no_such_method", "{src}");
+        assert!(d.message.contains("x else fallback"), "{d:?}");
+    }
+    let src = r#"
+        fn main() {
+            let r: int!string = Err("no");
+            print(Some(3) else 1, None else 1, r else 5, [7].first() else 0);
+        }
+    "#;
+    assert_eq!(run_output(src), "3\n1\n5\n7\n");
 }
 
 #[test]
@@ -15809,7 +15882,7 @@ pub fn list_lookups_return_options() {
             print(xs.first(), xs.last(), xs.min(), xs.max());
             let none = [0];
             none.remove(0);
-            print(none.first(), none.max().unwrap_or(-1));
+            print(none.first(), none.max() else -1);
         }
     ";
     assert_eq!(
@@ -15868,10 +15941,6 @@ pub fn question_mark_returns_the_none_or_the_err() {
 #[test]
 pub fn question_mark_needs_a_function_returning_its_kind() {
     for (src, code) in [
-        (
-            "fn main() { let m = {\"a\": 1}; let x = m.get(\"a\")?; print(x); }",
-            "propagate_return_type",
-        ),
         (
             "fn f(m) -> int { let x = m.get(\"a\")?; return x; }\nfn main() { print(f({\"a\": 1})); }",
             "propagate_return_type",
@@ -15958,9 +16027,9 @@ pub fn is_tests_a_type() {
         struct P { x: int }
         enum Shape { Circle(float), Square(int) }
         fn main() {
-            let v = json::parse("{\"a\": 1, \"b\": [1, 2]}");
+            let v = json::parse("{\"a\": 1, \"b\": [1, 2]}").unwrap();
             print(v is int, v is {string: any}, v is {string: int}, v is {any: any});
-            let xs = json::parse("[1, 2, 3]");
+            let xs = json::parse("[1, 2, 3]").unwrap();
             print(xs is int[], xs is string[], xs is (int|string)[], xs is any[]);
             let ps = [P { x: 1 }];
             print(ps is P[], 3 is int, 3 is int|string, 3 is any);
@@ -16018,8 +16087,8 @@ pub fn is_binds_a_variants_payload() {
             return 8080;
         }
         fn main() {
-            print(port(json::parse("{\"port\": 80}") as {string: any}));
-            print(port(json::parse("{\"port\": \"x\"}") as {string: any}));
+            print(port(json::parse("{\"port\": 80}").unwrap() as {string: any}));
+            print(port(json::parse("{\"port\": \"x\"}").unwrap() as {string: any}));
             let o = Some(5);
             print(o is Some(n) && n > 3 && n < 10);
             print(o is None);
@@ -16047,12 +16116,12 @@ pub fn as_downcasts_or_raises() {
         import "std/json";
         fn keys(m: {string: any}) -> int { return m.len(); }
         fn main() {
-            let v = json::parse("{\"a\": 1, \"b\": 2}");
+            let v = json::parse("{\"a\": 1, \"b\": 2}").unwrap();
             print(keys(v as {string: any}));
-            print(json::parse("[1, 2]") as int[]);
-            print(json::parse("7") as int + 1);
+            print(json::parse("[1, 2]").unwrap() as int[]);
+            print(json::parse("7").unwrap() as int + 1);
             try {
-                print(json::parse("[1, \"x\"]") as int[]);
+                print(json::parse("[1, \"x\"]").unwrap() as int[]);
             } catch "bad_downcast" {
                 print("caught");
             }
@@ -16073,12 +16142,12 @@ pub fn type_test_diagnostics() {
             "string(x)",
         ),
         (
-            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Option); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\").unwrap() is Option); }",
             "type_test_needs_arguments",
             "Option<int>",
         ),
         (
-            "import \"std/json\"; fn main() { print(json::parse(\"1\") is Some(x)); }",
+            "import \"std/json\"; fn main() { print(json::parse(\"1\").unwrap() is Some(x)); }",
             "variant_test_not_enum",
             "is Option<int>",
         ),
@@ -16143,7 +16212,7 @@ pub fn is_and_as_bind_like_comparisons() {
     let src = r#"
         import "std/json";
         fn main() {
-            let v = json::parse("2");
+            let v = json::parse("2").unwrap();
             print(v as int + 1);
             print(1 + 1 is int);
             print(v is int && v as int > 1);
@@ -16288,7 +16357,7 @@ pub fn receiverless_impl_functions_are_called_by_path() {
         enum Color { Red, Green }
         impl Color { fn first() -> Color => Color::Red; }
         struct Stack<T> { items: T[] }
-        impl Stack<T> {
+        impl<T> Stack<T> {
             fn new() -> Stack<T> => Stack<T> { items: [] };
             fn push(self, x: T) { self.items.push(x); }
         }
@@ -16360,6 +16429,307 @@ fn main() { print(P { x: 2 }.make().x); }
     let d = compile_diag(src, "dot.cdl").unwrap_err();
     assert_wellformed(&d, src);
     assert_eq!(d.code, "method_without_receiver");
+}
+
+/// A parameter may declare a default, and a call may pass arguments by name
+/// after the ones it passes in order. Defaults are filled in where the call is
+/// compiled, each call building its own value.
+#[test]
+pub fn defaults_and_named_arguments() {
+    let src = r#"
+const LIMIT: int = 3;
+fn window(w: int, h: int, title: string = "untitled", resizable: bool = true) -> string {
+    return title + " " + string(w) + "x" + string(h) + " " + string(resizable);
+}
+struct P { x: int }
+impl P {
+    fn new(x: int = 5) -> P => P { x };
+    fn moved(self, dx: int = 1, dy: int = 0) -> P => P { x: self.x + dx + dy };
+}
+fn lim(n: int = LIMIT) -> int => n;
+fn fresh(xs: int[] = []) -> int[] {
+    xs.push(1);
+    return xs;
+}
+fn main() {
+    print(window(800, 600));
+    print(window(800, 600, resizable: false));
+    print(window(h: 2, w: 1, title: "t"));
+    print(P { x: 1 }.moved(dy: 10).x);
+    print(P::new().x);
+    print(lim());
+    print(fresh().len(), fresh().len());
+}
+"#;
+    assert_eq!(
+        run_output(src),
+        "untitled 800x600 true\nuntitled 800x600 false\nt 1x2 true\n12\n5\n3\n1\n1\n"
+    );
+    for (src, code) in [
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, c: 3)); }",
+            "named_argument_unknown",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, a: 3)); }",
+            "named_argument_twice",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(b: 1, 2)); }",
+            "positional_after_named",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(b: 1)); }",
+            "argument_missing",
+        ),
+        ("fn main() { print(x: 1); }", "named_argument_unexpected"),
+        // Short of a parameter with no default, and past the last one with a
+        // name besides: the count is what is wrong.
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f()); }",
+            "arity_mismatch",
+        ),
+        (
+            "fn f(a: int, b: int = 2) -> int => a + b;\nfn main() { print(f(1, 2, 3, b: 4)); }",
+            "arity_mismatch",
+        ),
+        (
+            "host \"app\" { int rows(string); }\nfn main() {}",
+            "old_host_signature",
+        ),
+    ] {
+        let d = compile_diag(src, "named.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+    // A function of no parameters says so, to a name and to a closure.
+    for (src, code, says) in [
+        (
+            "fn g() -> int => 1;\nfn main() { print(g(x: 1)); }",
+            "named_argument_unknown",
+            "Its parameters are none",
+        ),
+        (
+            "fn g() -> int => 1;\nfn main() { print(g() fn(x) => x); }",
+            "trailing_closure_extra",
+            "g takes no arguments",
+        ),
+    ] {
+        let d = compile_diag(src, "none.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert!(format!("{d:?}").contains(says), "{src}: {d:?}");
+    }
+    let src = "dylib \"z\" { string version(int, float[]); }\nfn main() {}";
+    let d = compile_diag(src, "old.cdl").unwrap_err();
+    assert!(
+        d.message
+            .contains("fn version(a: int, b: float[]) -> string;"),
+        "{d:?}"
+    );
+}
+
+/// A function an `impl` block declares is a value by its type's path, and a
+/// method taken that way takes the receiver as its first argument. The tests
+/// in `tests/imports.rs` and `tests/embedding.rs` cover a module's function
+/// and a host function.
+#[test]
+pub fn functions_are_values_by_path() {
+    let src = r"
+        struct Rect { w: int, h: int }
+        impl Rect {
+            fn new(w: int, h: int) -> Rect => Rect { w, h };
+            fn area(self) -> int => self.w * self.h;
+        }
+        struct Cell<T> { v: T }
+        impl<T> Cell<T> { fn of(v: T) -> Cell<T> => Cell<T> { v }; }
+        fn apply(f, x) { return f(x); }
+        fn main() {
+            let rects = [Rect::new(2, 3), Rect::new(4, 5)];
+            print(rects.map(Rect::area));
+            let make = Rect::new;
+            print(make(1, 7).area());
+            print(apply(Cell<int>::of, 3).v);
+        }
+    ";
+    assert_eq!(run_output(src), "[6,20]\n7\n3\n");
+}
+
+/// A variant may name its payload, `Click { x: int, y: int }`: it is built and
+/// matched by field name, in any order, with field shorthand, and a pattern may
+/// skip fields with `..`.
+#[test]
+pub fn enum_variants_with_named_fields() {
+    let src = "
+enum Event { Click { x: int, y: int }, Key(string), Quit }
+enum Slot<T> { Filled { value: T, count: int }, Empty }
+fn describe(e: Event) -> string => match e {
+    Event::Click { x, y: py } => \"click \" + string(x) + \",\" + string(py),
+    Key(k) => \"key \" + k,
+    Quit => \"quit\",
+};
+fn main() {
+    let y = 4;
+    print(describe(Event::Click { y, x: 3 }));
+    print(describe(Event::Key(\"a\")));
+    let e = Event::Click { x: 1, y: 2 };
+    if (e is Event::Click { x, .. }) { print(x); }
+    let s = Slot<string>::Filled { value: \"v\", count: 2 };
+    match s { Filled { value, count } => print(value, count), Empty => print(0) }
+    let t = Filled { value: 1.5, count: 1 };
+    match t { Filled { value, .. } => print(value), Empty => print(0) }
+}
+";
+    assert_eq!(run_output(src), "click 3,4\nkey a\n1\nv\n2\n1.5\n");
+    for (src, code) in [
+        (
+            "enum E { A { x: int } }\nfn main() { let e = E::A(1); }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A(int) }\nfn main() { let e = E::A { x: 1 }; }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A { x: int, y: int } }\nfn main() { let e = E::A { x: 1 }; }",
+            "variant_field_missing",
+        ),
+        (
+            "enum E { A { x: int } }\nfn main() { let e = E::A { x: 1, z: 2 }; }",
+            "variant_field_unknown",
+        ),
+        (
+            "enum E { A { x: int }, B }\nfn main() { match E::B { A(x) => print(x), B => print(0) } }",
+            "variant_payload_shape",
+        ),
+        (
+            "enum E { A { x: int, y: int }, B }\nfn main() { match E::B { A { x } => print(x), B => print(0) } }",
+            "variant_field_missing",
+        ),
+    ] {
+        let d = compile_diag(src, "named.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
+/// An `impl` block on a generic type declares the parameters it binds,
+/// `impl<T> Cell<T>`, so a type that happens to be named `T` does not turn the
+/// block into an impl for that one instantiation.
+#[test]
+pub fn generic_impl_declares_its_parameters() {
+    let src = "
+struct T { a: int }
+struct Cell<T> { v: T }
+impl<T> Cell<T> { fn get(self) -> T => self.v; }
+fn main() { print(Cell<int> { v: 1 }.get(), Cell<T> { v: T { a: 2 } }.get().a); }
+";
+    assert_eq!(run_output(src), "1\n2\n");
+    let src = "
+struct Cell<T> { v: T }
+impl Cell<T> { fn get(self) -> T => self.v; }
+fn main() { print(Cell<int> { v: 1 }.get()); }
+";
+    let d = compile_diag(src, "undeclared.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "impl_undeclared_type_parameter");
+    assert!(d.message.contains("impl<T> Cell<T>"), "{d:?}");
+    let src = "struct P { x: int }\nimpl<T> P { fn get(self) => self.x; }\nfn main() {}";
+    let d = compile_diag(src, "unbound.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "impl_param_unbound");
+    assert_eq!(&src[d.span.clone()], "<T>", "{d:?}");
+}
+
+/// A field written alone in a struct literal takes the variable of its name,
+/// alongside fields written with a value and a closing `..`.
+#[test]
+pub fn struct_literal_field_shorthand() {
+    let src = "
+struct P { x: int, y: int, z: int = 9 }
+struct Cell<T> { v: T }
+fn make(x: int, y: int) -> P => P { x, y, .. };
+fn main() {
+    let y = 5;
+    let p = make(1, 2);
+    let q = P { x: 3, y, z: 4 };
+    let v = \"hi\";
+    print(p.x, p.y, p.z, q.x, q.y, q.z, Cell<string> { v }.v);
+}
+";
+    assert_eq!(run_output(src), "1\n2\n9\n3\n5\n4\nhi\n");
+    let src = "struct P { x: int }\nfn main() { let p = P { x }; }";
+    let d = compile_diag(src, "short.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(&src[d.span.clone()], "x", "{d:?}");
+}
+
+/// An `impl` function is a method only when its first parameter is `self`;
+/// any other `impl` function, with or without parameters, is called by its
+/// path. That is what lets a type have a constructor that takes arguments.
+#[test]
+pub fn impl_functions_without_self_are_called_by_path() {
+    let src = "
+struct P { x: int, y: int }
+impl P {
+    fn new(x: int, y: int) -> P => P { x: x, y: y };
+    fn splat(v) => P::new(v, v);
+    fn sum(self) -> int => self.x + self.y;
+}
+fn main() {
+    print(P::new(1, 2).sum());
+    print(P::splat(4).sum());
+}
+";
+    assert_eq!(run_output(src), "3\n8\n");
+    // A generic type's constructor is reached through its instantiation.
+    let src = "
+struct Cell<T> { v: T }
+impl<T> Cell<T> {
+    fn of(v: T) -> Cell<T> => Cell<T> { v: v };
+    fn get(self) -> T => self.v;
+}
+fn main() { print(Cell<int>::of(7).get()); }
+";
+    assert_eq!(run_output(src), "7\n");
+}
+
+/// A receiver goes by `self` and nothing else: a first parameter named
+/// otherwise makes the function a path function, and `self` anywhere but first
+/// in an `impl` function, or in a free function, is refused.
+#[test]
+pub fn receiver_is_spelled_self() {
+    let src = "
+struct P { x: int }
+impl P { fn get(this) => this.x; }
+fn main() { print(P { x: 1 }.get()); }
+";
+    let d = compile_diag(src, "this.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "method_without_receiver");
+    assert!(d.message.contains("takes no receiver"), "{d:?}");
+
+    for (src, at) in [
+        (
+            "struct P { x: int }\nimpl P { fn add(n, self) => self.x + n; }\nfn main() {}",
+            "self",
+        ),
+        ("fn f(self) { return 1; }\nfn main() {}", "self"),
+    ] {
+        let d = compile_diag(src, "self.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "misplaced_receiver", "{src}");
+        assert_eq!(&src[d.span], at, "{src}");
+    }
+
+    let src = "
+struct V { x: int }
+impl V { fn +(a, b) => V { x: a.x + b.x }; }
+fn main() {}
+";
+    let d = compile_diag(src, "op.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "operator_method_receiver");
 }
 
 /// `index_of` answers a position as an `Option` on lists and strings, `find`
@@ -16585,7 +16955,7 @@ pub fn for_pattern_errors() {
         ),
         (
             "fn main() { for (a, b) in 0..3 { print(a); } }",
-            "unexpected_token",
+            "tuple_pattern_mismatch",
         ),
     ] {
         let d = compile_diag(src, "diag.kl").unwrap_err();
@@ -16693,7 +17063,7 @@ pub fn match_takes_tuple_patterns() {
             }
             let origin = (0, 0);
             let found = match (0, 0) {
-                origin => "same",
+                o if o == origin => "same",
                 _ => "different",
             };
             print(found);
@@ -16762,17 +17132,49 @@ pub fn tuple_errors() {
         ),
         ("fn main() { let t = (1,); }", "tuple_of_one"),
         ("fn main() { let t: (int,) = 1; }", "tuple_of_one"),
-        ("fn main() { let (a) = 1; }", "tuple_of_one"),
-        (
-            "fn main() { let (a, 1) = (1, 2); }",
-            "tuple_pattern_element",
-        ),
+        ("fn main() { let (a,) = 1; }", "tuple_of_one"),
+        ("fn main() { let (a, 1) = (1, 2); }", "let_pattern_can_fail"),
         ("fn main() { print((1, 2) < (1, 3)); }", "invalid_operation"),
         ("fn main() { print((1, 2).len()); }", "no_such_method"),
     ] {
         let d = compile_diag(src, "diag.kl").unwrap_err();
         assert_wellformed(&d, src);
         assert_eq!(d.code, code, "{src}: {d:?}");
+    }
+}
+
+/// A `catch` takes a quoted kind or a name, and anything else after it is a
+/// parse error rather than a block that runs whether or not the `try` threw.
+/// A `try` with no `catch` says so in plain words.
+#[test]
+pub fn a_catch_takes_a_kind_or_a_name() {
+    for src in [
+        "fn main() { try { print(1); } catch 5 { print(2); } }",
+        "fn main() { try { print(1); } catch \"a\" { print(2); } catch { print(3); } }",
+    ] {
+        let d = compile_diag(src, "catch.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "unexpected_token", "{src}: {d:?}");
+        assert!(d.message.contains("a quoted error kind or a name"), "{d:?}");
+    }
+    let src = "fn main() { try { print(1); } }";
+    let d = compile_diag(src, "catch.cdl").unwrap_err();
+    assert_eq!(d.code, "try_block_no_catch", "{d:?}");
+    assert!(!d.message.contains("{BLUE}"), "{d:?}");
+}
+
+/// A function cannot cross into an embedding host, so a `host` signature that
+/// takes or returns one is refused where it is declared.
+#[test]
+pub fn a_host_signature_takes_no_function() {
+    for src in [
+        "host \"app\" { fn apply(f: fn(int) -> int) -> int; }\nfn main() {}",
+        "host \"app\" { fn all(fs: fn()[]); }\nfn main() {}",
+        "host \"app\" { fn make() -> fn(int) -> int; }\nfn main() {}",
+    ] {
+        let d = compile_diag(src, "host.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, "host_fn_takes_function", "{src}: {d:?}");
     }
 }
 
@@ -17330,4 +17732,550 @@ pub fn explicit_conversions_still_work() {
         ),
         "2\n-2\n3.0\n7\n0.5\n"
     );
+}
+
+/// Every block is a value: an `if` or `match` branch holds statements and ends
+/// in its value, a `{ ... }` where a value goes is one, and a branch may leave
+/// through `return`, `break`, `continue` or `throw` instead of giving one.
+#[test]
+pub fn blocks_are_values() {
+    let src = "
+fn classify(n: int) -> string {
+    let label = if n < 0 {
+        let neg = \"negative\";
+        neg
+    } else if n == 0 {
+        \"zero\"
+    } else {
+        let big = n > 100;
+        if big { \"big\" } else { \"small\" }
+    };
+    return label;
+}
+fn first_half(xs: int[]) -> int {
+    for x in xs {
+        let half = match x % 2 {
+            0 => x / 2,
+            _ => continue,
+        };
+        return half;
+    }
+    return -1;
+}
+fn parse_or(s: string) -> int {
+    let n = match s {
+        \"one\" => 1,
+        \"two\" => { let t = 2; t }
+        _ => { return 0; }
+    };
+    return n * 10;
+}
+fn main() {
+    print(classify(-3), classify(0), classify(500), classify(5));
+    let total = {
+        let a = 5;
+        let b = 6;
+        a * b
+    };
+    print(total, first_half([3, 5, 8]), parse_or(\"two\"), parse_or(\"x\"));
+    let tail = {
+        let q = 3;
+        match q {
+            3 => \"three\",
+            _ => \"other\",
+        }
+    };
+    let empty = {};
+    let w = { if total > 1 { 1 } else { 2 } };
+    print(tail, empty, w);
+    let x = 1;
+    let y = { x = 2; x + 1 };
+    print(x, y);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "negative\nzero\nbig\nsmall\n30\n4\n20\n0\nthree\n{}\n1\n2\n3\n"
+    );
+    let cases = [
+        (
+            "fn f() {\n    5 + 1\n}\nfn main() { print(f()); }",
+            "missing_semicolon",
+            "",
+        ),
+        (
+            "fn main() {\n    let x = { let a = 1; };\n}",
+            "value_block_without_value",
+            "{ let a = 1; }",
+        ),
+        (
+            "fn main() {\n    let x = if true { 1 };\n}",
+            "inline_condition_no_else_block",
+            "if true { 1 }",
+        ),
+        (
+            "fn main() {\n    let x = { if true { 1 } else { 2 } print(3); 4 };\n}",
+            "missing_semicolon",
+            "",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "blocks.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
+}
+
+/// One pattern grammar wherever a name is bound: `match` arms with guards,
+/// ranges, nested variants, structs and tuples, `is`, `let` and `let ... else`,
+/// `for`, and the parameters of functions and closures. A bare lowercase name
+/// binds; a comparison with a variable is a guard.
+#[test]
+pub fn patterns_bind_everywhere() {
+    let src = "
+enum Shape { Circle(float), Rect { w: float, h: float }, Empty }
+struct Point { x: int, y: int }
+
+fn describe(s: Shape) -> string {
+    return match s {
+        Shape::Circle(r) if r > 10.0 => \"big circle\",
+        Circle(r) => \"circle\",
+        Rect { w, h } if w == h => \"square\",
+        Rect { w, .. } => \"rect\",
+        Empty => \"empty\",
+    };
+}
+
+fn grade(n: int) -> string {
+    return match n {
+        90..=100 => \"A\",
+        80..90 => \"B\",
+        0 | 1 => \"tiny\",
+        x if x < 0 => \"negative\",
+        _ => \"low\",
+    };
+}
+
+fn lookup(m: {string: int}, k: string) -> int {
+    let Some(v) = m.get(k) else {
+        return -1;
+    };
+    return v * 2;
+}
+
+fn main() {
+    print(describe(Shape::Circle(20.0)), describe(Shape::Circle(1.0)));
+    print(describe(Shape::Rect { w: 2.0, h: 2.0 }), describe(Shape::Rect { w: 2.0, h: 3.0 }), describe(Shape::Empty));
+    print(grade(95), grade(85), grade(1), grade(-5), grade(50));
+    let p = Point { x: 3, y: 4 };
+    let Point { x, y } = p;
+    print(x + y);
+    let (a, (b, _)) = (1, (2, 3));
+    print(a, b);
+    let pairs = [(1, \"one\"), (2, \"two\")];
+    for (n, name) in pairs {
+        print(n, name);
+    }
+    let opt = Some((5, 6));
+    if opt is Some((q, r)) {
+        print(q * r);
+    }
+    match opt {
+        Some((0, _)) => print(\"zero first\"),
+        Some((f, s)) => print(f, s),
+        None => print(\"none\"),
+    }
+    print(lookup({\"a\": 4}, \"a\"), lookup({\"a\": 4}, \"b\"));
+    let add = fn((u, w)) => u + w;
+    print(add((10, 20)));
+    let pts = [Point { x: 1, y: 2 }, Point { x: 5, y: 6 }];
+    for Point { x, y: py } in pts {
+        print(x * py);
+    }
+}
+";
+    assert_eq!(
+        run_output(src),
+        "big circle\ncircle\nsquare\nrect\nempty\nA\nB\ntiny\nnegative\nlow\n7\n1\n2\n1\none\n2\ntwo\n30\n5\n6\n8\n-1\n30\n2\n30\n"
+    );
+    let src = "
+fn pair((a, b): (int, int)) -> int => a * b;
+struct P { x: int, y: int }
+fn main() {
+    let PI = 3;
+    let limit = 4;
+    let n = match 4 {
+        x if x == limit => \"at limit\",
+        _ => \"other\",
+    };
+    let P { x, .. } = P { x: 7, y: 8 };
+    print(PI, n, pair((3, 4)), x);
+}
+";
+    assert_eq!(run_output(src), "3\nat limit\n12\n7\n");
+    let cases = [
+        (
+            "fn main() { let limit = 4; match 3 { limit => print(1), _ => print(2) } }",
+            "pattern_binds_name",
+            "limit",
+        ),
+        (
+            "fn main() { let o = Some(1); let Some(v) = o; print(v); }",
+            "let_pattern_can_fail",
+            "let Some(v)",
+        ),
+        (
+            "fn main() { let o = Some(1); let Some(v) = o else { print(0); }; }",
+            "let_else_must_leave",
+            "{ print(0); }",
+        ),
+        (
+            "fn main() { let v = 1 else { return; }; }",
+            "else_operand",
+            "1 else { return; }",
+        ),
+        (
+            "fn main() { let (a, b) = (1, 2) else { return; }; }",
+            "let_else_never_runs",
+            "let (a, b)",
+        ),
+        (
+            "struct P { x: int, y: int }\nfn main() { let P { x } = P { x: 1, y: 2 }; }",
+            "pattern_field_missing",
+            "P { x }",
+        ),
+        (
+            "fn main() { match 1 { + => print(1) } }",
+            "pattern_expected",
+            "+",
+        ),
+        (
+            "fn main() { print(match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }); }",
+            "enum_error",
+            "match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "patterns.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
+}
+
+/// `a..b` and `a..=b` are values of the prelude's `Range`: stored, passed,
+/// looped over in either direction, sliced with, and asked for `len`,
+/// `contains`, `rev`, `step` and `list`. `range()` is gone and its call names
+/// the range to write.
+#[test]
+pub fn ranges_are_values() {
+    let src = "
+fn total(r: Range) -> int {
+    let sum = 0;
+    for i in r {
+        sum += i;
+    }
+    return sum;
+}
+
+fn main() {
+    let r = 2..5;
+    print(r.len(), r.contains(4), r.contains(5), total(r));
+    let back = (0..4).rev();
+    for i in back {
+        print(i);
+    }
+    for i in (0..10).step(3) {
+        print(i);
+    }
+    let n = 3;
+    for i in 1..=n {
+        print(i * 10);
+    }
+    let xs = [10, 20, 30, 40, 50];
+    print(xs[1..3], xs[1..=3], xs[2..]);
+    print((5..0).len(), (0..10).step(4).len(), (0..=10).rev().len());
+    print((10..0).rev().len());
+    let s = 0;
+    for i in 0..n + 1 {
+        if i == 1 { continue; }
+        s += i;
+    }
+    print(s);
+    print(0..3);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "3\ntrue\nfalse\n9\n3\n2\n1\n0\n0\n3\n6\n9\n10\n20\n30\n[20,30]\n[20,30,40]\n[30,40,50]\n0\n3\n11\n0\n5\nRange {start:0,end:3,step:1}\n"
+    );
+    assert_eq!(
+        run_output(
+            "fn main() { print((1..4).list(), (3..0).rev().list(), (0..10).step(5).list()); }"
+        ),
+        "[1,2,3]\n[]\n[0,5]\n"
+    );
+    let src = "fn main() { for i in range(3) { print(i); } }";
+    let d = compile_diag(src, "range.cdl").unwrap_err();
+    assert_eq!(&src[d.span.clone()], "range", "{d:?}");
+    assert!(d.message.contains("0..n"), "{d:?}");
+}
+
+/// A map gives a `for` its entries: `(k, v)` binds the key and the value, any
+/// other pattern takes the entry as a tuple, `_` walks it once per entry, and
+/// `m.keys()` and `m.values()` give one side. A lone name is an error that
+/// names those.
+#[test]
+pub fn map_iteration_gives_entries() {
+    let src = "
+fn main() {
+    let m = {\"a\": 1, \"b\": 2};
+    m[\"c\"] = 3;
+    let total = 0;
+    for (k, v) in m {
+        print(k, v);
+        total += v;
+    }
+    for e in [1] {
+        print(e);
+    }
+    for (_, v) in m {
+        total += v;
+    }
+    let pairs = {\"p\": (1, 2)};
+    for (name, (x, y)) in pairs {
+        print(name, x + y);
+    }
+    let n = 0;
+    for _ in m {
+        n += 1;
+    }
+    print(total, n, m.keys(), m.values());
+}
+";
+    assert_eq!(
+        run_output(src),
+        "a\n1\nb\n2\nc\n3\n1\np\n3\n12\n3\n[\"a\",\"b\",\"c\"]\n[1,2,3]\n"
+    );
+    let src = "fn main() { let m = {1: 2}; for k in m { print(k); } }";
+    let d = compile_diag(src, "map.cdl").unwrap_err();
+    assert_eq!(d.code, "map_iteration_takes_a_pattern", "{d:?}");
+}
+
+/// `T?` is `Option<T>` wherever a type is written: parameters, returns, `let`,
+/// fields, payloads and type arguments, and after `is`.
+#[test]
+pub fn optional_types_are_options() {
+    let src = "
+struct Slot { item: string? }
+fn first_even(xs: int[]) -> int? {
+    for x in xs {
+        if x % 2 == 0 {
+            return Some(x);
+        }
+    }
+    return None;
+}
+fn main() {
+    let found: int? = first_even([3, 4]);
+    let none: int? = first_even([3]);
+    let lists: int?[] = [found, none];
+    let s = Slot { item: Some(\"x\") };
+    let v: any = found;
+    print(found, none, lists.len(), s.item, v is int?, found is Option<int>);
+}
+";
+    assert_eq!(
+        run_output(src),
+        "Some(4)\nNone\n2\nSome(\"x\")\ntrue\ntrue\n"
+    );
+}
+
+/// A match covers an enum when its arms between them fit every value, down
+/// through the payloads: `Some(Some(_))`, `Some(None)` and `None` cover an
+/// `Option<Option<int>>`, and leaving one out names the variant it misses.
+#[test]
+pub fn nested_patterns_cover_a_match() {
+    let src = "
+fn kind(o: int??) -> string => match o {
+    Some(Some(_)) => \"both\",
+    Some(None) => \"outer\",
+    None => \"none\",
+};
+fn flag(p: (bool, int)) -> int => match p {
+    (true, n) => n,
+    (false, _) => 0,
+};
+fn main() {
+    print(kind(Some(Some(1))), kind(Some(None)), kind(None), flag((true, 3)), flag((false, 3)));
+}
+";
+    assert_eq!(run_output(src), "both\nouter\nnone\n3\n0\n");
+    let src = "fn main() { print(match Some(Some(1)) { Some(Some(_)) => 1, None => 0 }); }";
+    let d = compile_diag(src, "cover.cdl").unwrap_err();
+    assert!(d.message.contains("does not cover: Some"), "{d:?}");
+}
+
+/// Errors are values: `T!E` is `Result<T, E>`, `value else fallback` and
+/// `value else |e| { ... }` give a fallback for an `Option` or a `Result`, `?`
+/// passes a failure on, and in `main`, which has no caller, ends the program
+/// with the error. A `return`, `break` or `continue` out of a `try` takes its
+/// catch down.
+#[test]
+pub fn errors_are_values() {
+    let src = "
+fn parse_num(s: string) -> int!string {
+    let n = s.parse<int>() else { return Err(\"not a number: \" + s); };
+    return Ok(n);
+}
+fn sum(a: string, b: string) -> int!string => Ok(parse_num(a)? + parse_num(b)?);
+fn first_bad(xs: string[]) -> string {
+    for x in xs {
+        let n = parse_num(x) else |e| { return e; };
+        print(n);
+    }
+    return \"none\";
+}
+fn main() {
+    print(\"42\".parse<int>() else 0, \"x\".parse<int>() else 0);
+    print(sum(\"1\", \"2\"), sum(\"1\", \"z\"));
+    print(sum(\"1\", \"z\") else |e| { e.len() });
+    print(first_bad([\"1\", \"q\", \"2\"]));
+    let r: int!string = Err(\"boom\");
+    print(r else 7);
+    try {
+        let x = r?;
+        print(\"not reached\", x);
+    } catch e {
+        print(\"main caught \" + e);
+    }
+    try {
+        throw \"later\";
+    } catch e {
+        print(e);
+    }
+}
+";
+    assert_eq!(
+        run_output(src),
+        "42\n0\nOk(3)\nErr(\"not a number: z\")\n15\n1\nnot a number: q\n7\nmain caught boom\nlater\n"
+    );
+    let cases = [
+        (
+            "fn main() { let o = Some(1); print(o else |e| { 0 }); }",
+            "else_binder_on_option",
+            "e",
+        ),
+        (
+            "fn main() { let n = 3; print(n else 0); }",
+            "else_operand",
+            "n else 0",
+        ),
+    ];
+    for (src, code, at) in cases {
+        let d = compile_diag(src, "errors.cdl").unwrap_err();
+        assert_eq!(d.code, code, "{src}: {d:?}");
+        assert_eq!(&src[d.span.clone()], at, "{src}: {d:?}");
+    }
+}
+
+#[test]
+pub fn a_closure_follows_the_call() {
+    let src = r#"
+struct Button { label: string }
+impl Button {
+    fn on(self, event: string, handler: fn(string) -> string) -> string => handler(self.label + ":" + event);
+}
+fn download(url: string, retries: int = 3, done: fn(string, int)) {
+    done(url, retries);
+}
+fn twice(f: fn(int) -> int) -> int => f(f(1));
+fn main() {
+    let xs = [1, 2, 3];
+    xs.each() fn(x) { print(x * 10); }
+    print(xs.map() fn(x) => x + 1);
+    print(xs.reduce(0) fn(acc, x) => acc + x);
+    let b = Button { label: "ok" };
+    print(b.on("click") fn(e) { return e + "!"; });
+    download("a") fn(url, n) { print(url, n); }
+    download("b", retries: 1) fn(url, n) { print(url, n); }
+    print(twice() fn(n) => n * 3);
+    let call = fn(f) => f(4);
+    print(call() fn(n) => n - 1);
+}
+"#;
+    assert_eq!(
+        run_output_std(src),
+        "10\n20\n30\n[2,3,4]\n6\nok:click!\na\n3\nb\n1\n9\n3\n"
+    );
+    let src = "fn f(a: int, g: fn(int) -> int) -> int => g(a);\nfn main() { print(f(1, fn(x) => x) fn(x) => x); }";
+    let d = compile_diag(src, "trailing.cdl").unwrap_err();
+    assert_wellformed(&d, src);
+    assert_eq!(d.code, "trailing_closure_extra", "{d:?}");
+}
+
+#[test]
+pub fn declared_macros_expand_where_used() {
+    let src = r#"
+macro square($x: expr) => $x * $x;
+macro unless($c: expr, $body: block) => if !$c $body else {};
+macro swap($a: ident, $b: ident) => { let t = $a; $a = $b; $b = t; };
+macro add_ten($x: expr) => { let n = 10; $x + n };
+macro make($T: type, $v: expr) => { let p: $T = $v; p };
+macro first_some($o: expr) => match $o { Some(v) => v, None => 0 };
+macro apply($f: ident, $x: expr) => [$x].map(fn(v) => $f(v))[0];
+macro cube($x: expr) => $x * square!($x);
+macro pair($a: expr => $b: expr) => ($a, $b);
+fn inc(x: int) -> int => x + 1;
+fn main() {
+    let t = 1;
+    let u = 2;
+    print(square!(t + 1));
+    swap!(t, u);
+    print(t, u);
+    let n = 1;
+    print(add_ten!(n));
+    unless!(t > 5, { print("small"); });
+    print(make!(int, 4));
+    let v = 7;
+    print(first_some!(Some(v + 1)));
+    print(apply!(inc, v));
+    print(cube!(2));
+    print(pair!(1 => "a"));
+}
+"#;
+    assert_eq!(
+        run_output_std(src),
+        "4\n2\n1\n11\nsmall\n4\n8\n8\n8\n(1,\"a\")\n"
+    );
+    for (src, code) in [
+        (
+            "fn main() { print(sq!(2)); }\nmacro sq($x: expr) => $x * $x;\n",
+            "macro_declared_below",
+        ),
+        (
+            "macro sq($x: expr, $y: expr) => $x * $y;\nfn main() { print(sq!(2)); }\n",
+            "macro_no_match",
+        ),
+        (
+            "macro sq($x: expr $y: expr) => $x * $y;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: thing) => $x;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: expr) => $y;\nfn main() {}\n",
+            "macro_declaration",
+        ),
+        (
+            "macro sq($x: expr) => $x;\nmacro sq($x: expr) => $x;\nfn main() {}\n",
+            "macro_declared_twice",
+        ),
+        ("fn main() { let t$1 = 2; print(t$1); }\n", "expansion_name"),
+    ] {
+        let d = compile_diag(src, "macros.cdl").unwrap_err();
+        assert_wellformed(&d, src);
+        assert_eq!(d.code, code, "{src}: {d:?}");
+    }
 }

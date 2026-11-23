@@ -24,10 +24,10 @@ fn math_imports_and_computes() {
     let out = run(r#"
 import "std/math";
 fn main() {
-    print(math::sqrt(16.0));
+    print(math::cbrt(64.0));
     print(math::sin(0.0));
     print(math::pow(2.0, 10.0));
-    print(math::floor(math::pi()));
+    print(math::pi().floor());
 }
 "#);
     assert_eq!(
@@ -48,7 +48,7 @@ fn main() {
     print(math::erf(0.5));
     print(math::ldexp(1.0, 3));
     print(math::fmod(7.5, 2.0));
-    print(math::sqrt(-1.0));
+    print(math::log(-1.0));
 }
 "#);
     assert_eq!(
@@ -184,6 +184,33 @@ fn main() {
     );
 }
 
+/// The pure modules and the ones on runtime primitives import in a browser.
+#[wasm_bindgen_test]
+fn pure_modules_import_in_a_browser() {
+    let out = run(r#"
+import "std/encoding";
+import "std/csv";
+import "std/path";
+import "std/os";
+import "std/assert";
+import "std/cli";
+import "std/term";
+fn main() {
+    print(cli::parse(["-v"]).unwrap().flag("v"));
+    print(term::is_tty());
+    print(encoding::base64(encoding::utf8("foo")));
+    print(csv::parse("a,b").unwrap()[0][1]);
+    print(path::extension("x/y.txt"));
+    print(os::platform());
+    assert::eq(1, 1);
+}
+"#);
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        ["true", "false", "Zm9v", "b", "txt", "web"]
+    );
+}
+
 /// An artifact records the std bindings by name; the browser's runtime binds
 /// them to its own functions at load.
 #[wasm_bindgen_test]
@@ -192,7 +219,7 @@ fn an_artifact_that_imports_math_loads_and_runs() {
         String::from(
             r#"
 import "std/math";
-fn root(x: float) -> float { return math::sqrt(x); }
+fn root(x: float) -> float { return math::cbrt(x); }
 fn main() {}
 "#,
         ),
@@ -202,8 +229,8 @@ fn main() {}
     .expect("builds");
     let mut program = load_program(&bytes, &HostRegistry::new()).expect("loads");
     assert_eq!(
-        program.call("root", &[Value::Float(81.0)]).expect("runs"),
-        Value::Float(9.0)
+        program.call("root", &[Value::Float(27.0)]).expect("runs"),
+        Value::Float(3.0)
     );
 }
 
@@ -222,7 +249,7 @@ fn the_prelude_is_carried() {
     let out = run(r#"
 fn main() {
     let m = {"a": 1};
-    print(m.get("a").unwrap_or(0) + [3, 4].max().unwrap_or(0));
+    print((m.get("a") else 0) + ([3, 4].max() else 0));
     print("ab".capitalize());
 }
 "#);

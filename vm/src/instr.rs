@@ -370,15 +370,50 @@ pub enum LibFunc {
     FsList = 54,
     /// fs::read_bytes. The bytes of the source file as a list of ints.
     FsReadBytes = 55,
-    /// fs::digest. The digest of the source file under the algorithm named
+    /// hash::file. The digest of the source file under the algorithm named
     /// by the stored argument, as lowercase hex.
-    FsDigest = 56,
+    HashFile = 56,
     /// A fresh event source. Reads no register.
     EventSource = 57,
     /// The next event for a handler of this program, as the list
     /// `[source, handler, payload]`, or an empty list when there is none. The
     /// source register holds whether to wait for one while a source is held.
     EventNext = 58,
+    /// hash::md5, sha1 and sha256. The digest of the source string's UTF-8
+    /// bytes under the algorithm named by the stored argument, as lowercase
+    /// hex.
+    HashText = 59,
+    /// x.ceil(). The smallest whole number not less than the source float.
+    Ceil = 60,
+    /// x.trunc(). The source float with its fractional part dropped, toward
+    /// zero.
+    Trunc = 61,
+    /// event::wait. The next event for a handler of this program, as
+    /// [`Self::EventNext`] answers it with `wait`, or an empty list once the
+    /// source in the register has no work left.
+    EventWait = 62,
+    /// os::platform, arch, cwd, home_dir and temp_dir: the fact the int in
+    /// the source register names (0 to 4), as a string.
+    OsQuery = 63,
+    /// os::env. The variable the source string names, as a list holding its
+    /// value, or an empty list when it is not set.
+    OsEnv = 64,
+    /// os::env_vars. Every variable, as a flat list of names and values.
+    OsEnvVars = 65,
+    /// fs::size and fs::modified: the file's size in bytes, or its last
+    /// change in unix seconds, as the stored int (0 or 1) asks.
+    FsStat = 66,
+    /// fs::absolute. The source path made absolute, without touching links.
+    FsAbsolute = 67,
+    /// encoding::utf8. The source string's UTF-8 bytes.
+    Utf8Bytes = 68,
+    /// encoding::from_utf8. The string the source list of bytes spells.
+    FromUtf8 = 69,
+    /// time::now_ms and clock_ns, as the int in the source register asks.
+    TimeQuery = 70,
+    /// term::is_tty. Whether stdin (0), stdout (1) or stderr (2), as the int
+    /// in the source register names, is a terminal.
+    TermIsTty = 71,
 }
 
 /// What a value is checked for by [`LibFunc::AsTypeVal`] and
@@ -422,6 +457,16 @@ pub enum LibFuncVoid {
     /// event::on(source, handler): the closure that receives the source's
     /// events.
     EventOn = 9,
+    /// eprint(text): one line to stderr, after what stdout holds so far.
+    Eprint = 10,
+    /// os::set_env(name, value).
+    OsSetEnv = 11,
+    /// os::set_cwd(path).
+    OsSetCwd = 12,
+    /// fs::rename(from, to).
+    FsRename = 13,
+    /// fs::delete_all(path): a file, or a directory and all it holds.
+    FsDeleteAll = 14,
 }
 
 impl Instr {

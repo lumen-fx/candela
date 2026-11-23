@@ -28,7 +28,7 @@ use std::sync::OnceLock;
 /// Calls one zlib symbol through a logical `dylib` import. The name is
 /// `fixture`, so the OS loader's own search path can never satisfy it.
 const PROGRAM: &str = "dylib \"fixture\" {
-    string zlibVersion();
+    fn zlibVersion() -> string;
 }
 
 fn main() {
@@ -194,7 +194,7 @@ fn a_path_import_is_relative_to_the_named_directory() {
     std::fs::rename(&fixture, nested.join(format!("plug.{}", extension()))).expect("rename");
 
     let program = "dylib \"native/plug\" {
-    string zlibVersion();
+    fn zlibVersion() -> string;
 }
 
 fn main() {
@@ -237,7 +237,7 @@ fn a_dot_on_the_library_namespace_is_refused() {
     };
 
     let source = "dylib \"fixture\" {
-    string zlibVersion();
+    fn zlibVersion() -> string;
 }
 
 fn main() { print(fixture.zlibVersion()); }
@@ -389,7 +389,7 @@ fn an_artifact_resolves_a_relative_path_beside_itself() {
     let filename = fixture_filename();
     let namespace = filename.split('.').next().expect("a file name");
     let program = format!(
-        "dylib \"./native/{filename}\" {{\n    string zlibVersion();\n}}\n\nfn main() {{\n    print({namespace}::zlibVersion());\n}}\n"
+        "dylib \"./native/{filename}\" {{\n    fn zlibVersion() -> string;\n}}\n\nfn main() {{\n    print({namespace}::zlibVersion());\n}}\n"
     );
     let script = root.join("app").join("app.cdl");
     let bytes = build_bytecode(

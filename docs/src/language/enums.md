@@ -23,6 +23,23 @@ fn main() {
 Payload types follow the usual type grammar from [Types](types.md), so a payload
 can be a list, a map, a struct, or `any` for a slot whose type the value decides.
 
+A payload whose parts need names declares them in braces, the way a struct
+declares its fields:
+
+```rust
+enum Event {
+    Click { x: int, y: int },
+    Key(string),
+}
+
+fn main() {
+    print("declared");
+}
+```
+
+Such a variant is built and matched by field name, below. Printed, its payload
+shows in declaration order, `Click(3, 4)`.
+
 ## Constructing
 
 Build a value by naming the variant, qualified with the enum or on its own. A
@@ -45,9 +62,31 @@ fn main() {
 
 `type` on an enum value gives the enum's name; `string` gives the variant's name.
 
+A variant declared with named fields is built with them, in any order, and with
+the same field shorthand a struct literal takes. It is never built in order,
+and a positional variant is never built with braces:
+
+```rust
+enum Event {
+    Click { x: int, y: int },
+    Quit,
+}
+
+fn main() {
+    let y = 4;
+    let a = Event::Click { y, x: 3 };
+    print(string(a));
+}
+```
+
 A variant with no payload, written bare, names no type arguments of a
 [generic](generics.md) enum, and is accepted wherever an instantiation that
 names them is expected.
+
+A variant written on its own reaches the enums the file declares or imports by
+name, and the prelude's `Option` and `Result`. Two modules that each declare a
+`Done` variant keep their own, and a variant of an enum another module declares
+is written through that module.
 
 An enum from a module bound with `as` is reached through the alias and then the
 enum, because a variant belongs to its enum rather than to the module:
@@ -85,7 +124,9 @@ fn main() {
 
 A payload binding introduces a variable for the arm's body. Use `_` in a
 payload position to ignore it, and `_` as a whole arm for everything not listed.
-A wildcard arm comes last.
+A wildcard arm comes last. A payload place takes any
+[pattern](control-flow.md#patterns), so `Some((0, y))` or `Click(x, 0)` tests
+inside the payload too.
 
 `|` joins variants that share an arm. Every alternative binds the same names at
 the same types, since the arm runs whichever of them matched; one that binds
@@ -108,6 +149,29 @@ fn main() {
 }
 ```
 
+A variant with named fields is matched by name. A field written alone binds a
+variable of its name, `field: name` binds another name, and `..` at the end
+skips the fields the pattern does not name:
+
+```rust
+enum Event {
+    Click { x: int, y: int },
+    Key(string),
+}
+
+fn main() {
+    let e = Event::Click { x: 3, y: 4 };
+    match e {
+        Click { x, y: top } => print(x + top),
+        Key(k) => print(k),
+    }
+    match e {
+        Click { x, .. } => print(x),
+        Key(_) => print("key"),
+    }
+}
+```
+
 A `match` used as a value on an enum that lists every variant needs no `_`
 arm, as above. See [match as an
 expression](control-flow.md#match-as-an-expression).
@@ -115,7 +179,9 @@ expression](control-flow.md#match-as-an-expression).
 To test for one variant without a `match`, write the arm's pattern after `is`.
 The test is a `bool`, and its names hold the payload in the body of the `if` or
 `while` it is the condition of, and to the right of an `&&` after it. See
-[testing a type](types.md#testing-a-type-with-is).
+[testing a type](types.md#testing-a-type-with-is). In the condition of an `if`
+or a `while`, a pattern with braces goes in parentheses, since the braces would
+otherwise open the body: `if (e is Click { x, .. }) { ... }`.
 
 ```rust
 enum Event {
@@ -216,7 +282,7 @@ fn main() {
         Some(v) => print(v),
         None => print("nothing"),
     }
-    print(None.unwrap_or(0));
+    print(None else 0);
 }
 ```
 

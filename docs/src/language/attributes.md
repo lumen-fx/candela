@@ -1,8 +1,8 @@
 # Attributes
 
-An attribute is a note in front of a function or a struct that the program
-embedding candela reads. It is written `@` and its name, behind the module that
-declares it, with named arguments in parentheses:
+An attribute is a note in front of a declaration that the program embedding
+candela reads. It is written `@` and its name, behind the module that declares
+it, with its arguments in parentheses:
 
 ```rust
 import "ecs";
@@ -30,9 +30,10 @@ The compiler checks every attribute against its declaration before anything
 runs, under `candela check`, `candela build` and the editor alike:
 
 - The attribute exists in the module it is named behind.
-- It goes on the kind of item its declaration names: a function or a struct.
-- Each argument names one of its parameters, at most once, and every parameter
-  without a default is given.
+- It goes on a kind of declaration its declaration lists: a function, a
+  struct, a field, and so on.
+- Each parameter gets at most one argument, and every parameter without a
+  default is given.
 - Each value has its parameter's type. A type name resolves, so a misspelt
   `writes: [Positon]` is an unknown type; a function name names a declared
   function, so `after: [movment]` is an error too.
@@ -42,10 +43,11 @@ say) is the host's to check, when it loads the program.
 
 ## Writing arguments
 
-Every argument names its parameter, `name: value`, in any order. A parameter
-the declaration gives a default may be left out, and so may one it marks
-optional; an attribute whose parameters can all be left out may be written with
-no parentheses at all.
+Arguments are written the way a call writes them: in order first, then by name,
+`name: value`, in any order. `@range(1, max: 10)` gives the first parameter 1
+and `max` 10. A parameter the declaration gives a default may be left out, and
+so may one it marks optional; an attribute whose parameters can all be left
+out may be written with no parentheses at all.
 
 | Parameter type | A value is written as |
 | --- | --- |
@@ -61,13 +63,44 @@ parameter takes `1.0`, not `1`.
 
 ## Where attributes go
 
-An attribute goes in front of a top-level `fn`, `struct` or `enum` declaration,
-and several may stand in a row, `@cfg` among them. A function, struct or enum
-with type parameters cannot carry one, since it stands for one per set of type
-arguments, and neither can a method, an `import` or a statement.
+An attribute goes in front of any declaration: a function, a method, a
+parameter, a constant, a struct, a field, an enum, a variant or an `impl`
+block. Several may stand in a row, `@cfg` among them.
 
-When `@cfg` drops a declaration, the attributes in front of it are dropped with
-it and not checked.
+```rust
+import "ui";
+
+@ui::panel(title: "Player")
+struct Player {
+    @ui::slider(0, 100) health: int,
+    @ui::hidden id: int,
+}
+
+@ui::actions
+impl Player {
+    @ui::button("Heal")
+    fn heal(self, @ui::slider(1, 10) amount: int) {
+        self.health += amount;
+    }
+}
+
+enum Team {
+    @ui::label("Red team") Red,
+    Blue,
+}
+
+@ui::setting
+const MAX_PLAYERS: int = 8;
+```
+
+A declaration with type parameters cannot carry one, and neither can its
+parts or the methods of an `impl<T>` block, since it stands for one
+declaration per set of type arguments. An `import`, a statement, a closure's
+parameter and the fields of a struct declared inside a function take only
+`@cfg`.
+
+When `@cfg` drops a declaration, a field, a variant or a parameter, the
+attributes in front of it are dropped with it and not checked.
 
 ## Declaring an attribute
 
@@ -81,14 +114,17 @@ host "ecs" {
 }
 ```
 
-`on fn`, `on struct` or `on enum` says what the attribute goes on. Each
-parameter has a name, a type from the table above, and optionally `= value` as
+The `on` clause lists the kinds of declaration the attribute goes on, one or
+several: `fn`, `method`, `param`, `const`, `struct`, `field`, `enum`,
+`variant` and `impl`. `attribute doc(text: string) on fn, method;` goes on
+functions and methods both; a `fn` inside an `impl` block is a `method`, not a
+`fn`. Each parameter has a name, a type from the table above, and optionally `= value` as
 its default. An enum a parameter takes is declared like any other; a parameter
 typed `enum` takes a variant of whichever enum the script names.
 
-A `?` after the type makes a parameter optional with no default: a script may
-leave it out, and the host then finds no argument for it rather than a default
-value.
+A `?` after the type makes a parameter optional with no default, the way `T?`
+says a value may be absent anywhere else: a script may leave it out, and the
+host then finds no argument for it rather than a default value.
 
 ```rust
 host "game" {

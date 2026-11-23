@@ -412,7 +412,11 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::FsRead
         | LibFunc::Input
         | LibFunc::JsonStringify
-        | LibFunc::FsDigest
+        | LibFunc::HashFile
+        | LibFunc::HashText
+        | LibFunc::OsQuery
+        | LibFunc::FsAbsolute
+        | LibFunc::FromUtf8
         | LibFunc::AsStrVal => DataType::String,
         LibFunc::Contains
         | LibFunc::IsFloat
@@ -430,24 +434,33 @@ fn lib_func_type(func: LibFunc, arg: DataType) -> DataType {
         | LibFunc::IsNullVal
         | LibFunc::IsTypeVal
         | LibFunc::Bool
-        | LibFunc::AsBoolVal => DataType::Bool,
+        | LibFunc::AsBoolVal
+        | LibFunc::TermIsTty => DataType::Bool,
         LibFunc::Find
         | LibFunc::Len
         | LibFunc::TheAnswer
         | LibFunc::Int
         | LibFunc::AsIntVal
-        | LibFunc::EventSource => DataType::Int,
+        | LibFunc::EventSource
+        | LibFunc::FsStat
+        | LibFunc::TimeQuery => DataType::Int,
         LibFunc::Float
         | LibFunc::SqrtFloat
         | LibFunc::Round
         | LibFunc::Floor
+        | LibFunc::Ceil
+        | LibFunc::Trunc
         | LibFunc::AsFloatVal => DataType::Float,
         LibFunc::Abs | LibFunc::Repeat => arg,
-        LibFunc::Argv | LibFunc::Split | LibFunc::FsList => {
+        LibFunc::Argv | LibFunc::Split | LibFunc::FsList | LibFunc::OsEnv | LibFunc::OsEnvVars => {
             DataType::Array(Some(Box::new(DataType::String)))
         }
-        LibFunc::Range | LibFunc::FsReadBytes => DataType::Array(Some(Box::new(DataType::Int))),
-        LibFunc::EventNext => DataType::Array(Some(Box::new(DataType::Unknown))),
+        LibFunc::Range | LibFunc::FsReadBytes | LibFunc::Utf8Bytes => {
+            DataType::Array(Some(Box::new(DataType::Int)))
+        }
+        LibFunc::EventNext | LibFunc::EventWait => {
+            DataType::Array(Some(Box::new(DataType::Unknown)))
+        }
         LibFunc::Keys => match arg {
             DataType::Map(entry) => DataType::Array(entry.0.clone().map(Box::new)),
             _ => DataType::Array(None),

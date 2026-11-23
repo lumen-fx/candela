@@ -63,14 +63,20 @@ pub struct SourceFile {
 pub struct Param {
     pub name: String,
     pub ty: Option<String>,
+    /// The `= value` the parameter declares, as written.
+    pub default: Option<String>,
 }
 
 impl Param {
     #[must_use]
     pub fn render(&self) -> String {
-        match &self.ty {
+        let head = match &self.ty {
             Some(ty) => format!("{}: {ty}", self.name),
             None => self.name.clone(),
+        };
+        match &self.default {
+            Some(default) => format!("{head} = {default}"),
+            None => head,
         }
     }
 }
@@ -169,8 +175,32 @@ impl StructSymbol {
 pub struct VariantSymbol {
     pub name: String,
     pub payload: Vec<String>,
+    /// The field names of a variant declared with named fields, one per
+    /// payload place; empty for a positional payload.
+    pub fields: Vec<String>,
     pub span: Span,
     pub doc: String,
+}
+
+impl VariantSymbol {
+    /// The payload as a declaration writes it after the name: `(int, string)`,
+    /// ` { x: int, y: int }`, or nothing for a variant without one.
+    #[must_use]
+    pub fn shape(&self) -> String {
+        if self.payload.is_empty() {
+            String::new()
+        } else if self.fields.is_empty() {
+            format!("({})", self.payload.join(", "))
+        } else {
+            let fields: Vec<String> = self
+                .fields
+                .iter()
+                .zip(&self.payload)
+                .map(|(name, ty)| format!("{name}: {ty}"))
+                .collect();
+            format!(" {{ {} }}", fields.join(", "))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -234,8 +264,9 @@ pub struct AttributeSymbol {
     /// The host namespace that declares it.
     pub namespace: String,
     pub name: String,
-    /// `fn`, `struct` or `enum`: what it may be written on.
-    pub target: &'static str,
+    /// The kinds of declaration it may be written on, as its `on` clause
+    /// lists them: `fn`, `method`, `struct`, ...
+    pub targets: Vec<&'static str>,
     pub params: Vec<AttrParam>,
     pub span: Span,
     pub src_file: u16,
@@ -248,13 +279,13 @@ impl AttributeSymbol {
     pub fn header(&self) -> String {
         let params: Vec<String> = self.params.iter().map(AttrParam::render).collect();
         if params.is_empty() {
-            format!("attribute {} on {}", self.name, self.target)
+            format!("attribute {} on {}", self.name, self.targets.join(", "))
         } else {
             format!(
                 "attribute {}({}) on {}",
                 self.name,
                 params.join(", "),
-                self.target
+                self.targets.join(", ")
             )
         }
     }
@@ -266,6 +297,9 @@ pub enum UseOn {
     Fn(String),
     Struct(String),
     Enum(String),
+    /// A method, a parameter, a constant, a field, a variant or an `impl`
+    /// block.
+    Other,
 }
 
 /// An attribute the program's scripts wrote on an item.
@@ -318,6 +352,9 @@ pub struct ProgramSummary {
     pub attribute_uses: Vec<AttributeUseSymbol>,
     /// The names the buffer can write.
     pub scope: Vec<ScopeEntry>,
+    /// Each use in the buffer of a macro the program declares: its byte
+    /// range and the candela it expanded to.
+    pub expansions: Vec<(usize, usize, String)>,
 }
 
 /// The result of analyzing one buffer: the errors the compile found, and a
@@ -364,9 +401,17 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
     // exists only on another target is not.
     // Warnings are collected, never printed: the server talks to the editor
     // over stdio, where a report would corrupt the protocol.
+    let buffer = path.clone();
     let (checked, errors) = macros.scope(move || {
         collect_diagnostics(move || collect_warnings(move || check_only(owned, &path, &resolver)))
     });
+    // The compile recorded what each use of a declared macro expanded to;
+    // hover shows it.
+    let expansions: Vec<(usize, usize, String)> = candela::macros::take_expansions()
+        .into_iter()
+        .filter(|e| e.filename == buffer.as_str())
+        .map(|e| (e.span.start, e.span.end, e.text))
+        .collect();
     match checked {
         None => AnalysisOutcome {
             errors,
@@ -375,7 +420,10 @@ pub fn analyze(text: &str, path: &str, resolver: &ImportResolver) -> AnalysisOut
         },
         Some((out, warnings)) => AnalysisOutcome {
             errors,
-            summary: Some(build_summary(&out)),
+            summary: Some(ProgramSummary {
+                expansions,
+                ..build_summary(&out)
+            }),
             warnings,
         },
     }
@@ -415,7 +463,8 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
     let functions = out
         .functions
         .iter()
-        .map(|f| function_symbol(f, types, &sources))
+        .enumerate()
+        .map(|(id, f)| function_symbol(out, id, f, types, &sources))
         .collect();
 
     let structs = out
@@ -465,9 +514,15 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                 variants: e
                     .variants
                     .iter()
-                    .map(|v| VariantSymbol {
+                    .enumerate()
+                    .map(|(idx, v)| VariantSymbol {
                         name: v.name.to_string(),
                         payload: v.payload.iter().map(|t| types.of(t).to_string()).collect(),
+                        fields: u16::try_from(idx)
+                            .ok()
+                            .and_then(|idx| out.generics.variant_fields(e.id, idx))
+                            .map(|names| names.iter().map(ToString::to_string).collect())
+                            .unwrap_or_default(),
                         span: v.name_span,
                         doc: own_line_doc(text, v.name_span.start as usize),
                     })
@@ -486,11 +541,11 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
             AttributeSymbol {
                 namespace: namespace.to_string(),
                 name: decl.name.to_string(),
-                target: match decl.target {
-                    AttributeTargetKind::Fn => "fn",
-                    AttributeTargetKind::Struct => "struct",
-                    AttributeTargetKind::Enum => "enum",
-                },
+                targets: decl
+                    .targets
+                    .iter()
+                    .map(|t| AttributeTargetKind::keyword(*t))
+                    .collect(),
                 params: decl
                     .params
                     .iter()
@@ -533,6 +588,12 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
                         .map(|e| e.name.to_string())
                         .unwrap_or_default(),
                 ),
+                AttributeTarget::Method { .. }
+                | AttributeTarget::Param { .. }
+                | AttributeTarget::Const { .. }
+                | AttributeTarget::Field { .. }
+                | AttributeTarget::Variant { .. }
+                | AttributeTarget::Impl(_) => UseOn::Other,
             },
             fn_args: a
                 .args
@@ -553,6 +614,7 @@ fn build_summary(out: &CompileOutput) -> ProgramSummary {
         attributes,
         attribute_uses,
         scope: scope_entries(out.namespaces.root()),
+        expansions: Vec::new(),
     }
 }
 
@@ -684,13 +746,32 @@ fn scope_entries(root: &Namespace) -> Vec<ScopeEntry> {
     entries
 }
 
-fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -> FunctionSymbol {
+fn function_symbol(
+    out: &CompileOutput,
+    id: usize,
+    f: &Function,
+    types: TypeNames<'_>,
+    sources: &[SourceFile],
+) -> FunctionSymbol {
+    let defaults = u16::try_from(id)
+        .ok()
+        .and_then(|id| out.generics.fn_defaults(id))
+        .unwrap_or(&[]);
     let params = f
         .args
         .iter()
-        .map(|(name, ty)| Param {
+        .enumerate()
+        .map(|(k, (name, ty))| Param {
             name: name.to_string(),
             ty: ty.as_ref().map(|t| types.of(t).to_string()),
+            default: defaults.get(k).copied().flatten().and_then(|default| {
+                let (file, _, span) = out.generics.arg_default(default);
+                let text = sources
+                    .get(*file as usize)?
+                    .text
+                    .get(span.start as usize..span.end as usize)?;
+                Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+            }),
         })
         .collect();
 
@@ -722,7 +803,7 @@ fn function_symbol(f: &Function, types: TypeNames<'_>, sources: &[SourceFile]) -
             |(t, _)| Some(types.of(t).to_string()),
         )
         // A function that hands nothing back reads without an arrow.
-        .filter(|r| r != "null");
+        .filter(|r| r != "()");
 
     let method = f
         .name
@@ -1076,6 +1157,33 @@ mod tests {
         assert!(summary.functions.iter().any(|f| f.name == "main"));
     }
 
+    /// A use of a macro the program declares records what it expanded to,
+    /// which hover shows, and an error inside the expansion is reported at
+    /// the use.
+    #[test]
+    fn a_declared_macro_shows_its_expansion_and_reports_at_its_use() {
+        let source = "macro twice($x: expr) => { let t = $x; t + t };\nfn main() {\n    print(twice!(2));\n}\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        let summary = outcome.summary.expect("a summary is produced");
+        let at = source.find("twice!(2)").unwrap();
+        let offset = at + 2;
+        let hover = crate::ide::Ide::new(source, &summary, offset)
+            .hover()
+            .expect("hover over the use");
+        assert!(hover.contains("{ let t = 2 ; t + t }"), "{hover}");
+
+        let source =
+            "macro half($x: expr) => $x / \"two\";\nfn main() {\n    print(half!(2));\n}\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        let error = outcome
+            .errors
+            .first()
+            .expect("the expansion does not type-check");
+        let at = source.find("half!(2)").unwrap();
+        assert_eq!(error.span, at..at + "half!(2)".len(), "{error:?}");
+    }
+
     /// Code under a `@cfg` the server does not enable is dropped before names
     /// resolve, so a module or a function that exists only on another target
     /// is not reported.
@@ -1184,6 +1292,56 @@ mod tests {
     /// diagnostic: a user enum reads by the name it was declared under, at the
     /// top level and inside a list or a map. The server used to render every
     /// enum as the bare word `enum`, because it had a renderer of its own.
+    /// A parameter's default shows as written, its spacing collapsed; a
+    /// variant with named fields shows them by name; and an attribute on a
+    /// method, a field or a parameter is recorded as on neither a function,
+    /// a struct nor an enum.
+    #[test]
+    fn defaults_named_variant_fields_and_attributes_on_parts_are_summarized() {
+        let source = "host \"meta\" {\n    attribute note on method, field, param;\n}\n\
+                      enum Shape { Dot, Circle { r: float }, Pair(int, int) }\n\
+                      struct P { @note x: int }\n\
+                      impl P {\n    @note fn at(self, @note k: int) -> int => self.x * k;\n}\n\
+                      fn window(w: int, xs: int[] = [1,   2], title: string = \"t\") -> int => w;\n";
+        let outcome = analyze_buffer(source, "buffer.cdl");
+        assert!(
+            outcome.errors.is_empty(),
+            "{:?}",
+            outcome.errors.first().map(|d| d.message.clone())
+        );
+        let summary = outcome.summary.expect("a summary is produced");
+        let window = summary
+            .own_functions()
+            .find(|f| f.name == "window")
+            .expect("the function is in the outline");
+        assert_eq!(
+            window.header(),
+            "fn window(w: int, xs: int[] = [1, 2], title: string = \"t\") -> int"
+        );
+        let shape = summary
+            .enums
+            .iter()
+            .find(|e| e.name == "Shape")
+            .expect("the enum is in the summary");
+        let shapes: Vec<String> = shape
+            .variants
+            .iter()
+            .map(super::VariantSymbol::shape)
+            .collect();
+        assert_eq!(shapes, ["", " { r: float }", "(int, int)"]);
+        let notes: Vec<&super::UseOn> = summary
+            .attribute_uses
+            .iter()
+            .filter(|u| u.name == "note")
+            .map(|u| &u.on)
+            .collect();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(
+            notes.iter().all(|on| matches!(on, super::UseOn::Other)),
+            "{notes:?}"
+        );
+    }
+
     #[test]
     fn hover_names_an_enum_typed_parameter() {
         let source = "enum Value { Num(int), Text(string) }\n\
@@ -1352,7 +1510,7 @@ mod tests {
     /// library is not built yet analyses cleanly.
     #[test]
     fn a_dylib_is_bound_without_its_library() {
-        let source = "dylib \"nosuch_lib_xyz\" {\n    int f(int);\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
+        let source = "dylib \"nosuch_lib_xyz\" {\n    fn f(a: int) -> int;\n}\n\nfn g(x: int) -> int {\n    return nosuch_lib_xyz::f(x);\n}\n";
         let outcome = analyze_buffer(source, "buffer.cdl");
         assert!(
             outcome.errors.is_empty(),

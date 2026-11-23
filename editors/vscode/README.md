@@ -59,19 +59,19 @@ attribution details.
   with a decimal point (`[0-9]*.[0-9]+`).
 - Structs: `struct Name { field: type, ... }`; instantiated with
   `Name { field: value }`; fields accessed with `x.field`.
-- Foreign functions: `dylib "path" { rettype name(argtypes); ... }` for dynamic
-  libraries and `host "namespace" { rettype name(argtypes); ... }` for
+- Foreign functions: `dylib "path" { fn name(a: argtypes) -> rettype; ... }` for dynamic
+  libraries and `host "namespace" { fn name(a: argtypes) -> rettype; ... }` for
   host-registered closures. A trailing `...` argument marks a variadic host
   function.
 - Modules: `import "file.cdl";` for a file, `import "std/json";` for a shipped
   library. An import binds the module under its name (`json::parse`);
   `import "..." as alias;` picks the name, and `import "..." { a, b };` brings
   the named items into the file's scope.
-- Macros: `name!( ... )` hands the raw region between the parentheses to the
-  program embedding candela, which returns candela source to parse in its
-  place. The region ends at the parenthesis that balances the one that opened
-  it, skipping parentheses inside a string or after `//`. candela defines no
-  macros of its own and never reads a region.
+- Macros: `macro name($x: expr) => template;` declarations, with their
+  fragments and `$x` uses colored, and `name!( ... )` and `module::name!( ... )`
+  uses. A host macro's region is raw text, colored as such; it ends at the
+  parenthesis that balances the one that opened it, skipping parentheses inside
+  a string or after `//`.
 
 ## Language server
 
@@ -105,7 +105,7 @@ Two commands, in the Command Palette:
 - **Candela: Show Language Server Output** opens the server's output channel.
 
 A script that imports a package no manifest lists, such as the module a host
-program ships (`import "engine" { * };`), needs the server to know where it
+program ships (`import "engine";`), needs the server to know where it
 is. Name it in `candela.importRoots`, a map from the name the script imports
 to the package's directory or its `.cdl` file:
 

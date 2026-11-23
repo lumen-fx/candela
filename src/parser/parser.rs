@@ -6,6 +6,7 @@ use crate::RED;
 use crate::RESET;
 use crate::cfg;
 use crate::cfg::Cfg;
+use crate::compiler::attributes::AttrOn;
 use crate::compiler::attributes::AttrParamTypeExpr;
 use crate::compiler::attributes::AttrValueExpr;
 use crate::compiler::attributes::AttributeDecl;
@@ -13,15 +14,18 @@ use crate::compiler::attributes::AttributeParamDecl;
 use crate::compiler::attributes::AttributeTargetKind;
 use crate::compiler::attributes::AttributeUse;
 use crate::compiler::compiler_data::Source;
+use crate::compiler::expr::ForeignFn;
+use crate::compiler::expr::ForeignParams;
 use crate::compiler::expr::OPERATOR_SYMBOLS;
-use crate::compiler::expr::tuple_let_temp;
+use crate::compiler::expr::PatternLet;
+use crate::compiler::expr::TRAILING_ARG;
 use crate::compiler::expr::{Expr, ImportBinding, LetAnnotation, Span, var_assign};
+use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::FnTypeExpr;
 use crate::compiler::type_system::GenericType;
 use crate::compiler::type_system::ImplTemplate;
 use crate::compiler::type_system::TypeExpr;
 use crate::compiler::type_system::TypeParams;
-use crate::compiler::type_system::tuple_field;
 use crate::compiler::type_system::tuple_name;
 use crate::errors::BLUE;
 use crate::errors::blue;
@@ -46,23 +50,30 @@ use blocks::parse_struct_declare;
 use blocks::parse_try_catch_block;
 use blocks::parse_while_block;
 use candela_vm::errors::build_report;
+use declared_macros::MacroDef;
+use declared_macros::MacroScope;
 use lexer::LexErr;
 use lexer::MacroToken;
 use lexer::parse_string;
 use logos::SpannedIter;
 use parser_expr::add_op;
 use parser_expr::parse_expr;
+use rustc_hash::FxHashSet;
 use smol_strc::SmolStr;
+use std::cell::RefCell;
 use std::hint::{cold_path, unreachable_unchecked};
 use std::io::Write;
 use std::iter::Peekable;
+use std::rc::Rc;
 
 use lexer::Token;
 use logos::Logos;
 
 mod blocks;
+pub mod declared_macros;
 mod lexer;
 mod parser_expr;
+mod pattern;
 mod term;
 
 type TokenIter<'a> = Peekable<SpannedIter<'a, Token<'a>>>;
@@ -100,12 +111,29 @@ struct Parser<'a> {
     /// parsed, which is where a `break` or a `continue` has a loop to leave.
     /// A function body starts again from none.
     loops: u32,
-    /// Statements one statement expanded to past the first, waiting to be
-    /// placed right after it: `let (a, b) = t;` is a declaration of the tuple
-    /// and then one of each name.
-    pending_statements: Vec<Expr>,
+    /// The `let`s that take apart the parameters of the function being read
+    /// that are written as patterns, which open its body.
+    param_lets: Vec<Expr>,
+    /// The attributes written on the parts of the declaration being read (its
+    /// fields, variants or parameters), which the file's item list takes with
+    /// the declaration.
+    part_uses: Vec<(AttrOn, Box<[AttributeUse]>)>,
+    /// What the `impl` block just read is for, which the attributes in front
+    /// of it are written on, and the attributes on its methods and their
+    /// parameters, by each method's index in the file's items.
+    impl_on: Option<AttrOn>,
+    impl_uses: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     /// The indices in the file's items of its `const` declarations.
     consts: Vec<usize>,
+    /// The macros the file has declared or imported so far, which a use
+    /// further down expands through. Shared with the parsers of expansions.
+    macros: Rc<RefCell<MacroScope>>,
+    /// The names of the macros the file declares, in order.
+    declared_macros: Vec<SmolStr>,
+    /// Set when the macro use about to be read is a whole statement,
+    /// `name!(...);`, where an expansion that is a block runs as one and needs
+    /// no value.
+    macro_statement: std::cell::Cell<bool>,
 }
 
 /// The deepest that terms, blocks and types may nest.
@@ -169,6 +197,8 @@ enum ParserErr<'a> {
     /// `export import` that binds the module under a name instead of naming
     /// the items it passes on.
     ExportImportWithoutItems,
+    /// `import "m" { * };`: an import names its items or binds the module.
+    GlobImport,
     /// `name!(` whose region the file ends before closing.
     UnterminatedMacroRegion(&'a str),
     /// `name!(...)` with no expander registered for `name`.
@@ -179,13 +209,27 @@ enum ParserErr<'a> {
     MacroExpansionTrailingTokens(&'a str),
     /// Macros expanded into one another past [`MAX_EXPANSION_DEPTH`].
     MacroRecursionLimit(&'a str),
+    /// A `macro` declaration that does not have the shape one has; carries
+    /// what is wrong.
+    MacroDeclaration(String),
+    /// (the use as the macro writes it, what did not match)
+    MacroNoMatch(String, String),
+    /// A macro name the file already declares or imports.
+    MacroDeclaredTwice(String),
+    /// A use of a macro the file declares further down.
+    MacroDeclaredBelow(&'a str),
+    /// `module::name!(...)` where the module offers no such macro.
+    UnknownMacroPath(String),
+    /// A name of the form `t$1`, which only a macro expansion writes.
+    ExpansionName,
     /// Terms, blocks or types nested past [`MAX_NESTING_DEPTH`].
     NestingTooDeep,
     /// An operator token after `fn` in an `impl` block that a type cannot
     /// define. Carries the symbol that was written.
     OperatorMethodUnknown(&'static str),
     /// An attribute other than `@cfg` in front of something that is not a
-    /// top-level `fn` or `struct` declaration.
+    /// declaration: a statement, or a closure's or a host function's
+    /// parameter.
     AttributeWrongTarget,
     /// An attribute with nothing after it to apply to.
     AttributeWithoutItem,
@@ -196,9 +240,24 @@ enum ParserErr<'a> {
     OutsideLoop(&'static str),
     /// `(a,)`: a tuple of one element, which candela does not have.
     TupleOfOne,
-    /// A `let ( ... )` pattern with something other than a name, `_` or
-    /// another parenthesised pattern in it.
-    TuplePatternElement,
+    /// A parameter named `self` anywhere but first in an `impl` function
+    /// (true) or in a function outside an `impl` block (false).
+    MisplacedReceiver(bool),
+    /// A type parameter an `impl<T>` declares that is not one of the type's
+    /// arguments in the header. Carries the parameter.
+    ImplParamUnbound(String),
+    /// An argument passed in order after one passed by name.
+    PositionalAfterNamed,
+    /// A `host` or `dylib` entry written the removed C way, `int f(int);`.
+    /// Carries the entry rewritten the new way, when it could be read.
+    OldHostSignature(String),
+    /// A block used as a value whose last statement is not an expression
+    /// without a `;`, nor a `return`, `throw`, `break` or `continue`.
+    ValueBlockWithoutValue,
+    /// A token where a pattern goes that no pattern starts with.
+    PatternExpected(Token<'a>),
+    /// The `else` block of a `let ... else` that can reach its end.
+    LetElseMustLeave,
 }
 
 impl ParserErr<'_> {
@@ -218,6 +277,9 @@ impl ParserErr<'_> {
             }
             ParserErr::ArrayElementsMissingComma => "array_elements_missing_comma",
             ParserErr::InlineConditionNoElseBlock => "inline_condition_no_else_block",
+            ParserErr::ValueBlockWithoutValue => "value_block_without_value",
+            ParserErr::PatternExpected(_) => "pattern_expected",
+            ParserErr::LetElseMustLeave => "let_else_must_leave",
             ParserErr::DivisionByZero => "division_by_zero",
             ParserErr::ModuloByZero => "modulo_by_zero",
             ParserErr::IntegerNegativeExponent => "integer_negative_exponent",
@@ -235,11 +297,17 @@ impl ParserErr<'_> {
             ParserErr::ImportAliasWithItems => "import_alias_with_items",
             ParserErr::ImportItemsEmpty => "import_items_empty",
             ParserErr::ExportImportWithoutItems => "export_import_without_items",
+            ParserErr::GlobImport => "glob_import",
             ParserErr::UnterminatedMacroRegion(_) => "unterminated_macro_region",
-            ParserErr::UnknownMacro(_) => "unknown_macro",
+            ParserErr::UnknownMacro(_) | ParserErr::UnknownMacroPath(_) => "unknown_macro",
             ParserErr::MacroExpansionFailed(..) => "macro_expansion_failed",
             ParserErr::MacroExpansionTrailingTokens(_) => "macro_expansion_trailing_tokens",
             ParserErr::MacroRecursionLimit(_) => "macro_recursion_limit",
+            ParserErr::MacroDeclaration(_) => "macro_declaration",
+            ParserErr::MacroNoMatch(..) => "macro_no_match",
+            ParserErr::MacroDeclaredTwice(_) => "macro_declared_twice",
+            ParserErr::MacroDeclaredBelow(_) => "macro_declared_below",
+            ParserErr::ExpansionName => "expansion_name",
             ParserErr::NestingTooDeep => "nesting_too_deep",
             ParserErr::OperatorMethodUnknown(_) => "operator_method_unknown",
             ParserErr::AttributeWrongTarget => "attribute_wrong_target",
@@ -247,7 +315,10 @@ impl ParserErr<'_> {
             ParserErr::ThrowCall => "throw_call",
             ParserErr::OutsideLoop(_) => "outside_loop",
             ParserErr::TupleOfOne => "tuple_of_one",
-            ParserErr::TuplePatternElement => "tuple_pattern_element",
+            ParserErr::MisplacedReceiver(_) => "misplaced_receiver",
+            ParserErr::ImplParamUnbound(_) => "impl_param_unbound",
+            ParserErr::PositionalAfterNamed => "positional_after_named",
+            ParserErr::OldHostSignature(_) => "old_host_signature",
         }
     }
 }
@@ -262,6 +333,7 @@ const fn lex_err(e: LexErr) -> ParserErr<'static> {
         LexErr::FloatExponentMissingDigits => ParserErr::FloatExponentMissingDigits,
         LexErr::UnterminatedString => ParserErr::UnterminatedString,
         LexErr::SingleQuote => ParserErr::SingleQuote,
+        LexErr::ExpansionName => ParserErr::ExpansionName,
     }
 }
 
@@ -300,7 +372,18 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         )
         .to_string(),
         ParserErr::ArrayElementsMissingComma => "Array elements must be separated by a comma",
-        ParserErr::InlineConditionNoElseBlock => "Inline conditions must have an else block",
+        ParserErr::InlineConditionNoElseBlock => &format!(
+            "An {BLUE}{BOLD}if{RESET} used as a value has an {BLUE}{BOLD}else{RESET}, so it has a value whichever way it goes"
+        ),
+        ParserErr::PatternExpected(found) => &format!(
+            "Expected a pattern but found {found}. A pattern is {BLUE}{BOLD}_{RESET}, a name, a literal, a range {BLUE}{BOLD}1..5{RESET}, a tuple {BLUE}{BOLD}(a, b){RESET}, a variant {BLUE}{BOLD}Some(x){RESET} or a struct {BLUE}{BOLD}Point {{ x, y }}{RESET}"
+        ),
+        ParserErr::LetElseMustLeave => &format!(
+            "The {BLUE}{BOLD}else{RESET} of a {BLUE}{BOLD}let{RESET} runs when the pattern does not fit, so nothing is bound after it: it ends in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
+        ),
+        ParserErr::ValueBlockWithoutValue => &format!(
+            "This block is used as a value, so it ends in an expression with no {BOLD}';'{RESET}, its value, or in {BLUE}{BOLD}return{RESET}, {BLUE}{BOLD}throw{RESET}, {BLUE}{BOLD}break{RESET} or {BLUE}{BOLD}continue{RESET}"
+        ),
         ParserErr::DivisionByZero => "Division by zero",
         ParserErr::ModuloByZero => "Modulo by zero",
         ParserErr::IntegerNegativeExponent => "Integers cannot be raised to a negative exponent",
@@ -309,9 +392,9 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         )
         .to_string(),
         ParserErr::ArgumentsMissingCommaSeparator => "Arguments must be separated by a comma",
-        ParserErr::TryBlockNoCatch => {
+        ParserErr::TryBlockNoCatch => &format!(
             "A {BLUE}{BOLD}try{RESET} block must have at least one {BLUE}{BOLD}catch{RESET} block"
-        }
+        ),
         ParserErr::MatchBlockNoNonWildcardArm => &format!(
             "{BLUE}{BOLD}Match blocks{RESET} must have {BOLD}at least one non-wildcard arm{RESET}"
         ),
@@ -346,19 +429,38 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             "Name at least one item between the braces, or drop them to bind the module: {BLUE}{BOLD}import \"std/json\";{RESET}"
         ),
         ParserErr::ExportImportWithoutItems => &format!(
-            "An {BLUE}{BOLD}export import{RESET} passes items on to the files importing this one, so it names them: {BLUE}{BOLD}export import \"./shapes.cdl\" {{ * }};{RESET} or {BLUE}{BOLD}{{ Circle, area }}{RESET}"
+            "An {BLUE}{BOLD}export import{RESET} passes items on to the files importing this one, so it names them: {BLUE}{BOLD}export import \"./shapes.cdl\" {{ Circle, area }};{RESET}"
+        ),
+        ParserErr::GlobImport => &format!(
+            "An import names the items it brings in, {BLUE}{BOLD}import \"./shapes.cdl\" {{ Circle, area }};{RESET}, or binds the module to reach them through, {BLUE}{BOLD}import \"./shapes.cdl\";{RESET} and then {BLUE}{BOLD}shapes::Circle{RESET}. {RED}{BOLD}{{ * }}{RESET} is not an import list"
         ),
         ParserErr::UnterminatedMacroRegion(name) => &format!(
             "This {BLUE}{BOLD}{name}!{RESET} region is never closed: the file ends before its ')'"
         ),
         ParserErr::UnknownMacro(name) => &format!(
-            "No macro named {RED}{BOLD}{name}!{RESET} is registered. Macros come from the program embedding candela, which decides what each one means"
+            "No macro named {RED}{BOLD}{name}!{RESET} is in scope. A macro is declared with {BLUE}{BOLD}macro {name}(...) => ...;{RESET} above its use, imported from a module, or registered by the program embedding candela"
         ),
         ParserErr::MacroExpansionFailed(name, message) => {
             &format!("The {BLUE}{BOLD}{name}!{RESET} macro rejected this region: {message}")
         }
         ParserErr::MacroExpansionTrailingTokens(name) => &format!(
             "The {BLUE}{BOLD}{name}!{RESET} macro expanded to more than one expression. A macro stands where an expression stands, so it expands to exactly one"
+        ),
+        ParserErr::MacroDeclaration(ref message) => message.as_str(),
+        ParserErr::MacroNoMatch(usage, message) => &format!(
+            "This use does not match {BLUE}{BOLD}{usage}{RESET}: {message}"
+        ),
+        ParserErr::MacroDeclaredTwice(name) => &format!(
+            "This file already has a macro {RED}{BOLD}{name}!{RESET}. Rename one of them"
+        ),
+        ParserErr::MacroDeclaredBelow(name) => &format!(
+            "The macro {RED}{BOLD}{name}!{RESET} is declared further down. A macro is declared above its first use, the way an import is"
+        ),
+        ParserErr::UnknownMacroPath(path) => &format!(
+            "The module offers no macro {RED}{BOLD}{path}!{RESET}. A module offers the macros it declares and the ones its export imports name"
+        ),
+        ParserErr::ExpansionName => &format!(
+            "A name with {RED}{BOLD}${RESET} and digits is how a macro expansion keeps the names its template binds apart, so a program cannot write one"
         ),
         ParserErr::MacroRecursionLimit(name) => &format!(
             "Expanding this macro reached {RED}{BOLD}{name}!{RESET} more than {MAX_EXPANSION_DEPTH} macros deep. An expansion may use another macro, but the chain has to end"
@@ -376,7 +478,7 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
             }
         ),
         ParserErr::AttributeWrongTarget => &format!(
-            "Only {BLUE}{BOLD}@cfg(...){RESET} applies here. The attributes a host block declares go in front of a top-level fn or struct declaration"
+            "Only {BLUE}{BOLD}@cfg(...){RESET} applies here. The attributes a host block declares go in front of a declaration: a fn, a method, a parameter, a const, a struct, a field, an enum, a variant or an impl block"
         ),
         ParserErr::AttributeWithoutItem => {
             "An attribute applies to the declaration or statement after it, and nothing follows this one"
@@ -387,8 +489,20 @@ fn throw_parser_error(src: &Source, Span { start, end }: Span, t: ParserErr) -> 
         ParserErr::TupleOfOne => &format!(
             "A tuple holds at least two values. Drop the {BOLD}','{RESET} to group one value: {BLUE}{BOLD}(a){RESET}"
         ),
-        ParserErr::TuplePatternElement => &format!(
-            "Each place in a {BLUE}{BOLD}let{RESET} pattern is a name, {BLUE}{BOLD}_{RESET}, or another pattern in parentheses: {BLUE}{BOLD}let (a, (b, _)) = t;{RESET}"
+        ParserErr::MisplacedReceiver(true) => &format!(
+            "{BLUE}{BOLD}self{RESET} names a method's receiver, so it is the first parameter: {BLUE}{BOLD}fn area(self, scale: float){RESET}"
+        ),
+        ParserErr::MisplacedReceiver(false) => &format!(
+            "{BLUE}{BOLD}self{RESET} names the receiver of a method, and only a function in an {BLUE}{BOLD}impl{RESET} block has one. Give this parameter another name"
+        ),
+        ParserErr::PositionalAfterNamed => &format!(
+            "An argument passed in order comes before every argument passed by name, as in {BLUE}{BOLD}window(800, 600, title: \"x\"){RESET}"
+        ),
+        ParserErr::OldHostSignature(rewritten) => &format!(
+            "A {BLUE}{BOLD}host{RESET} or {BLUE}{BOLD}dylib{RESET} entry is declared like a function, with named parameters: {BLUE}{BOLD}{rewritten}{RESET}"
+        ),
+        ParserErr::ImplParamUnbound(param) => &format!(
+            "{RED}{BOLD}{param}{RESET} is declared here but is not one of the type's arguments. An impl block's type parameters stand for the type's arguments: {BLUE}{BOLD}impl<T> Cell<T>{RESET}"
         ),
     };
     if crate::errors::diagnostics_enabled() {
@@ -698,11 +812,50 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
     let mut arg_markers: Vec<Span> = Vec::with_capacity(4);
     loop {
         if parser.peek_token() == Token::RParen {
-            let end = parser.next_token().1.end;
+            let mut end = parser.next_token().1.end;
+            // `xs.each() fn(x) { ... }`: a closure right after the closing
+            // parenthesis is the argument of the callee's last parameter.
+            if parser.peek_token_opt() == Some(Token::Function)
+                && second_token_is(parser, Token::LParen)
+            {
+                let start = parser.peek_token_span().start;
+                let closure = term::parse_term(parser, true);
+                end = parser.last_token_end as u32;
+                args.push(Expr::NamedArg(
+                    SmolStr::new_static(TRAILING_ARG),
+                    Box::new(closure),
+                    (start, end).into(),
+                ));
+                arg_markers.push((start, end).into());
+            }
             return (Box::from(args), Box::from(arg_markers), end);
         }
         let arg_start: u32 = parser.peek_token_span().start;
-        args.push(parse_expr(parser));
+        // `name: value` passes an argument by the parameter's name. Positional
+        // arguments come first.
+        let mut ahead = parser.input.clone().map(|(t, _)| t.ok());
+        if let (Some(Some(Token::Identifier(name))), Some(Some(Token::Colon))) =
+            (ahead.next(), ahead.next())
+        {
+            let name_span = parser.next_token().1;
+            parser.next_token();
+            let value = parse_expr(parser);
+            args.push(Expr::NamedArg(
+                SmolStr::new(name),
+                Box::new(value),
+                name_span,
+            ));
+        } else {
+            let arg = parse_expr(parser);
+            if matches!(args.last(), Some(Expr::NamedArg(..))) {
+                cold_path();
+                parser.error(
+                    (arg_start, parser.last_token_end as u32).into(),
+                    ParserErr::PositionalAfterNamed,
+                );
+            }
+            args.push(arg);
+        }
         arg_markers.push((arg_start, parser.peek_token_span().start).into());
         if parser.peek_token() == Token::Comma {
             parser.next_token();
@@ -717,6 +870,7 @@ fn parse_args(parser: &mut Parser<'_>) -> (Box<[Expr]>, Box<[Span]>, u32) {
 /// Expands one `name!( ... )` invocation and parses what the expander returned
 /// in its place. `span` covers the whole invocation.
 fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr {
+    let statement = parser.macro_statement.take();
     let Some(body) = region.body else {
         cold_path();
         parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
@@ -726,6 +880,14 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
     if parser.inactive > 0 {
         return Expr::Null;
     }
+    let declared = parser.macros.borrow().get(region.name).cloned();
+    if let Some(def) = declared {
+        return expand_declared(parser, &def, region.name, body, span, statement);
+    }
+    if declared_below(parser, region.name, span) {
+        cold_path();
+        parser.error(span, ParserErr::MacroDeclaredBelow(region.name));
+    }
     // Held until this expansion is parsed, so a macro reached through a chain
     // of other macros counts the whole chain. At the cap `span` is already the
     // outermost invocation, which is the one the reader wrote.
@@ -733,7 +895,9 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
         parser.error(span, ParserErr::MacroRecursionLimit(region.name));
     };
     match macros::expand(region.name, body) {
-        Expansion::Text(expansion) => parse_expansion(parser, region.name, &expansion, span),
+        Expansion::Text(expansion) => {
+            parse_expansion(parser, region.name, &expansion, span, statement)
+        }
         Expansion::Null => Expr::Null,
         Expansion::Unknown => {
             cold_path();
@@ -759,13 +923,92 @@ fn expand_macro(parser: &Parser<'_>, region: MacroToken<'_>, span: Span) -> Expr
     }
 }
 
+/// Expands `module::name!( ... )`, a macro reached through the name an import
+/// bound its module under.
+fn expand_macro_path(
+    parser: &Parser<'_>,
+    module: &str,
+    region: MacroToken<'_>,
+    span: Span,
+) -> Expr {
+    let statement = parser.macro_statement.take();
+    let Some(body) = region.body else {
+        cold_path();
+        parser.error(span, ParserErr::UnterminatedMacroRegion(region.name));
+    };
+    if parser.inactive > 0 {
+        return Expr::Null;
+    }
+    let path = format!("{module}::{}", region.name);
+    let declared = parser.macros.borrow().get(path.as_str()).cloned();
+    let Some(def) = declared else {
+        cold_path();
+        parser.error(span, ParserErr::UnknownMacroPath(path));
+    };
+    expand_declared(parser, &def, region.name, body, span, statement)
+}
+
+/// Expands a use of a macro the program declares and parses the result in
+/// its place.
+fn expand_declared(
+    parser: &Parser<'_>,
+    def: &MacroDef,
+    name: &str,
+    body: &str,
+    span: Span,
+    statement: bool,
+) -> Expr {
+    let Some(_level) = macros::Depth::enter() else {
+        parser.error(span, ParserErr::MacroRecursionLimit(name));
+    };
+    let text = declared_macros::expand(def, body).unwrap_or_else(|message| {
+        cold_path();
+        parser.error(span, ParserErr::MacroNoMatch(def.usage(), message));
+    });
+    // An expansion inside another is part of the outer one's text.
+    if parser.span_override.is_none() {
+        macros::record_expansion(&parser.ctx.src.filename, span, &text);
+    }
+    parse_expansion(parser, name, &text, span, statement)
+}
+
+/// Whether the file declares a macro `name` after `span`, where a use above
+/// it cannot reach it.
+fn declared_below(parser: &Parser<'_>, name: &str, span: Span) -> bool {
+    let rest = parser
+        .ctx
+        .src
+        .contents
+        .get(span.end as usize..)
+        .unwrap_or("");
+    let mut from = 0;
+    while let Some(at) = rest[from..].find("macro") {
+        let after = rest[from + at + 5..].trim_start();
+        if let Some(tail) = after.strip_prefix(name)
+            && tail.trim_start().starts_with('(')
+        {
+            return true;
+        }
+        from += at + 5;
+    }
+    false
+}
+
 /// Parses `expansion` as a single expression, placed at the macro invocation
 /// `span`. The expanded text is not in any file, so every span it produces is
 /// the invocation's own; a program compiled from it reports against the macro
 /// the reader wrote, not against text they cannot see.
-fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span: Span) -> Expr {
+fn parse_expansion(
+    parser: &Parser<'_>,
+    macro_name: &str,
+    expansion: &str,
+    span: Span,
+    statement: bool,
+) -> Expr {
     let mut sub = Parser {
-        input: Token::lexer(expansion).spanned().peekable(),
+        input: Token::lexer_with_extras(expansion, true)
+            .spanned()
+            .peekable(),
         ctx: ParserCtx {
             src: parser.ctx.src,
             cfg: parser.ctx.cfg,
@@ -776,10 +1019,26 @@ fn parse_expansion(parser: &Parser<'_>, macro_name: &str, expansion: &str, span:
         pending_gt: None,
         inactive: parser.inactive,
         loops: parser.loops,
-        pending_statements: Vec::new(),
+        param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
         consts: Vec::new(),
+        macros: Rc::clone(&parser.macros),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
     };
-    let expr = parse_expr(&mut sub);
+    // A block, an `if`, a `match` or a loop standing as a whole statement
+    // runs as one, and needs no value.
+    let expr = match sub.peek_token_opt() {
+        Some(Token::LBrace) if statement => {
+            Expr::EvalBlock(Box::from(blocks::parse_block_in(&mut sub, Tail::Value).0))
+        }
+        Some(Token::If | Token::Match | Token::While | Token::For | Token::Loop) if statement => {
+            parse_statement(&mut sub, Tail::No).map_or(Expr::Null, |(e, _)| e)
+        }
+        _ => parse_expr(&mut sub),
+    };
     if sub.peek_token_opt().is_some() {
         cold_path();
         sub.error(span, ParserErr::MacroExpansionTrailingTokens(macro_name));
@@ -813,7 +1072,45 @@ pub fn catch_kinds_and_strings(src: &str) -> (Vec<(SmolStr, Span)>, Vec<SmolStr>
     (kinds, strings)
 }
 
-fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
+/// Whether the block being read may end in an expression with no `;`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    /// It may not: every statement ends in `;` or a block.
+    No,
+    /// A block used as a value, whose last expression is its value.
+    Value,
+    /// A function body, which hands back its value with `return` instead.
+    /// An expression there with no `;` is reported as such.
+    FnBody,
+}
+
+/// How a block's last statement ends it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockEnd {
+    /// An expression with no `;`, the block's value; carries where the `;`
+    /// would go.
+    Value(u32),
+    /// `return`, `throw`, `break` or `continue`, or a statement whose every
+    /// way through ends in one: control never reaches the block's end.
+    Jump,
+    /// Any other statement, or none.
+    Statement,
+}
+
+impl BlockEnd {
+    /// How a statement that is not a value ends a block.
+    fn of(statement: &Expr) -> Self {
+        if statement.diverges() {
+            Self::Jump
+        } else {
+            Self::Statement
+        }
+    }
+}
+
+/// Reads one statement and how it ends the block. In a block used as a value
+/// (`tail` is [`Tail::Value`]) the last statement may be its value.
+fn parse_statement(parser: &mut Parser<'_>, tail: Tail) -> Option<(Expr, BlockEnd)> {
     let mut token = parser.peek_token_opt()?;
     // A statement a `@cfg` turns off is parsed and dropped, and the statement
     // after it stands in its place.
@@ -831,58 +1128,92 @@ fn parse_statement(parser: &mut Parser<'_>) -> Option<Expr> {
             parser.error(span, ParserErr::AttributeWithoutItem);
         }
         if active {
-            return parse_statement(parser);
+            return parse_statement(parser, tail);
         }
         parser.inactive += 1;
-        let _ = parse_statement(parser);
-        parser.pending_statements.clear();
+        let _ = parse_statement(parser, Tail::No);
         parser.inactive -= 1;
         token = parser.peek_token_opt()?;
     }
     let t_span = parser.peek_token_span();
-    match token {
-        Token::If => Some(parse_condition_block(parser, t_span.start)),
+    let statement = match token {
+        Token::If => return Some(parse_condition_block(parser, t_span.start, tail)),
+        Token::Match => return Some(parse_match(parser, tail)),
+        Token::LBrace => return Some(parse_eval_block(parser, tail)),
         Token::While => Some(parse_while_block(parser)),
         Token::For => Some(parse_for_loop(parser)),
-        Token::Match => Some(parse_match(parser)),
-        Token::LBrace => Some(parse_eval_block(parser)),
         // Only `parse_file` accepts a function declaration. Reaching one here
         // means it was written inside a block, where it would otherwise parse
         // and then be dropped without ever being registered.
+        // `fn(` opens an anonymous function, an expression.
+        Token::Function if second_token_is(parser, Token::LParen) => {
+            return Some(parse_line(parser, token, tail));
+        }
         Token::Function => {
             cold_path();
             parser.error(t_span, ParserErr::NestedFunctionDeclaration);
         }
         Token::Loop => Some(parse_loop_block(parser)),
         Token::Try => Some(parse_try_catch_block(parser)),
-        Token::Struct => Some(parse_struct_declare(parser)),
-        Token::Enum => Some(parse_enum_declare(parser)),
+        Token::Struct => Some(local_declaration(parser, parse_struct_declare)),
+        Token::Enum => Some(local_declaration(parser, parse_enum_declare)),
         Token::RBrace => None,
-        t => Some(parse_line(parser, t)),
+        t => {
+            parser.macro_statement.set(macro_statement_ahead(parser));
+            return Some(parse_line(parser, t, tail));
+        }
+    };
+    statement.map(|statement| {
+        let end = BlockEnd::of(&statement);
+        (statement, end)
+    })
+}
+
+/// A struct or an enum declared inside a function, whose fields and variants
+/// take no attribute but `@cfg`: a host reads the attributes of top-level
+/// declarations only.
+fn local_declaration(parser: &mut Parser<'_>, parse: fn(&mut Parser<'_>) -> Expr) -> Expr {
+    let before = parser.part_uses.len();
+    let declared = parse(parser);
+    if let Some((_, uses)) = parser.part_uses.get(before) {
+        cold_path();
+        parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
     }
+    declared
+}
+
+/// Whether the statement ahead is one macro use and its `;`: `name!(...);`
+/// or `module::name!(...);`.
+fn macro_statement_ahead(parser: &Parser<'_>) -> bool {
+    let at = |n: usize| parser.input.clone().nth(n).and_then(|(t, _)| t.ok());
+    let macro_at = match at(0) {
+        Some(Token::Macro(_)) => 0,
+        Some(Token::Identifier(_)) if at(1) == Some(Token::DoubleColon) => 2,
+        _ => return false,
+    };
+    matches!(at(macro_at), Some(Token::Macro(_))) && at(macro_at + 1) == Some(Token::SemiColon)
 }
 
 fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
-    let (t, _) = parser.next_token();
+    let (t, let_span) = parser.next_token();
     debug_assert_eq!(t, Token::Let);
-    if parser.peek_token() == Token::LParen {
-        return parse_tuple_let(parser);
-    }
-    let (t, span) = parser.next_token();
-    let var_name = if let Token::Identifier(id) = t {
-        SmolStr::new(id)
-    } else {
-        cold_path();
-        parser.error(
-            span,
-            ParserErr::UnexpectedToken(
-                Token::Identifier(""),
-                t,
-                "Variable names must be identifiers.",
-            ),
-        );
+    // A name alone binds, whatever its case: `let PI = 3.14;`.
+    let pattern = match parser.peek_token() {
+        Token::Identifier(name)
+            if name != "_"
+                && parser
+                    .input
+                    .clone()
+                    .nth(1)
+                    .is_some_and(|(t, _)| matches!(t, Ok(Token::Colon | Token::Equals))) =>
+        {
+            let span = parser.next_token().1;
+            Pattern::Bind(SmolStr::new(name), span)
+        }
+        _ => pattern::parse_pattern(parser, true),
     };
-    // `let name: Type = value;` declares the variable's type.
+    // `let name: Type = value;` declares the variable's type, and a pattern's
+    // the type of the value it takes apart.
     let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
         parser.next_token();
         let start = parser.peek_token_span().start;
@@ -896,140 +1227,40 @@ fn parse_var_declare(parser: &mut Parser<'_>) -> Expr {
         "Variable declarations need a '=' to separate the name from the value.",
     );
     let value_start = parser.peek_token_span().start;
-    let var_value = parse_expr(parser);
+    // After a pattern, `else` runs where the pattern does not fit; after a
+    // name, it is the value's fallback, `let n = s.parse<int>() else 0;`.
+    let var_value = if let Pattern::Bind(..) = pattern {
+        parse_expr(parser)
+    } else {
+        parser_expr::parse_range(parser, true)
+    };
     let value_span = Span::from((value_start, parser.last_token_end as u32));
-    Expr::VarDeclare(
-        var_name,
-        Box::new(var_value),
-        annotation.map(|(ty, span)| {
-            Box::new(LetAnnotation {
-                ty,
-                span,
-                value_span,
-            })
-        }),
-    )
-}
-
-/// One place in a `let` pattern: a name to bind, `_`, or a nested pattern.
-enum LetPattern {
-    Name(SmolStr),
-    Ignore,
-    /// A nested pattern, with where it was written.
-    Tuple(Span, Vec<Self>),
-}
-
-/// Parses a parenthesised `let` pattern, `(a, (b, _))`, the `(` not yet read.
-fn parse_let_pattern(parser: &mut Parser<'_>) -> Vec<LetPattern> {
-    let open = parser.next_token().1;
-    parser.enter(open);
-    let mut places = Vec::with_capacity(2);
-    loop {
-        let place = match parser.peek_token() {
-            Token::LParen => {
-                let start = parser.peek_token_span().start;
-                let inner = parse_let_pattern(parser);
-                LetPattern::Tuple((start, parser.last_token_end as u32).into(), inner)
-            }
-            Token::Identifier("_") => {
-                parser.next_token();
-                LetPattern::Ignore
-            }
-            Token::Identifier(name) => {
-                parser.next_token();
-                LetPattern::Name(SmolStr::new(name))
-            }
-            _ => {
-                cold_path();
-                let span = parser.peek_token_span();
-                parser.error(span, ParserErr::TuplePatternElement);
-            }
-        };
-        places.push(place);
-        if parser.peek_token() != Token::Comma {
-            break;
-        }
-        let comma = parser.next_token().1;
-        if parser.peek_token() == Token::RParen {
-            if places.len() == 1 {
-                cold_path();
-                parser.error(comma, ParserErr::TupleOfOne);
-            }
-            break;
-        }
-    }
-    let close = parser.next_token_expect(Token::RParen, "Unmatched '(' in a let pattern");
-    if places.len() == 1 {
-        cold_path();
-        parser.error(open.extend(close), ParserErr::TupleOfOne);
-    }
-    parser.leave();
-    places
-}
-
-/// `let (a, b) = value;`: the value goes into a variable no program can name,
-/// and each name in the pattern is declared from the element in its place.
-/// The declarations after the first wait in `pending_statements`, which puts
-/// them right after it in the block. A nested pattern gets a variable of its
-/// own the same way.
-fn parse_tuple_let(parser: &mut Parser<'_>) -> Expr {
-    let pattern_start = parser.peek_token_span().start;
-    let pattern = parse_let_pattern(parser);
-    let pattern_span = Span::from((pattern_start, parser.last_token_end as u32));
-    let annotation = if parser.peek_token_opt() == Some(Token::Colon) {
+    let annotation = annotation.map(|(ty, span)| LetAnnotation {
+        ty,
+        span,
+        value_span,
+    });
+    let otherwise = if parser.peek_token_opt() == Some(Token::Else) {
         parser.next_token();
-        let start = parser.peek_token_span().start;
-        let ty = parse_type(parser);
-        Some((ty, Span::from((start, parser.last_token_end as u32))))
+        let (code, end, span) = blocks::parse_block_in(parser, Tail::No);
+        if end != BlockEnd::Jump {
+            cold_path();
+            parser.error(span, ParserErr::LetElseMustLeave);
+        }
+        Some(Box::from(code))
     } else {
         None
     };
-    parser.next_token_expect(
-        Token::Equals,
-        "Variable declarations need a '=' to separate the pattern from the value.",
-    );
-    let value_start = parser.peek_token_span().start;
-    let value = parse_expr(parser);
-    let value_span = Span::from((value_start, parser.last_token_end as u32));
-    let temp = tuple_let_temp(pattern.len(), pattern_span);
-    let mut bindings = Vec::new();
-    declare_let_pattern(&pattern, &temp, pattern_span, &mut bindings);
-    parser.pending_statements.extend(bindings);
-    Expr::VarDeclare(
-        temp,
-        Box::new(value),
-        annotation.map(|(ty, span)| {
-            Box::new(LetAnnotation {
-                ty,
-                span,
-                value_span,
-            })
-        }),
-    )
-}
-
-/// The declarations of every name `pattern` binds, each reading its element
-/// out of the variable `tuple`.
-fn declare_let_pattern(pattern: &[LetPattern], tuple: &SmolStr, span: Span, out: &mut Vec<Expr>) {
-    for (i, place) in pattern.iter().enumerate() {
-        let element = Expr::GetStructField(
-            Box::new(Expr::Var(tuple.clone(), span)),
-            tuple_field(i),
-            span,
-            span,
-        );
-        match place {
-            LetPattern::Name(name) => {
-                out.push(Expr::VarDeclare(name.clone(), Box::new(element), None));
-            }
-            LetPattern::Ignore => {}
-            LetPattern::Tuple(inner_span, inner) => {
-                let temp = tuple_let_temp(inner.len(), *inner_span);
-                out.push(Expr::VarDeclare(temp.clone(), Box::new(element), None));
-                declare_let_pattern(inner, &temp, span, out);
-            }
-        }
+    if let (Pattern::Bind(name, _), None) = (&pattern, &otherwise) {
+        return Expr::VarDeclare(name.clone(), Box::new(var_value), annotation.map(Box::new));
     }
+    Expr::LetPattern(Box::new(PatternLet {
+        span: let_span.extend(pattern.span()),
+        pattern,
+        value: var_value,
+        annotation,
+        otherwise,
+    }))
 }
 
 fn parse_var_assign(input: &mut Parser<'_>, e: Expr, e_start: u32) -> Expr {
@@ -1137,7 +1368,12 @@ fn parse_jump(input: &mut Parser<'_>, peek: Token<'_>) -> Option<Expr> {
     Some(jump)
 }
 
-fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
+/// Reads a statement that is not a block: a `let`, an assignment, a jump or
+/// an expression, with its `;`. As the last statement of a block used as a
+/// value (`tail`), an expression or a jump may leave the `;` off.
+fn parse_line(input: &mut Parser<'_>, peek: Token<'_>, tail: Tail) -> (Expr, BlockEnd) {
+    let start = input.peek_token_span().start;
+    let mut is_value = false;
     let line_code = if peek == Token::Let {
         parse_var_declare(input)
     } else if let Some(jump) = parse_jump(input, peek) {
@@ -1161,15 +1397,43 @@ fn parse_line(input: &mut Parser<'_>, peek: Token<'_>) -> Expr {
                 | Token::AssignOpShl
                 | Token::AssignOpShr),
             ) => parse_op_var_assign(input, e, e_start, op),
-            _ => e,
+            _ => {
+                is_value = true;
+                e
+            }
         }
     };
-    if input.peek_token_opt() != Some(Token::SemiColon) {
-        error_missing_semicolon(input);
+    let end = BlockEnd::of(&line_code);
+    match input.peek_token_opt() {
+        Some(Token::SemiColon) => {
+            input.next_token();
+            (line_code, end)
+        }
+        Some(Token::RBrace) if tail == Tail::Value && (is_value || end == BlockEnd::Jump) => {
+            let at = input.last_token_end as u32;
+            let end = if end == BlockEnd::Jump {
+                end
+            } else {
+                BlockEnd::Value(at)
+            };
+            (line_code, end)
+        }
+        // `xs.each() fn(x) { ... }` ends in the closure's block, which ends
+        // the statement the way the block of an `if` does.
+        _ if is_value && ends_in_trailing_block(input, &line_code) => (line_code, end),
+        // A function body does not end in its value the way a block used as
+        // a value does, so the help names the `return` that hands one back.
+        Some(Token::RBrace) if tail == Tail::FnBody && is_value => {
+            cold_path();
+            let text = &input.ctx.src.contents[start as usize..input.last_token_end];
+            let help = format!(
+                "All statements end with a ';'. To hand the value back, write {}",
+                blue(format_args!("return {text};"))
+            );
+            error_missing_semicolon_at(input, input.last_token_end as u32, Some(&help));
+        }
+        _ => error_missing_semicolon(input),
     }
-    input.next_token();
-    // input.next_token_expect(Token::SemiColon, "Lines must end with a ';'.");
-    line_code
 }
 
 #[cold]
@@ -1237,29 +1501,44 @@ fn error_unclosed_delimiter(
     )
 }
 
+/// Whether `e`, just read, is a call whose last argument is a closure after
+/// the parentheses with a `{ ... }` body.
+fn ends_in_trailing_block(parser: &Parser<'_>, e: &Expr) -> bool {
+    let (Expr::FunctionCall(args, ..)
+    | Expr::ObjFunctionCall(_, args, ..)
+    | Expr::CallValue(_, args, ..)) = e
+    else {
+        return false;
+    };
+    matches!(args.last(), Some(Expr::NamedArg(name, ..)) if name == TRAILING_ARG)
+        && parser.ctx.src.contents.as_bytes()[..parser.last_token_end].ends_with(b"}")
+}
+
 #[cold]
 #[inline(never)]
 fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
-    let span: Span = (parser.last_token_end as u32, parser.last_token_end as u32).into();
+    error_missing_semicolon_at(parser, parser.last_token_end as u32, None)
+}
+
+/// Reports a statement that ends at `at` with no `;` after it.
+#[cold]
+#[inline(never)]
+fn error_missing_semicolon_at(parser: &Parser<'_>, at: u32, help: Option<&str>) -> ! {
+    let span: Span = (at, at).into();
+    let at = at as usize;
     parser.throw_parser_err(
         || {
             build_report(
                 ariadne::ReportKind::Error,
-                (
-                    parser.ctx.src.filename.as_str(),
-                    (parser.last_token_end..parser.last_token_end),
-                ),
+                (parser.ctx.src.filename.as_str(), (at..at)),
             )
             .with_message("Missing semicolon")
             .with_label(
-                Label::new((
-                    parser.ctx.src.filename.as_str(),
-                    (parser.last_token_end..parser.last_token_end),
-                ))
-                .with_message(format_args!("Add a {} here", blue(';')))
-                .with_color(ariadne::Color::Blue),
+                Label::new((parser.ctx.src.filename.as_str(), (at..at)))
+                    .with_message(format_args!("Add a {} here", blue(';')))
+                    .with_color(ariadne::Color::Blue),
             )
-            .with_help("All statements end with a ';'")
+            .with_help(help.unwrap_or("All statements end with a ';'"))
             .finish()
         },
         span,
@@ -1268,13 +1547,21 @@ fn error_missing_semicolon(parser: &Parser<'_>) -> ! {
     )
 }
 
-fn parse_code(input: &mut Parser<'_>) -> Vec<Expr> {
+/// Reads the statements of a block up to its `}`, and how the last one ends
+/// it.
+fn parse_code(input: &mut Parser<'_>, tail: Tail) -> (Vec<Expr>, BlockEnd) {
     let mut output: Vec<Expr> = Vec::with_capacity(4);
-    while let Some(e) = parse_statement(input) {
+    let mut end = BlockEnd::Statement;
+    while let Some((e, e_end)) = parse_statement(input, tail) {
+        // Only the last statement can leave the `;` off.
+        if let BlockEnd::Value(at) = end {
+            cold_path();
+            error_missing_semicolon_at(input, at, None);
+        }
+        end = e_end;
         output.push(e);
-        output.append(&mut input.pending_statements);
     }
-    output
+    (output, end)
 }
 
 fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
@@ -1364,22 +1651,13 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         }
         parser.next_token();
         let mut items: Vec<(SmolStr, Span)> = Vec::new();
-        // `{ * }`: every item of the module.
+        // `{ * }` is refused, naming the two spellings that bring items in.
         if parser.peek_token() == Token::OpMul {
-            let star = parser.next_token().1;
-            end = parser
-                .next_token_expect(
-                    Token::RBrace,
-                    "A glob import is written { * }, with nothing else in the braces",
-                )
-                .end;
-            binding = Some(ImportBinding::Glob(star));
+            cold_path();
+            let star = parser.peek_token_span();
+            parser.error(star, ParserErr::GlobImport);
         }
-        let glob = binding.is_some();
         loop {
-            if glob {
-                break;
-            }
             let (token, span) = parser.next_token();
             match token {
                 Token::RBrace => {
@@ -1420,22 +1698,15 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
                 }
             }
         }
-        if !matches!(binding, Some(ImportBinding::Glob(_))) {
-            if items.is_empty() {
-                cold_path();
-                parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
-            }
-            binding = Some(ImportBinding::Items(items.into_boxed_slice()));
+        if items.is_empty() {
+            cold_path();
+            parser.error((brace.start, end).into(), ParserErr::ImportItemsEmpty);
         }
+        binding = Some(ImportBinding::Items(items.into_boxed_slice()));
     }
     // An `export import` passes on what it brings in, so it has to bring
     // items in rather than bind a name.
-    if exported.is_some()
-        && !matches!(
-            binding,
-            Some(ImportBinding::Items(_) | ImportBinding::Glob(_))
-        )
-    {
+    if exported.is_some() && !matches!(binding, Some(ImportBinding::Items(_))) {
         cold_path();
         parser.error((start, end).into(), ParserErr::ExportImportWithoutItems);
     }
@@ -1456,6 +1727,9 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         Token::SemiColon,
         "Import statements must end with a semicolon",
     );
+    if parser.inactive == 0 {
+        bind_imported_macros(parser, &path, is_logical, &binding, (start, end).into());
+    }
     Expr::ImportFile(
         path,
         binding,
@@ -1463,6 +1737,39 @@ fn parse_file_import(parser: &mut Parser<'_>, exported: Option<Span>) -> Expr {
         (start, end).into(),
         exported.is_some(),
     )
+}
+
+/// Puts the macros the imported module offers in the file's scope: behind
+/// the module's name, or by name for the ones an item list names.
+fn bind_imported_macros(
+    parser: &Parser<'_>,
+    path: &str,
+    is_logical: bool,
+    binding: &ImportBinding,
+    span: Span,
+) {
+    let Some(offered) = macros::module_macros(path, is_logical) else {
+        return;
+    };
+    match binding {
+        ImportBinding::Namespace(module) => {
+            for def in offered.iter() {
+                bind_macro(
+                    parser,
+                    SmolStr::new(format!("{module}::{}", def.name)),
+                    Rc::clone(def),
+                    span,
+                );
+            }
+        }
+        ImportBinding::Items(items) => {
+            for (item, item_span) in items {
+                if let Some(def) = offered.iter().find(|def| def.name == *item) {
+                    bind_macro(parser, item.clone(), Rc::clone(def), *item_span);
+                }
+            }
+        }
+    }
 }
 
 /// The name an import binds its module under when it says no other: the last
@@ -1539,8 +1846,12 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
         // A parenthesised type, which is what puts a function type under a
         // list suffix: `(fn(int) -> int)[]`. With a comma it is a tuple type,
         // `(int, string)`, the generic struct every tuple of that size
-        // instantiates.
-        let inner = parse_type(parser);
+        // instantiates. Empty, `()`, it is the type of no value.
+        let inner = if parser.peek_token() == Token::RParen {
+            TypeExpr::Identifier(SmolStr::new_static("()"), span)
+        } else {
+            parse_type(parser)
+        };
         if parser.peek_token() == Token::Comma {
             let mut args = vec![inner];
             while parser.peek_token() == Token::Comma {
@@ -1616,16 +1927,44 @@ fn parse_atomic_type(parser: &mut Parser<'_>) -> TypeExpr {
             ParserErr::UnexpectedToken(Token::Identifier(""), next_token, "Invalid type"),
         );
     };
+    // `T[]` is a list of `T`, and `T?` an `Option<T>`; both read left to
+    // right, so `int?[]` is a list of options and `int[]?` an optional list.
     loop {
-        if parser.peek_token() == Token::LBracket {
-            parser.next_token();
-            parser.next_token_expect(Token::RBracket, "Unmatched '['");
-            t = TypeExpr::Array(Box::new(t));
-        } else {
-            break;
+        match parser.peek_token_opt() {
+            Some(Token::LBracket) => {
+                parser.next_token();
+                parser.next_token_expect(Token::RBracket, "Unmatched '['");
+                t = TypeExpr::Array(Box::new(t));
+            }
+            Some(Token::Question) => {
+                let question = parser.next_token().1;
+                t = optional_type(t, question);
+            }
+            // `T!E`: a `Result<T, E>`.
+            Some(Token::OpNot) => {
+                let bang = parser.next_token().1;
+                let error = parse_atomic_type(parser);
+                t = TypeExpr::Generic(Box::new(GenericType {
+                    namespace: Box::from([]),
+                    name: SmolStr::new_static("Result"),
+                    args: Box::from([t, error]),
+                    span: bang,
+                }));
+            }
+            _ => break,
         }
     }
     t
+}
+
+/// `T?`: the type `Option<T>`, written where `?` follows `T` at `question`.
+fn optional_type(t: TypeExpr, question: Span) -> TypeExpr {
+    TypeExpr::Generic(Box::new(GenericType {
+        namespace: Box::from([]),
+        name: SmolStr::new_static("Option"),
+        args: Box::from([t]),
+        span: question,
+    }))
 }
 
 /// Walks a copy of the token stream to decide whether the `<` an identifier is
@@ -1755,12 +2094,19 @@ impl<'a> TypeArgScan<'a> {
                 return false;
             }
         }
-        while self.eat(Token::LBracket) {
-            if !self.eat(Token::RBracket) {
-                return false;
+        loop {
+            if self.eat(Token::LBracket) {
+                if !self.eat(Token::RBracket) {
+                    return false;
+                }
+            } else if self.eat(Token::OpNot) {
+                if !self.atomic_type() {
+                    return false;
+                }
+            } else if !self.eat(Token::Question) {
+                return true;
             }
         }
-        true
     }
 }
 
@@ -1802,6 +2148,74 @@ fn type_args_ahead(parser: &Parser<'_>, follow: TypeArgFollow) -> bool {
         Some(Token::LBrace) => follow == TypeArgFollow::Term,
         _ => false,
     }
+}
+
+/// Whether the token after the next one is `expected`.
+fn second_token_is(parser: &Parser<'_>, expected: Token<'_>) -> bool {
+    matches!(parser.input.clone().nth(1), Some((Ok(t), _)) if t == expected)
+}
+
+/// Whether the `{` just read opens a block used as a value rather than a map
+/// literal. A map's first key is followed by `:` before anything closes it;
+/// a block starts with a statement keyword, or its first statement ends in
+/// `;`, `=` or the block's own `}`. `{}` is the empty map.
+fn block_ahead(parser: &Parser<'_>) -> bool {
+    let mut input = parser.input.clone();
+    let first = match input.peek() {
+        Some((Ok(t), _)) => *t,
+        _ => return false,
+    };
+    match first {
+        Token::RBrace => return false,
+        Token::Let
+        | Token::Return
+        | Token::Throw
+        | Token::Break
+        | Token::Continue
+        | Token::If
+        | Token::While
+        | Token::For
+        | Token::Loop
+        | Token::Match
+        | Token::Try
+        | Token::Struct
+        | Token::Enum
+        | Token::LBrace
+        | Token::At => return true,
+        _ => {}
+    }
+    let mut depth = 0u32;
+    for (token, _) in input {
+        let Ok(token) = token else {
+            return false;
+        };
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket => depth = depth.saturating_sub(1),
+            Token::RBrace if depth == 0 => return true,
+            Token::RBrace => depth -= 1,
+            Token::Colon | Token::Comma if depth == 0 => return false,
+            Token::SemiColon
+            | Token::Equals
+            | Token::AssignOpAdd
+            | Token::AssignOpSub
+            | Token::AssignOpMul
+            | Token::AssignOpDiv
+            | Token::AssignOpMod
+            | Token::AssignOpPow
+            | Token::AssignOpBitAnd
+            | Token::AssignOpBitOr
+            | Token::AssignOpBitXor
+            | Token::AssignOpShl
+            | Token::AssignOpShr
+                if depth == 0 =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Parses `<Type, Type, ...>` where a type-argument list is already known to
@@ -1872,10 +2286,15 @@ fn parse_dylib_import(parser: &mut Parser<'_>) -> Expr {
     Expr::ImportDylib(path, fn_signatures, (start, end).into())
 }
 
-/// Parses a brace-delimited block of typed function signatures shared by
+/// Parses a brace-delimited block of function declarations shared by
 /// `dylib "..." { ... }` and `host "..." { ... }`. The opening `{` must already
 /// have been consumed; this consumes through the closing `}` and returns the
-/// parsed signatures together with the end offset of the `}`.
+/// parsed declarations together with the end offset of the `}`.
+///
+/// Each function is declared the way a candela function is, with named
+/// parameters, defaults and a `-> Type` return, and a `;` in place of the
+/// body: `fn noise(seed: int, octaves: int = 4) -> float;`. `fn log(...);`
+/// takes any number of arguments of any type, in a `host` block.
 ///
 /// `structs` is where a `host` block collects the structs it declares; a
 /// `dylib` block passes `None` and declares none.
@@ -1883,8 +2302,8 @@ fn parse_fn_signature_block(
     parser: &mut Parser<'_>,
     mut structs: Option<&mut Vec<Expr>>,
     mut attributes: Option<&mut Vec<AttributeDecl>>,
-) -> (Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>, u32) {
-    let mut fn_signatures: Vec<(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)> = Vec::new();
+) -> (Box<[ForeignFn]>, u32) {
+    let mut fn_signatures: Vec<ForeignFn> = Vec::new();
     let end: u32;
     loop {
         if parser.peek_token() == Token::RBrace {
@@ -1911,10 +2330,7 @@ fn parse_fn_signature_block(
             structs.push(declared);
             continue;
         }
-        // `attribute name ... on fn;`. A function that returns a type named
-        // `attribute` is written `attribute name(int);`, which the parameter
-        // list tells apart: an attribute's parameters are named, and one with
-        // none is followed by `on`.
+        // `attribute name ... on fn;`.
         if parser.peek_token() == Token::Identifier("attribute")
             && let Some(attributes) = attributes.as_deref_mut()
             && opens_attribute_decl(parser)
@@ -1923,82 +2339,145 @@ fn parse_fn_signature_block(
             attributes.push(parse_attribute_decl(parser, start.start));
             continue;
         }
-
-        let type_start = parser.peek_token();
-        let span = parser.peek_token_span();
-        let first = parse_type(parser);
-        let fn_name_span: Span;
-        let (return_type, fn_name) = if parser.peek_token() == Token::LParen {
-            if let TypeExpr::Identifier(name, span) = first {
-                fn_name_span = span;
-                (
-                    TypeExpr::Identifier(SmolStr::new_static("null"), span),
-                    name,
-                )
-            } else {
+        if parser.peek_token() != Token::Function {
+            cold_path();
+            let span = parser.peek_token_span();
+            parser.error(
+                span,
+                ParserErr::OldHostSignature(old_signature_rewritten(parser)),
+            );
+        }
+        parser.next_token();
+        let (t, fn_name_span) = parser.next_token();
+        let Token::Identifier(fn_name) = t else {
+            cold_path();
+            parser.error(
+                fn_name_span,
+                ParserErr::UnexpectedToken(
+                    Token::Identifier(""),
+                    t,
+                    "Function names must be identifiers.",
+                ),
+            );
+        };
+        let (types, params) = if parser
+            .input
+            .clone()
+            .nth(1)
+            .is_some_and(|(t, _)| t == Ok(Token::Ellipsis))
+        {
+            // `fn log(...)`: any number of arguments of any type, delivered
+            // to the registered closure as a slice. Carried through as a
+            // reserved sentinel type the host resolver recognises.
+            parser.next_token();
+            let span = parser.next_token().1;
+            parser.next_token_expect(Token::RParen, "Unmatched '('");
+            (
+                Box::from([TypeExpr::Identifier(SmolStr::new_static("..."), span)]),
+                ForeignParams::default(),
+            )
+        } else {
+            let before = parser.part_uses.len();
+            let (args, defaults) = blocks::parse_params(parser, false);
+            if let Some((_, uses)) = parser.part_uses.get(before) {
+                cold_path();
+                parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
+            }
+            if !parser.param_lets.is_empty() {
+                cold_path();
                 parser.error(
-                    span,
-                    ParserErr::UnexpectedToken(
-                        Token::Identifier(""),
-                        type_start,
-                        "Function names must be identifiers.",
+                    fn_name_span,
+                    ParserErr::UnexpectedTokenStr(
+                        "a parameter name",
+                        Token::LParen,
+                        "A host or dylib parameter is a name: fn f(x: int).",
                     ),
                 );
             }
+            let mut types = Vec::with_capacity(args.len());
+            let mut names = Vec::with_capacity(args.len());
+            for (name, ty) in args {
+                let Some(ty) = ty else {
+                    cold_path();
+                    parser.error(
+                        fn_name_span,
+                        ParserErr::UnexpectedTokenStr(
+                            "a type",
+                            Token::Comma,
+                            "Every parameter of a host or dylib function declares its type: fn f(x: int).",
+                        ),
+                    );
+                };
+                types.push(ty);
+                names.push(name);
+            }
+            (
+                types.into_boxed_slice(),
+                ForeignParams {
+                    names: names.into_boxed_slice(),
+                    defaults,
+                },
+            )
+        };
+        let return_type = if parser.peek_token() == Token::Arrow {
+            parser.next_token();
+            parse_type(parser)
         } else {
-            let (next_token, span) = parser.next_token();
-            fn_name_span = span;
-            let fn_name = if let Token::Identifier(name) = next_token {
-                SmolStr::new(name)
-            } else {
-                cold_path();
-                parser.error(
-                    span,
-                    ParserErr::UnexpectedToken(
-                        Token::Identifier(""),
-                        next_token,
-                        "Function names must be identifiers.",
-                    ),
-                );
-            };
-            (first, fn_name)
+            TypeExpr::Identifier(SmolStr::new_static("null"), fn_name_span)
         };
         parser.next_token_expect(
-            Token::LParen,
-            "Function arguments must be delimited by parentheses",
-        );
-        let mut args: Vec<TypeExpr> = Vec::with_capacity(2);
-        loop {
-            if parser.peek_token() == Token::RParen {
-                break;
-            }
-            // `...` marks a variadic host function: it accepts any number of
-            // arguments of any type, delivered to the registered closure as a
-            // slice. Carried through as a reserved sentinel type the host
-            // resolver recognises (meaningless in a `dylib` block).
-            if parser.peek_token() == Token::Ellipsis {
-                let span = parser.peek_token_span();
-                parser.next_token();
-                args.push(TypeExpr::Identifier(SmolStr::new_static("..."), span));
-                break;
-            }
-            args.push(parse_type(parser));
-            if parser.peek_token() == Token::Comma {
-                parser.next_token();
-            } else if !(parser.peek_token() == Token::RParen) {
-                cold_path();
-                let span = parser.peek_token_span();
-                parser.error(span, ParserErr::ArgumentsMissingCommaSeparator);
-            }
-        }
-        parser.next_token_expect(Token::RParen, "Unmatched ')'");
-        parser.next_token_expect(
             Token::SemiColon,
-            "Function definitions must end with a semicolon",
+            "A host or dylib function declaration ends with ';'",
         );
-        fn_signatures.push((fn_name, Box::from(args), return_type, fn_name_span));
+        fn_signatures.push((
+            SmolStr::new(fn_name),
+            types,
+            return_type,
+            fn_name_span,
+            params,
+        ));
     }
     (fn_signatures.into_boxed_slice(), end)
+}
+
+/// The removed C-style entry ahead, `int f(int, string);`, rewritten the way
+/// it is declared now, for the error that refuses it. The parameters get
+/// placeholder names, since the old form had none.
+fn old_signature_rewritten(parser: &Parser<'_>) -> String {
+    let text = parser.ctx.src.contents.as_str();
+    let start = parser
+        .input
+        .clone()
+        .next()
+        .map_or(text.len(), |(_, span)| span.start);
+    let rest = &text[start.min(text.len())..];
+    let entry = rest.split([';', '}']).next().unwrap_or_default().trim();
+    let Some((head, args)) = entry.split_once('(') else {
+        return String::from("fn name(x: int) -> int;");
+    };
+    let mut head: Vec<&str> = head.split_whitespace().collect();
+    let name = head.pop().unwrap_or("name");
+    let ret = head.join(" ");
+    let params: Vec<String> = args
+        .trim_end_matches(')')
+        .split(',')
+        .map(str::trim)
+        .filter(|ty| !ty.is_empty())
+        .enumerate()
+        .map(|(i, ty)| {
+            if ty == "..." {
+                ty.to_owned()
+            } else {
+                format!("{}: {ty}", char::from(b'a' + (i % 26) as u8))
+            }
+        })
+        .collect();
+    let ret = if ret.is_empty() {
+        String::new()
+    } else {
+        format!(" -> {ret}")
+    };
+    format!("fn {name}({}){ret};", params.join(", "))
 }
 
 /// Parses a `host "namespace" { signatures... }` block. The namespace names a
@@ -2039,12 +2518,12 @@ fn parse_host_block(parser: &mut Parser<'_>) -> Expr {
 fn parse_file(
     parser: &mut Parser<'_>,
     impls: &mut Vec<ImplTemplate>,
-    attributes: &mut Vec<(usize, Box<[AttributeUse]>)>,
+    attributes: &mut Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
 ) -> (Vec<Expr>, Vec<usize>) {
     let mut output: Vec<Expr> = Vec::with_capacity(2);
     // parse file statements
     while parser.peek_token_opt().is_some() {
-        if parser.peek_token() == Token::At {
+        let (active, uses) = if parser.peek_token() == Token::At {
             let (active, uses) = parse_attributes(parser);
             if parser.peek_token_opt().is_none() {
                 cold_path();
@@ -2054,25 +2533,43 @@ fn parse_file(
             if !uses.is_empty()
                 && !matches!(
                     parser.peek_token(),
-                    Token::Function | Token::Struct | Token::Enum
+                    Token::Function
+                        | Token::Struct
+                        | Token::Enum
+                        | Token::Impl
+                        | Token::Identifier("const")
                 )
             {
                 cold_path();
                 parser.error(uses[0].span, ParserErr::AttributeWrongTarget);
             }
-            if active {
-                parse_item(parser, &mut output, impls);
-                if !uses.is_empty() {
-                    attributes.push((output.len() - 1, uses.into_boxed_slice()));
-                }
-            } else {
-                parser.inactive += 1;
-                parse_item(parser, &mut Vec::new(), &mut Vec::new());
-                parser.inactive -= 1;
-            }
+            (active, uses)
+        } else {
+            (true, Vec::new())
+        };
+        if !active {
+            parser.inactive += 1;
+            parse_item(parser, &mut Vec::new(), &mut Vec::new());
+            parser.inactive -= 1;
+            parser.part_uses.clear();
+            parser.impl_uses.clear();
+            parser.impl_on = None;
             continue;
         }
+        let first = output.len();
         parse_item(parser, &mut output, impls);
+        if let Some(on) = parser.impl_on.take() {
+            if !uses.is_empty() {
+                attributes.push((first, on, uses.into_boxed_slice()));
+            }
+            attributes.append(&mut parser.impl_uses);
+        } else if output.len() > first {
+            let index = output.len() - 1;
+            if !uses.is_empty() {
+                attributes.push((index, AttrOn::Item, uses.into_boxed_slice()));
+            }
+            attributes.extend(parser.part_uses.drain(..).map(|(on, u)| (index, on, u)));
+        }
     }
     (output, std::mem::take(&mut parser.consts))
 }
@@ -2085,6 +2582,16 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
     // A block on a generic type is kept as a template instead.
     if t == Token::Impl {
         parse_impl_block(parser, output, impls);
+        return;
+    }
+    if t == Token::Identifier("macro") && macro_decl_ahead(parser) {
+        let (_, start) = parser.next_token();
+        let def = declared_macros::parse_macro_decl(parser);
+        if parser.inactive == 0 {
+            let span = (start.start, parser.last_token_end as u32).into();
+            parser.declared_macros.push(def.name.clone());
+            bind_macro(parser, def.name.clone(), Rc::new(def), span);
+        }
         return;
     }
     if t == Token::Identifier("const") {
@@ -2106,7 +2613,7 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
                 ParserErr::UnexpectedToken(
                     Token::Import,
                     next,
-                    "export goes in front of an import: export import \"./shapes.cdl\" { * };",
+                    "export goes in front of an import: export import \"./shapes.cdl\" { Circle };",
                 ),
             );
         }
@@ -2126,6 +2633,21 @@ fn parse_item(parser: &mut Parser<'_>, output: &mut Vec<Expr>, impls: &mut Vec<I
             parser.error(span, ParserErr::UnexpectedTokenStr("'fn' (function declaration), 'import', 'struct' (struct declaration), 'enum' (enum declaration), 'impl' (method block), 'dylib' (dynamic library import), or 'host' (host function block)", unexpected, "Invalid file statement."));
         }
     });
+}
+
+/// Puts `def` in the file's macro scope under `key`, the name a use writes.
+/// A key the scope already holds for another macro is an error at `span`.
+fn bind_macro(parser: &Parser<'_>, key: SmolStr, def: Rc<MacroDef>, span: Span) {
+    let mut scope = parser.macros.borrow_mut();
+    if let Some(existing) = scope.get(&key) {
+        if Rc::ptr_eq(existing, &def) {
+            return;
+        }
+        drop(scope);
+        cold_path();
+        parser.error(span, ParserErr::MacroDeclaredTwice(key.to_string()));
+    }
+    scope.insert(key, def);
 }
 
 /// Reads the run of attributes in front of an item or a statement. Answers
@@ -2330,10 +2852,20 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
                 Token::Colon,
                 "An attribute parameter is a name, a ':' and its type, as in writes: type[].",
             );
-            let ty = parse_attr_param_type(parser);
-            let optional = parser.peek_token() == Token::Question;
-            if optional {
+            // `T?` is how an attribute parameter says it may be left out,
+            // the way it says an `Option<T>` anywhere else.
+            let (ty, mut optional) = match parse_attr_param_type(parser) {
+                AttrParamTypeExpr::Value(TypeExpr::Generic(g))
+                    if g.name == "Option" && g.namespace.is_empty() && g.args.len() == 1 =>
+                {
+                    let inner = g.args.into_vec().pop().unwrap();
+                    (AttrParamTypeExpr::Value(inner), true)
+                }
+                ty => (ty, false),
+            };
+            if parser.peek_token() == Token::Question {
                 parser.next_token();
+                optional = true;
             }
             let default = if parser.peek_token() == Token::Equals {
                 parser.next_token();
@@ -2368,23 +2900,41 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
             ),
         );
     }
-    let (t, target_span) = parser.next_token();
-    let target = match t {
-        Token::Function => AttributeTargetKind::Fn,
-        Token::Struct => AttributeTargetKind::Struct,
-        Token::Enum => AttributeTargetKind::Enum,
-        other => {
+    // `on fn, method;`: every kind of declaration it may be written on.
+    let mut targets: Vec<AttributeTargetKind> = Vec::with_capacity(1);
+    loop {
+        let (t, target_span) = parser.next_token();
+        let word = match t {
+            Token::Function => "fn",
+            Token::Struct => "struct",
+            Token::Enum => "enum",
+            Token::Impl => "impl",
+            Token::Identifier(word) => word,
+            _ => "",
+        };
+        let Some(target) = AttributeTargetKind::ALL
+            .into_iter()
+            .find(|k| k.keyword() == word)
+        else {
             cold_path();
             parser.error(
                 target_span,
                 ParserErr::UnexpectedTokenStr(
-                    "'fn', 'struct' or 'enum'",
-                    other,
-                    "An attribute goes on a function, a struct or an enum.",
+                    "'fn', 'method', 'param', 'const', 'struct', 'field', 'enum', 'variant' or 'impl'",
+                    t,
+                    "An attribute goes on the kinds of declaration its on clause lists, as in on fn, method;.",
                 ),
             );
+        };
+        if !targets.contains(&target) {
+            targets.push(target);
         }
-    };
+        if parser.peek_token() == Token::Comma {
+            parser.next_token();
+        } else {
+            break;
+        }
+    }
     parser.next_token_expect(
         Token::SemiColon,
         "An attribute declaration ends with a semicolon.",
@@ -2392,7 +2942,7 @@ fn parse_attribute_decl(parser: &mut Parser<'_>, start: u32) -> AttributeDecl {
     AttributeDecl {
         name: SmolStr::new(name),
         params: params.into_boxed_slice(),
-        target,
+        targets: targets.into_boxed_slice(),
         span: (start, name_span.end).into(),
     }
 }
@@ -2521,11 +3071,13 @@ fn parse_cfg_predicate(parser: &mut Parser<'_>) -> bool {
 pub struct ParsedFile {
     pub code: Vec<Expr>,
     pub impls: Vec<ImplTemplate>,
-    /// The attributes other than `@cfg` written in front of an item, by the
-    /// item's index in `code`, in order.
-    pub attributes: Vec<(usize, Box<[AttributeUse]>)>,
+    /// The attributes other than `@cfg` written on an item or on one of its
+    /// parts, by the item's index in `code`, in order.
+    pub attributes: Vec<(usize, AttrOn, Box<[AttributeUse]>)>,
     /// The indices in `code` of the functions that are `const` declarations.
     pub consts: Vec<usize>,
+    /// The names of the macros the file declares.
+    pub macros: Vec<SmolStr>,
 }
 
 #[must_use]
@@ -2533,27 +3085,100 @@ pub fn parse(input: &str, src: &Source) -> ParsedFile {
     let mut impls: Vec<ImplTemplate> = Vec::new();
     let mut attributes = Vec::new();
     let cfg = cfg::active();
-    let code = parse_file(
-        &mut Parser {
-            input: Token::lexer(input).spanned().peekable(),
-            ctx: ParserCtx { src, cfg: &cfg },
-            last_token_end: 0,
-            span_override: None,
-            nesting: 0,
-            pending_gt: None,
-            inactive: 0,
-            loops: 0,
-            pending_statements: Vec::new(),
-            consts: Vec::new(),
-        },
-        &mut impls,
-        &mut attributes,
-    );
+    let mut parser = Parser {
+        input: Token::lexer(input).spanned().peekable(),
+        ctx: ParserCtx { src, cfg: &cfg },
+        last_token_end: 0,
+        span_override: None,
+        nesting: 0,
+        pending_gt: None,
+        inactive: 0,
+        loops: 0,
+        param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
+        consts: Vec::new(),
+        macros: Rc::default(),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
+    };
+    let code = parse_file(&mut parser, &mut impls, &mut attributes);
     ParsedFile {
         code: code.0,
         impls,
         attributes,
         consts: code.1,
+        macros: parser.declared_macros,
+    }
+}
+
+/// The macros a module offers the files that import it: the ones it declares
+/// and the ones its `export import`s name.
+///
+/// Only the module's top level is read, and only for those two forms; the
+/// rest of it is parsed when the module itself is.
+#[must_use]
+pub fn module_macros(src: &Source) -> Vec<Rc<MacroDef>> {
+    let cfg = cfg::active();
+    let mut parser = Parser {
+        input: Token::lexer(&src.contents).spanned().peekable(),
+        ctx: ParserCtx { src, cfg: &cfg },
+        last_token_end: 0,
+        span_override: None,
+        nesting: 0,
+        pending_gt: None,
+        inactive: 0,
+        loops: 0,
+        param_lets: Vec::new(),
+        part_uses: Vec::new(),
+        impl_on: None,
+        impl_uses: Vec::new(),
+        consts: Vec::new(),
+        macros: Rc::default(),
+        declared_macros: Vec::new(),
+        macro_statement: std::cell::Cell::new(false),
+    };
+    let mut offered: Vec<Rc<MacroDef>> = Vec::new();
+    let mut depth = 0u32;
+    while let Some(t) = parser.peek_token_opt() {
+        if depth == 0 && t == Token::Identifier("macro") && macro_decl_ahead(&parser) {
+            parser.next_token();
+            offered.push(Rc::new(declared_macros::parse_macro_decl(&mut parser)));
+            continue;
+        }
+        if depth == 0 && t == Token::Identifier("export") && second_token_is(&parser, Token::Import)
+        {
+            let (_, span) = parser.next_token();
+            let before: FxHashSet<SmolStr> = parser.macros.borrow().keys().cloned().collect();
+            parse_file_import(&mut parser, Some(span));
+            let scope = parser.macros.borrow();
+            offered.extend(
+                scope
+                    .iter()
+                    .filter(|(name, _)| !before.contains(*name) && !name.contains("::"))
+                    .map(|(_, def)| Rc::clone(def)),
+            );
+            continue;
+        }
+        let (t, _) = parser.next_token();
+        if matches!(t, Token::LBrace | Token::LParen | Token::LBracket) {
+            depth += 1;
+        } else if matches!(t, Token::RBrace | Token::RParen | Token::RBracket) {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    offered
+}
+
+/// Whether the `macro` the parser stands on opens a declaration,
+/// `macro name(`.
+fn macro_decl_ahead(parser: &Parser<'_>) -> bool {
+    let at = |n: usize| parser.input.clone().nth(n).and_then(|(t, _)| t.ok());
+    match at(1) {
+        Some(Token::Identifier(_)) => at(2) == Some(Token::LParen),
+        Some(Token::Macro(_)) => true,
+        _ => false,
     }
 }
 

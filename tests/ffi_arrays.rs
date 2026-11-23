@@ -70,11 +70,11 @@ struct Point { x: float, y: float }
 struct Tagged { id: int, at: Point }
 
 dylib "arrays" {
-    int sum(int[], int);
-    float weigh(Tagged[], int);
-    int count(string[], int);
-    int squares(int[], int);
-    halve(float[], int);
+    fn sum(a: int[], b: int) -> int;
+    fn weigh(a: Tagged[], b: int) -> float;
+    fn count(a: string[], b: int) -> int;
+    fn squares(a: int[], b: int) -> int;
+    fn halve(a: float[], b: int);
 }
 
 fn empty_ints() -> int {

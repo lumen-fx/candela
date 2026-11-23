@@ -1,0 +1,134 @@
+/// Regular expressions, with the syntax of Rust's regex crate: `\\d`, `[a-z]+`,
+/// `(?i)`, groups `(...)`, named groups `(?<name>...)`, `^`, `$`, `|`, `*?`.
+///
+///     import "std/regex";
+///     fn main() {
+///         let digits = regex::compile("[0-9]+")?;
+///         print(digits.find_all("a1 b22 c333"));
+///         print(digits.replace_all("a1 b22", "#"));
+///     }
+///
+/// The engine is regex-lite: it runs in time linear in the text, with no
+/// backtracking, and its classes are ASCII ones, so `\\w` and `\\d` match
+/// ASCII letters and digits only. A browser runs no native library, so there
+/// every call raises `regex_desktop_only`.
+
+import "std/json";
+
+@cfg(not(web))
+dylib "../std_src/regex/regex" {
+    fn candela_regex_check(pattern: string) -> string;
+    fn candela_regex_is_match(pattern: string, text: string) -> int;
+    fn candela_regex_find(pattern: string, text: string) -> string;
+    fn candela_regex_find_all(pattern: string, text: string) -> string;
+    fn candela_regex_captures(pattern: string, text: string) -> string;
+    fn candela_regex_replace_all(pattern: string, text: string, with: string) -> string;
+    fn candela_regex_split(pattern: string, text: string) -> string;
+}
+
+// The calls below go through these, so the module compiles for a browser,
+// where they raise.
+@cfg(not(web))
+fn native_check(pattern: string) -> string => regex::candela_regex_check(pattern);
+@cfg(web)
+fn native_check(pattern: string) -> string {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_is_match(pattern: string, text: string) -> int => regex::candela_regex_is_match(pattern, text);
+@cfg(web)
+fn native_is_match(pattern: string, text: string) -> int {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_find(pattern: string, text: string) -> string => regex::candela_regex_find(pattern, text);
+@cfg(web)
+fn native_find(pattern: string, text: string) -> string {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_find_all(pattern: string, text: string) -> string => regex::candela_regex_find_all(pattern, text);
+@cfg(web)
+fn native_find_all(pattern: string, text: string) -> string {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_captures(pattern: string, text: string) -> string => regex::candela_regex_captures(pattern, text);
+@cfg(web)
+fn native_captures(pattern: string, text: string) -> string {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_replace_all(pattern: string, text: string, with: string) -> string => regex::candela_regex_replace_all(pattern, text, with);
+@cfg(web)
+fn native_replace_all(pattern: string, text: string, with: string) -> string {
+    throw "regex_desktop_only";
+}
+@cfg(not(web))
+fn native_split(pattern: string, text: string) -> string => regex::candela_regex_split(pattern, text);
+@cfg(web)
+fn native_split(pattern: string, text: string) -> string {
+    throw "regex_desktop_only";
+}
+
+/// A compiled pattern, from `compile`.
+struct Regex {
+    /// The pattern it was compiled from.
+    pattern: string,
+}
+
+/// Compiles `pattern`. A pattern the engine refuses answers `regex_invalid`.
+fn compile(pattern: string) -> Regex!string {
+    if native_check(pattern) != "" {
+        return Err("regex_invalid");
+    }
+    return Ok(Regex { pattern });
+}
+
+/// The strings in a JSON array the library answered.
+fn strings(text: string) -> string[] {
+    let out: string[] = [];
+    for item in json::parse(text).unwrap() as any[] {
+        out.push(item as string);
+    }
+    return out;
+}
+
+impl Regex {
+    /// True when the pattern matches somewhere in `s`.
+    fn is_match(self, s: string) -> bool => native_is_match(self.pattern, s) == 1;
+
+    /// The first match in `s`, or `None`.
+    fn find(self, s: string) -> string? {
+        let found = json::parse(native_find(self.pattern, s)).unwrap();
+        if found == null {
+            return None;
+        }
+        return Some(found as string);
+    }
+
+    /// Every match in `s`, left to right, none overlapping the one before.
+    fn find_all(self, s: string) -> string[] => strings(native_find_all(self.pattern, s));
+
+    /// The groups of the first match in `s`: the whole match first, then each
+    /// group in order, with an empty string for a group that took no part.
+    /// `None` when nothing matches.
+    fn captures(self, s: string) -> string[]? {
+        let groups = json::parse(native_captures(self.pattern, s)).unwrap();
+        if groups == null {
+            return None;
+        }
+        let out: string[] = [];
+        for item in groups as any[] {
+            out.push(item as string);
+        }
+        return Some(out);
+    }
+
+    /// `s` with every match replaced by `with`, in which `$1` or `${name}`
+    /// stands for a group and `$$` for a dollar sign.
+    fn replace_all(self, s: string, with: string) -> string => native_replace_all(self.pattern, s, with);
+
+    /// The pieces of `s` between matches.
+    fn split(self, s: string) -> string[] => strings(native_split(self.pattern, s));
+}

@@ -240,7 +240,7 @@ impl Binding {
                 .named("ecs", name)
                 .filter_map(|a| match a.target {
                     AttributeTarget::Struct(id) => Some(id),
-                    AttributeTarget::Fn { .. } | AttributeTarget::Enum(_) => None,
+                    _ => None,
                 })
                 .collect()
         };
@@ -253,7 +253,7 @@ impl Binding {
                 AttributeTarget::Struct(id) => {
                     Some((id, struct_names(a.arg("without").unwrap(), table)))
                 }
-                AttributeTarget::Fn { .. } | AttributeTarget::Enum(_) => None,
+                _ => None,
             })
             .collect();
 
@@ -610,7 +610,7 @@ fn systems_run_on_a_built_artifact() {
         .named("ecs", "system")
         .map(|a| match &a.target {
             AttributeTarget::Fn { name, .. } => name.clone(),
-            AttributeTarget::Struct(_) | AttributeTarget::Enum(_) => unreachable!(),
+            _ => unreachable!(),
         })
         .collect();
     assert_eq!(

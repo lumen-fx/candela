@@ -2,11 +2,148 @@
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
 dylib "../std_src/time/time" {
-    int now();
-    string format(int, string);
+    fn now() -> int;
+    fn format(ms: int, pattern: string) -> string;
+    fn candela_format_utc(seconds: int, pattern: string) -> string;
+    fn candela_sleep_ms(ms: int);
+    fn candela_timer_start(id: int, ms: int, repeat: int);
+    fn candela_timer_cancel(id: int) -> int;
 }
+
+import "std/event";
 
 /// Returns the number of seconds since January 1, 1970, 00:00:00 UTC
 fn now() { return time::now(); }
 /// Formats a date (an int) into a string according to the given formatting pattern
 fn format(date, format) { return time::format(date, format); }
+
+/// Milliseconds since January 1, 1970, 00:00:00 UTC.
+fn now_ms() -> int => time_query(0);
+
+/// Nanoseconds on a clock that only moves forward, whatever happens to the
+/// wall clock: subtract two readings to time something. The count starts at
+/// the first reading.
+fn clock_ns() -> int => time_query(1);
+
+/// Pauses the program for `ms` milliseconds. Handlers do not run meanwhile.
+/// A browser cannot pause a page's program, so there it raises.
+fn sleep_ms(ms: int) {
+    time::candela_sleep_ms(ms);
+}
+
+/// Formats `t`, seconds since the epoch, in UTC with a C `strftime` pattern
+/// such as `"%Y-%m-%dT%H:%M:%SZ"`. `format` does the same in local time.
+fn format_utc(t: int, pattern: string) -> string => time::candela_format_utc(t, pattern);
+
+/// The digits of `text` from `at` to `at + count`, as an int, or -1 when one
+/// of them is not a digit.
+fn digits(text: string, at: int, count: int) -> int {
+    if at + count > text.len() {
+        return -1;
+    }
+    return text[at..at + count].parse<int>() else -1;
+}
+
+/// The days from the epoch to `year`-`month`-`day`, by the proleptic
+/// Gregorian calendar.
+fn days_from_civil(year: int, month: int, day: int) -> int {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+/// The moment an ISO 8601 date or date-time names, in seconds since the
+/// epoch: `2026-11-22`, `2026-11-22T10:30:00Z`, `2026-11-22 10:30:00+01:00`,
+/// with optional fractional seconds, which are dropped. A time with no offset
+/// is taken as UTC. `None` when `text` is not one of these forms.
+fn parse_iso(text: string) -> int? {
+    let year = digits(text, 0, 4);
+    let month = digits(text, 5, 2);
+    let day = digits(text, 8, 2);
+    if year < 0 || month < 1 || month > 12 || day < 1 || day > 31 {
+        return None;
+    }
+    if text.char_at(4) != "-" || text.char_at(7) != "-" {
+        return None;
+    }
+    let seconds = days_from_civil(year, month, day) * 86400;
+    if text.len() == 10 {
+        return Some(seconds);
+    }
+    let sep = text.char_at(10);
+    if sep != "T" && sep != "t" && sep != " " {
+        return None;
+    }
+    let hour = digits(text, 11, 2);
+    let minute = digits(text, 14, 2);
+    let second = digits(text, 17, 2);
+    if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60 {
+        return None;
+    }
+    if text.char_at(13) != ":" || text.char_at(16) != ":" {
+        return None;
+    }
+    seconds += hour * 3600 + minute * 60 + second;
+    let at = 19;
+    if at < text.len() && text.char_at(at) == "." {
+        at += 1;
+        while at < text.len() && digits(text, at, 1) >= 0 {
+            at += 1;
+        }
+    }
+    if at == text.len() {
+        return Some(seconds);
+    }
+    let zone = text.char_at(at);
+    if (zone == "Z" || zone == "z") && at + 1 == text.len() {
+        return Some(seconds);
+    }
+    if (zone == "+" || zone == "-") && at + 6 == text.len() && text.char_at(at + 3) == ":" {
+        let oh = digits(text, at + 1, 2);
+        let om = digits(text, at + 4, 2);
+        if oh < 0 || om < 0 {
+            return None;
+        }
+        let offset = oh * 3600 + om * 60;
+        return Some(if zone == "+" { seconds - offset } else { seconds + offset });
+    }
+    return None;
+}
+
+/// A timer `after` or `every` started.
+struct Timer {
+    /// The event source its ticks arrive under, for `event::wait`.
+    id: int,
+}
+
+impl Timer {
+    /// Stops the timer before its next tick. False when it had already
+    /// stopped.
+    fn cancel(self) -> bool => time::candela_timer_cancel(self.id) == 1;
+}
+
+/// Calls `f` once, `ms` milliseconds from now, on the program's thread. The
+/// program keeps running until it has, unless the timer is cancelled.
+fn after(ms: int, f: fn()) -> Timer {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        f();
+    });
+    time::candela_timer_start(id, ms, 0);
+    return Timer { id };
+}
+
+/// Calls `f` every `ms` milliseconds, on the program's thread, until the timer
+/// is cancelled. The program keeps running while it runs.
+fn every(ms: int, f: fn()) -> Timer {
+    let id = event::source();
+    event::on(id, fn(payload) {
+        f();
+    });
+    time::candela_timer_start(id, ms, 1);
+    return Timer { id };
+}

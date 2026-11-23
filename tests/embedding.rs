@@ -23,7 +23,7 @@ fn record(pairs: &[(&str, Value)]) -> Value {
 }
 
 /// Mirrors the author's snippet: `register_host_fn("app", "rows", |id: &str| ...)`
-/// returning an `i64`, a `host "app" { int rows(string); }` block, and a script
+/// returning an `i64`, a `host "app" { fn rows(a: string) -> int; }` block, and a script
 /// function that calls `app::rows(...)` invoked via `program.call`.
 #[test]
 fn host_fn_roundtrip_matches_snippet() {
@@ -32,7 +32,7 @@ fn host_fn_roundtrip_matches_snippet() {
 
     let src = r#"
 host "app" {
-    int rows(string);
+    fn rows(a: string) -> int;
 }
 
 fn count(id) {
@@ -51,6 +51,73 @@ fn main() {}
     assert_eq!(result, Value::Int(1));
 }
 
+/// A host function declares named parameters, which a call passes arguments
+/// by, and defaults, which a call that leaves one out passes instead.
+#[test]
+fn host_fn_takes_named_arguments_and_defaults() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "scaled", |text: String, by: i64| {
+        text.len() as i64 * by
+    });
+    let src = r#"
+host "app" {
+    fn scaled(text: string, by: int = 10) -> int;
+}
+
+fn total() -> int {
+    return app::scaled("ab") + app::scaled(by: 2, text: "abc");
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(26));
+}
+
+/// A host function is a value by its path: the compiler wraps it in a
+/// function of its declared signature.
+#[test]
+fn host_fn_is_a_value_by_its_path() {
+    let mut engine = Engine::new();
+    engine.register_host_fn("app", "rows", |id: &str| id.len() as i64);
+    let src = r#"
+host "app" {
+    fn rows(a: string) -> int;
+}
+
+fn total() -> int {
+    let f = app::rows;
+    return f("ab") + ["abc", "d"].map(app::rows)[0];
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(5));
+}
+
+/// A closure after a call to a variadic host function is its last argument.
+#[test]
+fn a_closure_follows_a_host_call() {
+    let mut engine = Engine::new();
+    engine.register_host_fn_variadic("app", "count", |args: &[Value]| {
+        Ok(Value::Int(args.len() as i64))
+    });
+    let src = r#"
+host "app" {
+    fn count(...) -> int;
+}
+
+fn total() -> int {
+    return app::count(1, 2) fn(y) => y;
+}
+
+fn main() {}
+"#;
+    let mut program = engine.compile(src, "main.cdl").expect("compiles");
+    assert_eq!(program.call("total", &[]).expect("call ok"), Value::Int(3));
+}
+
 /// A host block is a namespace, reached with `::`. A dot on the block's name
 /// is a compile error whose help names the `::` spelling, for a call used as a
 /// value and for one written as a statement.
@@ -64,8 +131,8 @@ fn host_fn_dot_call_is_refused() {
         let src = format!(
             r#"
 host "app" {{
-    int rows(string);
-    note(string);
+    fn rows(id: string) -> int;
+    fn note(id: string);
 }}
 
 fn count(id: string) -> int {{
@@ -95,7 +162,7 @@ fn variable_shadows_the_host_block() {
 
     let src = r#"
 host "app" {
-    int rows(string);
+    fn rows(a: string) -> int;
 }
 
 struct Board { offset: int }
@@ -156,8 +223,8 @@ fn state_persists_across_calls() {
 
     let src = r#"
 host "app" {
-    int rows(string);
-    set_rows(string, int);
+    fn rows(a: string) -> int;
+    fn set_rows(a: string, b: int);
 }
 
 fn add(id, n) {
@@ -206,10 +273,10 @@ fn scalar_marshalling_roundtrips() {
 
     let src = r#"
 host "m" {
-    int add_one(int);
-    float half(float);
-    bool negate(bool);
-    string shout(string);
+    fn add_one(a: int) -> int;
+    fn half(a: float) -> float;
+    fn negate(a: bool) -> bool;
+    fn shout(a: string) -> string;
 }
 
 fn ai(x) { return m::add_one(x); }
@@ -241,7 +308,7 @@ fn missing_host_registration_is_a_diagnostic() {
     let engine = Engine::new();
     let src = r#"
 host "app" {
-    int rows(string);
+    fn rows(a: string) -> int;
 }
 fn main() {}
 "#;
@@ -259,7 +326,7 @@ fn signature_mismatch_is_a_diagnostic() {
     engine.register_host_fn("app", "rows", |_n: i64| 0i64);
     let src = r#"
 host "app" {
-    int rows(string);
+    fn rows(a: string) -> int;
 }
 fn main() {}
 "#;
@@ -371,7 +438,7 @@ fn a_diagnostic_mid_call_does_not_corrupt_a_later_call() {
     engine.register_host_fn("lumen", "ping", |_n: i64| {});
     let src = r#"
 host "lumen" {
-    ping(int);
+    fn ping(a: int);
 }
 
 struct Item {
@@ -437,7 +504,7 @@ fn a_diagnostic_mid_call_does_not_leave_a_stale_specialization_address() {
     engine.register_host_fn("lumen", "ping", |_n: i64| {});
     let src = r#"
 host "lumen" {
-    ping(int);
+    fn ping(a: int);
 }
 
 struct Item {
@@ -489,7 +556,7 @@ fn a_diagnostic_mid_call_does_not_desync_a_later_closure() {
     engine.register_host_fn("lumen", "ping", |_n: i64| {});
     let src = r#"
 host "lumen" {
-    ping(int);
+    fn ping(a: int);
 }
 
 fn a(lazy) {
@@ -530,7 +597,7 @@ fn array_arg_and_return_roundtrip() {
 
     let src = r#"
 host "agg" {
-    int sum(int[]);
+    fn sum(a: int[]) -> int;
 }
 fn total(xs) { return agg::sum(xs); }
 fn make() { return [1, 2, 3, 4]; }
@@ -568,7 +635,7 @@ fn array_returned_by_host_fn() {
 
     let src = r#"
 host "nums" {
-    int[] seq();
+    fn seq() -> int[];
 }
 fn get() { return nums::seq(); }
 fn main() {}
@@ -689,7 +756,7 @@ fn map_roundtrip_both_directions() {
 
     let src = r#"
 host "cfg" {
-    int size({string: int});
+    fn size(a: {string: int}) -> int;
 }
 fn sz(m) { return cfg::size(m); }
 fn conf() { return {"title": "Song", "artist": "Band"}; }
@@ -738,7 +805,7 @@ fn nested_array_of_maps_track_list() {
 
     let src = r#"
 host "lib" {
-    {string: string}[] tracks();
+    fn tracks() -> {string: string}[];
 }
 fn all() { return lib::tracks(); }
 fn main() {}
@@ -771,7 +838,7 @@ fn collection_signature_mismatch_is_a_diagnostic() {
     engine.register_host_fn("agg", "sum", |_rows: Vec<String>| 0i64);
     let src = r#"
 host "agg" {
-    int sum(int[]);
+    fn sum(a: int[]) -> int;
 }
 fn main() {}
 "#;
@@ -794,7 +861,7 @@ fn a_host_fn_named_like_a_builtin_keeps_its_declared_type() {
 
     let src = r#"
 host "gpio" {
-    int read(int);
+    fn read(a: int) -> int;
 }
 fn level(pin) { return gpio::read(pin) + 1; }
 fn main() {}
@@ -818,10 +885,10 @@ fn builtin_names_are_shadowed_by_their_host_declarations() {
 
     let src = r#"
 host "dev" {
-    int string(int);
-    int exists(int);
-    string range(int);
-    float argv(float);
+    fn string(a: int) -> int;
+    fn exists(a: int) -> int;
+    fn range(a: int) -> string;
+    fn argv(a: float) -> float;
 }
 fn doubled(n) { return dev::string(n) + 1; }
 fn bumped(n) { return dev::exists(n) + 1; }
@@ -859,7 +926,7 @@ fn concatenating_a_non_string_is_a_diagnostic() {
 
     let src = r#"
 host "app" {
-    string label(...);
+    fn label(...) -> string;
 }
 fn tagged() { return app::label("pin") + "!"; }
 fn plain() { return "ok"; }
@@ -897,7 +964,7 @@ fn a_failing_host_fn_raises_at_the_call_site() {
 
     let src = r#"
 host "gpio" {
-    int read(int);
+    fn read(a: int) -> int;
 }
 fn level(pin) { return gpio::read(pin); }
 fn main() {}
@@ -936,7 +1003,7 @@ fn a_void_host_fn_can_fail() {
 
     let src = r#"
 host "app" {
-    save(string);
+    fn save(a: string);
 }
 fn store(text) { app::save(text); }
 fn main() {}
@@ -964,7 +1031,7 @@ fn a_script_catches_a_host_error() {
 
     let src = r#"
 host "gpio" {
-    int read(int);
+    fn read(a: int) -> int;
 }
 fn level(pin) {
     try {
@@ -996,7 +1063,7 @@ fn a_failing_variadic_host_fn_raises() {
 
     let src = r#"
 host "app" {
-    log(...);
+    fn log(...);
 }
 fn quiet() { app::log(); }
 fn loud() { app::log("hi"); }
@@ -1022,7 +1089,7 @@ fn a_fallible_closure_is_signature_checked_on_its_value_type() {
     });
     let src = r#"
 host "gpio" {
-    int read(int);
+    fn read(a: int) -> int;
 }
 fn main() {}
 "#;
@@ -1054,7 +1121,7 @@ fn a_signature_given_as_data_binds_and_calls() {
 
     let src = r#"
 host "gpio" {
-    int read(int, string);
+    fn read(a: int, b: string) -> int;
 }
 fn level(pin, mode) { return gpio::read(pin, mode) + 10; }
 fn main() {}
@@ -1089,7 +1156,7 @@ fn a_declaration_that_disagrees_with_the_given_signature_is_a_diagnostic() {
 
     let src = r#"
 host "gpio" {
-    string read(int);
+    fn read(a: int) -> string;
 }
 fn main() {}
 "#;
@@ -1113,7 +1180,7 @@ fn a_given_signature_does_not_bind_to_a_variadic_declaration() {
 
     let src = r#"
 host "app" {
-    log(...);
+    fn log(...);
 }
 fn main() {}
 "#;
@@ -1139,7 +1206,7 @@ fn a_given_signature_can_fail() {
 
     let src = r#"
 host "gpio" {
-    int read(int);
+    fn read(a: int) -> int;
 }
 fn level(pin) { return gpio::read(pin); }
 fn main() {}
@@ -1180,7 +1247,7 @@ fn variadic_host_fn_receives_all_args() {
 
     let src = r#"
 host "app" {
-    log(...);
+    fn log(...);
 }
 fn none() { app::log(); }
 fn one() { app::log("hi"); }
@@ -1215,7 +1282,7 @@ fn variadic_closure_with_fixed_declaration_is_a_diagnostic() {
     engine.register_host_fn_variadic("app", "log", |_args: &[Value]| Ok(Value::Null));
     let src = r#"
 host "app" {
-    log(string);
+    fn log(a: string);
 }
 fn main() {}
 "#;
@@ -1231,7 +1298,7 @@ fn fixed_closure_with_variadic_declaration_is_a_diagnostic() {
     engine.register_host_fn("app", "log", |_s: String| {});
     let src = r#"
 host "app" {
-    log(...);
+    fn log(...);
 }
 fn main() {}
 "#;
@@ -1261,7 +1328,7 @@ fn derive_shape_array_literal_and_named_fn() {
 
     let src = r#"
 host "lumen" {
-    derive(string, string[], string);
+    fn derive(a: string, b: string[], c: string);
 }
 fn on_start() {
     lumen::derive("total", ["price", "qty"], "compute_total");
@@ -1306,11 +1373,11 @@ fn nested_host_call_binds_its_own_args() {
 
     let src = r#"
 host "m" {
-    int add(int, int);
-    int sub(int, int);
-    int one();
-    int three();
-    int double(int);
+    fn add(a: int, b: int) -> int;
+    fn sub(a: int, b: int) -> int;
+    fn one() -> int;
+    fn three() -> int;
+    fn double(a: int) -> int;
 }
 
 fn last_arg_nested(x) { return m::add(x, m::one()); }
@@ -1357,7 +1424,7 @@ fn nested_host_call_in_method_arg() {
 
     let src = r#"
 host "m" {
-    string pick(string);
+    fn pick(a: string) -> string;
 }
 
 fn swap(s) { return s.replace(m::pick("a"), "b"); }
@@ -1487,7 +1554,7 @@ fn a_macro_expansion_is_an_argument_like_any_other() {
 
     let src = r#"
 host "app" {
-    int width(string);
+    fn width(a: string) -> int;
 }
 
 fn measure() -> int {
@@ -1587,7 +1654,7 @@ struct Cell<T> {
     value: T,
 }
 
-impl Cell<T> {
+impl<T> Cell<T> {
     fn get(self) -> T {
         return self.value;
     }
@@ -1822,7 +1889,7 @@ fn a_diagnostic_mid_call_does_not_leave_a_name_in_an_imported_scope() {
     engine.register_host_fn("lumen", "ping", |_n: i64| {});
     let mut program = engine
         .compile(
-            "host \"lumen\" {\n    ping(int);\n}\n\n\
+            "host \"lumen\" {\n    fn ping(a: int);\n}\n\n\
              import \"helper.cdl\";\n\n\
              fn refill(lazy) {\n    \
                  let g = fn(z) { return 42; };\n    \
@@ -1935,7 +2002,7 @@ fn check_binds_a_dylib_without_its_library() {
     let engine = Engine::new();
     let src = "
         dylib \"nosuch_lib_xyz\" {
-            int f(int);
+            fn f(a: int) -> int;
         }
         fn g(x: int) -> int { return nosuch_lib_xyz::f(x) + 1; }
         fn main() {}
@@ -1957,9 +2024,9 @@ fn check_binds_a_path_dylib_and_its_types() {
     let src = "
         struct Point { x: int, y: float }
         dylib \"../native/mylib\" {
-            Point origin(int);
-            int sum(int[], int);
-            reset();
+            fn origin(a: int) -> Point;
+            fn sum(a: int[], b: int) -> int;
+            fn reset();
         }
         fn total(xs: int[]) -> int {
             mylib::reset();
@@ -1976,7 +2043,7 @@ fn check_binds_a_path_dylib_and_its_types() {
 fn check_reports_what_a_compile_reports() {
     let engine = Engine::new();
     let wrong_argument = "
-        dylib \"nosuch_lib_xyz\" { int f(int); }
+        dylib \"nosuch_lib_xyz\" { fn f(a: int) -> int; }
         fn g() -> int { return nosuch_lib_xyz::f(\"s\"); }
     ";
     let errors = engine.check(wrong_argument, "arg.cdl").unwrap_err();
@@ -1986,7 +2053,7 @@ fn check_reports_what_a_compile_reports() {
         errors[0].message
     );
 
-    for signature in ["bool f(int);", "f({string: int});"] {
+    for signature in ["fn f(x: int) -> bool;", "fn f(m: {string: int});"] {
         let src = format!("dylib \"nosuch_lib_xyz\" {{ {signature} }}\n");
         let errors = engine.check(&src, "c.cdl").unwrap_err();
         assert_eq!(
@@ -2044,7 +2111,7 @@ fn two(b: B) {
 fn check_returns_warnings_and_needs_no_host() {
     let engine = Engine::new();
     let src = "
-        host \"app\" { int width(string); }
+        host \"app\" { fn width(a: string) -> int; }
         fn on_click(id) { return app::width(\"x\"); }
     ";
     let warnings = engine
@@ -2306,7 +2373,7 @@ const FEW_LARGE: &str = "
 fn churn(n: int) -> int {
     let total = 0;
     for i in 0..n {
-        let big = range(0, 50000);
+        let big = (0..50000).list();
         let grown = [];
         for j in 0..50000 {
             grown.push(j);
@@ -2391,7 +2458,7 @@ fn a_call_with_new_argument_types_compiles_its_own_entry() {
 const PARSE_PER_FRAME: &str = "import \"std/json\";
 
 fn p() -> int {
-    let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\") as any[];
+    let v = json::parse(\"[[1, 2], {\\\"a\\\": 3}]\").unwrap() as any[];
     return ((v[0] as any[])[1] as int) + ((v[1] as {any: any})[\"a\"] as int);
 }
 fn main() {}
@@ -2434,7 +2501,7 @@ host "process" {
         env: {string: string},
         end_at_exit: bool = true,
     }
-    bool start(string, string[], string, StartOptions);
+    fn start(a: string, b: string[], c: string, d: StartOptions) -> bool;
 }
 
 fn in_dir(dir: string) -> bool {
@@ -2554,7 +2621,7 @@ fn a_tuple_crosses_into_the_host_as_a_struct_of_its_elements() {
     );
     let mut program = engine
         .compile(
-            "host \"geo\" { int area((int, string)); }\nfn run() -> int { return geo::area((2, \"m\")); }\nfn main() {}\n",
+            "host \"geo\" { fn area(a: (int, string)) -> int; }\nfn run() -> int { return geo::area((2, \"m\")); }\nfn main() {}\n",
             "geo.cdl",
         )
         .expect("compiles");
@@ -2672,7 +2739,7 @@ fn a_host_function_cannot_return_a_struct() {
     let src = r#"
 host "app" {
     struct Opts { n: int, }
-    Opts opts();
+    fn opts() -> Opts;
 }
 fn main() {}
 "#;

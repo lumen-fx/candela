@@ -225,7 +225,7 @@ fn a_prelude_module_imported_by_name_keeps_its_bare_names() {
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     std::fs::write(
         dir.join("prog.cdl"),
-        "import \"std/option\";\nfn main() { print(Some(7).unwrap()); print(None.is_some()); print(Some(1).unwrap_or(9)); }\n",
+        "import \"std/option\";\nfn main() { print(Some(7).unwrap()); print(None.is_some()); print(Some(1) else 9); }\n",
     )
     .expect("write test file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_candela"));
@@ -310,6 +310,85 @@ fn aliased_module_sees_its_own_enum() {
         stdout.contains("Circle(1)") && stdout.contains("Empty"),
         "{stdout}"
     );
+}
+
+/// A module's function is a value by its path, the same as by its bare name.
+#[test]
+fn a_module_function_is_a_value_by_its_path() {
+    let output = run_program(
+        "fn_value_path",
+        &[
+            ("geo.cdl", "fn twice(x: int) -> int { return x * 2; }\n"),
+            (
+                "prog.cdl",
+                "import \"./geo.cdl\";\n\
+                 fn main() { let f = geo::twice; print(f(4)); print([1, 2].map(geo::twice)); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "8\n[2,4]\n");
+}
+
+/// A bare variant resolves among the enums its own module reaches, so two
+/// modules that each declare `Done` keep their own, whichever is imported
+/// first, and a bare name from a module imported under its name does not
+/// reach into it (candela #261).
+#[test]
+fn bare_variants_resolve_in_their_own_module() {
+    let output = run_program(
+        "variant_scope",
+        &[
+            (
+                "a.cdl",
+                "enum AEvent { Done(string, int), Failed(string) }\n\
+                 fn make() -> AEvent { return Done(\"a\", 1); }\n",
+            ),
+            (
+                "b.cdl",
+                "enum BEvent { Done(string), Failed(string) }\n\
+                 fn make() -> BEvent { return Done(\"b\"); }\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"./a.cdl\";\n\
+                 import \"./b.cdl\";\n\
+                 fn main() { print(string(a::make())); print(string(b::make())); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Done(\"a\",1)") && stdout.contains("Done(\"b\")"),
+        "{stdout}"
+    );
+
+    let output = run_program(
+        "variant_scope_unreached",
+        &[
+            ("a.cdl", "enum AEvent { Done(string) }\n"),
+            (
+                "prog.cdl",
+                "import \"./a.cdl\";\n\
+                 fn main() { print(string(Done(\"x\"))); print(string(a::AEvent::Done(\"y\"))); }\n",
+            ),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "a bare variant reached another module"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("a::AEvent::Done"), "{stderr}");
 }
 
 /// A variant of an aliased module's enum is reached through the alias and the
@@ -495,7 +574,7 @@ fn aliased_generic_type_is_named_in_every_type_position() {
                 "shapes.cdl",
                 "enum Slot<T> { Filled(T), Empty }\n\
                  struct Cell<T> { value: T }\n\
-                 impl Cell<T> { fn get(self) -> T { return self.value; } }\n",
+                 impl<T> Cell<T> { fn get(self) -> T { return self.value; } }\n",
             ),
             (
                 "prog.cdl",
@@ -544,11 +623,11 @@ fn two_modules_can_each_declare_the_same_generic_name() {
         &[
             (
                 "left.cdl",
-                "struct Slot<T> { tag: string, held: T }\n                 impl Slot<T> { fn label(self) -> string { return self.tag; } }\n",
+                "struct Slot<T> { tag: string, held: T }\n                 impl<T> Slot<T> { fn label(self) -> string { return self.tag; } }\n",
             ),
             (
                 "right.cdl",
-                "struct Slot<T> { held: T }\n                 impl Slot<T> { fn label(self) -> string { return \"right\"; } }\n",
+                "struct Slot<T> { held: T }\n                 impl<T> Slot<T> { fn label(self) -> string { return \"right\"; } }\n",
             ),
             (
                 "prog.cdl",
@@ -1229,7 +1308,7 @@ fn an_import_takes_a_name_or_items_not_both() {
 /// imported by name. The block's namespace is not repeated.
 #[test]
 fn a_host_struct_is_reached_through_the_module_name() {
-    const ECS: &str = "host \"ecs\" {\n    struct Entity { id: int }\n    bool despawn(Entity);\n}\n\
+    const ECS: &str = "host \"ecs\" {\n    struct Entity { id: int }\n    fn despawn(a: Entity) -> bool;\n}\n\
                        fn make(id: int) -> ecs::Entity => ecs::Entity { id: id };\n";
     let output = run_program(
         "host_struct_by_module",
@@ -1281,101 +1360,25 @@ fn a_host_struct_is_reached_through_the_module_name() {
     assert!(!output.status.success(), "the namespace is not repeated");
 }
 
-/// `import "m" { * };` brings in every item the module declares; a
-/// declaration of the importing file shadows an imported one of its name, and
-/// an attribute its host block declares is reached bare.
+/// `import "m" { * };` is an error whose help names the two spellings that
+/// replace it: a list of items, and the module bound under its name.
 #[test]
-fn a_glob_import_brings_every_item() {
-    let output = run_program(
+fn a_glob_import_is_an_error_naming_lists_and_paths() {
+    let output = check_program(
         "glob",
         &[
-            (
-                "a.cdl",
-                "struct Vec2 { x: float = 0.0 }\n\
-                 impl Vec2 { fn len(self) -> float { return self.x; } }\n\
-                 const SPEED: float = 2.5;\n\
-                 fn only_a() -> string { return \"a\"; }\n\
-                 host \"tags\" { attribute marker on struct; }\n",
-            ),
-            ("b.cdl", "fn only_b() -> string { return \"b\"; }\n"),
+            ("a.cdl", "fn only_a() -> string { return \"a\"; }\n"),
             (
                 "prog.cdl",
-                "import \"a.cdl\" { * };\n\
-                 import \"b.cdl\" { * };\n\
-                 @marker\nstruct Tag { n: int = 1 }\n\
-                 fn only_a() -> string { return \"local\"; }\n\
-                 fn main() { print(only_a(), only_b(), Vec2 { x: 2.0 }.len(), Tag { .. }.n, SPEED); }\n",
+                "import \"a.cdl\" { * };\nfn main() { print(only_a()); }\n",
             ),
         ],
     );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "local\nb\n2.0\n1\n2.5\n"
-    );
-}
-
-/// A name two glob imports both bring in is an error where it is used, and
-/// naming it in an item import picks one.
-#[test]
-fn a_name_two_globs_bring_in_is_ambiguous_where_used() {
-    let modules = [
-        (
-            "a.cdl",
-            "fn shared() -> int { return 1; }\nfn only_a() -> int { return 3; }\n",
-        ),
-        ("b.cdl", "fn shared() -> int { return 2; }\n"),
-    ];
-    let unused = run_program(
-        "glob_unused",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(only_a()); }\n",
-            ),
-        ],
-    );
-    assert!(
-        unused.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&unused.stderr)
-    );
-    let used = run_program(
-        "glob_used",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nfn main() { print(shared()); }\n",
-            ),
-        ],
-    );
-    assert!(!used.status.success());
-    assert!(String::from_utf8_lossy(&used.stderr).contains("Ambiguous import"));
-    let picked = run_program(
-        "glob_picked",
-        &[
-            modules[0],
-            modules[1],
-            (
-                "prog.cdl",
-                "import \"a.cdl\" { * };\nimport \"b.cdl\" { * };\nimport \"b.cdl\" { shared };\nfn main() { print(shared()); }\n",
-            ),
-        ],
-    );
-    assert!(
-        picked.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&picked.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&picked.stdout), "2\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not an import list"), "stderr: {stderr}");
+    assert!(stderr.contains("{ Circle, area }"), "stderr: {stderr}");
+    assert!(stderr.contains("shapes::Circle"), "stderr: {stderr}");
 }
 
 /// `export import` passes what it brings in on to the files importing the
@@ -1401,17 +1404,17 @@ fn an_export_import_passes_its_items_on() {
             ),
             (
                 "parts/all.cdl",
-                "export import \"./shapes.cdl\" { * };\n\
-                 export import \"./tags.cdl\" { * };\n",
+                "export import \"./shapes.cdl\" { Vec2, Kind, SIDE, area };\n\
+                 export import \"./tags.cdl\" { marker };\n",
             ),
             (
                 "lib.cdl",
-                "export import \"./parts/all.cdl\" { * };\n\
+                "export import \"./parts/all.cdl\" { Vec2, Kind, SIDE, area, marker };\n\
                  fn own() -> string { return \"own\"; }\n",
             ),
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\n\
+                "import \"lib.cdl\" { own, area, Vec2, Kind, SIDE, marker };\n\
                  import \"lib.cdl\";\n\
                  @marker\nstruct Tag { n: int = 1 }\n\
                  fn main() { print(own(), area(), Vec2 { x: 2.0 }.len(), Kind::Square, SIDE, Tag { .. }.n, lib::area()); }\n",
@@ -1429,9 +1432,8 @@ fn an_export_import_passes_its_items_on() {
     );
 }
 
-/// A list passes on only the items it names, a plain import passes on
-/// nothing, and a declaration of the module's own shadows an item an
-/// `export import` brought in.
+/// A list passes on only the items it names, and a plain import passes on
+/// nothing.
 #[test]
 fn an_export_import_passes_on_only_what_the_module_shows() {
     let modules = [
@@ -1439,14 +1441,12 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
             "a.cdl",
             "fn named() -> int { return 1; }\nfn unnamed() -> int { return 2; }\n",
         ),
-        ("c.cdl", "fn shadowed() -> string { return \"c\"; }\n"),
         ("b.cdl", "fn hidden() -> int { return 3; }\n"),
         (
             "lib.cdl",
             "export import \"./a.cdl\" { named };\n\
-             export import \"./c.cdl\" { * };\n\
-             import \"./b.cdl\" { * };\n\
-             fn shadowed() -> string { return \"lib\"; }\n",
+             import \"./b.cdl\" { hidden };\n\
+             fn own() -> string { return \"lib\"; }\n",
         ),
     ];
     let named = run_program(
@@ -1455,10 +1455,9 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
             modules[0],
             modules[1],
             modules[2],
-            modules[3],
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\nfn main() { print(named(), shadowed()); }\n",
+                "import \"lib.cdl\" { named, own };\nfn main() { print(named(), own()); }\n",
             ),
         ],
     );
@@ -1469,16 +1468,10 @@ fn an_export_import_passes_on_only_what_the_module_shows() {
     );
     assert_eq!(String::from_utf8_lossy(&named.stdout), "1\nlib\n");
     for (test, call) in [("export_unnamed", "unnamed"), ("export_plain", "hidden")] {
-        let prog = format!("import \"lib.cdl\" {{ * }};\nfn main() {{ print({call}()); }}\n");
+        let prog = format!("import \"lib.cdl\" {{ {call} }};\nfn main() {{ print({call}()); }}\n");
         let output = run_program(
             test,
-            &[
-                modules[0],
-                modules[1],
-                modules[2],
-                modules[3],
-                ("prog.cdl", &prog),
-            ],
+            &[modules[0], modules[1], modules[2], ("prog.cdl", &prog)],
         );
         assert!(!output.status.success(), "{call} should not reach prog.cdl");
     }
@@ -1498,7 +1491,7 @@ fn an_export_import_without_items_is_an_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("export import"), "stderr: {stderr}");
-    assert!(stderr.contains("{ * }"), "stderr: {stderr}");
+    assert!(stderr.contains("{ Circle, area }"), "stderr: {stderr}");
 }
 
 /// `export` in front of anything but an import is an error that shows the
@@ -1532,7 +1525,7 @@ fn an_export_import_list_passes_on_a_named_types_methods() {
             ("lib.cdl", "export import \"./shapes.cdl\" { Vec2 };\n"),
             (
                 "prog.cdl",
-                "import \"lib.cdl\" { * };\nfn main() { print(Vec2 { x: 2.5 }.len()); }\n",
+                "import \"lib.cdl\" { Vec2 };\nfn main() { print(Vec2 { x: 2.5 }.len()); }\n",
             ),
         ],
     );
@@ -1561,4 +1554,80 @@ fn export_stays_a_name_elsewhere() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
+}
+
+/// A module's macros import like its functions: behind the module's name, by
+/// name in a list, and passed on by an `export import` that names them.
+#[test]
+fn macros_import_and_export_like_functions() {
+    let output = run_program(
+        "macros",
+        &[
+            (
+                "util.cdl",
+                "macro twice($e: expr) => $e + $e;\nfn helper() -> int { return 7; }\n",
+            ),
+            (
+                "facade.cdl",
+                "export import \"./util.cdl\" { twice, helper };\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"./util.cdl\";\n\
+                 import \"./facade.cdl\" { twice, helper };\n\
+                 fn main() { print(util::twice!(3), twice!(helper())); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n14\n");
+    let missing = check_program(
+        "macros_missing",
+        &[
+            ("util.cdl", "fn helper() -> int { return 7; }\n"),
+            (
+                "prog.cdl",
+                "import \"./util.cdl\";\nfn main() { print(util::twice!(3)); }\n",
+            ),
+        ],
+    );
+    assert!(!missing.status.success());
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(stderr.contains("util::twice!"), "stderr: {stderr}");
+}
+
+/// Two modules may each bind their own functions of one library: a call
+/// through the library's name finds the function in whichever block declares
+/// it.
+#[test]
+fn two_modules_bind_one_library_under_one_name() {
+    let output = check_program(
+        "one_library_two_blocks",
+        &[
+            (
+                "a.cdl",
+                "dylib \"./native/shared\" {\n    fn a_only(x: int) -> int;\n}\n\
+                 fn call_a() -> int => shared::a_only(1);\n",
+            ),
+            (
+                "b.cdl",
+                "dylib \"./native/shared\" {\n    fn b_only(x: int) -> int;\n}\n\
+                 fn call_b() -> int => shared::b_only(2);\n",
+            ),
+            (
+                "prog.cdl",
+                "import \"a.cdl\";\nimport \"b.cdl\";\n\
+                 fn main() { print(a::call_a() + b::call_b()); }\n",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

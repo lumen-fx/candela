@@ -43,7 +43,7 @@ the crate for `wasm32-unknown-emscripten` as a static library and link it with
 `-fwasm-exceptions`. That build reads files and package roots from
 Emscripten's file system, so files packaged with the program import as they do
 on a desktop. The standard library modules that bind native libraries
-(`std/math`, `std/time`, `std/random`, `std/hash`) are carried inside it, as in
+(`std/math`, `std/time`, `std/random`) are carried inside it, as in
 the browser build, and other dynamic libraries do not load.
 
 ## A whole program
@@ -58,7 +58,7 @@ fn main() -> Result<(), candela::Diagnostic> {
     let mut program = engine.compile(
         r#"
         host "app" {
-            int width(string);
+            fn width(text: string) -> int;
         }
 
         fn banner(label: string) -> int {
@@ -98,11 +98,30 @@ them or `()`:
 | `String`, or a single `&str` argument | `string` |
 | `Vec<T>` | `T[]` |
 | `BTreeMap<String, T>`, `HashMap<String, T>` | `{string: T}` |
-| `()` (return only) | `null` |
+| `()` (return only) | `()` |
 
 The closure's signature is derived from its Rust types and checked against the
 script's `host` declaration when you compile. A disagreement in arity, argument
-type or return type is returned as a `Diagnostic`, never a panic.
+type or return type is returned as a `Diagnostic`, never a panic. A function
+never crosses the boundary, so a `host` declaration that takes or returns one
+is a compile error (`host_fn_takes_function`); call the function in the script
+and pass the host its result.
+
+A `host` block declares each function the way a candela function is declared,
+with a `;` in place of the body: `fn width(text: string) -> int;`. A function
+that returns nothing leaves out the `->`. The parameter names are what a call
+passes arguments by, and a parameter may declare a default that a call leaving
+it out passes instead; the closure always receives every argument:
+
+```candela
+host "app" {
+    fn scaled(text: string, by: int = 10) -> int;
+}
+
+fn main() {
+    print(app::scaled("ab"), app::scaled(by: 2, text: "abc"));
+}
+```
 
 A namespace is a namespace, so a host function may take a name a built-in
 already has: `gpio::read` is the `int` its block declares, not the `read` that
@@ -126,8 +145,8 @@ engine.register_host_fn("fs", "read", |path: &str| {
 `HostError::new` takes anything that renders, so an error from the work the
 closure was doing carries through with `map_err`. What the script sees is a
 runtime error at the call, naming the function and repeating the message; it
-can be caught with `catch "host_fn_error"`, and it reaches the host as a
-`Diagnostic` with that code when it is not. The type checked against the
+ends the run, and reaches the host as a `Diagnostic` with that code, unless
+the script catches it with `catch "host_fn_error"`. The type checked against the
 declaration is the `T` inside the `Result`, so the two spellings bind to the
 same `host` signature.
 
@@ -149,7 +168,7 @@ declare the function with `...`:
 
 ```rust
 host "app" {
-    log(...);
+    fn log(...);
 }
 ```
 
@@ -211,7 +230,7 @@ host "process" {
         env: {string: string},
         end_at_exit: bool = true,
     }
-    bool start(string, string[], string, StartOptions);
+    fn start(cmd: string, args: string[], cwd: string, options: StartOptions) -> bool;
 }
 ```
 
@@ -271,7 +290,7 @@ closure always receives every field.
 
 A host function cannot return a struct; a declaration that does is refused
 when it binds. A tuple crosses the same way, as a struct whose fields are named
-by position: `int area((int, string));` registers its parameter as
+by position: `fn area(shape: (int, string)) -> int;` registers its parameter as
 `HostType::Struct` with the fields `"0"` and `"1"`, and the closure receives a
 `Value::Struct` named `(int, string)` and reads `args[0].field("0")`. A `.cdlb` built from the script records the struct with the program's
 own, so `RuntimeProgram` binds and passes it the same way.
@@ -908,7 +927,7 @@ ordinary struct it compiles to.
 ## Reading attributes
 
 A `host` block can declare [attributes](../language/attributes.md) that the
-scripts compiled against it write on their functions and structs:
+scripts compiled against it write on their declarations:
 
 ```rust
 host "ecs" {
@@ -943,8 +962,14 @@ pub struct Attribute {
 
 pub enum AttributeTarget {
     Fn { name: String, params: Vec<(String, DataType)> },
+    Method { owner: DataType, name: String, params: Vec<(String, DataType)> },
+    Param { function: String, owner: Option<DataType>, name: String, ty: DataType },
+    Const { name: String, ty: DataType },
     Struct(u16),
+    Field { struct_id: u16, name: String },
     Enum(u16),
+    Variant { enum_id: u16, name: String },
+    Impl(DataType),
 }
 
 pub enum AttributeValue {
@@ -965,7 +990,12 @@ parameter the declaration lists, in its order, with the value the script wrote
 or the default; a parameter declared optional (`name: T?`) that the script left
 out has no entry, so `arg` answers `None` for it. A function target carries its
 parameters and their declared types, `any` for one left bare, which is what a
-host reads to decide what to pass. A function argument (`fn` or `fn[]`)
+host reads to decide what to pass. A method target carries the same, the
+receiver first, with `owner`, the type its `impl` block is for; a parameter
+target names its function, the `owner` when that function is a method, and the
+parameter's own name and type. A constant carries its declared type, a field
+or a variant its struct's or enum's id and its name, and an `impl` block the
+type it is for. A function argument (`fn` or `fn[]`)
 carries the same for the function it names, with its declared return type,
 `any` when it declares none, so a host can call a function that has no
 attribute of its own, such as a condition a system names. An enum target and a

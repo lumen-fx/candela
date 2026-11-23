@@ -53,7 +53,7 @@
 #
 # The archive holds the tree to install, flat: the candela compiler, the
 # candela-vm runtime, the candela-lsp language server where the release carries it, and the
-# standard library in libs/ beside them. The binaries resolve `import "std/..."` relative to their own location, so the
+# standard library in libs/ beside them, native libraries included. The binaries resolve `import "std/..."` relative to their own location, so the
 # whole tree lands in one directory and that directory is what goes on PATH.
 # The same layout is what the Windows package installs. Every installed path
 # is recorded in a receipt at <prefix>/receipt, so a later run can replace an

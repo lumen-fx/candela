@@ -7,15 +7,20 @@ A map holds key-value pairs. Brackets read and write an entry: `m[k]` is the
 value stored under `k` and raises `unknown_map_key` when there is none, and
 `m[k] = v` adds the entry or replaces its value. The built-in methods
 `m.len()`, `m.contains(k)`, `m.remove(k)`, `m.keys()` and `m.values()` are
-listed in [built-in functions](builtins.md), and a map iterates its keys:
+listed in [built-in functions](builtins.md). A `for` over a map gives its
+entries, a key and a value each, and `m.keys()` or `m.values()` gives one
+side:
 
 ```rust
 fn main() {
     let m = {"a": 1, "b": 2};
     m["c"] = 3;
     m["a"] += 10;
-    for k in m {
-        print(k + "=" + string(m[k]));
+    for (k, v) in m {
+        print(k + "=" + string(v));
+    }
+    for k in m.keys() {
+        print(k);
     }
 }
 ```
@@ -41,14 +46,14 @@ m.get(k)
 - Raises: nothing.
 
 `get` is the lookup that may find nothing; `m[k]` is the one that expects the
-key to be there. `m.get(k).unwrap_or(fallback)` reads with a fallback, and
+key to be there. `m.get(k) else fallback` reads with a fallback, and
 `m.get(k)?` hands the `None` back to the caller; see [option](option.md).
 
 ```rust
 fn main() {
     let counts = {"a": 1};
     print(counts.get("a"));
-    print(counts.get("z").unwrap_or(0));
+    print(counts.get("z") else 0);
 }
 ```
 

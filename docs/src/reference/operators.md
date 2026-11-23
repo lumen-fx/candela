@@ -29,6 +29,9 @@ except `^`.
 
 `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
 
+A range, `a..b` or `a..=b`, binds looser than all of them and does not chain:
+`0..n + 1` is `0..(n + 1)`. See [ranges](#ranges).
+
 `is` and `as` take a type on their right rather than an expression, at the
 level of the comparisons: `a + b as int` is `(a + b) as int`, `v as int + 1` is
 `(v as int) + 1`, and `v is int && v > 0` tests before it compares. See [type
@@ -223,7 +226,7 @@ type. `T` is any type an annotation can name, read up to the end of the type, so
 if v is int && v > 0 {
     print(v + 1);
 }
-let cfg = json::parse(text) as {string: any};
+let cfg = json::parse(text)? as {string: any};
 ```
 
 Where the test held, a tested variable has the type `T` and a variant's names
@@ -374,16 +377,23 @@ See [methods](../language/methods.md), [enums](../language/enums.md) and
 
 ## Ranges
 
-`..` builds the range of a `for` loop and appears nowhere else. Both bounds must
-be `int`, and the end is exclusive. `for i in ..n` starts at zero.
+`a..b` is a value of the prelude type [`Range`](../standard-library/range.md):
+the `int`s from `a` up to but not including `b`. `a..=b` includes `b`. Both
+bounds must be `int`. `for i in ..n` starts at zero. Between the brackets of an
+index a range slices, `xs[1..3]`; in a pattern it tests that a number is in it,
+`1..=9 => ...`.
 
 ```rust
-for i in 0..3 {
-    print(i);       // 0, 1, 2
+fn main() {
+    let r = 0..3;
+    for i in r {
+        print(i);       // 0, 1, 2
+    }
+    print((0..=3).len());       // 4
 }
 ```
 
-See [control flow](../language/control-flow.md).
+See [control flow](../language/control-flow.md#for).
 
 ## Symbols that are not operators
 
@@ -395,7 +405,12 @@ See [control flow](../language/control-flow.md).
   `import "std/json";`.
 - `...` marks a variadic host function in a `host` block. See
   [embedding](../integration/embedding.md).
-- `->` gives the return type in a `dylib` or `host` signature. `=>` means
+- `:` after a name in a call's argument list passes the argument by its
+  parameter's name, as in `window(800, 600, title: "x")`; see
+  [functions](../language/functions.md#default-values-and-named-arguments).
+  `=` after a parameter gives its default, as in `fn f(size: int = 12)`.
+- `->` gives the return type of a function, a `dylib` or `host` function, and a
+  function type, as in `fn(int) -> int`. `=>` means
   "evaluates to": it separates a `match` pattern from its body, and gives a
   function a body of one expression, as in `fn(x) => x * 2`.
 

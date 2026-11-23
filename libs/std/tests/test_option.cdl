@@ -40,8 +40,8 @@ fn main() {
     assert::is_false(s.is_none());
 
     assert::eq(s.unwrap(), 5);
-    assert::eq(n.unwrap_or(99), 99);
-    assert::eq(s.unwrap_or(99), 5);
+    assert::eq(n else 99, 99);
+    assert::eq(s else 99, 5);
 
     // map over the payload.
     let m = s.map(describe);

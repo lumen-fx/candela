@@ -37,25 +37,25 @@ executor exists once. A reverse edge would be a dependency cycle and would fail
 to resolve, so the rule enforces itself; keep it in mind when deciding where new
 code belongs.
 
-The workspace also holds the native halves of the first-party packages; see
-`packages/` below. Nothing in the three crates depends on them.
+The workspace also holds the standard library's Rust native libraries; see
+`libs/std_src/` below. Nothing in the three crates depends on them.
 
 The rest of the tree:
 
-- `packages/` holds the [first-party packages](../packages/index.md), one
-  directory each: the manifest, the candela source under `src/`, the browser
-  half under `web/` for a package that has one, and the native half under
-  `native/`, a Rust crate built as the shared library the package's `dylib`
-  block loads. `packages/sys/` is the crate those native halves share: the
-  event table a library receives and the string conventions of the C
-  boundary. `packages/testkit/` builds a package's library and runs the
-  package from candela in its tests. A local run outside the tests needs the
-  built library copied to the package's `dist/<name>.<ext>`, which the release
-  does for every target with `scripts/pack-packages.sh`.
 - `libs/std/` holds the standard library, written in candela. `libs/std/tests/`
-  holds one `.cdl` test program per module.
-- `libs/std_src/` holds the C sources behind the `hash`, `math`, `random` and
-  `time` modules.
+  holds one `.cdl` test program per module, and `libs/std/web/` the browser
+  halves of `browser`, `js` and `websocket`.
+- `libs/std_src/` holds the native libraries behind the standard library, one
+  directory each, named for the library the modules' `dylib` blocks load: the
+  C sources behind `math`, `random` and `time`, and the Rust crates
+  `process`, `archive` and `net` (http and websocket), each built as a
+  cdylib. `libs/std_src/sys/` is the crate those Rust libraries share: the
+  event table a library receives and the string conventions of the C
+  boundary. `libs/std_src/testkit/` lays out a library directory with a
+  freshly built library and runs a program against it in their tests. A local
+  run outside the tests needs the built library copied to
+  `libs/std_src/<name>/<name>.<ext>`, which `scripts/stage-std.sh` does for a
+  release.
 - `examples/` holds demo and benchmark programs, most of them alongside Python
   and Lua versions of the same thing. They double as the training corpus for
   profile-guided builds. `examples/package/` is a project rather than a loose
@@ -69,8 +69,8 @@ The rest of the tree:
 - `msi/` holds the WiX package definition and the script that builds the Windows
   installer.
 - `scripts/` holds the release tooling: `bump-version.py`, which sets the
-  version the tree and the packages call themselves, `pack-packages.sh`, which
-  packs the first-party packages for one target, `release-fragments.sh` and
+  version the tree calls itself, `stage-std.sh`, which lays out the `libs`
+  directory a toolchain archive carries, `release-fragments.sh` and
   `migration-notes.sh`, which file a release's migration notes and write them
   into its release notes, `check-breaking-change.py`, which checks a pull
   request's breaking-change label against its notes, and the checklist for
@@ -196,8 +196,8 @@ cargo test -p candela-lsp
 The language server's suite spawns the built binary and drives it over its
 protocol, so build it first.
 
-A test that runs `candela-vm`, or loads a first-party package's native
-library, builds it first with a nested `cargo build` into a directory of its
+A test that runs `candela-vm`, or loads one of the standard library's Rust
+native libraries, builds it first with a nested `cargo build` into a directory of its
 own under the target directory, so `cargo test` needs nothing built
 beforehand; under `cargo llvm-cov` that build is instrumented and measured
 like the rest. The dynamic library round trip skips rather than fails when the

@@ -1,5 +1,5 @@
 //! Builds what a suite runs that its own package does not build: the
-//! `candela-vm` binary and the first-party packages' native libraries.
+//! `candela-vm` binary and the standard library's Rust native libraries.
 //!
 //! `cargo test` builds the `candela` binary for this package's tests, but not
 //! a binary or a library of another workspace member, and a workspace run

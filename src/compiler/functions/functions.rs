@@ -300,6 +300,7 @@ pub fn handle_functions(
                 args,
                 span,
                 args_indexes,
+                false,
                 v,
                 ctx,
                 state,
@@ -338,6 +339,7 @@ pub fn handle_functions(
             args,
             span,
             args_indexes,
+            false,
             v,
             ctx,
             state,
@@ -413,8 +415,8 @@ pub fn handle_functions(
     } else if let Some((fn_args, returns_null, dyn_id, is_host, is_variadic)) = state
         .dyn_libs
         .iter()
-        .find(|l| l.name == namespace[0])
-        .and_then(|lib| {
+        .filter(|l| l.name == namespace[0])
+        .find_map(|lib| {
             lib.fns.iter().find(|x| x.name == fn_name).map(|sig| {
                 (
                     sig.args.clone(),
@@ -426,6 +428,24 @@ pub fn handle_functions(
             })
         })
     {
+        // Arguments passed by name go in place, and the ones left out take
+        // their defaults, as for a candela function.
+        let bound = (!is_variadic)
+            .then(|| {
+                foreign_bound_args(
+                    namespace[0].as_str(),
+                    fn_name,
+                    args,
+                    args_indexes,
+                    span,
+                    ctx,
+                    state,
+                )
+            })
+            .flatten();
+        let (args, args_indexes) = bound
+            .as_ref()
+            .map_or((args, args_indexes), |(a, s)| (&**a, &**s));
         // A variadic host fn accepts any argument count and any types, so its
         // arity/type checks are skipped; every supplied argument is still
         // compiled and stored, and the registered closure receives them all.
@@ -500,4 +520,47 @@ pub fn handle_functions(
     } else {
         error_unknown_function_in_namespace(fn_name, namespace, span, ctx.file_idx, state);
     }
+}
+
+/// The arguments of a call to function `fn_name` of `host` or `dylib` block
+/// `block`, with named arguments put in place and the ones it leaves out filled
+/// from their defaults; `None` when the call needs nothing done.
+fn foreign_bound_args(
+    block: &str,
+    fn_name: &str,
+    args: &[Expr],
+    args_indexes: &[Span],
+    span: Span,
+    ctx: Ctx,
+    state: &State<'_>,
+) -> Option<(Box<[Expr]>, Box<[Span]>)> {
+    // Two modules may each bind a block to one library, under one name.
+    let sig = state
+        .dyn_libs
+        .iter()
+        .filter(|lib| lib.name == block)
+        .find_map(|lib| lib.fns.iter().find(|sig| sig.name == fn_name))?;
+    // A variadic function takes a closure after the call as one more argument
+    // in order.
+    let named = if sig.variadic {
+        args.iter().any(crate::compiler::expr::is_named_arg)
+    } else {
+        args.iter().any(|arg| matches!(arg, Expr::NamedArg(..)))
+    };
+    if !named && (args.len() >= sig.params.len() || sig.defaults.is_empty()) {
+        return None;
+    }
+    let callee = format!("{block}::{fn_name}");
+    crate::compiler::call_args::bind(
+        &crate::compiler::call_args::Params {
+            callee: &callee,
+            names: &sig.params,
+            defaults: &sig.defaults,
+        },
+        args,
+        args_indexes,
+        span,
+        ctx.file_idx,
+        state.sources,
+    )
 }

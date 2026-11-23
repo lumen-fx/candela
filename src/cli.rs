@@ -38,7 +38,7 @@ const USAGE: &str = "Usage:
   candela new <name>               Start a project
   candela run [file.cdl] [args]    Run the project, or the file given
   candela check [file.cdl]         Compile without running
-  candela build [file.cdl] [-o out.cdlb] [--debug] [--no-native] [--target <triple>]
+  candela build [file.cdl] [-o out.cdlb] [--stage <dir>] [--debug] [--no-native] [--target <triple>]
                                    Compile to an artifact
   candela add <name>[@requirement] Record a dependency and fetch it
   candela remove <name>            Drop a dependency
@@ -54,6 +54,10 @@ Options:
   --debug     Build without the release passes or machine code, as a run from
               source compiles (build)
   --no-native Build without machine code, so the artifact runs on bytecode (build)
+  --stage <dir>
+              Lay out a runnable app in <dir>: the artifact, candela-vm, and
+              only the standard library native libraries the artifact binds
+              (build)
   --target <triple>
               Generate the machine code for another machine, such as
               aarch64-apple-darwin (build)
@@ -205,6 +209,7 @@ fn check_verb(args: &mut impl Iterator<Item = String>) {
 fn build_verb(args: &mut impl Iterator<Item = String>) {
     let mut file: Option<String> = None;
     let mut output: Option<String> = None;
+    let mut stage: Option<PathBuf> = None;
     let mut offline = false;
     let mut options = BuildOptions::default();
     let mut cfg = Cfg::new();
@@ -218,6 +223,12 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
                 output = Some(path);
             }
             "--offline" => offline = true,
+            "--stage" => {
+                let Some(dir) = args.next() else {
+                    misuse("--stage needs the directory to lay the app out in");
+                };
+                stage = Some(PathBuf::from(dir));
+            }
             "--debug" => options.release = false,
             "--no-native" => options.native = NativeCode::None,
             "--target" => {
@@ -240,8 +251,21 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
     let output = output.unwrap_or_else(|| {
         let text = path.to_string_lossy();
         let stem = text.strip_suffix(".cdl").unwrap_or(&text);
-        format!("{stem}.cdlb")
+        let artifact = format!("{stem}.cdlb");
+        // Staged, the artifact goes in the app's directory under its own name.
+        match &stage {
+            Some(dir) => dir
+                .join(Path::new(&artifact).file_name().unwrap_or_default())
+                .to_string_lossy()
+                .into_owned(),
+            None => artifact,
+        }
     });
+    if let Some(dir) = &stage
+        && let Err(e) = fs::create_dir_all(dir)
+    {
+        fail(&format!("cannot create {}: {e}", dir.display()));
+    }
 
     let contents = read_source(&path);
     let bytes = match cfg
@@ -254,6 +278,62 @@ fn build_verb(args: &mut impl Iterator<Item = String>) {
         fail(&format!("cannot write {output}: {e}"));
     }
     println!("Wrote {} ({} bytes)", output, bytes.len());
+    if let Some(dir) = stage {
+        stage_app(&dir, &bytes);
+    }
+}
+
+/// Copies into `dir` what the artifact `bytes` needs to run there with
+/// nothing else installed: `candela-vm` from beside this binary, the license
+/// files beside it, and under `dir/libs/` each standard library native
+/// library the artifact binds, laid out as the toolchain lays them out, where
+/// `candela-vm` looks beside itself.
+fn stage_app(dir: &Path, bytes: &[u8]) {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok())
+        .unwrap_or_default();
+    let toolchain = exe.parent().unwrap_or_else(|| Path::new("."));
+    let vm_name = format!("candela-vm{}", std::env::consts::EXE_SUFFIX);
+    let copy = |from: &Path, to: &Path| {
+        if let Some(parent) = to.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            fail(&format!("cannot create {}: {e}", parent.display()));
+        }
+        if let Err(e) = fs::copy(from, to) {
+            fail(&format!(
+                "cannot copy {} to {}: {e}",
+                from.display(),
+                to.display()
+            ));
+        }
+        println!("Staged {}", to.display());
+    };
+    let vm = toolchain.join(&vm_name);
+    if !vm.is_file() {
+        fail(&format!(
+            "there is no {vm_name} beside {} to stage; install the whole toolchain",
+            exe.display()
+        ));
+    }
+    copy(&vm, &dir.join(&vm_name));
+    for license in ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSE"] {
+        let file = toolchain.join(license);
+        if file.is_file() {
+            copy(&file, &dir.join(license));
+        }
+    }
+    let libraries = candela_vm::artifact::native_libraries(bytes)
+        .unwrap_or_else(|e| fail(&format!("cannot read the artifact back: {e}")));
+    let Some(libs) = candela_vm::rt::std_lib_dir() else {
+        fail("cannot find the toolchain's libs directory");
+    };
+    for library in libraries {
+        let file =
+            candela_vm::rt::resolve_library_filename(&library, candela_vm::rt::TargetOs::CURRENT);
+        copy(&libs.join(&file), &dir.join("libs").join(&file));
+    }
 }
 
 /// Reads a source file, reporting the same way a failed run always has.

@@ -4,7 +4,7 @@
 /// keyed by strings, an array becomes a list, and a scalar becomes an int,
 /// float, string, bool, or null. The result is typed `any`, so read a field
 /// back with a downcast (`v as int`, `v as {string: any}`) or a type test
-/// (`v is int`). A malformed string raises a catchable error.
+/// (`v is int`). A malformed string answers an `Err` with `json_parse_error`.
 ///
 /// `stringify` serializes any candela value back to a json string.
 ///
@@ -12,9 +12,14 @@
 /// compiles into a `.cdlb` artifact that runs under `candela-vm` with no
 /// dynamic library.
 
-/// Parses a json string into a value (typed `any`).
-fn parse(text) {
-    return json_parse(text);
+/// Parses a json string into a value (typed `any`), or `Err` with
+/// `json_parse_error` when the string is not json.
+fn parse(text: string) -> any!string {
+    try {
+        return Ok(json_parse(text));
+    } catch e {
+        return Err(e);
+    }
 }
 
 /// Serializes a value to a json string.

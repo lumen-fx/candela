@@ -1,0 +1,91 @@
+/// Reading a command line: flags, options with values, and the arguments
+/// left over.
+///
+///     import "std/cli";
+///     fn main() {
+///         let args = cli::parse(argv(), takes_value: ["out", "o"])?;
+///         if args.flag("verbose") {
+///             print("verbose");
+///         }
+///         print(args.option("out") else "a.out");
+///         print(args.positional);
+///     }
+///
+/// `--name` and `-n` are flags, and `-abc` is the three flags `a`, `b` and
+/// `c`. A name listed in `takes_value` is an option instead, whose value is
+/// the next argument, or follows `=` as in `--out=file`. `--` ends the
+/// options, and everything after it is positional.
+
+/// A parsed command line.
+struct Args {
+    /// The arguments that are neither flags nor options, in order.
+    positional: string[],
+    /// The flags given, by name, without their dashes.
+    flags: string[],
+    /// The options given, by name, each with the last value it was given.
+    options: {string: string},
+}
+
+impl Args {
+    /// True when the flag `name` was given.
+    fn flag(self, name: string) -> bool => self.flags.contains(name);
+
+    /// The value of the option `name`, or `None` when it was not given.
+    fn option(self, name: string) -> string? {
+        if self.options.contains(name) {
+            return Some(self.options[name]);
+        }
+        return None;
+    }
+}
+
+/// Reads `args`, usually `argv()`. An option at the end with no value after
+/// it answers `cli_missing_value`.
+fn parse(args: string[], takes_value: string[] = []) -> Args!string {
+    let out = Args { positional: [], flags: [], options: {} };
+    let i = 0;
+    let rest = false;
+    while i < args.len() {
+        let arg = args[i];
+        i += 1;
+        if rest || arg == "-" || !arg.starts_with("-") {
+            out.positional.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            rest = true;
+            continue;
+        }
+        let long = arg.starts_with("--");
+        let body = if long { arg[2..arg.len()] } else { arg[1..arg.len()] };
+        let name = body;
+        let value: string? = None;
+        match body.index_of("=") {
+            Some(at) => {
+                name = body[0..at];
+                value = Some(body[at + 1..body.len()]);
+            }
+            None => {}
+        }
+        let names = if long || value.is_some() { [name] } else { name.chars() };
+        let last = names.len() - 1;
+        let k = 0;
+        while k < names.len() {
+            let n = names[k];
+            if takes_value.contains(n) {
+                if value.is_some() && k == last {
+                    out.options[n] = value.unwrap();
+                } else if k == last && i < args.len() {
+                    out.options[n] = args[i];
+                    i += 1;
+                } else {
+                    return Err("cli_missing_value");
+                }
+            } else {
+                out.flags.push(n);
+            }
+            k += 1;
+        }
+    }
+    return Ok(out);
+}

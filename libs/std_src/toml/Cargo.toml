@@ -1,0 +1,28 @@
+# The native library behind `std/toml`: TOML text to candela values and back,
+# through the `toml` crate, with values crossing the C boundary as JSON. The
+# release job ships it as libs/std_src/toml/toml.<ext>, the path the module's
+# `dylib` block names.
+[package]
+name = "candela-std-toml"
+# Never published: it ships inside the toolchain archive.
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "The native library behind candela's std/toml."
+
+[lib]
+name = "candela_std_toml"
+crate-type = ["cdylib", "rlib"]
+# The library has no unit tests, so no harness of its own: a harness build
+# compiles the exports again under another hash, and a coverage report can
+# read that idle copy in place of the one the tests in tests/ load.
+test = false
+
+[dependencies]
+candela-std-sys = { path = "../sys" }
+serde_json = "1"
+toml = "1"
+
+[dev-dependencies]
+candela-std-testkit = { path = "../testkit" }

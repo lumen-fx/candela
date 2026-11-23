@@ -266,7 +266,7 @@ fn dropped_code_still_has_to_parse() {
         .compile("@cfg(web)\nfn f( { }\nfn main() {}", "main.cdl")
         .err()
         .expect("a syntax error is an error under any configuration");
-    assert_eq!(err.code, "unexpected_token");
+    assert_eq!(err.code, "pattern_expected");
 }
 
 #[test]

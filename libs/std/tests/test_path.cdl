@@ -1,0 +1,28 @@
+import "std/assert";
+import "std/path";
+import "std/os";
+
+fn main() {
+    if os::platform() != "windows" {
+        assert::eq(path::join(["a", "b", "c.txt"]), "a/b/c.txt");
+        assert::eq(path::join(["a/", "", "b"]), "a/b");
+        assert::eq(path::join(["a", "/b"]), "/b");
+        assert::eq(path::parent("a/b/c"), "a/b");
+        assert::eq(path::parent("/a"), "/");
+        assert::eq(path::parent("a"), "");
+        assert::eq(path::normalize("a/./b/../c"), "a/c");
+        assert::eq(path::normalize("../x/.."), "..");
+        assert::eq(path::normalize("/a/../../b"), "/b");
+        assert::eq(path::separator(), "/");
+    }
+    assert::eq(path::name("a/b/c.txt"), "c.txt");
+    assert::eq(path::name("a/b/"), "b");
+    assert::eq(path::stem("a/c.tar.gz"), "c.tar");
+    assert::eq(path::extension("a/c.txt"), "txt");
+    assert::eq(path::extension(".bashrc"), "");
+    assert::eq(path::stem(".bashrc"), ".bashrc");
+    assert::eq(path::normalize(""), ".");
+    assert::is_true(path::is_absolute("/x"));
+    assert::is_false(path::is_absolute("x/y"));
+    print("path ok");
+}

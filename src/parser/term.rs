@@ -10,21 +10,27 @@ use super::parser_expr::PREFIX_PRECEDENCE;
 use super::parser_expr::parse_expr_with_precedence;
 use crate::cold_path;
 use crate::compiler::expr::Expr;
+use crate::compiler::expr::PatternLet;
 use crate::compiler::expr::Span;
 use crate::compiler::expr::StructRest;
 use crate::compiler::expr::tuple_literal;
+use crate::compiler::patterns::Pattern;
 use crate::compiler::type_system::TypeExpr;
 use crate::parser::Parser;
 use crate::parser::TypeArgFollow;
-use crate::parser::blocks::parse_block_expr;
+use crate::parser::block_ahead;
 use crate::parser::blocks::parse_condition_expr;
 use crate::parser::blocks::parse_fn_body;
 use crate::parser::blocks::parse_match_arms;
+use crate::parser::blocks::parse_value_block;
+use crate::parser::blocks::parse_value_block_after;
 use crate::parser::expand_macro;
+use crate::parser::expand_macro_path;
 use crate::parser::extend_namespace;
 use crate::parser::parse_args;
 use crate::parser::parse_namespace;
 use crate::parser::parse_type_args;
+use crate::parser::pattern::parse_pattern;
 use crate::parser::type_args_ahead;
 use smol_strc::SmolStr;
 use smol_strc::ToSmolStr;
@@ -108,18 +114,29 @@ fn parse_struct(
                 ),
             )
         };
-        parser.next_token_expect(
-            Token::Colon,
-            "A colon must separate a field from its value.",
-        );
-        let field_start: u32 = parser.peek_token_span().start;
-        let field_value = parse_expr(parser);
-        fields.push((
-            field_name,
-            field_value,
-            field_name_span,
-            (field_start, parser.peek_token_span().start).into(),
-        ));
+        // `Vec2 { x, y }`: a field written alone takes the variable of its
+        // name, the way `x: x` would.
+        if matches!(parser.peek_token(), Token::Comma | Token::RBrace) {
+            fields.push((
+                field_name.clone(),
+                Expr::Var(field_name, field_name_span),
+                field_name_span,
+                field_name_span,
+            ));
+        } else {
+            parser.next_token_expect(
+                Token::Colon,
+                "A colon separates a field from its value; a field written alone takes the variable of its name.",
+            );
+            let field_start: u32 = parser.peek_token_span().start;
+            let field_value = parse_expr(parser);
+            fields.push((
+                field_name,
+                field_value,
+                field_name_span,
+                (field_start, parser.peek_token_span().start).into(),
+            ));
+        }
         let (next_token, span) = parser.next_token();
         if next_token == Token::RBrace {
             end = span.end;
@@ -159,6 +176,7 @@ fn parse_generic_term(
     path: Box<[SmolStr]>,
     type_args: Box<[TypeExpr]>,
     start: u32,
+    allow_struct: bool,
 ) -> Expr {
     let span: Span = (start, parser.last_token_end as u32).into();
     match parser.peek_token() {
@@ -181,6 +199,10 @@ fn parse_generic_term(
             if parser.peek_token_opt() == Some(Token::LParen) {
                 parser.next_token();
                 parse_fn_call(parser, namespace, span, type_args)
+            } else if parser.peek_token_opt() == Some(Token::LBrace) && allow_struct {
+                // `Slot<int>::Filled { value: 1 }`: a variant with named fields.
+                parser.next_token();
+                parse_struct(parser, namespace, start, type_args)
             } else {
                 Expr::NamespacedRef(namespace, span, type_args)
             }
@@ -245,7 +267,23 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                     ) =>
                 {
                     let type_args = parse_type_args(parser);
-                    parse_generic_term(parser, Box::from([SmolStr::new(s)]), type_args, start)
+                    parse_generic_term(
+                        parser,
+                        Box::from([SmolStr::new(s)]),
+                        type_args,
+                        start,
+                        allow_struct,
+                    )
+                }
+                // A MACRO BEHIND A MODULE'S NAME: m::name!( ... )
+                Some(Token::DoubleColon)
+                    if matches!(parser.input.clone().nth(1), Some((Ok(Token::Macro(_)), _))) =>
+                {
+                    parser.next_token();
+                    let (Token::Macro(region), m_span) = parser.next_token() else {
+                        unreachable!("the token after '::' was read as a macro");
+                    };
+                    expand_macro_path(parser, s, region, (t_span.start, m_span.end).into())
                 }
                 // NAMESPACE
                 Some(Token::DoubleColon) => {
@@ -290,7 +328,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                             ) =>
                         {
                             let type_args = parse_type_args(parser);
-                            parse_generic_term(parser, namespace, type_args, start)
+                            parse_generic_term(parser, namespace, type_args, start, allow_struct)
                         }
                         // A bare namespaced identifier: a nullary enum-variant
                         // construction (`Color::Red`), resolved by the compiler.
@@ -327,7 +365,12 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             }
             Expr::Array(Box::from(elems), Box::from(elem_spans))
         }
-        // LParen Expr RParen, or a tuple: LParen Expr (Comma Expr)+ RParen
+        // LParen Expr RParen, or a tuple: LParen Expr (Comma Expr)+ RParen.
+        // `()` is the value of no value, which runs as the host's `null`.
+        Token::LParen if parser.peek_token() == Token::RParen => {
+            parser.next_token();
+            Expr::Null
+        }
         Token::LParen => {
             let first_start = parser.peek_token_span().start;
             let v = parse_expr(parser);
@@ -400,8 +443,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
         // Inline condition
         Token::If => {
             let (condition, condition_span) = parse_condition_expr(parser);
-            let mut output_code: Vec<Expr> = Vec::with_capacity(2);
-            output_code.push(parse_block_expr(parser));
+            let mut output_code: Vec<Expr> = parse_value_block(parser);
             loop {
                 let next_token = parser.peek_token_opt();
                 if next_token != Some(Token::Else) {
@@ -415,19 +457,15 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 if next_token == Some(Token::If) {
                     parser.next_token();
                     let (else_if_condition, else_if_span) = parse_condition_expr(parser);
-                    parser.next_token_expect(Token::LBrace, "Blocks must begin with a '{'.");
-                    let else_if_value = parse_expr(parser);
-                    parser.next_token_expect(Token::RBrace, "Unmatched '}'");
+                    let else_if_code = parse_value_block(parser);
                     output_code.push(Expr::ElseIfBlock(
                         Box::new(else_if_condition),
-                        Box::new([else_if_value]),
+                        Box::from(else_if_code),
                         else_if_span,
                     ));
                 } else if next_token == Some(Token::LBrace) {
-                    parser.next_token();
-                    let else_value = parse_expr(parser);
-                    parser.next_token_expect(Token::RBrace, "Unmatched '}'");
-                    output_code.push(Expr::ElseBlock(Box::new([else_value])));
+                    let else_code = parse_value_block(parser);
+                    output_code.push(Expr::ElseBlock(Box::from(else_code)));
                     break;
                 } else {
                     break;
@@ -455,24 +493,43 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                 "Function arguments must be delimited by parentheses",
             );
             let mut args: Vec<SmolStr> = Vec::with_capacity(2);
-            // let mut args: Vec<(SmolStr, SmolStr)> = Vec::with_capacity(2);
+            let mut lets: Vec<Expr> = Vec::new();
             // `fn()` takes nothing, the empty list a declaration accepts too.
-            // The names are read only once there is one to read.
+            // The names are read only once there is one to read. A parameter
+            // written as a pattern takes the argument under a name no program
+            // can write, and the body opens with the `let` that takes it
+            // apart.
             while parser.peek_token() != Token::RParen {
-                let (next_token, next_token_span) = parser.next_token();
-                let Token::Identifier(arg_name) = next_token else {
-                    cold_path();
-                    parser.error(
-                        next_token_span,
-                        ParserErr::UnexpectedToken(Token::Identifier(""), next_token, ""),
-                    );
+                // A name alone binds, whatever its case.
+                let plain_name = matches!(parser.peek_token(), Token::Identifier(name) if name != "_")
+                    && parser
+                        .input
+                        .clone()
+                        .nth(1)
+                        .is_some_and(|(t, _)| matches!(t, Ok(Token::Comma | Token::RParen)));
+                let pattern = if plain_name {
+                    let (Token::Identifier(name), span) = parser.next_token() else {
+                        unreachable!()
+                    };
+                    Pattern::Bind(SmolStr::new(name), span)
+                } else {
+                    parse_pattern(parser, true)
                 };
-                // parser.next_token_expect(
-                //     Token::Colon,
-                //     "Argument names and types must be separated by a colon",
-                // );
-                // let arg_type = parse_type(parser);
-                args.push(SmolStr::new(arg_name));
+                match pattern {
+                    Pattern::Bind(name, _) => args.push(name),
+                    pattern => {
+                        let span = pattern.span();
+                        let name = SmolStr::from(format!("[param {}]", args.len()));
+                        lets.push(Expr::LetPattern(Box::new(PatternLet {
+                            pattern,
+                            value: Expr::Var(name.clone(), span),
+                            annotation: None,
+                            otherwise: None,
+                            span,
+                        })));
+                        args.push(name);
+                    }
+                }
                 if parser.peek_token() != Token::Comma {
                     break;
                 }
@@ -496,6 +553,7 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
             //     )
             // } else
             if matches!(next_token, Some(Token::LBrace | Token::FatArrow)) {
+                parser.param_lets = lets;
                 let fn_code = parse_fn_body(parser, false);
                 Expr::AnonymousFunction(
                     Box::from(args),
@@ -513,6 +571,10 @@ fn parse_term_inner(parser: &mut Parser<'_>, allow_struct: bool) -> Expr {
                     ),
                 );
             }
+        }
+        // A block used as a value, `{ let t = 5; t * 2 }`.
+        Token::LBrace if block_ahead(parser) => {
+            Expr::EvalBlock(Box::from(parse_value_block_after(parser, t_span)))
         }
         // map
         Token::LBrace => {

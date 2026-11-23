@@ -1,0 +1,52 @@
+/// TOML, the format of `candela.toml`: text to candela values and back.
+///
+///     import "std/toml";
+///     fn main() {
+///         let config = toml::parse("[server]\nport = 8080\n")? as {string: any};
+///         print((config["server"] as {string: any})["port"]);
+///     }
+///
+/// A table reads as a map, an array as a list, and a date or time as its
+/// text. A browser runs no native library, so there both calls raise
+/// `toml_desktop_only`.
+
+import "std/json";
+
+@cfg(not(web))
+dylib "../std_src/toml/toml" {
+    fn candela_toml_parse(text: string) -> string;
+    fn candela_toml_stringify(json: string) -> string;
+}
+
+@cfg(not(web))
+fn native_parse(text: string) -> string => toml::candela_toml_parse(text);
+@cfg(web)
+fn native_parse(text: string) -> string {
+    throw "toml_desktop_only";
+}
+@cfg(not(web))
+fn native_stringify(json: string) -> string => toml::candela_toml_stringify(json);
+@cfg(web)
+fn native_stringify(json: string) -> string {
+    throw "toml_desktop_only";
+}
+
+/// The value the library answered, or its error code.
+fn answer(text: string, code: string) -> any!string {
+    let fields = json::parse(text).unwrap() as {string: any};
+    if fields.contains("error") {
+        return Err(code);
+    }
+    return Ok(fields["value"]);
+}
+
+/// The document `text` holds, as a `{string: any}` map read like
+/// `json::parse` reads JSON. Text that is not TOML answers `toml_invalid`.
+fn parse(text: string) -> any!string => answer(native_parse(text), "toml_invalid");
+
+/// `value`, a map, written as TOML text. A value with no TOML form, such as
+/// `null` or a list at the top, answers `toml_unrepresentable`.
+fn stringify(value: any) -> string!string {
+    let written = answer(native_stringify(json::stringify(value)), "toml_unrepresentable")?;
+    return Ok(written as string);
+}

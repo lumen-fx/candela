@@ -21,7 +21,7 @@ struct Set<T> {
     items: {T: bool},
 }
 
-impl Set<T> {
+impl<T> Set<T> {
     /// A new empty set: `Set<int>::new()`, naming the member type.
     fn new() -> Set<T> {
         return Set<T>{ items: {} };
@@ -60,10 +60,10 @@ impl Set<T> {
     /// A new set with every member of either set. Neither input changes.
     fn union(self, other: Set<T>) -> Set<T> {
         let r = Set<T>{ items: {} };
-        for x in self.items {
+        for x in self.items.keys() {
             r.items[x] = true;
         }
-        for x in other.items {
+        for x in other.items.keys() {
             r.items[x] = true;
         }
         return r;
@@ -72,7 +72,7 @@ impl Set<T> {
     /// A new set with the members present in both sets. Neither input changes.
     fn intersection(self, other: Set<T>) -> Set<T> {
         let r = Set<T>{ items: {} };
-        for x in self.items {
+        for x in self.items.keys() {
             if other.items.contains(x) {
                 r.items[x] = true;
             }
@@ -84,7 +84,7 @@ impl Set<T> {
     /// input changes.
     fn difference(self, other: Set<T>) -> Set<T> {
         let r = Set<T>{ items: {} };
-        for x in self.items {
+        for x in self.items.keys() {
             if !other.items.contains(x) {
                 r.items[x] = true;
             }
@@ -96,12 +96,12 @@ impl Set<T> {
     /// changes.
     fn symmetric_difference(self, other: Set<T>) -> Set<T> {
         let r = Set<T>{ items: {} };
-        for x in self.items {
+        for x in self.items.keys() {
             if !other.items.contains(x) {
                 r.items[x] = true;
             }
         }
-        for x in other.items {
+        for x in other.items.keys() {
             if !self.items.contains(x) {
                 r.items[x] = true;
             }

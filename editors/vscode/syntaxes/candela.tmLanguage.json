@@ -4,6 +4,8 @@
   "scopeName": "source.candela",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#macro-declaration" },
+    { "include": "#macro-fragment" },
     { "include": "#macro" },
     { "include": "#attribute" },
     { "include": "#import" },
@@ -52,6 +54,35 @@
         "1": { "name": "punctuation.definition.annotation.candela" },
         "2": { "name": "storage.type.annotation.candela" }
       }
+    },
+    "macro-declaration": {
+      "comment": "macro name($x: expr) => template;",
+      "match": "\\b(macro)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.macro.candela" },
+        "2": { "name": "entity.name.function.macro.candela" }
+      }
+    },
+    "macro-fragment": {
+      "comment": "$x: expr in a macro's pattern, and $x in its template",
+      "patterns": [
+        {
+          "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(expr|ident|type|block)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.variable.candela" },
+            "2": { "name": "variable.parameter.macro.candela" },
+            "3": { "name": "punctuation.separator.candela" },
+            "4": { "name": "storage.type.macro-fragment.candela" }
+          }
+        },
+        {
+          "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.variable.candela" },
+            "2": { "name": "variable.parameter.macro.candela" }
+          }
+        }
+      ]
     },
     "macro": {
       "patterns": [

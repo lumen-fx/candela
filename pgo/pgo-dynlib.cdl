@@ -2,9 +2,9 @@
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
 dylib "pgo_dynlib" {
-    int pgo_add_int(int,int);
-    float pgo_add_float(float,float);
-    int pgo_all_types(int,float,string,int[],float[],string[][],int[][],int);
+    fn pgo_add_int(a: int, b: int) -> int;
+    fn pgo_add_float(a: float, b: float) -> float;
+    fn pgo_all_types(a: int, b: float, c: string, d: int[], e: float[], f: string[][], g: int[][], h: int) -> int;
 }
 
 fn main() {

@@ -2,6 +2,7 @@
 // Copyright 2026 Horace Hoff, licensed under the Apache License, Version 2.0.
 // It has been modified by the candela authors. See the NOTICE file.
 use super::attributes::AttributeDecl;
+use super::patterns::Pattern;
 use super::type_system::ReturnAnnotation;
 use super::type_system::TypeExpr;
 use super::type_system::TypeParams;
@@ -19,6 +20,32 @@ use std::{hint::unreachable_unchecked, rc::Rc};
 /// another type: `Point#len` and `Str#len` are distinct symbols, and both are
 /// distinct from a free `fn len`.
 pub const METHOD_SEP: char = '#';
+
+/// The name a closure written after a call's closing parenthesis is passed
+/// under, `xs.each() fn(x) { ... }`. No program can write it, so it never
+/// collides with a parameter.
+pub const TRAILING_ARG: &str = "[trailing]";
+
+/// Whether `arg` is passed by a name the program wrote, as opposed to in
+/// order or as the closure after the call.
+#[must_use]
+pub fn is_named_arg(arg: &Expr) -> bool {
+    matches!(arg, Expr::NamedArg(name, ..) if name != TRAILING_ARG)
+}
+
+/// The parameter name that makes an `impl` function a method.
+///
+/// An `impl` function whose first parameter is named `self` takes the value in
+/// front of the dot; any other `impl` function is called by its path,
+/// `Point::new(1, 2)`.
+pub const RECEIVER: &str = "self";
+
+/// Whether a function declared with parameters named `names` takes a receiver:
+/// its first parameter is [`RECEIVER`].
+#[must_use]
+pub fn takes_receiver<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.next() == Some(RECEIVER)
+}
 
 /// Builds the mangled free-function symbol an `impl Type { fn method ... }`
 /// lowers to.
@@ -51,13 +78,6 @@ pub fn tuple_literal(elements: Vec<(Expr, Span)>, span: Span) -> Expr {
     Expr::Struct(Box::from([name]), fields, span, Box::from([]), None)
 }
 
-/// How the variable a `let (a, b) = value;` keeps its tuple in starts.
-///
-/// The rest of the name is the number of places in the pattern, the start and
-/// the end of the pattern in the file, all three separated by spaces, and `]`.
-/// No identifier can start with `[`.
-pub const TUPLE_LET_PREFIX: &str = "[TUPLE ";
-
 /// The call that reads the constant `name`: a constant is a function of no
 /// arguments that a bare name calls.
 #[must_use]
@@ -71,47 +91,36 @@ pub fn const_read(name: &SmolStr, span: Span) -> Expr {
     )
 }
 
-/// The variable a `let` pattern of `places` places written at `span` holds
-/// its tuple in. See [`TUPLE_LET_PREFIX`].
-#[must_use]
-pub fn tuple_let_temp(places: usize, span: Span) -> SmolStr {
-    format_args!("{TUPLE_LET_PREFIX}{places} {} {}]", span.start, span.end).to_smolstr()
+/// The field names of an enum's variants declared with named fields, by the
+/// variant's index: `Click { x: int, y: int }` names its two payload places.
+pub type VariantFields = Box<[(u16, Box<[SmolStr]>)]>;
+
+/// The `= value` each parameter of a declaration was declared with and where,
+/// one entry per parameter; empty when no parameter declares one.
+pub type ParamDefaults = Box<[Option<(Expr, Span)>]>;
+
+/// One function a `host` or `dylib` block declares, `fn noise(seed: int);`.
+///
+/// Its name, the parameter types, the return type (`null` for none), where the
+/// name was written, and the parameters' names and defaults. A variadic one,
+/// `fn log(...);`, has the one type `...` and no names.
+pub type ForeignFn = (SmolStr, Box<[TypeExpr]>, TypeExpr, Span, ForeignParams);
+
+/// The names and defaults of a [`ForeignFn`]'s parameters, which a call reads
+/// to put named arguments in place and fill the ones it leaves out.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForeignParams {
+    pub names: Box<[SmolStr]>,
+    pub defaults: ParamDefaults,
 }
 
-/// The number of places the `let` pattern behind variable `name` has and
-/// where the pattern was written, `None` for a variable a program declared.
-#[must_use]
-pub fn tuple_let_pattern(name: &str) -> Option<(usize, Span)> {
-    let mut parts = name
-        .strip_prefix(TUPLE_LET_PREFIX)?
-        .strip_suffix(']')?
-        .split(' ');
-    let places = parts.next()?.parse().ok()?;
-    let start = parts.next()?.parse().ok()?;
-    let end = parts.next()?.parse().ok()?;
-    Some((places, Span { start, end }))
-}
-
-/// The elements of a tuple literal and where each was written, `None` for any
-/// other expression. A `match` arm written as a tuple literal is a tuple
-/// pattern.
-#[must_use]
-pub fn tuple_elements(expr: &Expr) -> Option<Vec<(&Expr, Span)>> {
-    match expr {
-        Expr::Struct(path, fields, _, type_args, None)
-            if type_args.is_empty()
-                && path.len() == 1
-                && crate::compiler::type_system::tuple_arity(&path[0]).is_some() =>
-        {
-            Some(
-                fields
-                    .iter()
-                    .map(|(_, value, span, _)| (value, *span))
-                    .collect(),
-            )
-        }
-        _ => None,
-    }
+/// How a variant takes its payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantShape {
+    /// In order, in parentheses: `Key(string)`, or no payload at all.
+    Positional,
+    /// By field name, in braces: `Click { x: int, y: int }`.
+    Named(Box<[SmolStr]>),
 }
 
 /// What an import adds to the scope of the file that writes it.
@@ -124,11 +133,6 @@ pub enum ImportBinding {
     /// of its name, merged into the file's own scope. The module itself is
     /// bound under no name.
     Items(Box<[(SmolStr, Span)]>),
-    /// `import "drift" { * };`: every item the module declares, merged into
-    /// the file's scope. A declaration of the file's own of the same name
-    /// shadows the imported one; a name two glob imports both bring in is
-    /// ambiguous, and an error only where the file uses it.
-    Glob(Span),
 }
 
 /// Where a struct literal written with `..` takes the fields it does not
@@ -159,9 +163,29 @@ pub enum IsTarget {
     /// that names no type but a variant without a payload (`None`) is a
     /// variant test.
     Type(TypeExpr),
-    /// A variant written the way a `match` arm writes it, `Some(x)`: an
-    /// [`Expr::FunctionCall`] whose arguments name the payload binders.
-    Variant(Expr),
+    /// A pattern, written the way a `match` arm writes it: `Some(x)`,
+    /// `Click { x, y }`. What it binds is in scope where the test held.
+    Pattern(Pattern),
+}
+
+/// One arm of a `match`: its pattern, the guard written after `if`, and the
+/// body that runs when both hold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Box<[Expr]>,
+}
+
+/// `let pattern = value;`, or with `else { ... }` after the value: the block
+/// that runs when the pattern does not fit, which has to leave.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternLet {
+    pub pattern: Pattern,
+    pub value: Expr,
+    pub annotation: Option<LetAnnotation>,
+    pub otherwise: Option<Box<[Expr]>>,
+    pub span: Span,
 }
 
 /// The type a `let` declares for its variable: `let xs: int[] = [];`.
@@ -286,12 +310,17 @@ pub enum Expr {
     /// field of a struct type left to its default lower to. Built by the
     /// compiler, never by the parser.
     StructDefault(u16, Span),
-    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params)
+    /// EnumDeclare(name, variants: [(variant_name, payload_types, name_span)], span, type_params, field_names)
+    ///
+    /// `field_names` names the payload of each variant declared with named
+    /// fields, `Click { x: int, y: int }`, by the variant's index. The payload
+    /// itself stays positional, in declaration order.
     EnumDeclare(
         SmolStr,
         Box<[(SmolStr, Box<[TypeExpr]>, Span)]>,
         Span,
         TypeParams,
+        VariantFields,
     ),
     /// NamespacedRef(path, span, type_args)
     ///
@@ -301,23 +330,21 @@ pub enum Expr {
     /// `type_args` names the instantiation of a generic enum
     /// (`Slot<int>::Empty`) and is empty otherwise.
     NamespacedRef(Box<[SmolStr]>, Span, Box<[TypeExpr]>),
-    /// Match(scrutinee, arms: [(patterns, body)], wildcard_body, span, is_value)
+    /// Match(scrutinee, arms, wildcard_body, span, is_value)
     ///
-    /// The arm patterns are parsed as ordinary expressions; the compiler picks
-    /// the lowering by the scrutinee's static type. For an enum scrutinee each
-    /// pattern is a variant pattern (`Circle(r)` binds the payload); otherwise
-    /// each pattern is an equality test against the scrutinee. An arm holds one
-    /// pattern per `|` alternative and runs when any of them matches.
+    /// The first arm whose pattern fits the scrutinee, and whose guard holds,
+    /// runs. A last arm written `_` with no guard is kept apart, as the
+    /// wildcard.
     ///
     /// `is_value` marks a `match` written where a value goes. Each of its
-    /// bodies is one expression, the arm's value, and it covers every case.
-    Match(
-        Box<Self>,
-        Box<[(Box<[Self]>, Box<[Self]>)]>,
-        Option<Box<[Self]>>,
-        Span,
-        bool,
-    ),
+    /// bodies ends in the arm's value or leaves, and it covers every case.
+    Match(Box<Self>, Box<[MatchArm]>, Option<Box<[Self]>>, Span, bool),
+    /// LetPattern(let)
+    ///
+    /// `let pattern = value;` with a pattern other than a name, and
+    /// `let pattern = value else { ... };`: what the pattern binds is in scope
+    /// for the rest of the block. See [`PatternLet`].
+    LetPattern(Box<PatternLet>),
     /// GetStructField(struct_expr, field, struct_span, field_span, value_span)
     GetStructField(Box<Self>, SmolStr, Span, Span),
     /// SetStructField(struct_expr, field, new_expr, struct_span, field_span, value_span)
@@ -381,13 +408,15 @@ pub enum Expr {
     /// callee's static `Fn` type names the function the same way the type of a
     /// `let`-bound closure does.
     CallValue(Box<Self>, Box<[Self]>, Span, Box<[Span]>),
-    /// FunctionDecl(name, args, code, name_span, return_type, type_params)
+    /// FunctionDecl(name, args, code, name_span, return_type, type_params, defaults)
     ///
     /// `return_type` carries the optional `-> Type` annotation together with the
     /// span of the annotation itself, which is what a mismatch between the
     /// declared and the returned type is reported against. `type_params` names
     /// the type parameters of a generic function (`fn first<T>`) and is empty
-    /// otherwise.
+    /// otherwise. `defaults` holds the `= value` each parameter was declared
+    /// with and where, one entry per parameter, and is empty when none declares
+    /// one.
     FunctionDecl(
         SmolStr,
         Box<[(SmolStr, Option<TypeExpr>)]>,
@@ -395,9 +424,33 @@ pub enum Expr {
         Span,
         ReturnAnnotation,
         TypeParams,
+        ParamDefaults,
     ),
+    /// NamedArg(name, value, name_span)
+    ///
+    /// An argument passed by its parameter's name, `title: "x"`. Only the
+    /// argument list of a call holds one, and the call puts it in place before
+    /// anything compiles it. A closure written after a call's closing
+    /// parenthesis comes as one named [`TRAILING_ARG`]: it binds the callee's
+    /// last parameter, and a callee without parameter names takes it as its
+    /// last argument in order.
+    NamedArg(SmolStr, Box<Self>, Span),
+    /// DefaultArg(default_id, span)
+    ///
+    /// The `= value` a parameter was declared with, standing for the argument a
+    /// call left out; see [`crate::compiler::type_system::Generics::arg_default`].
+    /// It compiles in the file that declared it. Built by the compiler, never
+    /// by the parser.
+    DefaultArg(u32, Span),
 
     ReturnVal(Box<Option<Self>>),
+    /// Else(value, binder, fallback, span)
+    ///
+    /// `value else fallback`: the value inside the `Some` or `Ok` that `value`
+    /// holds, or the fallback when it is a `None` or an `Err`. With a binder,
+    /// `value else |e| { ... }`, the block sees the `Err`'s error under it. A
+    /// fallback that leaves (`return`, `break`, ...) gives no value.
+    Else(Box<Self>, Option<(SmolStr, Span)>, Box<Self>, Span),
 
     ArrayGetIndex(Box<Self>, Box<Self>, Span),
     /// Propagate(operand, span)
@@ -431,11 +484,7 @@ pub enum Expr {
     /// IntForLoop(loop_var_name, first_elem, final_elem, code)
     IntForLoop(SmolStr, Box<Self>, Box<Self>, Box<[Self]>, Span, Span),
     /// ImportDylib(lib_path, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end))
-    ImportDylib(
-        SmolStr,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
-        Span,
-    ),
+    ImportDylib(SmolStr, Box<[ForeignFn]>, Span),
 
     /// HostBlock(namespace, [(fn_name, fn_args, fn_return_type, fn_name_span)], (start, end), structs, attributes)
     ///
@@ -448,7 +497,7 @@ pub enum Expr {
     /// block is written in (`@ecs::system`).
     HostBlock(
         SmolStr,
-        Box<[(SmolStr, Box<[TypeExpr]>, TypeExpr, Span)]>,
+        Box<[ForeignFn]>,
         Span,
         Box<[Self]>,
         Box<[AttributeDecl]>,
@@ -531,10 +580,12 @@ impl Expr {
                 | Self::Map(_, _)
                 | Self::Struct(..)
                 | Self::StructDefault(..)
+                | Self::DefaultArg(..)
                 | Self::NamespacedRef(_, _, _)
                 | Self::GetStructField(_, _, _, _)
                 | Self::InlineCondition(_, _, _, _)
                 | Self::Match(_, _, _, _, true)
+                | Self::Else(..)
                 | Self::AnonymousFunction(_, _, _)
                 | Self::ArrayGetIndex(_, _, _)
                 | Self::Propagate(_, _)
@@ -564,6 +615,141 @@ impl Expr {
                 | Self::BoolNeg(_, _, _)
                 | Self::Neg(_, _, _)
         )
+    }
+}
+
+impl Expr {
+    /// Whether control never reaches the end of this statement: `return`,
+    /// `throw`, `break` and `continue`, and a block or an `if` with an `else`
+    /// whose every way through ends in one. A branch of an `if` or a `match`
+    /// used as a value may end this way instead of in a value.
+    #[must_use]
+    pub fn diverges(&self) -> bool {
+        match self {
+            Self::ReturnVal(_) | Self::Break | Self::Continue => true,
+            Self::FunctionCall(_, namespace, ..) => {
+                matches!(&**namespace, [name] if name == "throw")
+            }
+            Self::EvalBlock(body) => body.last().is_some_and(Self::diverges),
+            Self::Condition(_, code, ..) | Self::InlineCondition(_, code, ..) => {
+                let main = code
+                    .iter()
+                    .position(|x| matches!(x, Self::ElseIfBlock(..) | Self::ElseBlock(_)))
+                    .unwrap_or(code.len());
+                matches!(code.last(), Some(Self::ElseBlock(_)))
+                    && code[..main].last().is_some_and(Self::diverges)
+                    && code[main..].iter().all(|branch| match branch {
+                        Self::ElseIfBlock(_, body, _) | Self::ElseBlock(body) => {
+                            body.last().is_some_and(Self::diverges)
+                        }
+                        _ => true,
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// The `if`, `match` and block expressions used as values inside this
+    /// statement's expressions, outermost first, not looking inside anonymous
+    /// functions or the bodies of the statement itself.
+    ///
+    /// A value block's statements run where the expression holding it does,
+    /// so a walk over a body's statements (for its returns, its breaks, the
+    /// variables it writes) reads these the way it reads the statements.
+    #[must_use]
+    pub fn nested_value_blocks(&self) -> Vec<&Self> {
+        let mut out = Vec::new();
+        collect_value_blocks(self, true, &mut out);
+        out
+    }
+}
+
+/// See [`Expr::nested_value_blocks`]. `root` is the statement itself, whose
+/// own bodies the walk that asked already reads.
+fn collect_value_blocks<'a>(expr: &'a Expr, root: bool, out: &mut Vec<&'a Expr>) {
+    match expr {
+        Expr::InlineCondition(condition, ..) if root => collect_value_blocks(condition, false, out),
+        Expr::Match(scrutinee, ..) if root => collect_value_blocks(scrutinee, false, out),
+        Expr::EvalBlock(_) if root => {}
+        Expr::Else(value, ..) if root => collect_value_blocks(value, false, out),
+        Expr::InlineCondition(..)
+        | Expr::Match(_, _, _, _, true)
+        | Expr::EvalBlock(_)
+        | Expr::Else(..) => {
+            out.push(expr);
+        }
+        Expr::Match(scrutinee, ..) => collect_value_blocks(scrutinee, false, out),
+        Expr::LetPattern(pattern_let) => collect_value_blocks(&pattern_let.value, false, out),
+        Expr::Condition(condition, ..)
+        | Expr::ElseIfBlock(condition, ..)
+        | Expr::WhileBlock(condition, ..)
+        | Expr::ForLoop(_, condition, ..)
+        | Expr::VarDeclare(_, condition, _)
+        | Expr::VarAssign(_, condition, _, _)
+        | Expr::NamedArg(_, condition, _)
+        | Expr::Propagate(condition, _)
+        | Expr::Is(condition, ..)
+        | Expr::Cast(condition, ..)
+        | Expr::Neg(condition, ..)
+        | Expr::BitNot(condition, ..)
+        | Expr::BoolNeg(condition, ..)
+        | Expr::GetStructField(condition, ..) => collect_value_blocks(condition, false, out),
+        Expr::IntForLoop(_, start, end, ..) | Expr::ArrayGetIndex(start, end, _) => {
+            collect_value_blocks(start, false, out);
+            collect_value_blocks(end, false, out);
+        }
+        Expr::ArrayGetSlice(base, start, end, _) => {
+            collect_value_blocks(base, false, out);
+            collect_value_blocks(start, false, out);
+            if let Some(end) = end {
+                collect_value_blocks(end, false, out);
+            }
+        }
+        Expr::ArrayModify(base, index, value, _, _) => {
+            collect_value_blocks(base, false, out);
+            collect_value_blocks(index, false, out);
+            collect_value_blocks(value, false, out);
+        }
+        Expr::SetStructField(obj, _, value, ..) => {
+            collect_value_blocks(obj, false, out);
+            collect_value_blocks(value, false, out);
+        }
+        Expr::ReturnVal(value) => {
+            if let Some(value) = value.as_ref() {
+                collect_value_blocks(value, false, out);
+            }
+        }
+        Expr::FunctionCall(args, ..) | Expr::Array(args, _) => {
+            for arg in args {
+                collect_value_blocks(arg, false, out);
+            }
+        }
+        Expr::ObjFunctionCall(callee, args, ..) | Expr::CallValue(callee, args, ..) => {
+            collect_value_blocks(callee, false, out);
+            for arg in args {
+                collect_value_blocks(arg, false, out);
+            }
+        }
+        Expr::Map(pairs, _) => {
+            for (key, _, value, _) in pairs {
+                collect_value_blocks(key, false, out);
+                collect_value_blocks(value, false, out);
+            }
+        }
+        Expr::Struct(_, fields, _, _, base) => {
+            for (_, value, _, _) in fields {
+                collect_value_blocks(value, false, out);
+            }
+            if let Some(base) = base.as_ref().and_then(|b| b.0.base()) {
+                collect_value_blocks(base, false, out);
+            }
+        }
+        _ if expr.binary_operands().is_some() => {
+            for operand in expr.chain_operands() {
+                collect_value_blocks(operand, false, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -828,7 +1014,18 @@ pub fn self_operator_method(expr: &Expr) -> Option<&'static str> {
 
 #[must_use]
 pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
-    code.iter().any(|expr| match expr {
+    code.iter().any(|expr| {
+        expr.nested_value_blocks()
+            .into_iter()
+            .any(|block| code_modifies_variable(var_name, std::slice::from_ref(block)))
+            || statement_modifies_variable(var_name, expr)
+    })
+}
+
+/// [`code_modifies_variable`] for one statement, leaving out the value
+/// blocks inside its expressions.
+fn statement_modifies_variable(var_name: &SmolStr, expr: &Expr) -> bool {
+    match expr {
         Expr::VarAssign(n, _, _, _) => n == var_name,
         Expr::Condition(_, body, _, _)
         | Expr::WhileBlock(_, body, _)
@@ -846,14 +1043,27 @@ pub fn code_modifies_variable(var_name: &SmolStr, code: &[Expr]) -> bool {
                 || (err_var != var_name && code_modifies_variable(var_name, catch_code))
         }
         Expr::Match(_, arms, wildcard, _, _) => {
-            arms.iter()
-                .any(|(_, body)| code_modifies_variable(var_name, body))
-                || wildcard
-                    .as_ref()
-                    .is_some_and(|body| code_modifies_variable(var_name, body))
+            arms.iter().any(|arm| {
+                code_modifies_variable(var_name, &arm.body)
+                    || arm
+                        .guard
+                        .as_ref()
+                        .is_some_and(|g| code_modifies_variable(var_name, std::slice::from_ref(g)))
+            }) || wildcard
+                .as_ref()
+                .is_some_and(|body| code_modifies_variable(var_name, body))
+        }
+        Expr::LetPattern(pattern_let) => pattern_let
+            .otherwise
+            .as_ref()
+            .is_some_and(|body| code_modifies_variable(var_name, body)),
+        // A fallback is code the statement runs.
+        Expr::Else(_, binder, fallback, _) => {
+            binder.as_ref().is_none_or(|(name, _)| name != var_name)
+                && code_modifies_variable(var_name, std::slice::from_ref(fallback))
         }
         _ => false,
-    })
+    }
 }
 
 #[must_use]
@@ -899,28 +1109,14 @@ fn scan_block_free_names(
     bound.truncate(bound_len);
 }
 
-/// What a tuple pattern adds to a free-name scan: each name it binds is
-/// bound for the arm body, and each value it compares an element with is
-/// read where the pattern is.
-fn scan_tuple_pattern(
-    pattern: &Expr,
-    depth: u32,
-    bound: &mut Vec<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
-    let Some(elements) = tuple_elements(pattern) else {
-        scan_free_names(pattern, depth, bound, out);
-        return;
-    };
-    for (element, _) in elements {
-        match element {
-            Expr::Var(name, _) => bound.push(name.clone()),
-            nested if tuple_elements(nested).is_some() => {
-                scan_tuple_pattern(nested, depth, bound, out);
-            }
-            value => scan_free_names(value, depth, bound, out),
-        }
+/// What a pattern adds to a free-name scan: each name it binds is bound for
+/// the code after it, and each value it compares with is read where the
+/// pattern is.
+fn scan_pattern(pattern: &Pattern, depth: u32, bound: &mut Vec<SmolStr>, out: &mut Vec<SmolStr>) {
+    for read in pattern.reads() {
+        scan_free_names(read, depth, bound, out);
     }
+    bound.extend(pattern.binders().into_iter().map(|(name, _)| name));
 }
 
 /// Collects, in the order they first appear, the names the anonymous
@@ -993,29 +1189,34 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::Match(scrutinee, arms, wildcard, _, _) => {
             scan_free_names(scrutinee, depth, bound, out);
-            for (patterns, body) in arms {
+            for arm in arms {
                 let bound_len = bound.len();
-                // An enum pattern binds its payload for the arm body; any
-                // other pattern is a value the scrutinee is compared against.
-                for pattern in patterns {
-                    if tuple_elements(pattern).is_some() {
-                        scan_tuple_pattern(pattern, depth, bound, out);
-                    } else if let Expr::FunctionCall(binders, _, _, _, _) = pattern {
-                        for binder in binders {
-                            if let Expr::Var(name, _) = binder {
-                                bound.push(name.clone());
-                            }
-                        }
-                    } else {
-                        scan_free_names(pattern, depth, bound, out);
-                    }
+                scan_pattern(&arm.pattern, depth, bound, out);
+                if let Some(guard) = &arm.guard {
+                    scan_free_names(guard, depth, bound, out);
                 }
-                scan_block_free_names(body, depth, bound, out);
+                scan_block_free_names(&arm.body, depth, bound, out);
                 bound.truncate(bound_len);
             }
             if let Some(body) = wildcard {
                 scan_block_free_names(body, depth, bound, out);
             }
+        }
+        Expr::Else(value, binder, fallback, _) => {
+            scan_free_names(value, depth, bound, out);
+            let bound_len = bound.len();
+            if let Some((name, _)) = binder {
+                bound.push(name.clone());
+            }
+            scan_free_names(fallback, depth, bound, out);
+            bound.truncate(bound_len);
+        }
+        Expr::LetPattern(pattern_let) => {
+            scan_free_names(&pattern_let.value, depth, bound, out);
+            if let Some(otherwise) = &pattern_let.otherwise {
+                scan_block_free_names(otherwise, depth, bound, out);
+            }
+            scan_pattern(&pattern_let.pattern, depth, bound, out);
         }
         Expr::Condition(condition, body, ..)
         | Expr::InlineCondition(condition, body, ..)
@@ -1030,12 +1231,8 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         }
         Expr::Is(operand, target, _, _) => {
             scan_free_names(operand, depth, bound, out);
-            if let IsTarget::Variant(Expr::FunctionCall(binders, _, _, _, _)) = &**target {
-                for binder in binders {
-                    if let Expr::Var(name, _) = binder {
-                        bound.push(name.clone());
-                    }
-                }
+            if let IsTarget::Pattern(pattern) = &**target {
+                scan_pattern(pattern, depth, bound, out);
             }
         }
         Expr::ElseBlock(body) | Expr::EvalBlock(body) | Expr::LoopBlock(body) => {
@@ -1072,6 +1269,7 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::Propagate(obj, _)
         | Expr::Cast(obj, _, _, _)
         | Expr::BoolNeg(obj, _, _)
+        | Expr::NamedArg(_, obj, _)
         | Expr::Neg(obj, _, _)
         | Expr::BitNot(obj, _, _) => {
             scan_free_names(obj, depth, bound, out);
@@ -1130,8 +1328,9 @@ fn scan_free_names(expr: &Expr, depth: u32, bound: &mut Vec<SmolStr>, out: &mut 
         | Expr::NamespacedRef(_, _, _)
         | Expr::StructDefault(_, _)
         | Expr::StructDeclare(..)
-        | Expr::EnumDeclare(_, _, _, _)
-        | Expr::FunctionDecl(_, _, _, _, _, _)
+        | Expr::EnumDeclare(..)
+        | Expr::FunctionDecl(..)
+        | Expr::DefaultArg(..)
         | Expr::ImportDylib(_, _, _)
         | Expr::HostBlock(..)
         | Expr::ImportFile(..)

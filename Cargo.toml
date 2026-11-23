@@ -24,14 +24,21 @@ keywords = ["candela", "scripting", "language", "interpreter", "embedded"]
 categories = ["compilers", "development-tools"]
 # The repository root carries things a published crate has no use for: the
 # artwork, the VS Code extension, the docs site sources, the installer, the MSI
-# and PGO inputs, and the first-party packages, which ship through the
-# registry. Source, tests, the standard library, and the licenses ship.
+# and PGO inputs, and the Rust sources of the standard library's native
+# libraries, which ship built inside the toolchain archive. Source, tests, the
+# standard library, and the licenses ship.
 exclude = [
     "assets/",
     "docs/",
     "editors/",
     "msi/",
-    "packages/",
+    "libs/std_src/archive/",
+    "libs/std_src/net/",
+    "libs/std_src/process/",
+    "libs/std_src/regex/",
+    "libs/std_src/sys/",
+    "libs/std_src/testkit/",
+    "libs/std_src/toml/",
     "pgo/",
     "scripts/",
     "about.hbs",
@@ -52,22 +59,24 @@ exclude = [
 #     the lexer/parser/type-checker; its tooling deps (tower-lsp, tokio, ...)
 #     never touch this crate's dependency graph or the `candela` binary. It is
 #     `publish = false`; nothing published depends on it.
-# The native halves of the first-party packages under `packages/` are members
-# too, each a cdylib with its own dependencies (an HTTP client, archive
+# The standard library's Rust native libraries under `libs/std_src/` are
+# members too, each a cdylib with its own dependencies (an HTTP client, archive
 # readers, TLS). Nothing in `candela` or `candela-vm` depends on them; they
-# ship as packages a program opts into, never inside the runtime.
+# ship beside the runtime in the toolchain archive, loaded only by a program
+# that imports a module binding one, never linked into the runtime.
 # `default-members` keeps plain `cargo build` at the repo root building only the
 # `candela-lang` package (build `-p candela-vm` / `-p candela-lsp` explicitly).
 [workspace]
 members = [
     "lsp",
     "vm",
-    "packages/sys",
-    "packages/testkit",
-    "packages/process/native",
-    "packages/download/native",
-    "packages/archive/native",
-    "packages/websocket/native",
+    "libs/std_src/sys",
+    "libs/std_src/testkit",
+    "libs/std_src/process",
+    "libs/std_src/archive",
+    "libs/std_src/net",
+    "libs/std_src/regex",
+    "libs/std_src/toml",
 ]
 default-members = ["."]
 

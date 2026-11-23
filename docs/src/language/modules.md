@@ -92,8 +92,8 @@ fn main() {
 }
 ```
 
-An item is a function, a struct, an enum, a constant or an attribute the module
-declares; naming a type brings the functions its `impl` blocks declare along
+An item is a function, a struct, an enum, a constant, an attribute or a macro
+the module declares; naming a type brings the functions its `impl` blocks declare along
 with it. This form binds no module name. Naming an item
 the module does not declare is a compile error that lists the ones it does. The
 same module may be imported both ways, one import under its name and one with
@@ -102,25 +102,9 @@ a list.
 `as` and a list do not combine on one import; write two imports of the same
 path instead.
 
-## Importing every item
-
-`{ * }` brings in every item the module declares, the way a list naming each of
-them would:
-
-```rust
-import "./geometry.cdl" { * };
-
-fn main() {
-    print(area(2, 3), Point { x: 1, y: 2 });
-}
-```
-
-A declaration of the file's own shadows an item of the same name that `{ * }`
-brought in, so a module that gains a name later does not break the files
-importing it. A name two `{ * }` imports both bring in is ambiguous: the
-program compiles as long as the file does not use it, and a use is a compile
-error naming both modules. Naming the item in a list import, as in
-`import "./geometry.cdl" { area };`, picks that module's.
+An import names every item it brings in; there is no form that brings in all of
+them. Writing `{ * }` is a compile error whose help shows both spellings: list
+the items, or import the module and reach them through its name.
 
 ## Name collisions
 
@@ -187,25 +171,22 @@ a list; `main.cdl` imports those itself when it needs them, unless
 
 ## Passing items on
 
-`export` in front of an import with a list or `{ * }` passes the items it
-brings in on to every file that imports this one, as if the file declared
+`export` in front of an import with a list passes the items it brings in on to every file that imports this one, as if the file declared
 them itself. One module can then be written as several files and still be
 imported as one:
 
 `shapes/main.cdl`:
 
 ```rust
-export import "./circle.cdl" { * };
-export import "./square.cdl" { * };
+export import "./circle.cdl" { Circle, circle_area };
+export import "./square.cdl" { Square, square_area };
 ```
 
-A file that writes `import "shapes" { * };` or `import "shapes";` reaches
-everything `circle.cdl` and `square.cdl` declare, and a definition still
-points at the file that declares it. A list passes on only the items it
-names, with the methods of a named type. A declaration of the file's own
-shadows a passed-on item of the same name, and a name two `{ * }` imports
-make ambiguous is passed on by neither. An `export import` always names
-items: write `{ * }` or a list, not `as`.
+A file that writes `import "shapes" { Circle };` or `import "shapes";` reaches
+the items `shapes/main.cdl` passes on, and a definition still points at the
+file that declares it. A list passes on only the items it names, with the
+methods of a named type. An `export import` always names its items: write a
+list, not `as`.
 
 Only the `main` of the file you run is the entry point. A `main` in an imported
 module is ignored, which lets a module keep one for its own checks.
@@ -239,8 +220,8 @@ are the prelude: every program has them with no import, so `xs.map(f)`, `s.capit
 imports at all. Their helpers are methods in `impl` blocks that resolve on the
 receiver's type. Importing one of them by name still works and reaches the same
 module. A call to a name an unimported module declares is a compile error whose
-help names the import, so `sqrt(x)` points at `import "std/math";` and the
-call `math::sqrt(x)`.
+help names the import, so `cbrt(x)` points at `import "std/math";` and the
+call `math::cbrt(x)`.
 
 ## Packages
 

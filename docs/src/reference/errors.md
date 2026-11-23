@@ -42,23 +42,30 @@ Raised while the file is read, before any type is known.
 | String literal | A string the file ends inside, reported at its opening quote (`unterminated_string`), or a `'`, since strings are written in double quotes (`single_quote`) |
 | Number literal | An `int` or a `float` literal whose value is past what the type holds, or an exponent marker with no digits after it, as in `1e` |
 | Unclosed delimiter | A `(`, `[` or `{` that is never closed; the report points at the opener |
-| Missing semicolon | A statement not ended with `;` |
+| Missing semicolon | A statement not ended with `;`. Only the last expression of a block used as a value leaves it off; at the end of a function body, the report names the `return` that hands the value back |
+| Block value | A block used as a value (an `if` or `match` branch, or `{ ... }` where a value goes) whose last statement is neither an expression without `;` nor `return`, `throw`, `break` or `continue` (`value_block_without_value`) |
 | Missing separator | Array elements, arguments or parameters not separated by `,` |
+| Argument order | An argument passed in order after one passed by name (`positional_after_named`) |
+| `host` or `dylib` entry | An entry written the removed C way, `int f(int);`; the report shows it rewritten as `fn f(a: int) -> int;` (`old_host_signature`) |
+| `host` signature | A `host` function that takes or returns a function, or a list, map or struct holding one. No function crosses into the embedding program; call it in the script and pass the host its result (`host_fn_takes_function`) |
 | Inline `if` without `else` | An `if` used as an expression must produce a value on every path |
-| `try` without `catch` | A `try` block needs at least one `catch` clause |
+| `try` and `catch` | A `try` block with no `catch` clause (`try_block_no_catch`), or a `catch` followed by something other than a quoted kind or a name, such as `catch 5` or a bare `catch {` (`unexpected_token`) |
 | `match` without arms | A `match` with no arms, or with only a `_` arm |
 | `match` arm | An expression arm not followed by `,` before the next arm (`match_arm_missing_comma`), or `_` written as one of a pattern's alternatives (`match_wildcard_alternative`) |
-| Tuple | A tuple of one element, `(a,)`, in a value, a type or a `let` pattern (`tuple_of_one`); a place in a `let` pattern that is not a name, `_` or a nested pattern (`tuple_pattern_element`) |
+| Tuple | A tuple of one element, `(a,)`, in a value, a type or a pattern (`tuple_of_one`) |
+| Pattern | A token where a pattern goes that no pattern starts with (`pattern_expected`); `else` after a `let` whose pattern is a name alone, which always fits (`let_else_on_name`); a `let ... else` block that can reach its end instead of leaving (`let_else_must_leave`). See [patterns](../language/control-flow.md#patterns) |
 | `throw` call | `throw("kind")`, the call spelling: `throw` is a statement, `throw "kind";` (`throw_call`) |
 | Bad import path | An import path whose extension is neither absent nor `.cdl`, or the removed `import std::string;` form |
-| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`); an `export import` with no items (`export_import_without_items`) |
+| Import binding | A path whose last segment is not a name, imported with no `as` (`import_name_not_identifier`); `as` and a list of items on one import (`import_alias_with_items`); an empty list of items (`import_items_empty`); an `export import` with no items (`export_import_without_items`); `{ * }` in place of a list (`glob_import`) |
 | Constant arithmetic | Integer division or remainder by a literal zero, an integer raised to a negative literal exponent, or a shift by a literal count outside 0 to 63 |
 | `break` or `continue` outside a loop | A `break` or `continue` with no `for`, `while` or `loop` around it in its own function (`outside_loop`); a loop in a calling function, or around an anonymous function, does not count |
 | Nested declaration | A `fn` declaration written inside a block instead of at the top level |
+| `impl` parameters | A type parameter `impl<T>` declares that is not one of the type's arguments in the header (`impl_param_unbound`) |
+| Receiver | A parameter named `self` that is not the first parameter of an `impl` function, or a `self` parameter on a function outside an `impl` block (`misplaced_receiver`) |
 | Operator method name | An operator symbol after `fn` in an `impl` block that a type cannot define, such as `>` or `&&`. The report lists the ones it can and says what derives `!=`, `>` and `>=` |
 | Nesting too deep | Expressions, blocks or types nested more than 128 levels deep, counting every enclosing level. Move the inner part into a variable or a function. A flat chain of operators, `a + b + c + ...`, is not nesting and compiles at any length |
-| Attribute | An attribute with nothing after it to apply to (`attribute_without_item`), an attribute other than `@cfg` in front of anything but a top-level `fn` or `struct` (`attribute_wrong_target`), or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [attributes](../language/attributes.md) and [conditional compilation](../language/conditional-compilation.md) |
-| Macro | A macro no expander is registered for, a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. See [macros](../language/macros.md) |
+| Attribute | An attribute with nothing after it to apply to (`attribute_without_item`), an attribute other than `@cfg` in front of something that is not a declaration, such as a statement, a closure's parameter or a field of a struct declared inside a function (`attribute_wrong_target`), or a `@cfg` condition that is not a flag, `key = "value"`, `not(...)` with one condition, `any(...)` or `all(...)`. See [attributes](../language/attributes.md) and [conditional compilation](../language/conditional-compilation.md) |
+| Macro | A macro that is not in scope and that no expander is registered for (`unknown_macro`), one the file declares further down (`macro_declared_below`), a region the file ends before closing, an expander that rejects the region it was given, an expansion that is not a single expression, or macros expanding into one another more than 32 levels deep. A `macro` declaration of the wrong shape (`macro_declaration`), a second macro of one name (`macro_declared_twice`), a use that does not match its macro's pattern (`macro_no_match`), and a name of the form `t$1` written outside an expansion (`expansion_name`). See [macros](../language/macros.md) |
 
 ## Compile errors
 
@@ -77,8 +84,9 @@ name from its own is reported with the new spelling: `assert_eq` points at
 server offers each of these as a quick fix that writes the import and the
 spelling.
 A method a map no longer has is `no_such_method` with the spelling that
-replaced it: `m[key] = value` for `insert`, `m.get(key).unwrap_or(fallback)`
-for `get_or`. A renamed string or list method is reported the same way:
+replaced it: `m[key] = value` for `insert`, `m.get(key) else fallback` for
+`get_or`. `unwrap_or` on an option or a result names `x else fallback`, the
+one spelling of a fallback. A renamed string or list method is reported the same way:
 `index_of` for a string's `find`, `split` for a list's `partition`, and
 `trim_start`, `trim_end`, `trim_chars`, `trim_start_chars` and `trim_end_chars`
 for `trim_left`, `trim_right`, `trim_sequence`, `trim_sequence_left` and
@@ -109,6 +117,20 @@ is `tuple_pattern_mismatch`. `|` alternatives of a tuple arm that bind
 different names are `pattern_bindings_differ`, as they are for an enum arm. See
 [types](../language/types.md#tuples).
 
+**Pattern errors.** A `let` pattern that does not fit every value of the value's
+type, with no `else`, is `let_pattern_can_fail`; the same holds for a pattern
+after `for` and for a parameter written as a pattern. A `let ... else` whose
+pattern always fits is `let_else_never_runs`. A struct or variant pattern of
+another type than the value is `pattern_type_mismatch`; a struct pattern that
+leaves out a field without ending in `..` is `pattern_field_missing`, one naming
+a field the struct does not have `pattern_field_unknown`, and one naming a field
+twice `pattern_field_twice`. A `for` over a map with a lone name rather than
+a pattern is `map_iteration_takes_a_pattern`: a map gives its entries, so write
+`for (k, v) in m`, or `for k in m.keys()` for the keys alone. A match arm whose pattern is a lone name that a
+variable in scope already has, with arms after it, is `pattern_binds_name`: the
+name binds and matches everything, so compare with the variable in a guard
+instead. See [control flow](../language/control-flow.md#patterns).
+
 **Arity and argument errors.** Calling a function with too few or too many
 arguments, or with an argument whose type the parameter does not accept, whether
 that type was declared with `name: type` or taken from another call. The report
@@ -116,11 +138,24 @@ labels the declaration as well as the call. A function that declares `-> Type`
 and returns something else is reported against the annotation. A call has the
 type its function declares, so an argument taken from a call is checked against
 the declared return type, not against what the body returns. A dot call that
-reaches an `impl` function declared with no parameters is
+reaches an `impl` function whose first parameter is not `self` is
 `method_without_receiver`: nothing would receive the value in front of the dot,
-and the help names the path call, `Type::name()`. The reverse, a path call that
-reaches an `impl` function declaring a receiver, is `path_call_with_receiver`,
-and the help names the dot call.
+and the help names the path call, `Type::name(...)`, and the `self` parameter
+that would make it a method. The reverse, a path call that reaches an `impl`
+function taking `self`, is `path_call_with_receiver`, and the help names the dot
+call.
+
+**Named argument errors.** A call that passes an argument by a name the
+function has no parameter for is `named_argument_unknown`, one that gives a
+parameter twice, in order and by name or by name twice, is
+`named_argument_twice`, and one that passes arguments by name and leaves out a
+parameter with no default is `argument_missing`. An argument passed by name to
+a built-in, a function value or an enum variant, which take theirs in order, is
+`named_argument_unexpected`. See
+[functions](../language/functions.md#default-values-and-named-arguments). A
+closure written after a call whose last parameter already has an argument, or
+after a call to a function that takes none, is `trailing_closure_extra`; see
+[functions](../language/functions.md#a-closure-after-the-call).
 
 **Operator errors.** An operator applied to operand types it does not accept,
 including a `float` operand of a bitwise operator and a non-`bool` operand of `&&`,
@@ -136,7 +171,8 @@ rules, each with an identifier an editor and an embedder read:
 file is read; `operator_method_arity` for a parameter count the operator does not
 have; `operator_method_on_builtin` for an operator inside `impl int`, `impl list`
 or another built-in type; `operator_method_receiver` for a first parameter
-annotated as a type other than the one the `impl` block names; and
+that is not `self` or is annotated as a type other than the one the `impl`
+block names; and
 `operator_method_return_type` for a method the operator cannot take a value from,
 which is one handing nothing back or an `==`, `<` or `<=` not answering a `bool`.
 See [methods](../language/methods.md).
@@ -165,14 +201,17 @@ not cover every variant. The non-exhaustive report lists the variants you left
 out. A qualified pattern is also reported when its qualifier names an enum other
 than the matched value's, or names nothing at all; the report says which enum
 the pattern reaches and which one the match is on. A `?` after a value that is
-neither an `Option` nor a `Result` is `propagate_operand`, and one in `main` or
-in a function that does not return the same enum, with the same error type for a
-`Result`, is `propagate_return_type`; see
+neither an `Option` nor a `Result` is `propagate_operand`, and one in a
+function that does not return the same enum, with the same error type for a
+`Result`, is `propagate_return_type`; in `main` a `?` ends the program with the
+error instead. `else` after a value that is neither an `Option` nor a `Result` is
+`else_operand`, and `else |e|` after an `Option`, whose `None` carries no
+error, is `else_binder_on_option`; see
 [error handling](../language/error-handling.md#passing-a-failure-on). A `|` alternative that binds
 other names, or the same names at other types, than the first alternative of
 its arm is `pattern_bindings_differ`. A `match` used as a value with no `_` arm,
-on a value that is not an enum, is `match_without_wildcard`, unless its last arm
-is a tuple pattern of names and `_` alone. See
+on a value that is not an enum, is `match_without_wildcard`, unless an arm with
+no guard has a pattern that always fits, such as a tuple of names. See
 [control flow](../language/control-flow.md#match-as-an-expression).
 
 **Type test and downcast errors.** A downcast the operand's static type rules
@@ -192,11 +231,22 @@ See [types](../language/types.md#testing-a-type-with-is).
 definitions. Two `impl` blocks that define one method for the same instantiated
 generic type are reported the same way.
 
+**Variant shape errors.** A variant declared with named fields is built and
+matched by name, and one with a positional payload in parentheses; writing one
+the other way is `variant_payload_shape`. A named-field literal or pattern that
+leaves out a field is `variant_field_missing` (a pattern may end in `..` to skip
+the rest; a literal may not), one naming a field the variant does not declare is
+`variant_field_unknown`, and one naming a field twice is `variant_field_twice`.
+See [enums](../language/enums.md).
+
 **Generic type errors.** Type arguments whose count does not match the
 declaration, type arguments on a name that declares none, type arguments on a
 built-in method, a name in a declaration that is neither a type nor one of its
 type parameters, and a generic type whose own fields name a deeper instantiation
-of itself without end. See [generics](../language/generics.md).
+of itself without end. A bare name in a generic `impl` header that is neither a
+type nor a parameter the block declares is `impl_undeclared_type_parameter`,
+and the help shows the header with `impl<T>`. See
+[generics](../language/generics.md).
 
 **Import and library errors.** An import path that cannot be read, an item
 named in an import that the module does not declare
@@ -210,10 +260,11 @@ symbol. See
 [modules](../language/modules.md) and [C libraries](../integration/c-libraries.md).
 
 **Attribute errors.** An attribute no `host` block declares where it is named
-is `unknown_attribute`. One on the kind of item its declaration does not name,
-or on a generic function or struct, is `attribute_wrong_target`. An argument
-for a parameter the attribute does not have, one given twice, one without its
-parameter's name, a parameter with no default left out, a value of the wrong
+is `unknown_attribute`. One on a kind of declaration its `on` clause does not
+list, or on a generic declaration or a part of one, is `attribute_wrong_target`.
+An argument for a parameter the attribute does not have, one given twice, more
+arguments in order than it has parameters, one in order after a named one, a
+parameter with no default left out, a value of the wrong
 type, a function name that names no function, or an enum variant that does not
 exist or carries a payload is `attribute_bad_argument`. A type name that does
 not resolve is the unknown-type error any annotation gets. In a `host` block, a
@@ -267,6 +318,7 @@ clause matches and the string bound to the catch variable. See
 | `index_out_of_bounds` | An array or string index outside the value |
 | `slice_out_of_bounds` | A slice whose bounds fall outside the value, or whose start is past its end. A slice starting where the value ends is in range and produces an empty one |
 | `unknown_map_key` | Reading a map key that is not present with `m[k]`. `m.get(k)` answers `None` instead |
+| `range_step` | `r.step(n)` with an `n` less than 1. See [range](../standard-library/range.md) |
 
 ### Arithmetic
 
@@ -316,7 +368,27 @@ Two kinds come from what the call was given rather than from the system:
 | Kind | Raised by |
 | --- | --- |
 | `fs_not_a_byte` | `fs::write_bytes` with an element outside 0 to 255 |
-| `fs_unknown_digest` | `fs::digest` with an algorithm other than md5, sha1 and sha256 |
+| `hash_unknown_algorithm` | `hash::file` with an algorithm other than md5, sha1 and sha256 |
+
+### Standard library modules
+
+| Kind | Raised by |
+| --- | --- |
+| `browser_only` | A function of [browser](../standard-library/browser.md) or [js](../standard-library/js.md) called anywhere but in a browser |
+| `encoding_invalid_utf8` | Answered by [`encoding::from_utf8`](../standard-library/encoding.md) for bytes that are not UTF-8 or an element that is not a byte |
+| `encoding_invalid_hex`, `encoding_invalid_base64`, `encoding_invalid_url` | Answered by `encoding::from_hex`, `from_base64` and `url_decode` for text that is not in their form |
+| `csv_unterminated_quote` | Answered by [`csv::parse`](../standard-library/csv.md) for a quoted field that never closes |
+| `http_desktop_only` | `http::download` called in a browser, which has no file to download to |
+| `regex_invalid` | Answered by [`regex::compile`](../standard-library/regex.md) for a pattern the engine refuses |
+| `toml_invalid`, `toml_unrepresentable` | Answered by [`toml::parse`](../standard-library/toml.md) for text that is not TOML, and by `toml::stringify` for a value with no TOML form |
+| `regex_desktop_only`, `toml_desktop_only` | A call to `std/regex` or `std/toml` in a browser, which runs no native library |
+| `cli_missing_value` | Answered by [`cli::parse`](../standard-library/cli.md) for an option at the end with no value |
+| `websocket_bad_close` | Answered, as an `Err`, by [`socket.close`](../standard-library/websocket.md#close) given a code other than 1000 or 3000 to 4999, or a reason longer than 123 bytes |
+
+The background calls of [process](../standard-library/process.md),
+[http](../standard-library/http.md) and
+[archive](../standard-library/archive.md) raise nothing: a failure arrives as
+the `Failed(message)` event, whose message names the cause.
 
 ### Sorting
 
@@ -345,32 +417,32 @@ Two kinds come from what the call was given rather than from the system:
 | `host_fn_error` | A function a `host` block declares failed. The message names the function and repeats what the host reported |
 
 An embedding program decides when this happens: its closure returns an error
-instead of a value. Catch it like any other kind, or let it end the run. See
-[embedding](../integration/embedding.md).
+instead of a value. It ends the run, and reaches the host, unless a `try`
+catches it. See [embedding](../integration/embedding.md).
 
 ### Your own
 
 `throw "message";` raises an error whose kind is the string you pass, so
-`catch "message"` matches it. Choose short, stable identifiers for anything you
-intend to catch.
+`catch "message"` matches it. Use it for what should not happen; a
+failure a caller is meant to handle goes back as a `Result`.
 
 ## Catching
 
-A `try` block runs under the innermost `catch`. The errors listed above are
-caught wherever the block raises them: in an operator, a built-in function, a
-`throw`, or inside a function the block calls, at any depth. When no `catch`
-matches, the error is re-raised to the next enclosing `try`, and an error that
-reaches the top of the program is printed and ends it.
+A runtime error ends the program: it unwinds every call between where it was
+raised and `main`. A `try` in any function catches it on the way; a function
+that expects a failure hands it back as a [`Result`](../standard-library/result.md)
+instead, see [error handling](../language/error-handling.md#which-one-to-use). When no `catch`
+matches, the error is re-raised to the next enclosing `try`, and one that
+reaches the top of the program is printed and ends it. A host that called the
+program receives it as the call's error.
 
 ```rust
-import "std/fs";
-
 fn main() {
+    let text = "8o";
     try {
-        let text = fs::read("port.txt");
         print(int(text) + 1);
-    } catch "fs_not_found" {
-        print("no config");
+    } catch "invalid_int" {
+        print("not a number");
     } catch e {
         print("failed: " + e);
     }
@@ -378,11 +450,6 @@ fn main() {
 ```
 
 The catch variable holds the kind as a string.
-
-An error raised several frames below the `try` abandons the calls in between and
-resumes at the `catch`, so a failure deep in a helper is handled where the work
-was started. This covers your own functions and the standard library modules
-written in candela.
 
 `exit()` with a non-zero status ends a program without being catchable.
 

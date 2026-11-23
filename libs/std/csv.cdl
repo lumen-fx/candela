@@ -1,0 +1,86 @@
+/// Comma-separated values: rows of text fields, as RFC 4180 writes them.
+///
+///     import "std/csv";
+///     fn main() {
+///         let rows = csv::parse("name,qty\nbolt,4\n")?;
+///         print(rows[1][0]);
+///         print(csv::stringify([["a", "b,c"], ["1", "2"]]));
+///     }
+///
+/// A field is quoted when it holds a comma, a quote or a line break, and a
+/// quote inside one is doubled. Every field is a string; convert with
+/// `int()` or `s.parse<T>()`.
+
+/// The rows of `text`, each a list of its fields. A row ends at `\n` or
+/// `\r\n`, and a line break at the very end starts no row. A quoted field that
+/// never closes answers `csv_unterminated_quote`.
+fn parse(text: string) -> string[][]!string {
+    let rows: string[][] = [];
+    let row: string[] = [];
+    let field: string[] = [];
+    let quoted = false;
+    let started = false;
+    let chars = text.chars();
+    let i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if quoted {
+            if c == "\"" {
+                if i + 1 < chars.len() && chars[i + 1] == "\"" {
+                    field.push("\"");
+                    i += 1;
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == "\"" {
+            quoted = true;
+            started = true;
+        } else if c == "," {
+            row.push(field.join(""));
+            field = [];
+            started = true;
+        } else if c == "\n" || c == "\r" {
+            if c == "\r" && i + 1 < chars.len() && chars[i + 1] == "\n" {
+                i += 1;
+            }
+            row.push(field.join(""));
+            rows.push(row);
+            row = [];
+            field = [];
+            started = false;
+        } else {
+            field.push(c);
+            started = true;
+        }
+        i += 1;
+    }
+    if quoted {
+        return Err("csv_unterminated_quote");
+    }
+    if started || field.len() > 0 || row.len() > 0 {
+        row.push(field.join(""));
+        rows.push(row);
+    }
+    return Ok(rows);
+}
+
+/// One field as a row writes it: quoted when it holds a comma, a quote or a
+/// line break.
+fn field_text(field: string) -> string {
+    if field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r") {
+        return "\"" + field.replace("\"", "\"\"") + "\"";
+    }
+    return field;
+}
+
+/// `rows` as CSV text, each row ending in `\n`.
+fn stringify(rows: string[][]) -> string {
+    let out: string[] = [];
+    for row in rows {
+        out.push(row.map(field_text).join(",") + "\n");
+    }
+    return out.join("");
+}

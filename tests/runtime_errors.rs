@@ -767,9 +767,9 @@ fn fs_append_creates_a_missing_file() {
 import "std/fs";
 
 fn main() {{
-    fs::append("{path}", "one\n");
-    fs::append("{path}", "two\n");
-    print(fs::read("{path}"));
+    fs::append("{path}", "one\n")?;
+    fs::append("{path}", "two\n")?;
+    print(fs::read("{path}")?);
 }}
 "#
     );
@@ -806,21 +806,17 @@ fn main() {
 /// json values are read by recursive descent, so a long run of openers used to
 /// exhaust the native stack and kill the process.
 #[test]
-fn deeply_nested_json_raises_rather_than_dying() {
+fn deeply_nested_json_fails_rather_than_dying() {
     let source = format!(
         r#"import "std/json";
 
 fn main() {{
-    try {{
-        print(json::parse("{}"));
-    }} catch "json_parse_error" {{
-        print("raised");
-    }}
+    print(json::parse("{}") else |e| {{ e }});
 }}
 "#,
         "[".repeat(200_000)
     );
-    assert_eq!(run("deep_json", &source), ["raised"]);
+    assert_eq!(run("deep_json", &source), ["json_parse_error"]);
 }
 
 /// A parsed document is the one thing that puts lists, maps and pooled strings
@@ -843,7 +839,7 @@ fn a_parsed_document_survives_later_allocation() {
         r#"import "std/json";
 
 fn main() {{
-    let doc = json::parse("{document}") as any[];
+    let doc = json::parse("{document}").unwrap() as any[];
     let n = 0;
     let text = "";
     while n < 5000 {{
@@ -1355,4 +1351,23 @@ fn the_first_value_of_a_reassigned_variable_reports_its_own_place() {
         prelude.contains("list.cdl:") && !prelude.contains("empty_sum.cdl:1:1"),
         "the report points into the list module, got:\n{prelude}"
     );
+}
+
+/// `eprint` writes to standard error, with the text `print` would give, and
+/// leaves standard output to `print`.
+#[test]
+fn eprint_writes_to_standard_error() {
+    let done = finish(
+        "eprint",
+        r#"
+fn main() {
+    print("out");
+    eprint("err", 3, [1, 2]);
+}
+"#,
+        "",
+    );
+    assert!(done.succeeded, "{}", done.stderr);
+    assert_eq!(done.stdout, "out\n");
+    assert_eq!(done.stderr, "err\n3\n[1,2]\n");
 }

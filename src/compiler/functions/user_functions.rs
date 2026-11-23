@@ -198,6 +198,26 @@ pub fn handle_user_function(
     // whose callee is an expression rather than a name.
     env_id: Option<u16>,
 ) -> Option<u16> {
+    // Arguments passed by name go in place, and the ones left out take their
+    // defaults, before anything below counts or compiles them.
+    if let Some((args, args_indexes)) =
+        crate::compiler::call_args::bind_user_args(fn_id, 0, args, args_indexes, span, ctx, state)
+    {
+        return handle_user_function(
+            fn_name,
+            fn_id,
+            output,
+            v,
+            ctx,
+            state,
+            tgt_id,
+            &args,
+            span,
+            &args_indexes,
+            type_args,
+            env_id,
+        );
+    }
     let is_recursive = resolve_is_recursive(fn_id, state);
 
     let fn_returns_null = state.fns[fn_id].returns_null;
@@ -256,8 +276,8 @@ pub fn handle_user_function(
         && let Some(fn_sig) = state
             .dyn_libs
             .iter()
-            .find(|lib| !lib.is_host && lib.name == namespace[namespace.len() - 2])
-            .and_then(|lib| {
+            .filter(|lib| !lib.is_host && lib.name == namespace[namespace.len() - 2])
+            .find_map(|lib| {
                 lib.fns
                     .iter()
                     .find(|f| f.name == namespace[namespace.len() - 1])
@@ -977,6 +997,8 @@ fn compile_function(
                 in_function: true,
                 offset: ctx.advance_offset(output.len()).offset,
                 return_downcast,
+                tries: 0,
+                loop_tries: 0,
                 ..ctx
             },
             state,

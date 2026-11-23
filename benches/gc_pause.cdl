@@ -3,7 +3,7 @@
 // attributes, children, text and a click handler, rebuilt a piece at a time.
 
 host "bench" {
-    frame_done();
+    fn frame_done();
 }
 
 struct Node {

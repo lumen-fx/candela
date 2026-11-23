@@ -1,7 +1,7 @@
 //! The standard library's native functions, built into the runtime for targets
 //! that cannot load a dynamic library.
 //!
-//! `std/math`, `std/time`, `std/random` and `std/hash` reach their work
+//! `std/math`, `std/time` and `std/random` reach their work
 //! through a `dylib` block naming a small C library that ships beside the
 //! toolchain. A browser has no such library and no loader, so on wasm32 the
 //! same bindings resolve to the Rust functions here instead: the std modules
@@ -10,7 +10,6 @@
 //! declares, so a `.cdlb` built on a desktop that records those bindings runs
 //! here unchanged.
 
-use crate::digest;
 use std::cell::Cell;
 
 /// One argument, as the binding's declared type reads it.
@@ -37,13 +36,6 @@ impl Arg<'_> {
             Self::Str(_) => 0,
         }
     }
-
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Self::Str(s) => s.as_bytes(),
-            Self::Int(_) | Self::Float(_) => &[],
-        }
-    }
 }
 
 /// What an intrinsic hands back to the program.
@@ -63,7 +55,6 @@ pub type Intrinsic = fn(&[Arg<'_>]) -> Ret;
 const MATH: &str = "std_src/math/math";
 const TIME: &str = "std_src/time/time";
 const RANDOM: &str = "std_src/random/random";
-const HASH: &str = "std_src/hash/hash";
 
 macro_rules! unary {
     ($f:expr) => {
@@ -112,16 +103,26 @@ const TABLE: &[(&str, &str, Intrinsic)] = &[
     (MATH, "candela_hypot", binary!(f64::hypot)),
     (MATH, "candela_erf", unary!(libm::erf)),
     (MATH, "candela_erfc", unary!(libm::erfc)),
-    (MATH, "candela_sqrt", unary!(f64::sqrt)),
     (MATH, "candela_pow", binary!(f64::powf)),
-    (MATH, "candela_floor", unary!(f64::floor)),
-    (MATH, "candela_ceil", unary!(f64::ceil)),
-    (MATH, "candela_round", unary!(f64::round)),
-    (MATH, "candela_trunc", unary!(f64::trunc)),
     (MATH, "candela_fmod", binary!(|x: f64, y: f64| x % y)),
     (MATH, "candela_copysign", binary!(f64::copysign)),
     (TIME, "now", |_| Ret::Int(clock::now())),
     (TIME, "format", |a| Ret::Str(time_format(a[0].int(), a[1]))),
+    // A page's program cannot pause, and nothing could run a timer's
+    // function while it waited.
+    (TIME, "candela_sleep_ms", |_| {
+        desktop_only("A browser cannot pause a program; time::sleep_ms runs only on a desktop")
+    }),
+    (TIME, "candela_timer_start", |_| {
+        desktop_only("time::after and time::every run only on a desktop")
+    }),
+    (TIME, "candela_timer_cancel", |_| Ret::Int(0)),
+    (TIME, "candela_format_utc", |a| {
+        Ret::Str(match a[1] {
+            Arg::Str(pattern) => strftime(&Tm::utc(a[0].int()), pattern),
+            _ => String::new(),
+        })
+    }),
     (RANDOM, "candela_seed", |a| {
         RNG.set(Some(Pcg32::new(a[0].int() as u64, 54)));
         Ret::Null
@@ -135,16 +136,15 @@ const TABLE: &[(&str, &str, Intrinsic)] = &[
         let (min, max) = (a[0].float(), a[1].float());
         Ret::Float(min + random_unit() * (max - min))
     }),
-    (HASH, "candela_md5", |a| {
-        Ret::Str(digest::hex(&digest::md5(a[0].bytes())))
-    }),
-    (HASH, "candela_sha1", |a| {
-        Ret::Str(digest::hex(&digest::sha1(a[0].bytes())))
-    }),
-    (HASH, "candela_sha256", |a| {
-        Ret::Str(digest::hex(&digest::sha256(a[0].bytes())))
-    }),
 ];
+
+/// Ends the run with `message`, for a binding a browser cannot carry out.
+fn desktop_only(message: &str) -> ! {
+    #[cfg(target_arch = "wasm32")]
+    crate::errors::wasm_error(message);
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("{message}");
+}
 
 /// The intrinsic that stands for `symbol` in `library`, where `library` is the
 /// path relative to the `libs` directory a std module's binding records.
@@ -243,7 +243,6 @@ pub struct Tm {
 
 impl Tm {
     /// `timestamp` in UTC.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn utc(timestamp: i64) -> Self {
         let days = timestamp.div_euclid(86_400);
         let secs = timestamp.rem_euclid(86_400) as u32;
@@ -474,10 +473,6 @@ fn random_unit() -> f64 {
     f64::from(draw32()) / 4_294_967_296.0
 }
 
-// ---------------------------------------------------------------------------
-// hash
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,12 +484,7 @@ mod tests {
     #[test]
     fn every_std_binding_has_an_intrinsic() {
         let std_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../libs/std");
-        for (module, library) in [
-            ("math", MATH),
-            ("time", TIME),
-            ("random", RANDOM),
-            ("hash", HASH),
-        ] {
+        for (module, library) in [("math", MATH), ("time", TIME), ("random", RANDOM)] {
             let source = std::fs::read_to_string(std_dir.join(format!("{module}.cdl"))).unwrap();
             let block = source.split('{').nth(1).unwrap().split('}').next().unwrap();
             for line in block.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -511,9 +501,8 @@ mod tests {
     #[test]
     fn math_matches_the_c_library() {
         let f = |x| [Arg::Float(x)];
-        assert_eq!(call(MATH, "candela_sqrt", &f(16.0)), Ret::Float(4.0));
+        assert_eq!(call(MATH, "candela_cbrt", &f(27.0)), Ret::Float(3.0));
         assert_eq!(call(MATH, "candela_sin", &f(0.0)), Ret::Float(0.0));
-        assert_eq!(call(MATH, "candela_round", &f(-2.5)), Ret::Float(-3.0));
         assert_eq!(call(MATH, "candela_logb", &f(8.0)), Ret::Float(3.0));
         assert_eq!(
             call(MATH, "candela_logb", &f(0.0)),
@@ -533,100 +522,10 @@ mod tests {
             Ret::Float(1.5)
         );
         assert_eq!(call(MATH, "candela_erf", &f(0.0)), Ret::Float(0.0));
-        let Ret::Float(nan) = call(MATH, "candela_sqrt", &f(-1.0)) else {
+        let Ret::Float(nan) = call(MATH, "candela_log", &f(-1.0)) else {
             unreachable!()
         };
         assert!(nan.is_nan());
-    }
-
-    /// The published test vectors, plus lengths either side of the one-block
-    /// and two-block padding boundaries.
-    #[test]
-    fn digests_match_the_reference_vectors() {
-        let digest = |symbol, text: &str| match call(HASH, symbol, &[Arg::Str(text)]) {
-            Ret::Str(s) => s,
-            other => panic!("{symbol}: {other:?}"),
-        };
-        assert_eq!(
-            digest("candela_md5", ""),
-            "d41d8cd98f00b204e9800998ecf8427e"
-        );
-        assert_eq!(
-            digest("candela_md5", "abc"),
-            "900150983cd24fb0d6963f7d28e17f72"
-        );
-        assert_eq!(
-            digest("candela_sha1", "abc"),
-            "a9993e364706816aba3e25717850c26c9cd0d89d"
-        );
-        assert_eq!(
-            digest("candela_sha256", "abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        let two_blocks = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
-        assert_eq!(
-            digest("candela_sha1", two_blocks),
-            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
-        );
-        assert_eq!(
-            digest("candela_sha256", two_blocks),
-            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
-        );
-        assert_eq!(
-            digest(
-                "candela_md5",
-                "12345678901234567890123456789012345678901234567890123456789012345678901234567890"
-            ),
-            "57edf4a22be3c955ac49da2e2107b67a"
-        );
-        // The text's UTF-8 bytes, two of them for this one character.
-        assert_eq!(
-            digest("candela_md5", "\u{e9}"),
-            "66ddcd97cfdeabb2f6fb8a999b4bc76f"
-        );
-        let million_a = "a".repeat(1_000_000);
-        assert_eq!(
-            digest("candela_sha256", &million_a),
-            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
-        );
-        assert_eq!(
-            digest("candela_sha1", &million_a),
-            "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
-        );
-        // A run of `a` either side of where the length field stops fitting
-        // in the last block.
-        let boundaries = [
-            (
-                55,
-                "ef1772b6dff9a122358552954ad0df65",
-                "c1c8bbdc22796e28c0e15163d20899b65621d65a",
-                "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318",
-            ),
-            (
-                56,
-                "3b0c8ac703f828b04c6c197006d17218",
-                "c2db330f6083854c99d4b5bfb6e8f29f201be699",
-                "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a",
-            ),
-            (
-                64,
-                "014842d480b571495a4a0363793f7367",
-                "0098ba824b5c16427bd7a1122a5a442a25ec644d",
-                "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
-            ),
-            (
-                120,
-                "5f61c0ccad4cac44c75ff505e1f1e537",
-                "f34c1488385346a55709ba056ddd08280dd4c6d6",
-                "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c",
-            ),
-        ];
-        for (n, md5, sha1, sha256) in boundaries {
-            let text = "a".repeat(n);
-            assert_eq!(digest("candela_md5", &text), md5, "md5 of {n}");
-            assert_eq!(digest("candela_sha1", &text), sha1, "sha1 of {n}");
-            assert_eq!(digest("candela_sha256", &text), sha256, "sha256 of {n}");
-        }
     }
 
     /// The reference output of the PCG32 demo program for seed 42, sequence 54.

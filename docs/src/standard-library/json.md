@@ -18,11 +18,8 @@ json::parse(text)
 ```
 
 - `text`: the json document, as a string.
-- Returns: the parsed value, typed `any`.
-- Raises: `json_parse_error` when the input is malformed. The message names the
-  reason: `unexpected end of input`, `object key must be a string`, `unterminated
-  string`, `invalid number`, `invalid escape`, `trailing characters after value`,
-  and the rest.
+- Returns: an `any!string`: `Ok` with the parsed value, typed `any`, or
+  `Err("json_parse_error")` when the input is malformed.
 
 Objects and arrays nest to a fixed depth, far beyond what a document written for
 a program to read reaches. Text that nests deeper is rejected as malformed with
@@ -58,7 +55,7 @@ beside an int.
 import "std/json";
 
 fn main() {
-    let doc = json::parse("{\"name\": \"ada\", \"scores\": [1, 2, 3]}");
+    let doc = json::parse("{\"name\": \"ada\", \"scores\": [1, 2, 3]}")?;
     let obj = doc as {string: any};
     print(obj["name"] as string);
     print((obj["scores"] as int[]).len());
